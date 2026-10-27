@@ -31,6 +31,10 @@ use tempfile::TempDir;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 const UPSTREAM_TOKEN: &str = "isolated-git-gateway-test-upstream-token";
 const REPOSITORY: &str = "group/repo";
+/// Larger than Git's default `http.postBuffer` (1 MiB), so Git sends its
+/// flush-only probe POST before streaming the pack.
+const LARGE_PUSH_BYTES: usize = 2 * 1024 * 1024;
+const ORIGIN_BODY_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 // Proxy environment is a process-wide input to the real Broker runtime. Isolate
 // it in a child instead of mutating the environment of a multithreaded test.
@@ -173,7 +177,50 @@ async fn git_http_gateway_child() {
                 && request.has_pack),
             "{pushed:?}"
         );
+        // A push within `http.postBuffer` is one receive-pack POST, no probe.
+        assert!(!pushed.iter().any(|request| request.probe), "{pushed:?}");
     }
+
+    // With default settings, Git precedes a push larger than `http.postBuffer`
+    // with a probe POST whose whole body is a flush packet, then streams the
+    // pack. Both must reach the upstream with the Broker's credential.
+    let clone = root.join("clone-0");
+    fs::write(
+        clone.join("large.bin"),
+        incompressible_bytes(LARGE_PUSH_BYTES),
+    )
+    .unwrap();
+    git(&clone, &["add", "large.bin"]);
+    git(&clone, &["commit", "-m", "large"]);
+    let branch = "refs/heads/large-from-client";
+    let before = origin.requests();
+    git(
+        &clone,
+        &[
+            "-c",
+            &authorization,
+            "push",
+            "origin",
+            &format!("HEAD:{branch}"),
+        ],
+    );
+    assert_eq!(
+        git_text(&clone, &["rev-parse", "HEAD"]),
+        git_text(&upstream_repo, &["rev-parse", branch])
+    );
+    let pushed = origin.requests();
+    let posts = pushed[before.len()..]
+        .iter()
+        .filter(|request| {
+            request.method == "POST" && request.target == "/group/repo.git/git-receive-pack"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(posts.len(), 2, "{posts:?}");
+    assert!(posts[0].probe, "{posts:?}");
+    assert!(
+        posts[1].has_pack && posts[1].body_bytes > LARGE_PUSH_BYTES,
+        "{posts:?}"
+    );
 
     // Both client URL forms must reach only the same canonical upstream repo.
     let requests = origin.requests();
@@ -400,6 +447,19 @@ fn private_permissions(path: &Path) {
     }
 }
 
+/// Deterministic bytes that zlib cannot shrink, so the pack stays large.
+fn incompressible_bytes(len: usize) -> Vec<u8> {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 56) as u8
+        })
+        .collect()
+}
+
 fn commit(repo: &Path, content: &str) {
     fs::write(repo.join("file.txt"), content).unwrap();
     git(repo, &["add", "file.txt"]);
@@ -533,6 +593,9 @@ struct UpstreamRequest {
     protocol_v2: bool,
     fetch_command: bool,
     has_pack: bool,
+    /// The whole body is Git's flush-only large-push probe.
+    probe: bool,
+    body_bytes: usize,
     upstream_credential: bool,
 }
 
@@ -645,7 +708,7 @@ fn serve_git(
                 assert_eq!(read_line(&mut reader), "\r\n");
                 break;
             }
-            assert!(body.len() + length <= 1024 * 1024);
+            assert!(body.len() + length <= ORIGIN_BODY_MAX_BYTES);
             let offset = body.len();
             body.resize(offset + length, 0);
             reader.read_exact(&mut body[offset..]).unwrap();
@@ -653,7 +716,7 @@ fn serve_git(
         }
     } else if let Some(length) = headers.get("content-length") {
         let length: usize = length.parse().unwrap();
-        assert!(length <= 1024 * 1024);
+        assert!(length <= ORIGIN_BODY_MAX_BYTES);
         body.resize(length, 0);
         reader.read_exact(&mut body).unwrap();
     }
@@ -668,6 +731,8 @@ fn serve_git(
             .windows(b"command=fetch".len())
             .any(|bytes| bytes == b"command=fetch"),
         has_pack: body.windows(4).any(|bytes| bytes == b"PACK"),
+        probe: body == b"0000",
+        body_bytes: body.len(),
         upstream_credential: headers
             .get("authorization")
             .is_some_and(|value| value == &format!("Bearer {UPSTREAM_TOKEN}")),

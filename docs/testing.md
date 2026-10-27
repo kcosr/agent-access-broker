@@ -94,8 +94,10 @@ The `git_http_gateway` integration test requires Git, including `git http-backen
 It drives real protocol-v2 clone, fetch, and push commands through an in-process
 Broker gateway to a disposable Git repository behind a local TLS origin. Both
 repository URL forms, with and without `.git`, must reach canonical `.git`
-upstream paths. It also checks upstream credential selection, repository denial
-before forwarding, and disabled redirect following. Git configuration, tokens,
+upstream paths. Small pushes send one receive-pack POST; a push larger than
+Git's default `http.postBuffer` must forward Git's flush-only probe POST and
+then the streamed pack. It also checks upstream credential selection, repository
+denial before forwarding, and disabled redirect following. Git configuration, tokens,
 repositories, and certificate trust are isolated from the user's environment.
 Run it with `cargo test --locked -p agent-access-broker-host --test git_http_gateway`;
 the ordinary locked Rust suite includes it. Its ignored `git_http_gateway_child`

@@ -226,6 +226,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **Git pushes over 1 MiB work through the gateway.** With default Git
+  settings, a push larger than `http.postBuffer` failed with `HTTP 400`
+  because the gateway rejected the probe request Git sends first. The probe
+  is now accepted after the same checks as the push, forwarded upstream and
+  counted as a pack POST; its audit record's `git` value carries
+  `"probe": true`. See [Git HTTP gateway](docs/git-http-gateway.md).
+  ([#83](https://github.com/kcosr/agent-access-broker/pull/83))
+
 - **GitLab upload refusals name the file limit.** A `project.upload` file over
   the size cap or outside the media type allowlist now returns
   `attachment_size_denied` or `attachment_media_type_denied` to an authorized

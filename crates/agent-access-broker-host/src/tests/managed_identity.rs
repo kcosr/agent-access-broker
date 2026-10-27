@@ -1719,6 +1719,64 @@ async fn read_only_fingerprint_fetches_but_push_is_refused_before_the_pack_body(
     }
 }
 
+/// Git's large-push probe (a body of one flush packet) reaches the upstream
+/// only where the push it precedes could, and gets the push's refusal on a
+/// read-only path.
+#[tokio::test]
+async fn read_only_fingerprint_probe_is_refused_like_its_push() {
+    let (f, audit_path) = managed_git_push_fixture().await;
+    let push_uri = "/sip/service.git/git-receive-pack";
+    let response = git_request(
+        &f,
+        Method::POST,
+        push_uri,
+        "git-writable-probe",
+        Body::from("0000"),
+    )
+    .await;
+    assert_reaches_upstream(&response, "writable probe");
+
+    update_identity_token(
+        &f,
+        agent_access_core::IdentityTokenSettingsUpdate {
+            enabled: None,
+            read_only: Some(true),
+        },
+    );
+    for (request_id, body) in [
+        (
+            "git-read-only-push",
+            Body::from(receive_pack_test_payload("report-status")),
+        ),
+        ("git-read-only-probe", Body::from("0000")),
+    ] {
+        let response = git_request(&f, Method::POST, push_uri, request_id, body).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{request_id}");
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            ReasonCode::ServiceActionDenied.as_str(),
+            "{request_id}"
+        );
+    }
+    let records = read_audit_records(&audit_path);
+    let denial = |request_id: &str| {
+        let mut record = records
+            .iter()
+            .find(|record| record["agentRequestId"] == request_id)
+            .unwrap_or_else(|| panic!("{request_id} is audited"))
+            .clone();
+        let admission = &mut record["providerAudit"]["admission"];
+        assert!(admission["waitedMilliseconds"].is_u64(), "{record}");
+        admission["waitedMilliseconds"] = json!(0);
+        record
+    };
+    let (push, probe) = (denial("git-read-only-push"), denial("git-read-only-probe"));
+    for field in ["decision", "reasonCode", "providerAudit", "identitySource"] {
+        assert_eq!(push[field], probe[field], "{field}");
+    }
+    assert_eq!(probe["providerAudit"]["identityAccess"]["readOnly"], true);
+}
+
 #[tokio::test]
 async fn disabled_identity_token_is_an_unknown_fingerprint_on_git() {
     let (f, _) = managed_git_push_fixture().await;
