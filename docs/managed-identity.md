@@ -105,7 +105,8 @@ classification, not a stored list of actions:
   resolution or provider dispatch. An HTTP MCP call to a hidden write tool fails
   as an unknown or unavailable tool (`invalid_params`). Git fetch works; push is
   refused at receive-pack discovery and at the receive-pack POST before its body
-  is read. Every resumed continuation names an action and passes the same check.
+  is parsed; the POST's unread body is only discarded. Every resumed
+  continuation names an action and passes the same check.
 - **Local output is unaffected.** Read-only governs upstream effects only. CLI
   and stdio MCP local output destinations keep their ordinary behavior.
 

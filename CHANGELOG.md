@@ -241,14 +241,16 @@ All notable changes to this project are documented in this file.
   receive the concealed reason.
   ([#81](https://github.com/kcosr/agent-access-broker/pull/81))
 
-- **Refused uploads usually report their reason instead of a network error.**
-  When an admitted upload is refused before its body has been read, the Broker
-  keeps reading and discarding the rest for a bounded amount and time while
-  the denial is delivered, so clients receive the 4xx response instead of a
-  connection reset when the remainder arrives within those bounds. Larger or
-  slower remainders, and uploads refused before admission such as by rate
-  limits, can still end the connection. See [HTTP API](docs/http-api.md).
-  ([#80](https://github.com/kcosr/agent-access-broker/pull/80))
+- **Refused uploads and Git pushes usually report their reason instead of a
+  network error.** When an admitted upload or Git push is refused, or a push's
+  upstream forward fails, before its body has been read, the Broker keeps
+  reading and discarding the rest for a bounded amount and time while the
+  response is delivered, so clients receive it instead of a connection reset
+  when the remainder arrives within those bounds. Larger or slower remainders,
+  and requests refused before admission such as by rate limits, can still end
+  the connection. See [HTTP API](docs/http-api.md) and
+  [Git HTTP gateway](docs/git-http-gateway.md#refused-pushes).
+  ([#80](https://github.com/kcosr/agent-access-broker/pull/80), [#82](https://github.com/kcosr/agent-access-broker/pull/82))
 
 - **Definitive GitLab write rejections keep their reason.** Approve and
   unapprove, suggestion apply and batch apply, and draft publish-all and

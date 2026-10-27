@@ -1777,6 +1777,48 @@ async fn read_only_fingerprint_probe_is_refused_like_its_push() {
     assert_eq!(probe["providerAudit"]["identityAccess"]["readOnly"], true);
 }
 
+/// Git writes a whole push before reading the answer. Over a real
+/// connection, the read-only refusal still reaches it: the Broker discards
+/// the pack it never parses instead of resetting the connection.
+#[tokio::test]
+async fn read_only_push_refusal_reaches_a_client_still_sending_its_pack() {
+    use super::lingering_close::{connect_to, push_request_bytes, read_response_with_reason};
+    use tokio::io::AsyncWriteExt;
+
+    let (f, _) = managed_git_push_fixture().await;
+    update_identity_token(
+        &f,
+        agent_access_core::IdentityTokenSettingsUpdate {
+            enabled: None,
+            read_only: Some(true),
+        },
+    );
+    let address = f.broker.as_ref().unwrap().running().gateway_addr().unwrap();
+    let (mut reader, mut writer) = connect_to(address).await;
+    let request = push_request_bytes(
+        "refs/heads/feature",
+        &format!(
+            "x-agent-access-caller-authorization: {PROXY}\r\n\
+             x-aw-identity-token-sha256: {}\r\n\
+             {EXECUTION_CONTEXT_HEADER}: internal\r\n",
+            f.hash
+        ),
+        6 * 1024 * 1024,
+    );
+    let step = Duration::from_secs(30);
+    tokio::time::timeout(step, writer.write_all(&request))
+        .await
+        .unwrap()
+        .expect("the Broker reads the refused push to its end");
+    let (status, reason, body) = tokio::time::timeout(step, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("the client reads the refusal");
+    assert_eq!(status, 403);
+    assert_eq!(reason.as_deref(), Some("service_action_denied"));
+    assert_eq!(body, b"identity access is read-only\n");
+}
+
 #[tokio::test]
 async fn disabled_identity_token_is_an_unknown_fingerprint_on_git() {
     let (f, _) = managed_git_push_fixture().await;

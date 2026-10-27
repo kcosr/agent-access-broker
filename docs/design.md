@@ -1295,9 +1295,10 @@ permitted read selects the same grant as on a full-access path. A refusal is
 `ServiceActionDenied` ("identity access is read-only") with an `identityAccess`
 audit payload, before credential lookup, OAuth leasing, scope resolution or
 dispatch; an unknown action on a read-only path receives the same denial. Git
-push is refused at receive-pack discovery and POST before the body is read,
-keeping the classified repository scope. An attested identity without valid
-synthetic caveats lists nothing and is denied. HTTP MCP resolves hidden tools
+push is refused at receive-pack discovery and POST before the body is parsed,
+keeping the classified repository scope; the POST's unread body is only
+discarded. An attested identity without valid synthetic caveats lists nothing
+and is denied. HTTP MCP resolves hidden tools
 through the caller-filtered registry, so a write call there is an unknown tool,
 and `initialize` and `server/discover` add a read-only sentence to the server
 instructions. A request is judged against the runtime snapshot it was admitted
@@ -2457,16 +2458,25 @@ Invocation JSON and streamed files retain the configured transfer cap, while
 multipart JSON metadata is capped at 1 MiB. Invocation and Git bodies use the
 total `request_body_timeout_ms` deadline; public idle timing uses the global
 streaming setting and Git uses its matched gateway setting. An admitted
-invocation answered with its body unread, such as an upload refused after its
-metadata, lingers on its HTTP/1.1 connection: one of the server's connection
-tasks discards the rest, stopping once 8 MiB have been read (the received frame
-that crosses 8 MiB is read whole), after five seconds, or at the transfer cap or
-body deadline, so the client can finish sending and read the response instead
-of meeting a reset. The task holds the request's global and per-principal
-concurrency permits until it ends; graceful shutdown waits for it and forced
-shutdown cancels it. A remainder beyond those bounds, or a body that already
-failed, still closes the connection unread. Refusals before admission never read
-the body. HTTP MCP retains its independent intake admission.
+invocation or Git pack POST answered with its body unread, such as an upload
+refused after its metadata or a push refused after its command prefix, lingers
+on its HTTP/1.1 connection: one of the server's connection tasks discards the
+rest without parsing or forwarding it, stopping once 8 MiB have been read (the
+received frame that crosses 8 MiB is read whole), after five seconds, or at the
+invocation transfer cap or body deadline, so the client can finish sending and
+read the response instead of meeting a reset. After an unsuccessful response, a
+body still held, such as a pack an upstream request that refused it early or
+failed is still sending, is awaited within the same deadline and discarded
+once that holder drops it unfinished; one that ends while held releases the
+wait at once, and one still held at the deadline is stopped there, so its
+holder reads and forwards nothing more. A successful response leaves a held
+body to its holder, as for an upstream that answers before it has read the
+whole pack; that response keeps the request's permits until it ends. The task
+holds the request's global and per-principal concurrency permits until it
+ends, never past that deadline; graceful shutdown waits for it and forced
+shutdown cancels it. A remainder beyond those bounds,
+or a body that already failed, still closes the connection unread. Refusals
+before admission never read the body. HTTP MCP retains its independent intake admission.
 Local-password hashes run outside the managed
 SQLite mutex with two login/change jobs and one reserved administrative job per
 store, plus a fresh account/password-state check before commit.

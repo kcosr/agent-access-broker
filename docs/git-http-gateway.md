@@ -20,10 +20,11 @@ A [read-only identity token](managed-identity.md#read-only-paths) can fetch
 (`repo.fetch` is classified as a read) but cannot push: `repo.push` is a write,
 so both the receive-pack discovery GET and the receive-pack POST return 403
 `service_action_denied` with reason `identity access is read-only` before the
-command prefix or pack body is read and before any upstream credential is
-resolved. The denial's audit keeps the classified repository scope. An explicit
-Basic Broker token keeps its own authority. Direct-only caller secrets are
-invalid in the dedicated carrier here.
+command prefix or pack body is parsed and before any upstream credential is
+resolved; the POST's unread body is only discarded (see
+[refused pushes](#refused-pushes)). The denial's audit keeps the classified
+repository scope. An explicit Basic Broker token keeps its own authority.
+Direct-only caller secrets are invalid in the dedicated carrier here.
 
 This document owns `[gateways]` entries with `kind = "git_http"`. Git HTTP
 gateways are host-matched protocol surfaces on the gateway listener and are
@@ -234,6 +235,32 @@ the upstream's answer is returned to Git. Its audit records carry
 `providerAudit.git` with an empty `updates` list and `probe: true`. A flush
 packet followed by any other byte is still rejected as a prefix without ref
 updates (`git_pkt_line_malformed`).
+
+### Refused pushes
+
+When the broker answers an admitted pack POST before reading all of its body,
+such as a push refused after its command prefix, by policy or by a read-only
+path, or one whose upstream request failed or refused it before the whole pack
+was sent, an HTTP/1.1 connection keeps reading and discarding the rest of the
+body after the response. When the upstream request still holds the pack at
+that point, the connection waits for it to let go, within the same bounds,
+and then discards the rest; at the five-second limit it stops that request,
+which forwards nothing more. The discarded bytes are never parsed or forwarded.
+Discarding stops once 8 MiB have been read (the received frame that crosses
+8 MiB is read whole), five seconds after the response or at the body deadline,
+whichever comes first, and the request keeps its global and per-principal
+concurrency slots until then. An upstream that answers successfully before it
+has read the whole pack keeps receiving it until the push completes, and the
+request keeps its slots until its response ends. When the rest of the body
+arrives within those bounds, a Git client still sending its pack, or an HTTP
+intermediary relaying it, reads the refusal instead of meeting a reset, and the
+connection stays open. Otherwise the connection closes with the body unread, and
+such a client can still see a transport error instead of the response. Refusals
+before admission, including authentication, concurrency, rate and queue limits,
+never read the body; a large push refused there can end in a closed connection
+before the client reads the response. Git reports a failed pack POST by its HTTP
+status, for example `error: RPC failed; HTTP 403`, without the gateway's message
+line; the audit record carries the reason.
 
 ## Request representation headers
 
