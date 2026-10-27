@@ -1,5 +1,8 @@
-//! Lingering close for an admitted invocation answered while its request body
-//! is still unread, typically an upload refused after its metadata part.
+//! Lingering close for an admitted request answered while its body is still
+//! unread: an invocation, typically an upload refused after its metadata
+//! part, or a Git pack POST, typically a push refused after its command
+//! prefix or one whose upstream request failed before the whole pack was
+//! forwarded.
 //!
 //! When a handler drops an unfinished HTTP/1 request body, Hyper discards only
 //! the bytes it has already buffered and then closes the connection. The
@@ -18,8 +21,9 @@
 //! limits until it is done. It runs among its server's connection tasks:
 //! graceful shutdown waits for it and forced shutdown cancels it.
 //!
-//! Refusals before admission, including rate and queue limits, never reach
-//! this: their bodies stay unread.
+//! The remainder is only read and dropped, never parsed or forwarded.
+//! Refusals before admission, including authentication, rate and queue
+//! limits, never reach this: their bodies stay unread.
 use super::request_lifetime::RequestLifetime;
 use crate::http_server::ConnectionTasks;
 use axum::body::{Body, Bytes, HttpBody};

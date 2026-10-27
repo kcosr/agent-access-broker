@@ -1,8 +1,9 @@
-//! Uploads refused while their body is still unread: over real connections,
-//! the client finishes sending and reads the denial within the lingering
-//! bounds, lingering keeps the request's concurrency permits and follows the
-//! server's shutdown, and refusals before admission still never read the body.
-use super::invocation_limits::{ALICE, BOB, assert_limited, limit_fixture, set_fake_limit};
+//! Uploads and Git pushes refused while their body is still unread: over real
+//! connections, the client finishes sending and reads the denial within the
+//! lingering bounds, lingering keeps the request's concurrency permits and
+//! follows the server's shutdown, and refusals before admission still never
+//! read the body.
+use super::invocation_limits::{ALICE, BOB, assert_limited, limit, limit_fixture, set_fake_limit};
 use super::*;
 use crate::http_server::ConnectionTasks;
 use crate::ingress::lingering_close::{LINGER_MAX_BYTES, LINGER_TIMEOUT};
@@ -47,6 +48,15 @@ fn upload_head(request_id: &str, project: &str, file_bytes: usize) -> String {
 
 /// Reads one HTTP/1.1 response, framed by its length or chunked encoding.
 async fn read_response(reader: &mut BufReader<OwnedReadHalf>) -> std::io::Result<(u16, Vec<u8>)> {
+    read_response_with_reason(reader)
+        .await
+        .map(|(status, _, body)| (status, body))
+}
+
+/// Reads one HTTP/1.1 response and its reason code header, if any.
+pub(super) async fn read_response_with_reason(
+    reader: &mut BufReader<OwnedReadHalf>,
+) -> std::io::Result<(u16, Option<String>, Vec<u8>)> {
     let mut lines = Vec::new();
     loop {
         let mut line = String::new();
@@ -66,6 +76,7 @@ async fn read_response(reader: &mut BufReader<OwnedReadHalf>) -> std::io::Result
                 .map(|(_, value)| value.trim().to_owned())
         })
     };
+    let reason = header(&REASON_CODE_HEADER.to_ascii_lowercase());
     let mut body = Vec::new();
     if let Some(length) = header("content-length") {
         body.resize(length.parse().unwrap(), 0);
@@ -86,15 +97,19 @@ async fn read_response(reader: &mut BufReader<OwnedReadHalf>) -> std::io::Result
             }
         }
     }
-    Ok((status, body))
+    Ok((status, reason, body))
 }
 
 async fn connect(
     broker: &TestBroker,
 ) -> (BufReader<OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf) {
-    let stream = TcpStream::connect(broker.running().public_addr())
-        .await
-        .unwrap();
+    connect_to(broker.running().public_addr()).await
+}
+
+pub(super) async fn connect_to(
+    address: SocketAddr,
+) -> (BufReader<OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf) {
+    let stream = TcpStream::connect(address).await.unwrap();
     let (read, write) = stream.into_split();
     (BufReader::new(read), write)
 }
@@ -194,8 +209,21 @@ fn streamed_upload(
     tokio::sync::mpsc::UnboundedSender<Bytes>,
     Arc<AtomicUsize>,
 ) {
+    streamed_body(Bytes::from(upload_prefix(project)))
+}
+
+/// A body whose first frame is `first`; the test sends the rest through the
+/// returned sender. The counter records the frames read, and the end of the
+/// body as one more.
+fn streamed_body(
+    first: Bytes,
+) -> (
+    Body,
+    tokio::sync::mpsc::UnboundedSender<Bytes>,
+    Arc<AtomicUsize>,
+) {
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-    sender.send(Bytes::from(upload_prefix(project))).unwrap();
+    sender.send(first).unwrap();
     let read = Arc::new(AtomicUsize::new(0));
     let counter = read.clone();
     let body = Body::from_stream(stream::unfold(receiver, move |mut receiver| {
@@ -465,4 +493,220 @@ async fn forced_shutdown_cancels_a_lingering_body() {
     if let Ok(read) = closed {
         assert_eq!(read, 0, "{}", String::from_utf8_lossy(&tail));
     }
+}
+
+const GIT_HOST: &str = "git.example.test";
+const RECEIVE_PACK: &str = "/sip/service.git/git-receive-pack";
+
+/// A gateway that may push `sip/service`, with room for large packs, that
+/// refuses pushes to `refs/heads/protected`. Its upstream is not allowed, so
+/// nothing is ever forwarded.
+async fn push_gateway(configure: impl FnOnce(&mut BrokerConfig)) -> GatewayRouterFixture {
+    test_gateway_router_with_config(true, &["repo.fetch", "repo.push"], |config| {
+        let gateway = config.gateways.get_mut("gitlab_git").unwrap();
+        gateway.request_body_max_bytes = Some(64 * 1024 * 1024);
+        gateway.git.as_mut().unwrap().deny_ref_patterns = vec!["refs/heads/protected".into()];
+        configure(config);
+    })
+    .await
+}
+
+/// A push's command prefix creating `reference`, as Git sends it, and the
+/// start of its pack.
+fn push_prefix(reference: &str) -> Vec<u8> {
+    let command = format!(
+        "{} {} {reference}\0report-status side-band-64k",
+        "0".repeat(40),
+        "2".repeat(40)
+    );
+    let mut prefix = format!("{:04x}{command}", command.len() + 4).into_bytes();
+    prefix.extend_from_slice(b"0000PACK");
+    prefix
+}
+
+/// A whole HTTP/1.1 receive-pack POST to `reference`, with `headers` and a
+/// pack of `pack_bytes`, in one request as Git sends a push that fits its
+/// `http.postBuffer`.
+pub(super) fn push_request_bytes(reference: &str, headers: &str, pack_bytes: usize) -> Vec<u8> {
+    let mut body = push_prefix(reference);
+    body.resize(body.len() + pack_bytes, b'x');
+    let mut request = format!(
+        "POST {RECEIVE_PACK} HTTP/1.1\r\n\
+         host: {GIT_HOST}\r\n\
+         content-type: application/x-git-receive-pack-request\r\n\
+         {headers}content-length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    request.extend_from_slice(&body);
+    request
+}
+
+fn gateway_basic(token: &str) -> String {
+    format!(
+        "authorization: Basic {}\r\n",
+        BASE64.encode(format!("agent-access:{token}"))
+    )
+}
+
+/// Git writes a push's whole body before it reads the answer. Refused at
+/// any point after admission, before or after the command prefix is read,
+/// the Broker reads the rest of the body without forwarding it, so the
+/// client gets the refusal instead of a reset and its connection stays
+/// usable.
+#[tokio::test]
+async fn a_refused_push_is_read_to_its_end_so_the_client_gets_the_refusal() {
+    let fixture = push_gateway(|_| {}).await;
+    let address = fixture._broker.running().gateway_addr().unwrap();
+    let authorization = gateway_basic(&fixture.agent_token);
+    let pack_bytes = 6 * 1024 * 1024;
+    assert!((pack_bytes as u64) < LINGER_MAX_BYTES);
+    for (case, reference, headers, status, reason) in [
+        (
+            "refused before the body is read",
+            "refs/heads/feature",
+            format!("{authorization}content-encoding: gzip\r\n"),
+            400,
+            "gateway_header_denied",
+        ),
+        (
+            "refused after the command prefix",
+            "refs/heads/protected",
+            authorization.clone(),
+            403,
+            "git_ref_denied",
+        ),
+        (
+            "failed before reaching the upstream",
+            "refs/heads/feature",
+            authorization.clone(),
+            502,
+            "gateway_upstream_denied",
+        ),
+    ] {
+        let (mut reader, mut writer) = connect_to(address).await;
+        let request = push_request_bytes(reference, &headers, pack_bytes);
+        tokio::time::timeout(STEP, writer.write_all(&request))
+            .await
+            .unwrap()
+            .unwrap_or_else(|error| panic!("{case}: the push was not read to its end: {error}"));
+        let (got, got_reason, _) =
+            tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+                .await
+                .unwrap()
+                .unwrap_or_else(|error| panic!("{case}: no refusal: {error}"));
+        assert_eq!(
+            (got, got_reason.as_deref()),
+            (status, Some(reason)),
+            "{case}"
+        );
+
+        // Nothing was left unread: the connection serves the next request.
+        writer
+            .write_all(
+                format!(
+                    "GET /sip/service.git/info/refs?service=git-upload-pack HTTP/1.1\r\n\
+                     host: {GIT_HOST}\r\n{authorization}\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let (next, next_reason, _) =
+            tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+                .await
+                .unwrap()
+                .unwrap_or_else(|error| panic!("{case}: the connection was closed: {error}"));
+        assert_eq!(
+            (next, next_reason.as_deref()),
+            (502, Some("gateway_upstream_denied")),
+            "{case}"
+        );
+    }
+}
+
+fn push_request_through_router(
+    request_id: &str,
+    token: &str,
+    body: Body,
+    tasks: &ConnectionTasks,
+) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(RECEIVE_PACK)
+        .extension(ConnectInfo(
+            "127.0.0.1:43201".parse::<SocketAddr>().unwrap(),
+        ))
+        .extension(tasks.clone())
+        .header("Host", GIT_HOST)
+        .header(REQUEST_ID_HEADER, request_id)
+        .header(
+            AUTHORIZATION,
+            format!("Basic {}", BASE64.encode(format!("agent-access:{token}"))),
+        )
+        .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
+        .body(body)
+        .unwrap()
+}
+
+/// Sends `frames` frames of pack data, then ends the body. Returns how many
+/// reads the whole body makes: the prefix, the frames and the end.
+fn finish_push(sender: tokio::sync::mpsc::UnboundedSender<Bytes>, frames: usize) -> usize {
+    for _ in 0..frames {
+        let _ = sender.send(Bytes::from(vec![b'x'; 1024]));
+    }
+    frames + 2
+}
+
+#[tokio::test]
+async fn only_push_refusals_after_admission_read_the_rest_of_the_pack() {
+    let fixture = push_gateway(|config| {
+        config
+            .limits
+            .invocations
+            .services
+            .insert("gitlab_git".into(), limit(1, "1m"));
+    })
+    .await;
+    let tracker = TaskTracker::new();
+    let tasks = ConnectionTasks::tracked_by(tracker.clone());
+
+    // Refused after admission, which spends the window: the connection reads
+    // the rest of the pack to its end.
+    let (body, sender, read) = streamed_body(Bytes::from(push_prefix("refs/heads/protected")));
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(push_request_through_router(
+            "lingering-push-refused",
+            &fixture.agent_token,
+            body,
+            &tasks,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.headers()[REASON_CODE_HEADER], "git_ref_denied");
+    let reads = finish_push(sender, 64);
+    settle(&tracker).await;
+    assert_eq!(read.load(Ordering::SeqCst), reads);
+
+    // Rate limited before admission: the pack is never read.
+    let (body, sender, read) = streamed_body(Bytes::from(push_prefix("refs/heads/feature")));
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(push_request_through_router(
+            "lingering-push-limited",
+            &fixture.agent_token,
+            body,
+            &tasks,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()[REASON_CODE_HEADER], "rate_limited");
+    finish_push(sender, 64);
+    settle(&tracker).await;
+    assert_eq!(read.load(Ordering::SeqCst), 0);
 }

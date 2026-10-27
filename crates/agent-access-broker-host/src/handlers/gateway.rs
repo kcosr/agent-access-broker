@@ -354,7 +354,7 @@ pub(crate) async fn gateway_dispatch(
         }
     };
 
-    let mut matched_gateway = match match_gateway(&snapshot, &request) {
+    let matched_gateway = match match_gateway(&snapshot, &request) {
         Ok(Some(matched_gateway)) => matched_gateway,
         Ok(None) => {
             return gateway_error_response(
@@ -523,7 +523,27 @@ pub(crate) async fn gateway_dispatch(
         Ok(context) => context,
         Err(response) => return *response,
     };
+    // Refusals before admission, including authentication, concurrency, rate
+    // and queue limits, never read the body. A later refusal or upstream
+    // failure can leave it unread, as for a push refused after its command
+    // prefix; the connection lingers so the client reads the response. The
+    // remainder is only discarded, never parsed or forwarded. Lingering keeps
+    // the admitted request's permits, so it stays within the global and
+    // per-principal concurrency limits.
+    let (request, unread) = crate::ingress::lingering_close::track(request);
+    let permits = context.permits.clone();
+    let response =
+        gateway_dispatch_admitted(&state, request, matched_gateway, classified, context).await;
+    unread.linger(response, permits)
+}
 
+async fn gateway_dispatch_admitted(
+    state: &AppState,
+    request: Request<Body>,
+    mut matched_gateway: MatchedGateway,
+    classified: ClassifiedGatewayRequest,
+    context: GatewayContext,
+) -> Response<Body> {
     let headers = request.headers().clone();
     let mut body = Some(request.into_body());
     let GatewayContext {

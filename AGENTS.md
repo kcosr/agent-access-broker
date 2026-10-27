@@ -935,10 +935,10 @@ read-only, service/action caveats) that invocation, Git admission, discovery and
 resource clauses share, before grant selection and without removing grants, so
 precedence is unchanged. A missing or unserved descriptor counts as a write.
 Refuse writes before credential, OAuth, scope or provider work; Git push is
-refused at receive-pack discovery and POST before the body is read. Carry the
-setting as serialized `identitySource.readOnlyAccess`, never in `token_scopes`
-or stored token caveats. Browser sessions and issued Broker tokens are
-unaffected.
+refused at receive-pack discovery and POST before the body is parsed, and the
+POST's unread body is only discarded. Carry the setting as serialized
+`identitySource.readOnlyAccess`, never in `token_scopes` or stored token
+caveats. Browser sessions and issued Broker tokens are unaffected.
 
 Carry one private proof through MCP intake/session/final governed admission.
 Revalidate it before credential or provider work; never resolve a queued request
