@@ -74,14 +74,19 @@ refused after admission: over real connections, a client that writes a
 multi-MiB body first still reads the denial and reuses the connection, for a
 push refused before its body is read, after its command prefix, or when
 forwarding fails, and `tests::managed_identity` checks the same for a
-read-only push; a remainder over the lingering cap closes it, graceful shutdown
-waits for a lingering body to finish and closes the connection in order, and
-forced shutdown ends the lingering task before its timeout and releases its
-permits; through the router, lingering bodies hold their global and
-per-principal slots until they finish or time out, and rate-limited uploads and
-pushes still never read their bodies. Unit tests fix the 8 MiB allowance,
-including the frame that crosses it. These tests do not use
-live upstream services.
+read-only push. A local HTTPS origin that answers a push early, while the
+upstream request still holds the pack, checks that the rest is discarded once
+it lets go, without forwarding, and that the connection is reused and the
+permits released. A remainder over the lingering cap closes the connection,
+graceful shutdown waits for a lingering body to finish and closes the
+connection in order, and forced shutdown ends the lingering task before its
+timeout and releases its permits; through the router, lingering bodies hold
+their global and per-principal slots until they finish or time out, and
+rate-limited uploads and pushes still never read their bodies. Unit tests fix
+the 8 MiB allowance, including the frame that crosses it, and a body still
+held at the response: discarded once handed over, dropped unread after the
+deadline that releases the permits, and releasing them at once when it ends.
+These tests do not use live upstream services.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.

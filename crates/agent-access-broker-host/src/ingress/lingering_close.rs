@@ -1,8 +1,8 @@
 //! Lingering close for an admitted request answered while its body is still
 //! unread: an invocation, typically an upload refused after its metadata
 //! part, or a Git pack POST, typically a push refused after its command
-//! prefix or one whose upstream request failed before the whole pack was
-//! forwarded.
+//! prefix or one whose upstream request failed or answered before the whole
+//! pack was forwarded.
 //!
 //! When a handler drops an unfinished HTTP/1 request body, Hyper discards only
 //! the bytes it has already buffered and then closes the connection. The
@@ -16,10 +16,19 @@
 //! closes it as before. A body that already failed, for example past the
 //! ingress cap or receive deadline, is not read again.
 //!
-//! The discarding task holds the admitted request's concurrency permits, so a
-//! lingering connection still counts against the global and per-principal
-//! limits until it is done. It runs among its server's connection tasks:
-//! graceful shutdown waits for it and forced shutdown cancels it.
+//! The body can still be held when the response is ready, for example by an
+//! upstream request that answered early or failed and has not yet let go of
+//! the pack it was sending. The connection then waits, within the same
+//! deadline, for the body to be handed over when that holder drops it
+//! unfinished, and discards the rest in the time left. A body that ends while
+//! held releases the wait at once; one handed over after the deadline is
+//! dropped, and the connection closes as before.
+//!
+//! The waiting and discarding task holds the admitted request's concurrency
+//! permits, so a lingering connection still counts against the global and
+//! per-principal limits until it is done, and never past the lingering
+//! deadline. It runs among its server's connection tasks: graceful shutdown
+//! waits for it and forced shutdown cancels it.
 //!
 //! The remainder is only read and dropped, never parsed or forwarded.
 //! Refusals before admission, including authentication, rate and queue
@@ -36,6 +45,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 /// The request-body allowance discarded after the response. Enough for the
@@ -44,19 +54,42 @@ use tokio::time::Instant;
 /// whole, so the frame that crosses the allowance is the last one read and the
 /// total exceeds it by less than that frame.
 pub(crate) const LINGER_MAX_BYTES: u64 = 8 * 1024 * 1024;
-/// The longest the connection keeps discarding after the response.
+/// The longest the connection keeps waiting for and discarding the body after
+/// the response.
 pub(crate) const LINGER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The connection's handle on a request body its handler may leave unread.
 pub(crate) struct UnreadBody {
-    left: Arc<Mutex<Option<LeftBody>>>,
+    slot: Arc<Mutex<Slot>>,
     tasks: Option<ConnectionTasks>,
     expects_continue: bool,
+}
+
+/// Where a tracked body stands, shared by the body and its handle.
+enum Slot {
+    /// Owned by the handler, or by whatever it passed the body to, such as an
+    /// upstream request still sending it.
+    Held,
+    /// Dropped unfinished before the response was ready.
+    Left(LeftBody),
+    /// Held when the response was ready: dropping it unfinished hands it to
+    /// the connection task waiting on the receiver.
+    Awaited(oneshot::Sender<LeftBody>),
+    /// Ended, failed or handed over: nothing is left for the handle.
+    Done,
 }
 
 struct LeftBody {
     body: Body,
     polled: bool,
+}
+
+impl LeftBody {
+    /// A client that asked to continue and whose body was never read has not
+    /// sent it, so there is nothing to discard.
+    fn sent(&self, expects_continue: bool) -> bool {
+        self.polled || !expects_continue
+    }
 }
 
 /// Wraps `request`'s body so that a handler that drops it unfinished leaves it
@@ -73,17 +106,17 @@ pub(crate) fn track(request: Request) -> (Request, UnreadBody) {
         .headers()
         .get(EXPECT)
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"100-continue"));
-    let left = Arc::new(Mutex::new(None));
+    let slot = Arc::new(Mutex::new(Slot::Held));
     let (parts, body) = request.into_parts();
     let body = Body::new(TrackedBody {
         body: Some(body),
         polled: false,
-        left: left.clone(),
+        slot: slot.clone(),
     });
     (
         Request::from_parts(parts, body),
         UnreadBody {
-            left,
+            slot,
             tasks,
             expects_continue,
         },
@@ -94,24 +127,53 @@ impl UnreadBody {
     /// Returns `response` unchanged. If the handler left the body unfinished,
     /// the connection discards the rest, within the bounds above, while the
     /// response is sent, and `permits`, the admitted request's concurrency
-    /// permits, are released only once that ends; otherwise they are released
-    /// now. A client that asked to continue and was answered before any body
-    /// was read has not sent the body, so nothing waits for it.
+    /// permits, are released only once that ends. If the body is still held,
+    /// the connection waits for it, within the same deadline, and the permits
+    /// are released once the body ends, is discarded or the deadline passes.
+    /// Otherwise they are released now. A client that asked to continue and
+    /// was answered before any body was read has not sent the body, so
+    /// nothing is discarded for it.
     pub(crate) fn linger<P: Send + 'static>(self, response: Response, permits: P) -> Response {
-        let left = self.left.lock().unwrap().take();
-        if let (Some(left), Some(tasks)) = (left, self.tasks)
-            && (left.polled || !self.expects_continue)
-        {
-            let deadline = linger_deadline(
+        let mut slot = self.slot.lock().unwrap();
+        let state = std::mem::replace(&mut *slot, Slot::Done);
+        let Some(tasks) = self.tasks else {
+            return response;
+        };
+        let deadline = || {
+            linger_deadline(
                 Instant::now(),
                 RequestLifetime::current()
                     .deadline()
                     .map(|deadline| deadline.at),
-            );
-            tasks.spawn(async move {
-                discard(left.body, deadline).await;
-                drop(permits);
-            });
+            )
+        };
+        let expects_continue = self.expects_continue;
+        match state {
+            Slot::Left(left) if left.sent(expects_continue) => {
+                drop(slot);
+                let deadline = deadline();
+                tasks.spawn(async move {
+                    discard(left.body, deadline).await;
+                    drop(permits);
+                });
+            }
+            Slot::Held => {
+                let (sender, handed_over) = oneshot::channel();
+                *slot = Slot::Awaited(sender);
+                drop(slot);
+                let deadline = deadline();
+                tasks.spawn(async move {
+                    // The holder drops the sender without a body when the
+                    // body ends; the deadline bounds a holder that keeps it.
+                    if let Ok(Ok(left)) = tokio::time::timeout_at(deadline, handed_over).await
+                        && left.sent(expects_continue)
+                    {
+                        discard(left.body, deadline).await;
+                    }
+                    drop(permits);
+                });
+            }
+            Slot::Left(_) | Slot::Awaited(_) | Slot::Done => {}
         }
         response
     }
@@ -145,7 +207,28 @@ async fn discard(mut body: Body, deadline: Instant) {
 struct TrackedBody {
     body: Option<Body>,
     polled: bool,
-    left: Arc<Mutex<Option<LeftBody>>>,
+    slot: Arc<Mutex<Slot>>,
+}
+
+impl TrackedBody {
+    /// Nothing is left to read: a waiting connection task is released.
+    fn finish(&self) {
+        *self.slot.lock().unwrap() = Slot::Done;
+    }
+
+    /// The body was dropped unfinished: it goes to the connection task waiting
+    /// for it, or stays for the handle. A task that stopped waiting drops it.
+    fn hand_over(&self, left: LeftBody) {
+        let mut slot = self.slot.lock().unwrap();
+        match std::mem::replace(&mut *slot, Slot::Done) {
+            Slot::Held => *slot = Slot::Left(left),
+            Slot::Awaited(sender) => {
+                drop(slot);
+                let _ = sender.send(left);
+            }
+            Slot::Left(_) | Slot::Done => {}
+        }
+    }
 }
 
 impl HttpBody for TrackedBody {
@@ -164,6 +247,7 @@ impl HttpBody for TrackedBody {
         let frame = Pin::new(body).poll_frame(cx);
         if matches!(frame, Poll::Ready(None | Some(Err(_)))) {
             this.body = None;
+            this.finish();
         }
         frame
     }
@@ -181,13 +265,12 @@ impl HttpBody for TrackedBody {
 
 impl Drop for TrackedBody {
     fn drop(&mut self) {
-        if let Some(body) = self.body.take()
-            && !body.is_end_stream()
-        {
-            *self.left.lock().unwrap() = Some(LeftBody {
+        match self.body.take() {
+            Some(body) if !body.is_end_stream() => self.hand_over(LeftBody {
                 body,
                 polled: self.polled,
-            });
+            }),
+            _ => self.finish(),
         }
     }
 }
@@ -295,6 +378,135 @@ mod tests {
         // The first frame, every remaining frame and the end of the body.
         assert_eq!(read.load(Ordering::SeqCst), 102);
         assert!(!held(&permits));
+    }
+
+    /// A body whose frames the test sends through the returned sender,
+    /// counting its reads, the end of the body included.
+    fn channel_body() -> (
+        Body,
+        tokio::sync::mpsc::UnboundedSender<Bytes>,
+        Arc<AtomicUsize>,
+    ) {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Bytes>();
+        let read = Arc::new(AtomicUsize::new(0));
+        let counter = read.clone();
+        let body = Body::from_stream(stream::unfold(receiver, move |mut receiver| {
+            let counter = counter.clone();
+            async move {
+                let frame = receiver.recv().await;
+                counter.fetch_add(1, Ordering::SeqCst);
+                frame.map(|frame| (Ok::<_, std::io::Error>(frame), receiver))
+            }
+        }));
+        (body, sender, read)
+    }
+
+    /// Tracks a request whose body has sent its first frame and is still held,
+    /// as by an upstream request that answered early.
+    async fn held_body(
+        tasks: &ConnectionTasks,
+    ) -> (
+        Body,
+        UnreadBody,
+        tokio::sync::mpsc::UnboundedSender<Bytes>,
+        Arc<AtomicUsize>,
+    ) {
+        let (body, sender, read) = channel_body();
+        sender.send(Bytes::from_static(b"prefix")).unwrap();
+        let (request, unread) = track(builder(tasks).body(body).unwrap());
+        let mut holder = request.into_body();
+        holder.frame().await.unwrap().unwrap();
+        (holder, unread, sender, read)
+    }
+
+    #[tokio::test]
+    async fn a_body_held_at_the_response_is_discarded_once_handed_over() {
+        let tracker = TaskTracker::new();
+        let tasks = ConnectionTasks::tracked_by(tracker.clone());
+        let (holder, unread, sender, read) = held_body(&tasks).await;
+        let permits = permits();
+        let response = unread.linger(Response::new(Body::from("early")), permits.clone());
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 64)
+                .await
+                .unwrap(),
+            "early"
+        );
+        // The holder still has the body: the connection waits for it.
+        tokio::task::yield_now().await;
+        assert!(held(&permits));
+        assert_eq!(read.load(Ordering::SeqCst), 1);
+
+        for _ in 0..100 {
+            sender.send(Bytes::from_static(b"x")).unwrap();
+        }
+        drop(sender);
+        // The holder lets go of it unfinished; the rest is discarded.
+        drop(holder);
+        settle(&tracker).await;
+        // The first frame, every remaining frame and the end of the body.
+        assert_eq!(read.load(Ordering::SeqCst), 102);
+        assert!(!held(&permits));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_body_held_past_the_deadline_is_dropped_unread_after_the_permits() {
+        let tracker = TaskTracker::new();
+        let tasks = ConnectionTasks::tracked_by(tracker.clone());
+        let (holder, unread, sender, read) = held_body(&tasks).await;
+        let permits = permits();
+        let started = Instant::now();
+        unread.linger(Response::new(Body::empty()), permits.clone());
+        // The permits never outlive the lingering deadline.
+        settle(&tracker).await;
+        assert_between(started.elapsed(), LINGER_TIMEOUT);
+        assert!(!held(&permits));
+
+        // Handed over too late, the body is dropped without another read.
+        for _ in 0..10 {
+            sender.send(Bytes::from_static(b"x")).unwrap();
+        }
+        drop(holder);
+        tokio::task::yield_now().await;
+        assert_eq!(read.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_body_that_ends_releases_the_permits_at_once() {
+        let tracker = TaskTracker::new();
+        let tasks = ConnectionTasks::tracked_by(tracker.clone());
+
+        // The holder reads the rest of the body to its end.
+        let (mut holder, unread, sender, read) = held_body(&tasks).await;
+        let read_to_its_end = permits();
+        let started = Instant::now();
+        unread.linger(Response::new(Body::empty()), read_to_its_end.clone());
+        tokio::task::yield_now().await;
+        assert!(held(&read_to_its_end));
+        sender.send(Bytes::from_static(b"rest")).unwrap();
+        drop(sender);
+        holder.frame().await.unwrap().unwrap();
+        assert!(holder.frame().await.is_none());
+        settle(&tracker).await;
+        assert!(!held(&read_to_its_end));
+        assert!(started.elapsed() < LINGER_TIMEOUT);
+        // The first frame, the rest and the end: nothing more was read.
+        assert_eq!(read.load(Ordering::SeqCst), 3);
+        drop(holder);
+
+        // The holder drops a body known to have ended after its last frame.
+        let (request, unread) = track(builder(&tasks).body(Body::from("whole")).unwrap());
+        let mut holder = request.into_body();
+        holder.frame().await.unwrap().unwrap();
+        let ended = permits();
+        let started = Instant::now();
+        unread.linger(Response::new(Body::empty()), ended.clone());
+        tokio::task::yield_now().await;
+        assert!(held(&ended));
+        drop(holder);
+        settle(&tracker).await;
+        assert!(!held(&ended));
+        assert!(started.elapsed() < LINGER_TIMEOUT);
     }
 
     #[tokio::test]

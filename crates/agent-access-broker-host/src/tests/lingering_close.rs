@@ -710,3 +710,177 @@ async fn only_push_refusals_after_admission_read_the_rest_of_the_pack() {
     settle(&tracker).await;
     assert_eq!(read.load(Ordering::SeqCst), 0);
 }
+
+/// The bytes of a pack POST's body the [`EarlyOrigin`] reads before it answers.
+const EARLY_READ: usize = 64 * 1024;
+
+/// An HTTPS Git origin that answers one pack POST early: it reads the request
+/// head and at least [`EARLY_READ`] bytes of its body, answers 413 and then
+/// keeps the connection open, reading nothing more, until told to close it.
+struct EarlyOrigin {
+    base_url: String,
+    read: Arc<AtomicUsize>,
+    close: std::sync::mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl EarlyOrigin {
+    fn start() -> Self {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+        use std::io::{Read, Write};
+        let fixture = |name: &str| {
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../agent-access-core/tests/fixtures/outbound-tls")
+                    .join(name),
+            )
+            .unwrap()
+        };
+        let tls = Arc::new(
+            rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                CertificateDer::pem_slice_iter(&fixture("leaf-a.pem"))
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap(),
+                PrivateKeyDer::from_pem_slice(&fixture("leaf-a.key")).unwrap(),
+            )
+            .unwrap(),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("https://{}", listener.local_addr().unwrap());
+        let read = Arc::new(AtomicUsize::new(0));
+        let counter = read.clone();
+        let (close, closing) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(STEP)).unwrap();
+            let connection = rustls::ServerConnection::new(tls).unwrap();
+            let mut tls = rustls::StreamOwned::new(connection, stream);
+            let mut received = Vec::new();
+            let mut buffer = [0_u8; 16 * 1024];
+            let head = loop {
+                let read = tls.read(&mut buffer).unwrap();
+                assert!(read > 0, "the request ended early");
+                received.extend_from_slice(&buffer[..read]);
+                if let Some(end) = received.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            while received.len() - head < EARLY_READ {
+                let read = tls.read(&mut buffer).unwrap();
+                assert!(read > 0, "the request ended early");
+                received.extend_from_slice(&buffer[..read]);
+            }
+            counter.store(received.len() - head, Ordering::SeqCst);
+            let answer = b"upstream refused the pack\n";
+            write!(
+                tls,
+                "HTTP/1.1 413 Payload Too Large\r\ncontent-type: text/plain\r\ncontent-length: {}\r\n\r\n",
+                answer.len()
+            )
+            .unwrap();
+            tls.write_all(answer).unwrap();
+            tls.flush().unwrap();
+            // Unread bytes remain: closing resets the Broker's upload.
+            let _ = closing.recv_timeout(STEP);
+        });
+        Self {
+            base_url,
+            read,
+            close,
+            thread: Some(thread),
+        }
+    }
+
+    /// The body bytes it read before answering.
+    fn read(&self) -> usize {
+        self.read.load(Ordering::SeqCst)
+    }
+
+    /// Closes the connection and waits until it is closed.
+    fn close(&mut self) {
+        let _ = self.close.send(());
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
+
+/// An upstream that answers a push early, before the whole pack was sent,
+/// keeps the gateway's upstream request holding the unfinished body after
+/// the response. Once that request lets go of it, the connection discards the
+/// rest without forwarding it, so the client finishes sending and reuses the
+/// connection, and the request's permits are released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_answered_early_upstream_is_read_to_its_end_once_the_upstream_lets_go() {
+    let mut origin = EarlyOrigin::start();
+    let base_url = origin.base_url.clone();
+    let fixture = push_gateway(|config| {
+        let gateway = config.gateways.get_mut("gitlab_git").unwrap();
+        gateway.upstream_base_url = base_url.clone();
+        gateway.allowed_upstream_hosts = vec![format!("{base_url}/**")];
+        config.network.outbound_tls = agent_access_core::OutboundTlsConfig {
+            trust: agent_access_core::OutboundTlsTrustMode::Custom,
+            ca_certificate: Some(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../agent-access-core/tests/fixtures/outbound-tls/ca-a.pem"),
+            ),
+        };
+    })
+    .await;
+    let guards = fixture._broker.state().shared_ingress.clone();
+    let address = fixture._broker.running().gateway_addr().unwrap();
+    let authorization = gateway_basic(&fixture.agent_token);
+    let pack_bytes = 4 * 1024 * 1024;
+    let first_bytes = 256 * 1024;
+    let request = push_request_bytes("refs/heads/feature", &authorization, pack_bytes);
+    let split = request.len() - pack_bytes + first_bytes;
+
+    // The client sends the command prefix and the start of the pack; the
+    // origin answers before the rest arrives.
+    let (mut reader, mut writer) = connect_to(address).await;
+    writer.write_all(&request[..split]).await.unwrap();
+    let (status, _, body) = tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("the client reads the origin's early answer");
+    assert_eq!(status, 413);
+    assert_eq!(body, b"upstream refused the pack\n");
+    // The answer is delivered and the upstream request still holds the body:
+    // the connection waits for it, holding the request's permits.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(guards.global_in_flight_requests(), 1);
+
+    // The upstream lets go: the rest of the pack is discarded, not forwarded.
+    origin.close();
+    tokio::time::timeout(STEP, writer.write_all(&request[split..]))
+        .await
+        .unwrap()
+        .expect("the Broker reads the rest of the pack");
+    assert!(origin.read() >= EARLY_READ && origin.read() < first_bytes);
+
+    // Nothing was left unread: the connection serves the next request.
+    writer
+        .write_all(
+            format!(
+                "GET /sip/service.git/info/refs?service=git-upload-pack HTTP/1.1\r\n\
+                 host: {GIT_HOST}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let (next, reason, _) = tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("the connection serves the next request");
+    assert_eq!(
+        (next, reason.as_deref()),
+        (401, Some("gateway_auth_required"))
+    );
+    wait_until(|| guards.global_in_flight_requests() == 0).await;
+    assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+}
