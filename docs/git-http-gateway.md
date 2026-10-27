@@ -222,6 +222,19 @@ broker validates their nonzero object IDs, includes them in the same prefix
 limit, and forwards their original bytes unchanged. Malformed declarations,
 declarations after a ref update, and prefixes without ref updates are rejected.
 
+The one exception is Git's large-push probe. Before streaming a push request
+larger than its `http.postBuffer` (1 MiB by default), Git sends a receive-pack
+POST whose whole body is the flush packet `0000`. The broker accepts a body that
+is exactly those four bytes followed by the end of the request, and treats it as
+a push: it goes through the same authentication, invocation limit, read-only,
+token caveat and `repo.push` grant checks, so a caller who cannot push gets the
+push's refusal for the probe. It names no refs, so ref rules have nothing to
+check. An accepted probe is forwarded upstream with the push's credential and
+the upstream's answer is returned to Git. Its audit records carry
+`providerAudit.git` with an empty `updates` list and `probe: true`. A flush
+packet followed by any other byte is still rejected as a prefix without ref
+updates (`git_pkt_line_malformed`).
+
 ## Request representation headers
 
 Upload-pack POSTs may carry a single `Content-Encoding: gzip` header. The broker
@@ -356,8 +369,9 @@ counts, so one Git command usually costs more than one request:
   A protocol v2 `git ls-remote` sends the `ls-refs` POST.
 - A protocol v0 or v1 fetch sends one upload-pack POST per negotiation round;
   its `git ls-remote` uses only discovery and is not counted.
-- A push sends its receive-pack POST, preceded by a small probe POST when the
-  request is larger than the client's `http.postBuffer`.
+- A push sends its receive-pack POST, preceded by a small
+  [probe POST](#push-validation) when the request is larger than the client's
+  `http.postBuffer`.
 
 Size gateway limits for several POSTs per Git command. The built-in default
 (100 per `1m`) leaves room; when lowering it, allow at least three or four

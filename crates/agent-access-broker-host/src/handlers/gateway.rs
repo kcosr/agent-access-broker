@@ -174,6 +174,20 @@ struct ReceivePackBody {
     replay: Bytes,
     remaining: Body,
     updates: Vec<GitRefUpdate>,
+    /// Git's large-push probe: the whole body was one flush packet.
+    probe: bool,
+}
+
+impl ReceivePackBody {
+    /// The `git` audit value of this request; the probe is marked so its
+    /// empty update list is not mistaken for a push.
+    fn audit_value(&self) -> serde_json::Value {
+        let mut value = receive_pack_audit_value(&self.updates);
+        if self.probe {
+            value["probe"] = json!(true);
+        }
+        value
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1091,9 +1105,7 @@ async fn forward_prepared_git_http(
     }
 
     let limits = gateway_forward_limits(&runtime, &gateway);
-    let git_audit = receive_pack
-        .as_ref()
-        .map(|receive_pack| receive_pack_audit_value(&receive_pack.updates));
+    let git_audit = receive_pack.as_ref().map(ReceivePackBody::audit_value);
     let request_body =
         match prepare_gateway_request_body(&method, &headers, body, receive_pack, &limits).await {
             Ok(request_body) => request_body,
@@ -1567,7 +1579,7 @@ async fn prepare_gateway_request_body(
                 "gateway request body exceeds configured cap",
             )
             .with_audit(json!({
-                "git": receive_pack_audit_value(&receive_pack.updates),
+                "git": receive_pack.audit_value(),
             })));
         }
         if receive_pack
@@ -1581,7 +1593,7 @@ async fn prepare_gateway_request_body(
                 "gateway request body exceeds configured cap",
             )
             .with_audit(json!({
-                "git": receive_pack_audit_value(&receive_pack.updates),
+                "git": receive_pack.audit_value(),
             })));
         }
         let (body, failure, progress) = gateway_request_replay_body(receive_pack, limits);
@@ -1778,7 +1790,14 @@ async fn parse_receive_pack_body(
         })?;
         match length {
             0 => {
-                if updates.is_empty() {
+                // Before streaming a request larger than `http.postBuffer`,
+                // Git sends a probe whose whole body is one flush packet. It
+                // names no refs; every other push check still applies.
+                let probe = updates.is_empty()
+                    && prefix.is_empty()
+                    && pending.len() == 4
+                    && receive_pack_body_ends(&mut body, limits.idle_timeout).await?;
+                if updates.is_empty() && !probe {
                     return Err(receive_pack_error(
                         ReasonCode::GitPktLineMalformed,
                         "gateway git receive-pack command list is empty",
@@ -1803,8 +1822,10 @@ async fn parse_receive_pack_body(
                 return Ok(ReceivePackBody {
                     prefix: Bytes::from(prefix),
                     replay: Bytes::from(pending),
-                    remaining: body,
+                    // The probe's body has already ended.
+                    remaining: if probe { Body::empty() } else { body },
                     updates,
+                    probe,
                 });
             }
             1 | 2 => {
@@ -1958,6 +1979,37 @@ async fn read_receive_pack_prefix_frame(
             ));
         }
         return Ok(());
+    }
+}
+
+/// Whether the receive-pack body ends without another byte; reading stops at
+/// the first frame that carries data.
+async fn receive_pack_body_ends(
+    body: &mut Body,
+    idle_timeout: Duration,
+) -> Result<bool, ProviderError> {
+    loop {
+        let frame = match timeout(idle_timeout, body.frame()).await {
+            Ok(Some(Ok(frame))) => frame,
+            Ok(Some(Err(error))) => {
+                return Err(gateway_body_read_error(&error, true).with_audit(json!({
+                    "git": receive_pack_audit_value(&[]),
+                })));
+            }
+            Ok(None) => return Ok(true),
+            Err(_) => {
+                return Err(ProviderError::deny(
+                    ReasonCode::GatewayRequestBodyDenied,
+                    "gateway git receive-pack request body read timed out",
+                )
+                .with_audit(json!({
+                    "git": receive_pack_audit_value(&[]),
+                })));
+            }
+        };
+        if frame.data_ref().is_some_and(|chunk| !chunk.is_empty()) {
+            return Ok(false);
+        }
     }
 }
 
@@ -3913,9 +3965,263 @@ mod tests {
         );
     }
 
+    /// Git's large-push probe passes the admission, caveat, policy and
+    /// credential steps of the push it precedes, and is a counted pack POST.
+    #[tokio::test]
+    async fn receive_pack_probe_passes_push_admission_and_counts_as_a_pack_post() {
+        let (state, authorization) = managed_gateway_body_fixture("repo.push", None, |config| {
+            // Reaching forwarding fails with gateway_upstream_denied.
+            config
+                .gateways
+                .get_mut("gitlab_git")
+                .unwrap()
+                .allowed_upstream_hosts = vec!["https://blocked.example.com/**".into()];
+            config.limits.invocations.services.insert(
+                "gitlab_git".to_string(),
+                agent_access_core::InvocationLimitConfig {
+                    max_wait: None,
+                    requests: 1,
+                    window: "1m".to_string(),
+                },
+            );
+        });
+        let forwarded = receive_pack_response(
+            Arc::clone(&state),
+            authorization.clone(),
+            "gateway-probe-forwarded",
+            Body::from("0000"),
+        )
+        .await;
+        assert_eq!(forwarded.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            forwarded.headers()[REASON_CODE_HEADER],
+            ReasonCode::GatewayUpstreamDenied.as_str()
+        );
+        // The probe spent the one pack POST the window allows.
+        let limited = receive_pack_response(
+            state,
+            authorization,
+            "gateway-probe-limited",
+            Body::from("0000"),
+        )
+        .await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            limited.headers()[REASON_CODE_HEADER],
+            ReasonCode::RateLimited.as_str()
+        );
+    }
+
+    /// The probe takes the receive-pack forwarding path: the upstream gets
+    /// the flush packet with the execution credential, and both audit records
+    /// mark the probe.
+    #[tokio::test]
+    async fn receive_pack_probe_is_forwarded_with_the_credential_and_audited() {
+        let temp = test_temp_dir();
+        let token_path = temp.join("gateway-probe-token");
+        let identity_token_path = temp.join("identity-probe-token");
+        let audit_path = temp.join("gateway-probe.audit.jsonl");
+        std::fs::write(&token_path, "upstream-token").unwrap();
+        std::fs::write(&identity_token_path, "identity-token").unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            let head_end = loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(read, 0, "gateway closed before sending the probe");
+                request.extend_from_slice(&buffer[..read]);
+                if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                    && request[end + 4..].ends_with(b"0\r\n\r\n")
+                {
+                    break end + 4;
+                }
+            };
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-git-receive-pack-result\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            (request, head_end)
+        });
+
+        let mut gateway = test_gateway_config();
+        gateway.upstream_base_url = format!("http://{upstream_addr}");
+        gateway.allowed_upstream_hosts = vec![format!("http://{upstream_addr}/**")];
+        gateway.git.as_mut().unwrap().allow_push = true;
+        let git = gateway.git.clone().unwrap();
+        let mut config = test_forwarding_config(&token_path, &identity_token_path, &audit_path);
+        config.policy.grants[0].actions = vec!["repo.push".to_string()];
+        config
+            .gateways
+            .get_mut("gitlab_git")
+            .unwrap()
+            .git
+            .as_mut()
+            .unwrap()
+            .allow_push = true;
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let identity = runtime.identity_from_principal_groups(
+            "gateway-user".to_string(),
+            None,
+            Some("gateway-user".to_string()),
+            vec!["gateway-users".to_string()],
+            None,
+            None,
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-git-receive-pack-request"),
+        );
+        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("4"));
+        let receive_pack = parse_receive_pack_body(
+            Body::from("0000"),
+            &git,
+            &headers,
+            &gateway_test_limits(1024),
+        )
+        .await
+        .unwrap();
+        let prepared = runtime
+            .prepare_gateway_operation(
+                test_governed_operation(OperationContext {
+                    agent_request_id: "gateway-probe-forward".to_string(),
+                    broker_request_id: "broker-probe-forward".to_string(),
+                    identity,
+                    service: "gitlab_git".to_string(),
+                    action: "repo.push".to_string(),
+                    source: agent_access_core::SourceContext::unknown(),
+                }),
+                ResourceScopes::from([("repository".to_string(), vec!["sip/service".to_string()])]),
+            )
+            .await
+            .unwrap();
+
+        let response = forward_prepared_git_http(
+            runtime.clone(),
+            gateway,
+            GatewayForwardRequest {
+                git_request_kind: GitRequestKind::ReceivePackPost,
+                headers,
+                body: Body::empty(),
+                content_encoding: None,
+                receive_pack: Some(receive_pack),
+            },
+            prepared,
+            None,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.is_empty());
+
+        let (request, head_end) = upstream.await.unwrap();
+        let head = String::from_utf8_lossy(&request[..head_end]);
+        assert!(head.starts_with("POST /sip/service.git/git-receive-pack HTTP/1.1"));
+        assert!(head.contains("authorization: Bearer upstream-token"));
+        assert!(head.contains("content-type: application/x-git-receive-pack-request"));
+        // Like a push, the body is streamed: one chunk holding the flush packet.
+        assert_eq!(&request[head_end..], b"4\r\n0000\r\n0\r\n\r\n");
+
+        drain_gateway_test_audit(&runtime).await;
+        let records = audit_records(&audit_path);
+        let probe_git = json!({"operation": "receive-pack", "probe": true, "updates": []});
+        for phase in ["started", "completed"] {
+            assert!(
+                records.iter().any(|record| {
+                    record["agentRequestId"] == "gateway-probe-forward"
+                        && record["action"] == "repo.push"
+                        && record["decision"] == "allow"
+                        && record["providerAudit"]["gateway"]["phase"] == phase
+                        && record["providerAudit"]["git"] == probe_git
+                }),
+                "{phase}: {records:?}"
+            );
+        }
+    }
+
+    /// A caller who could not make the push gets its refusal for the probe.
+    #[tokio::test]
+    async fn receive_pack_probe_gets_the_refusal_of_its_push() {
+        let push = receive_pack_payload(
+            RECEIVE_PACK_OLD,
+            RECEIVE_PACK_NEW,
+            "refs/heads/feature",
+            Some("report-status"),
+            b"PACK",
+        );
+        for (case, token_action, grant_action, reason) in [
+            (
+                "token caveat",
+                "repo.fetch",
+                "repo.push",
+                ReasonCode::ServiceActionDenied,
+            ),
+            (
+                "no push grant",
+                "repo.push",
+                "repo.fetch",
+                ReasonCode::ServiceActionDenied,
+            ),
+        ] {
+            let (state, authorization) =
+                managed_gateway_body_fixture(token_action, None, |config| {
+                    config.policy.grants[0].actions = vec![grant_action.to_string()];
+                    // Forwarding would fail with gateway_upstream_denied.
+                    config
+                        .gateways
+                        .get_mut("gitlab_git")
+                        .unwrap()
+                        .allowed_upstream_hosts = vec!["https://blocked.example.com/**".into()];
+                });
+            let mut refusals = Vec::new();
+            for (request_id, body) in [
+                ("gateway-refused-push", Body::from(push.clone())),
+                ("gateway-refused-probe", Body::from("0000")),
+            ] {
+                let response = receive_pack_response(
+                    Arc::clone(&state),
+                    authorization.clone(),
+                    request_id,
+                    body,
+                )
+                .await;
+                refusals.push((
+                    response.status(),
+                    response.headers()[REASON_CODE_HEADER].clone(),
+                ));
+            }
+            assert_eq!(refusals[0], refusals[1], "{case}");
+            assert_eq!(
+                refusals[1],
+                (
+                    StatusCode::FORBIDDEN,
+                    HeaderValue::from_static(reason.as_str())
+                ),
+                "{case}"
+            );
+        }
+    }
+
     async fn gateway_body_response(
         state: Arc<ReloadableState>,
         authorization: String,
+        body: Body,
+    ) -> Response<Body> {
+        receive_pack_response(state, authorization, "gateway-body-bounds", body).await
+    }
+
+    async fn receive_pack_response(
+        state: Arc<ReloadableState>,
+        authorization: String,
+        request_id: &str,
         body: Body,
     ) -> Response<Body> {
         build_gateway_router(state)
@@ -3927,7 +4233,7 @@ mod tests {
                         "127.0.0.1:41080".parse::<SocketAddr>().unwrap(),
                     ))
                     .header(HOST, "git.example.test")
-                    .header(REQUEST_ID_HEADER, "gateway-body-bounds")
+                    .header(REQUEST_ID_HEADER, request_id)
                     .header(AUTHORIZATION, authorization)
                     .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
                     .body(body)
@@ -4616,6 +4922,79 @@ mod tests {
             parse_receive_pack_body(Body::from(too_large), &git, &HeaderMap::new(), &limits).await,
         );
         assert_eq!(error.reason_code(), ReasonCode::GitPrefixCapExceeded);
+    }
+
+    #[tokio::test]
+    async fn receive_pack_parser_accepts_only_the_flush_only_probe() {
+        let mut git = test_gateway_config().git.unwrap();
+        git.allow_push = true;
+        let limits = gateway_test_limits(4096);
+        // Git's large-push probe, in one frame or split across frames.
+        for body in [
+            Body::from("0000"),
+            delayed_body(vec![
+                (Duration::ZERO, Bytes::from_static(b"00")),
+                (Duration::ZERO, Bytes::from_static(b"00")),
+                (Duration::ZERO, Bytes::new()),
+            ]),
+        ] {
+            let parsed = parse_receive_pack_body(body, &git, &HeaderMap::new(), &limits)
+                .await
+                .unwrap();
+            assert!(parsed.probe);
+            assert!(parsed.updates.is_empty());
+            assert_eq!(&parsed.prefix[..], b"0000");
+            assert!(parsed.replay.is_empty());
+            assert_eq!(
+                parsed.audit_value(),
+                json!({"operation": "receive-pack", "probe": true, "updates": []})
+            );
+        }
+        // Anything else without ref updates is still rejected.
+        let mut shallow_only = pkt_line(format!("shallow {RECEIVE_PACK_OLD}\n").as_bytes());
+        shallow_only.extend(b"0000");
+        for (case, body) in [
+            ("flush then pack", Body::from("0000PACK")),
+            ("two flushes", Body::from("00000000")),
+            (
+                "flush then a later byte",
+                delayed_body(vec![
+                    (Duration::ZERO, Bytes::from_static(b"0000")),
+                    (Duration::from_millis(10), Bytes::from_static(b"x")),
+                ]),
+            ),
+            ("shallow declaration only", Body::from(shallow_only)),
+        ] {
+            let error = expect_receive_pack_error(
+                parse_receive_pack_body(body, &git, &HeaderMap::new(), &limits).await,
+            );
+            assert_eq!(
+                error.reason_code(),
+                ReasonCode::GitPktLineMalformed,
+                "{case}"
+            );
+            assert_eq!(
+                error.message, "gateway git receive-pack command list is empty",
+                "{case}"
+            );
+        }
+        // A push with ref updates is never the probe.
+        let parsed = parse_receive_pack_body(
+            Body::from(receive_pack_payload(
+                RECEIVE_PACK_OLD,
+                RECEIVE_PACK_NEW,
+                "refs/heads/feature",
+                Some("report-status"),
+                b"",
+            )),
+            &git,
+            &HeaderMap::new(),
+            &limits,
+        )
+        .await
+        .unwrap();
+        assert!(!parsed.probe);
+        assert!(parsed.audit_value().get("probe").is_none());
     }
 
     #[tokio::test]
