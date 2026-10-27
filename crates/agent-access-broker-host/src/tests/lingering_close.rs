@@ -1198,3 +1198,76 @@ async fn graceful_shutdown_does_not_wait_past_the_lingering_deadline_for_a_held_
     assert_eq!(guards.global_in_flight_requests(), 0);
     wait_until(|| origin.ended()).await;
 }
+
+/// An origin that refuses a push early, keeps its connection open and stops
+/// reading leaves the upstream request blocked writing the pack, never
+/// reading the client's body again, while the client keeps sending until
+/// every buffer is full. At the lingering deadline the client's body is
+/// dropped anyway: its connection ends, the request's permits are released,
+/// and graceful shutdown does not wait past the deadline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_push_held_by_an_upstream_that_stopped_reading_ends_at_the_lingering_deadline() {
+    let origin = EarlyOrigin::start(EarlyAnswer::RefuseThenStall);
+    let fixture = early_origin_gateway(&origin).await;
+    let guards = fixture._broker.state().shared_ingress.clone();
+    let address = fixture._broker.running().gateway_addr().unwrap();
+    let pack_bytes = 32 * 1024 * 1024;
+    let request = push_request_bytes(
+        "refs/heads/feature",
+        &gateway_basic(&fixture.agent_token),
+        pack_bytes,
+    );
+    let sent = request.len() - pack_bytes + 2 * RESUMED_CHUNK;
+    let (mut reader, mut writer) = connect_to(address).await;
+    writer.write_all(&request[..sent]).await.unwrap();
+    let (status, _, _) = tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("the client reads the origin's early refusal");
+    assert_eq!(status, 413);
+    let answered = Instant::now();
+
+    // The client keeps sending; once the buffers are full its write blocks.
+    let sending = tokio::spawn(async move {
+        let result = writer.write_all(&request[sent..]).await;
+        (result, writer)
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !sending.is_finished(),
+        "the buffers absorbed the whole pack"
+    );
+    assert_eq!(guards.global_in_flight_requests(), 1);
+
+    let GatewayRouterFixture {
+        _broker: broker,
+        app,
+        ..
+    } = fixture;
+    drop(app);
+    let report = tokio::time::timeout(LINGER_TIMEOUT + Duration::from_secs(3), broker.stop())
+        .await
+        .expect("graceful shutdown finishes at about the lingering deadline");
+    assert!(report.is_clean(), "{report:?}");
+    let stopped = answered.elapsed();
+    assert!(
+        stopped > LINGER_TIMEOUT - Duration::from_secs(1),
+        "{stopped:?}"
+    );
+    assert_eq!(guards.global_in_flight_requests(), 0);
+    assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+
+    // The client's connection ended: its blocked write failed and its read
+    // side is closed.
+    let (written, _writer) = tokio::time::timeout(Duration::from_secs(2), sending)
+        .await
+        .expect("the client's write ends with its connection")
+        .unwrap();
+    assert!(written.is_err(), "{written:?}");
+    let mut tail = [0_u8; 64];
+    let read = tokio::time::timeout(Duration::from_secs(2), reader.read(&mut tail))
+        .await
+        .expect("the client's connection is closed");
+    assert!(matches!(read, Ok(0) | Err(_)), "{read:?}");
+    drop(origin);
+}

@@ -22,10 +22,11 @@
 //! then waits, within the same deadline, for the body to be handed over when
 //! that holder drops it unfinished, and discards the rest in the time left. A
 //! body that ends while held releases the wait at once. At the deadline, a
-//! body still held is stopped: its holder's read fails, at once if the holder
-//! is waiting for a frame the client may never send, so it reads and forwards
-//! nothing more and drops the body, which is then dropped unread, and the
-//! connection closes as before. A successful response leaves a held body
+//! body still held is stopped: the request's own body is dropped there,
+//! whatever its holder is doing, even an upstream request blocked writing to
+//! an upstream that stopped reading, so the client's connection closes as
+//! before. The holder's next read fails, at once if it is waiting for a frame
+//! the client may never send, so it reads and forwards nothing more. A successful response leaves a held body
 //! to its holder, as for an upstream that answers before it has read the whole
 //! pack: the exchange is still in progress, and its response keeps the
 //! permits, as the Git gateway's forwarded response does until it ends.
@@ -75,6 +76,10 @@ pub(crate) struct UnreadBody {
 
 /// What a tracked body and its handle share.
 struct Shared {
+    /// The request's own body, which its holder reads through here until it
+    /// ends, fails or is handed over, or lingering for it expires. No lock on
+    /// it is held across an await: only for one poll, a hint or a take.
+    body: Mutex<Option<Body>>,
     slot: Mutex<Slot>,
     /// Lingering for a held body ended: its next read fails.
     expired: AtomicBool,
@@ -83,13 +88,22 @@ struct Shared {
 }
 
 impl Shared {
-    /// Stops a body still held at the deadline: the holder's read fails, and a
-    /// body handed over from now on is dropped unread. A holder waiting for a
-    /// frame is woken to read the failure, so it gives the body up without
-    /// waiting for a frame the client may never send.
+    fn body(&self) -> std::sync::MutexGuard<'_, Option<Body>> {
+        self.body
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Stops a body still held at the deadline: the body is dropped here,
+    /// whatever its holder is doing, which ends the client's request and its
+    /// connection; the holder's read fails, and a body handed over from now
+    /// on is dropped unread. A holder waiting for a frame is woken to read the
+    /// failure, so it gives the body up at once.
     fn expire(&self) {
         self.expired.store(true, Ordering::Release);
         *self.slot.lock().unwrap() = Slot::Done;
+        let body = self.body().take();
+        drop(body);
         self.reader.wake();
     }
 }
@@ -148,15 +162,16 @@ pub(crate) fn track(request: Request) -> (Request, UnreadBody) {
         .headers()
         .get(EXPECT)
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"100-continue"));
+    let (parts, body) = request.into_parts();
     let shared = Arc::new(Shared {
+        body: Mutex::new(Some(body)),
         slot: Mutex::new(Slot::Held),
         expired: AtomicBool::new(false),
         reader: AtomicWaker::new(),
     });
-    let (parts, body) = request.into_parts();
     let body = Body::new(TrackedBody {
-        body: Some(body),
         polled: false,
+        ended: false,
         shared: shared.clone(),
     });
     (
@@ -258,17 +273,22 @@ async fn discard(mut body: Body, deadline: Instant) {
 
 /// A request body that hands itself back to its [`UnreadBody`] when dropped
 /// before it ended or failed, and fails once lingering for it has expired.
+/// It reads the request's own body through the shared state, so that an
+/// expiry can drop that body without its holder.
 struct TrackedBody {
-    body: Option<Body>,
     polled: bool,
+    /// It returned its end or a failure: nothing more is read.
+    ended: bool,
     shared: Arc<Shared>,
 }
 
 impl TrackedBody {
-    /// Lingering for this held body expired: the body is dropped unread and
-    /// its holder reads the failure.
+    /// Lingering for this held body expired: the body, if the expiry has not
+    /// dropped it already, is dropped unread and the holder reads the failure.
     fn fail_expired(&mut self) -> Poll<Option<Result<Frame<Bytes>, axum::Error>>> {
-        self.body = None;
+        self.ended = true;
+        let body = self.shared.body().take();
+        drop(body);
         self.finish();
         Poll::Ready(Some(Err(axum::Error::new(LingerExpired))))
     }
@@ -302,14 +322,22 @@ impl HttpBody for TrackedBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = &mut *self;
-        if this.body.is_some() && this.shared.expired.load(Ordering::Acquire) {
+        if this.ended {
+            return Poll::Ready(None);
+        }
+        if this.shared.expired.load(Ordering::Acquire) {
             return this.fail_expired();
         }
-        let Some(body) = this.body.as_mut() else {
-            return Poll::Ready(None);
-        };
         this.polled = true;
-        let frame = Pin::new(body).poll_frame(cx);
+        let frame = {
+            let mut body = this.shared.body();
+            let Some(body) = body.as_mut() else {
+                // Only an expiry takes the body from a holder still reading it.
+                drop(body);
+                return this.fail_expired();
+            };
+            Pin::new(body).poll_frame(cx)
+        };
         match frame {
             Poll::Pending => {
                 // Expiry wakes the task registered here; an expiry before the
@@ -320,7 +348,9 @@ impl HttpBody for TrackedBody {
                 }
             }
             Poll::Ready(None | Some(Err(_))) => {
-                this.body = None;
+                this.ended = true;
+                let body = this.shared.body().take();
+                drop(body);
                 this.finish();
             }
             Poll::Ready(Some(Ok(_))) => {}
@@ -329,19 +359,31 @@ impl HttpBody for TrackedBody {
     }
 
     fn is_end_stream(&self) -> bool {
-        self.body.as_ref().is_none_or(HttpBody::is_end_stream)
+        if self.ended {
+            return true;
+        }
+        match self.shared.body().as_ref() {
+            Some(body) => body.is_end_stream(),
+            // Taken by an expiry: the failure is still to be read.
+            None => false,
+        }
     }
 
     fn size_hint(&self) -> SizeHint {
-        self.body
+        if self.ended {
+            return SizeHint::with_exact(0);
+        }
+        self.shared
+            .body()
             .as_ref()
-            .map_or_else(|| SizeHint::with_exact(0), HttpBody::size_hint)
+            .map_or_else(SizeHint::default, HttpBody::size_hint)
     }
 }
 
 impl Drop for TrackedBody {
     fn drop(&mut self) {
-        match self.body.take() {
+        let body = self.shared.body().take();
+        match body {
             Some(body) if !body.is_end_stream() => self.hand_over(LeftBody {
                 body,
                 polled: self.polled,
@@ -545,11 +587,9 @@ mod tests {
         assert_between(started.elapsed(), LINGER_TIMEOUT);
         assert!(!held(&permits));
 
-        // The holder's next read fails, though more of the body has arrived:
-        // it reads nothing more and the body is dropped unread.
-        for _ in 0..10 {
-            sender.send(Bytes::from_static(b"x")).unwrap();
-        }
+        // The body was dropped at the deadline, so the client's later frames
+        // go nowhere; the holder's next read fails and reads nothing more.
+        assert!(sender.is_closed());
         assert!(holder.frame().await.unwrap().is_err());
         assert!(holder.frame().await.is_none());
         drop(holder);
@@ -584,6 +624,34 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn expiry_drops_the_body_of_a_holder_that_is_not_reading_it() {
+        let tracker = TaskTracker::new();
+        let tasks = ConnectionTasks::tracked_by(tracker.clone());
+        // The holder is busy elsewhere, as an upstream request blocked writing
+        // to an upstream that stopped reading: it neither polls the body nor
+        // waits for its next frame.
+        let (holder, unread, sender, read) = held_body(&tasks).await;
+        let permits = permits();
+        let started = Instant::now();
+        unread.linger(refusal(""), permits.clone());
+        tokio::task::yield_now().await;
+        assert!(!sender.is_closed());
+
+        // At the deadline the request's own body is dropped, which ends the
+        // client's request, and only then are the permits released.
+        settle(&tracker).await;
+        assert_between(started.elapsed(), LINGER_TIMEOUT);
+        assert!(sender.is_closed());
+        assert!(!held(&permits));
+        assert_eq!(read.load(Ordering::SeqCst), 1);
+
+        // The holder's next read fails.
+        let mut holder = holder;
+        assert!(holder.frame().await.unwrap().is_err());
+        assert!(holder.frame().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_body_handed_over_after_the_deadline_is_dropped_unread() {
         let tracker = TaskTracker::new();
         let tasks = ConnectionTasks::tracked_by(tracker.clone());
@@ -593,11 +661,13 @@ mod tests {
         settle(&tracker).await;
         assert!(!held(&permits));
 
-        // Handed over too late, the body is dropped without another read.
+        // Handed over too late, the body is dropped without another read; the
+        // expiry has dropped it already.
         for _ in 0..10 {
-            sender.send(Bytes::from_static(b"x")).unwrap();
+            let _ = sender.send(Bytes::from_static(b"x"));
         }
         drop(holder);
+        assert!(sender.is_closed());
         tokio::task::yield_now().await;
         assert_eq!(read.load(Ordering::SeqCst), 1);
     }
