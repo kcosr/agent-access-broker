@@ -1983,7 +1983,7 @@ async fn read_receive_pack_prefix_frame(
 }
 
 /// Whether the receive-pack body ends without another byte; reading stops at
-/// the first frame that carries data.
+/// the first frame that carries data or trailers.
 async fn receive_pack_body_ends(
     body: &mut Body,
     idle_timeout: Duration,
@@ -2007,7 +2007,9 @@ async fn receive_pack_body_ends(
                 })));
             }
         };
-        if frame.data_ref().is_some_and(|chunk| !chunk.is_empty()) {
+        // Only empty data frames may follow the flush: data or trailers mean
+        // the body is not the probe.
+        if frame.data_ref().is_none_or(|chunk| !chunk.is_empty()) {
             return Ok(false);
         }
     }
@@ -4964,6 +4966,20 @@ mod tests {
                 ]),
             ),
             ("shallow declaration only", Body::from(shallow_only)),
+            (
+                "flush then undeclared trailers",
+                Body::new(http_body_util::StreamBody::new(futures_util::stream::iter(
+                    [
+                        Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(
+                            Bytes::from_static(b"0000"),
+                        )),
+                        Ok(hyper::body::Frame::trailers(HeaderMap::from_iter([(
+                            axum::http::HeaderName::from_static("x-extra"),
+                            HeaderValue::from_static("1"),
+                        )]))),
+                    ],
+                ))),
+            ),
         ] {
             let error = expect_receive_pack_error(
                 parse_receive_pack_body(body, &git, &HeaderMap::new(), &limits).await,
