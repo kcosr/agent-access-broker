@@ -604,7 +604,7 @@ fn supplied_values_never_appear_in_an_explanation() {
     assert!(!explained.contains("secret"), "{explained}");
 }
 
-/// Every action schema of the native providers this crate tests against.
+/// Every shipped native action schema, from representative configurations.
 fn native_schemas() -> Vec<(String, Value)> {
     let gitlab: agent_access_gitlab::GitlabProviderConfig = toml::from_str(
         "api_base_url = \"https://gitlab.example.com/api/v4\"\nweb_base_url = \"https://gitlab.example.com\"",
@@ -621,6 +621,8 @@ fn native_schemas() -> Vec<(String, Value)> {
         ),
         agent_access_gitlab::gitlab_descriptor(&gitlab),
         agent_access_cloudbees_ci::cloudbees_ci_descriptor(&cloudbees),
+        agent_access_gmail::descriptor(),
+        agent_access_teams::descriptor(),
     ]
     .into_iter()
     .flat_map(|descriptor| {
@@ -636,11 +638,75 @@ fn native_schemas() -> Vec<(String, Value)> {
 /// The most values an input within the footprint budget can carry.
 const MOST_VALUES: u64 = MAX_INPUT_FOOTPRINT / VALUE_FOOTPRINT;
 
+/// The most bytes of `const` and `enum` values one native schema may hold:
+/// the validator clones them into errors.
+const MAX_CONSTANT_BYTES_PER_SCHEMA: usize = 4 * 1024;
+/// The largest `not`, `if` or `contains` subschema, serialized: the
+/// validator evaluates them in full and the budget does not count them.
+const MAX_DECIDING_SUBSCHEMA_BYTES: usize = 1024;
+
+/// What one schema holds beyond the budget's reach.
+#[derive(Debug, Default)]
+struct DiagnosticProfile {
+    references: usize,
+    constant_bytes: usize,
+    largest_deciding_subschema: usize,
+}
+
+impl DiagnosticProfile {
+    fn of(schema: &Value) -> Self {
+        let mut profile = Self::default();
+        profile.walk(schema);
+        profile
+    }
+
+    fn walk(&mut self, node: &Value) {
+        match node {
+            Value::Object(keywords) => {
+                for (keyword, value) in keywords {
+                    match keyword.as_str() {
+                        "$ref" | "$dynamicRef" | "$recursiveRef" => self.references += 1,
+                        "const" | "enum" => {
+                            self.constant_bytes += serde_json::to_string(value).unwrap().len();
+                            continue;
+                        }
+                        "default" | "examples" => continue,
+                        "not" | "if" | "contains" => {
+                            self.largest_deciding_subschema = self
+                                .largest_deciding_subschema
+                                .max(serde_json::to_string(value).unwrap().len());
+                        }
+                        _ => {}
+                    }
+                    self.walk(value);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| self.walk(item)),
+            _ => {}
+        }
+    }
+}
+
+/// Explanations run only for native actions, whose schemas are written in
+/// Broker code. Every shipped one stays within this diagnostic profile, so
+/// a schema that could make explaining expensive fails here: no references,
+/// a few KiB of constants, small `not`/`if`/`contains` subschemas, and the
+/// budget at the largest input it admits.
 #[test]
-fn native_schemas_fit_the_budget() {
+fn native_schemas_fit_the_diagnostic_profile() {
     let schemas = native_schemas();
-    assert!(schemas.len() > 150, "{}", schemas.len());
+    assert!(schemas.len() > 200, "{}", schemas.len());
     for (action, schema) in schemas {
+        let profile = DiagnosticProfile::of(&schema);
+        assert_eq!(profile.references, 0, "{action}");
+        assert!(
+            profile.constant_bytes <= MAX_CONSTANT_BYTES_PER_SCHEMA,
+            "{action}: {profile:?}"
+        );
+        assert!(
+            profile.largest_deciding_subschema <= MAX_DECIDING_SUBSCHEMA_BYTES,
+            "{action}: {profile:?}"
+        );
         let positions = SchemaCost::of(&schema, 1).unwrap();
         let errors = SchemaCost::of(&schema, MOST_VALUES).unwrap();
         assert!(

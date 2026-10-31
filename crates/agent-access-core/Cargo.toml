@@ -52,7 +52,9 @@ agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
 agent-access-confluence = { path = "../agent-access-confluence" }
 agent-access-fake = { path = "../agent-access-fake" }
 agent-access-gitlab = { path = "../agent-access-gitlab" }
+agent-access-gmail = { path = "../agent-access-gmail" }
 agent-access-jira = { path = "../agent-access-jira" }
+agent-access-teams = { path = "../agent-access-teams" }
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 filetime.workspace = true
 rusqlite = { workspace = true, features = ["backup", "trace"] }

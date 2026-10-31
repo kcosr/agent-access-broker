@@ -1804,11 +1804,15 @@ concealment.
 ### Input denials
 
 Parse inputs strictly, for example with `deny_unknown_fields`, and deny
-malformed ones with `input_invalid` (`decision = deny`). When a scope
-resolution, body admission or invocation denies that way, the host checks the
-request's inputs against the action's input schema and, when they break it,
-replaces the message with field-specific problems built from the schema, such
-as `notes.note.view inputs are invalid: inputs.note is required`.
+malformed ones with `input_invalid` (`decision = deny`). When a native
+provider's scope resolution, body admission or invocation denies that way,
+the host checks the request's inputs against the action's input schema and,
+when they break it, replaces the message with field-specific problems built
+from the schema, such as
+`notes.note.view inputs are invalid: inputs.note is required`. Keep input
+schemas cheap to evaluate: no `$ref`, a few KiB of `const` and `enum` values
+at most, and small `not`, `if` and `contains` subschemas; the shipped
+providers are tested against that profile.
 The provider's message stands when the inputs satisfy the schema, and when
 explaining is outside the host's budget or discovery hides the action from
 the caller, so give each denial a specific message without supplied values.

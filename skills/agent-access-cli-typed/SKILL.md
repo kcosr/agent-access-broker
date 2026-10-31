@@ -923,8 +923,9 @@ IDs when reporting failures. If the broker returns `decision: "deny"`, do not
 try to bypass policy; narrow the request to allowed project, space, repository,
 or ask the user for the correct scope.
 
-An `input_invalid` denial whose inputs break the action's input schema names
-up to three problems by input property, for example `jira.comment.list inputs
+For built-in services, an `input_invalid` denial whose inputs break the
+action's input schema names up to three problems by input property, for
+example `jira.comment.list inputs
 are invalid: inputs.maxResults must be an integer`; typed commands set those
 properties through their flags. Fix what it names and keep the other valid
 options; do not drop options or retry blindly. A message without that detail

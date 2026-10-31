@@ -96,13 +96,18 @@ response it stays with its holder. These tests do not use live upstream
 services.
 Core `runtime::input_explanation` tests cover the message for each JSON Schema
 error kind, alternative forms, path rendering, the three-problem cap, the
-provider-message fallback and secret-like values that must never appear. Their
-budget tests check that every native action schema fits the diagnostic budget
-and that large inputs and schemas with thousands of failing branches keep the
-provider's message without being validated. A command-authority test checks
-that denials before policy, in scope resolution and command admission, are
-explained only when caller discovery lists the action: not under a token whose
-resources miss every grant, an unusable winning grant or no grant. Host
+provider-message fallback and secret-like values that must never appear.
+`native_schemas_fit_the_diagnostic_profile` holds every shipped native action
+schema (Jira, Confluence, GitLab, CloudBees CI, Gmail and Teams) to the
+diagnostic profile and budget, and budget tests check that large inputs and
+schemas with thousands of failing branches keep the provider's message
+without being validated. Command-authority tests check that imported and
+command-backed denials keep the adapter's message, including for schemas
+crafted to make evaluation explode, without compiling them. A credential
+discovery test checks that a native denial in scope resolution is explained
+only when caller discovery lists the action: not under a token whose
+resources miss every grant, nor once the winning grant's credential is
+unusable. Host
 `tests::input_explanations` drives the production Jira and Confluence providers
 through HTTP and HTTP MCP to denials in scope resolution and invocation, before
 any upstream request, and checks that responses, service logs and audit records

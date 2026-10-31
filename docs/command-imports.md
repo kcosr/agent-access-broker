@@ -852,8 +852,9 @@ A command reports a failure with one of these codes:
   supplied credential or proxy secret
   ([secrets in responses](#secrets-in-responses)).
 - Inputs that break the accepted input schema never reach the command: the
-  Broker denies them with `input_invalid` naming the problems (see
-  [input explanations](http-api.md#input-explanations)). A command's own
+  Broker denies them with `input_invalid` and the adapter's message. The
+  field-specific [input explanations](http-api.md#input-explanations) of
+  native actions never evaluate command schemas, and a command's own
   `input_invalid` keeps the command's message.
 - `upstream_rate_limited` may carry `retryAfterSeconds` inside `error`, from 1
   to 86,400:

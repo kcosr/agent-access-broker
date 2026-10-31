@@ -171,8 +171,9 @@ query arrays using form serialization, JSON request bodies, and the scalar
 URL-encoded form profile below. JSON bodies may be objects or arrays, and DELETE
 may carry a body. GET, HEAD and OPTIONS bodies are unsupported. Required fields
 and supported JSON Schema constraints are validated before dispatch; inputs
-that break them are denied with `input_invalid` naming the problems (see
-[input explanations](http-api.md#input-explanations)). Path values
+that break them are denied with `input_invalid` and the adapter's message,
+without the field-specific [input explanations](http-api.md#input-explanations)
+of native actions. Path values
 cannot contain slash, backslash, percent signs or dot-only segments, which avoids
 upstream path normalization changing the selected operation. Query values are
 escaped independently.

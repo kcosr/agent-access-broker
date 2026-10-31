@@ -568,9 +568,10 @@ arguments.
 
 The adapter enforces accepted input schemas and validates declared structured
 outputs. Inputs that break the accepted input schema are denied with
-`input_invalid` naming the problems, as for native actions; see
-[input explanations](http-api.md#input-explanations). Local references and
-anchors are supported within the bounded schema
+`input_invalid` and the adapter's message; the field-specific
+[input explanations](http-api.md#input-explanations) of native actions never
+evaluate imported schemas. Local references and anchors are supported within
+the bounded schema
 profile; external references, base IDs, dynamic references, and references into
 literal data are unsupported. Schema/manifest bytes and depth, regex backtracking,
 request duration, SSE event size, and response size are bounded. Each schema permits

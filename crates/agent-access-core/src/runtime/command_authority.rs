@@ -676,7 +676,7 @@ impl BrokerRuntime {
         } = request;
         let scope_identity =
             InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
-        let resolution = with_provider_context(
+        let (resolved, state) = with_provider_context(
             correlation.clone(),
             service.to_owned(),
             action.to_owned(),
@@ -701,17 +701,8 @@ impl BrokerRuntime {
                 )),
             ),
         )
-        .await;
-        let (resolved, state) = match resolution {
-            Ok(resolution) => resolution.into_parts(),
-            Err(error) => {
-                return Err(self
-                    .explain_input_denial_before_policy(
-                        snapshot, identity, context, service, action, inputs, error,
-                    )
-                    .await);
-            }
-        };
+        .await?
+        .into_parts();
         let mismatch = || {
             ProviderError::error(
                 ReasonCode::OperationFailed,
@@ -770,7 +761,7 @@ impl BrokerRuntime {
 
 /// What preparation needs to admit a call to a command-enforced action.
 pub(super) struct CommandAdmissionRequest<'a> {
-    pub snapshot: &'a Arc<PolicySnapshot>,
+    pub snapshot: &'a PolicySnapshot,
     pub identity: &'a IdentityContext,
     pub context: &'a ExecutionContext,
     pub service: &'a str,

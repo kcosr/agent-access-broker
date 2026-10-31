@@ -621,6 +621,15 @@ fn import_config() -> BrokerConfig {
 /// credential-free import's are, so both modes are available to the planner
 /// while each action's modes come from the real mapping.
 fn runtime(grants: Vec<PolicyGrantConfig>, per_user: bool) -> BrokerRuntime {
+    runtime_with_actions(grants, per_user, actions())
+}
+
+/// [`runtime`] publishing `actions` instead of the usual ones.
+fn runtime_with_actions(
+    grants: Vec<PolicyGrantConfig>,
+    per_user: bool,
+    actions: Vec<ImportedActionRecord>,
+) -> BrokerRuntime {
     let base = BrokerRuntime::new(config()).unwrap();
     let mut config = import_config();
     let mut base = base.clone();
@@ -631,7 +640,7 @@ fn runtime(grants: Vec<PolicyGrantConfig>, per_user: bool) -> BrokerRuntime {
                 ImportedCredentialMode::Service,
                 ImportedCredentialMode::PerUser,
             ],
-            actions(),
+            actions,
         );
         record.slot_versions.insert(
             crate::imports::ImportedCredentialPurpose::Execution,
@@ -639,7 +648,7 @@ fn runtime(grants: Vec<PolicyGrantConfig>, per_user: bool) -> BrokerRuntime {
         );
         record
     } else {
-        record(&[], actions())
+        record(&[], actions)
     };
     let prepared = base.prepare_imported_service_change(&record, None).unwrap();
     let mut runtime = base
@@ -2393,96 +2402,130 @@ fn publication_refuses_changes_that_would_invalidate_retained_grants() {
     }
 }
 
-/// The message of the input denial `caller` receives for a call to
-/// `action` whose `input` is not a string.
+/// The message of the input denial `caller` receives for `inputs` to
+/// `action`, and how long preparation took.
 async fn input_denial(
     runtime: &BrokerRuntime,
     caller: &IdentityContext,
     action: &str,
-    input: &str,
-) -> String {
-    let denied = prepare(runtime, caller, action, json!({ input: 7 }))
+    inputs: Value,
+) -> (String, std::time::Duration) {
+    let started = std::time::Instant::now();
+    let denied = prepare(runtime, caller, action, inputs)
         .await
         .err()
         .unwrap();
     assert_eq!(denied.reason_code(), ReasonCode::InputInvalid);
-    denied.message
+    (denied.message, started.elapsed())
 }
 
-/// Scope resolution of a Broker-enforced action and command admission of a
-/// command-enforced one both run before policy, so an input denial is
-/// explained only to a caller to whom discovery lists the action.
+/// Imported actions, command-backed ones included, carry schemas accepted
+/// from outside the Broker, so their input denials keep the adapter's
+/// message even for a caller discovery lists them for: neither scope
+/// resolution of a Broker-enforced action nor command admission of a
+/// command-enforced one compiles or evaluates the schema.
 #[tokio::test]
-async fn input_denials_before_policy_are_explained_only_to_callers_discovery_lists_them_for() {
-    let explained = |action: &str, input: &str| {
-        format!("{SERVICE}.{action} inputs are invalid: inputs.{input} must be a string")
-    };
-    let actions = [("issue.view", "project"), ("issue.search", "query")];
-    let granted = |modes: &[(&str, i32)]| {
-        actions
-            .iter()
-            .flat_map(|(action, _)| {
-                modes.iter().map(|(mode, priority)| {
-                    grant(
-                        "group:engineering",
-                        action,
-                        mode,
-                        *priority,
-                        &["p-ops"],
-                        &[],
-                    )
-                })
-            })
-            .collect::<Vec<_>>()
-    };
-
-    // A caller discovery lists the actions for.
-    let available = runtime(granted(&[("service", 0)]), false);
+async fn imported_input_denials_keep_the_adapter_message() {
+    let runtime = runtime(
+        ["issue.view", "issue.search"]
+            .into_iter()
+            .map(|action| grant("group:engineering", action, "service", 0, &["p-ops"], &[]))
+            .collect(),
+        false,
+    );
     let caller = identity(None);
-    for (action, input) in actions {
+    for action in ["issue.view", "issue.search"] {
+        assert!(discovered(&runtime, &caller, action).is_some(), "{action}");
+        let (message, _) = input_denial(&runtime, &caller, action, json!({"project": 7})).await;
+        assert_eq!(message, INPUT_DENIAL, "{action}");
+    }
+}
+
+/// Schemas whose evaluation would clone a large constant into thousands of
+/// errors, or expand references exponentially inside `not`, are never
+/// evaluated for an imported action: the denial returns at once.
+#[tokio::test]
+async fn crafted_imported_schemas_are_never_evaluated() {
+    let refs: Vec<Value> = (0..20).map(|_| json!({"$ref": "#/$defs/big"})).collect();
+    let cloning = json!({
+        "type": "object",
+        "$defs": {"big": {"const": "x".repeat(200_000)}},
+        "properties": {
+            "project": {"type": "string"},
+            "items": {"type": "array", "items": {"anyOf": [{"allOf": refs}, {"type": "string"}]}}
+        }
+    });
+    let mut defs = serde_json::Map::new();
+    defs.insert("s0".into(), json!({"type": "string"}));
+    for index in 1..=30 {
+        let previous = format!("#/$defs/s{}", index - 1);
+        defs.insert(
+            format!("s{index}"),
+            json!({"allOf": [{"$ref": previous}, {"$ref": previous}]}),
+        );
+    }
+    let expanding = json!({
+        "type": "object",
+        "$defs": defs,
+        "properties": {
+            "project": {"type": "string"},
+            "value": {"allOf": [{"type": "integer"}, {"not": {"$ref": "#/$defs/s30"}}]}
+        }
+    });
+    let crafted = |name: &str, command: Value, schema: Value| {
+        let mut record = action(name, command);
+        record.definition.input_schema = schema;
+        record
+    };
+    let runtime = runtime_with_actions(
+        vec![
+            grant(
+                "group:engineering",
+                "issue.cloning",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+            grant(
+                "group:engineering",
+                "issue.expanding",
+                "service",
+                0,
+                &["p-ops"],
+                &[],
+            ),
+        ],
+        false,
+        vec![
+            // Command admission of a command-enforced action.
+            crafted(
+                "issue.cloning",
+                json!({"resources": {"type": "project"}}),
+                cloning,
+            ),
+            // Scope resolution of a Broker-enforced action.
+            crafted(
+                "issue.expanding",
+                json!({"resources": {"type": "project", "inputs": ["/project"]}}),
+                expanding,
+            ),
+        ],
+    );
+    let caller = identity(None);
+    for (action, inputs) in [
+        (
+            "issue.cloning",
+            json!({"project": 7, "items": vec![Value::Null; 500]}),
+        ),
+        ("issue.expanding", json!({"project": 7, "value": "x"})),
+    ] {
+        assert!(discovered(&runtime, &caller, action).is_some(), "{action}");
+        let (message, elapsed) = input_denial(&runtime, &caller, action, inputs).await;
+        assert_eq!(message, INPUT_DENIAL, "{action}");
         assert!(
-            discovered(&available, &caller, action).is_some(),
-            "{action}"
-        );
-        assert_eq!(
-            input_denial(&available, &caller, action, input).await,
-            explained(action, input)
-        );
-    }
-
-    // A token whose resources miss every granted one: the actions pass the
-    // token's action list, but discovery hides them.
-    let restricted = identity(Some(token(&["issue.view", "issue.search"], &["p-sec"])));
-    for (action, input) in actions {
-        assert_eq!(
-            discovered(&available, &restricted, action),
-            None,
-            "{action}"
-        );
-        assert_eq!(
-            input_denial(&available, &restricted, action, input).await,
-            INPUT_DENIAL
-        );
-    }
-
-    // A winning personal grant whose credential this import cannot use:
-    // discovery hides the actions, and the lower service grant never applies.
-    let unavailable = runtime(granted(&[("per_user", 10), ("service", 0)]), false);
-    for (action, input) in actions {
-        assert_eq!(discovered(&unavailable, &caller, action), None, "{action}");
-        assert_eq!(
-            input_denial(&unavailable, &caller, action, input).await,
-            INPUT_DENIAL
-        );
-    }
-
-    // A caller with no grant for the actions.
-    let ungranted = runtime(Vec::new(), false);
-    for (action, input) in actions {
-        assert_eq!(discovered(&ungranted, &caller, action), None, "{action}");
-        assert_eq!(
-            input_denial(&ungranted, &caller, action, input).await,
-            INPUT_DENIAL
+            elapsed < std::time::Duration::from_secs(5),
+            "{action}: {elapsed:?}"
         );
     }
 }

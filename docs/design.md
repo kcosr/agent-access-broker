@@ -550,19 +550,23 @@ invalid settings or document destinations as a typed configuration failure,
 which the host reports as `config_validation_failed`.
 
 The host does not validate inputs against the action's input schema before
-dispatch; providers parse them strictly. When a scope-resolution, command
-admission, body-admission or invocation hook denies with `input_invalid`, the
-host validates the request's inputs against the action's input schema on that
-failure path only, compiled under the bounded local profile of imported
-schemas. If the schema finds problems, the host replaces the message with up
-to three field-specific ones built from each problem's location and schema
-constants, never from supplied values; otherwise the provider's message
-stands. The reason, decision, result and audit data are unchanged. A
-diagnostic budget, checked before compiling, bounds the input's estimated
-size and the errors the schema can produce for it, because the validator
-copies the input into every `anyOf`/`oneOf` branch error and has no deadline;
-outside it the provider's message stands. Hooks before policy explain only
-when caller discovery lists the action on the admitted snapshot, so a
+dispatch; providers parse them strictly. When a native provider's
+scope-resolution, body-admission or invocation hook denies with
+`input_invalid`, the host validates the request's inputs against the action's
+input schema on that failure path only, compiled under the bounded local
+profile of imported schemas. If the schema finds problems, the host replaces
+the message with up to three field-specific ones built from each problem's
+location and schema constants, never from supplied values; otherwise the
+provider's message stands. The reason, decision, result and audit data are
+unchanged. Only native actions are explained: their schemas are written in
+Broker code, and a test holds every shipped one to a diagnostic profile (no
+references, small constants and small `not`/`if`/`contains` subschemas).
+Imported and command-backed actions keep their adapter's message, and their
+schemas are never evaluated for it. As defence in depth, a diagnostic budget
+checked before compiling bounds the input's estimated size and the errors the
+schema can produce for it, because the validator copies the input into every
+`anyOf`/`oneOf` branch error and has no deadline. Scope resolution explains
+only when caller discovery lists the action on the admitted snapshot, so a
 malformed call reveals no schema that discovery hides. The invocation hook
 consumes the request, so the host keeps a shared handle to its inputs
 (`host::admitted_inputs`). See

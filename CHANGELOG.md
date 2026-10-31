@@ -216,16 +216,17 @@ All notable changes to this project are documented in this file.
   [comment pagination](docs/providers-jira.md#comment-pagination-and-limits).
   ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
 
-- **`input_invalid` denials name the problems.** When a provider denies an
-  action's inputs and they break the action's published input schema, `reason`
+- **`input_invalid` denials name the problems.** When a built-in provider
+  denies an action's inputs and they break its published input schema, `reason`
   and `error.message` name up to three problems by path, such as
   `jira.comment.list inputs are invalid: inputs.maxResults must be an integer`.
-  Native, imported and command actions are covered. Messages use schema
-  constants only, never supplied values. The provider's message stands for a
-  rule the schema does not express, for inputs above about 32 KiB or schemas
-  that could produce too many errors, and before policy unless caller
-  discovery lists the action. Reason codes, statuses, decisions and audit
-  records are unchanged. See
+  Built-in provider actions are covered; imported and command-backed actions
+  keep their adapter's message. Messages use schema constants only, never
+  supplied values. The provider's message stands for a rule the schema does
+  not express, for inputs above about 32 KiB or schemas that could produce
+  too many errors, and before policy unless caller discovery lists the
+  action. Reason codes, statuses, decisions and audit records are unchanged.
+  See
   [input explanations](docs/http-api.md#input-explanations).
 
 - **Import validation is stricter.** OpenAPI documents with

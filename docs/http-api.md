@@ -2363,10 +2363,11 @@ failures. Unrecognized validation shapes retain the generic upstream failure.
 
 #### Input explanations
 
-When a provider denies a request's inputs with `input_invalid` during scope
-resolution, body admission or invocation, the Broker checks those inputs
-against the action's published input schema. If they break it, `reason` and
-`error.message` name up to three problems after the action, for example:
+When a native provider denies a request's inputs with `input_invalid` during
+scope resolution, body admission or invocation, the Broker checks those
+inputs against the action's published input schema. If they break it,
+`reason` and `error.message` name up to three problems after the action, for
+example:
 
 ```text
 jira.comment.list inputs are invalid: inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy, startAt, url
@@ -2388,12 +2389,15 @@ property or `<key>`.
 When the inputs satisfy the schema, the provider enforced a rule the schema
 does not express, such as a cross-field requirement left to the provider, and
 its own message is returned unchanged. The provider's message also stands in
-two other cases:
+these cases:
 
-- Scope resolution and command admission run before policy, so a denial there
-  is explained only when caller discovery lists the action for the caller in
-  that execution context: the same grant, precedence, token-restriction and
-  local credential checks as the caller's catalog and MCP tool list.
+- Imported actions (MCP, OpenAPI and Swagger imports) and command-backed
+  actions keep their adapter's message. Their schemas come from outside the
+  Broker and are never evaluated to explain a denial.
+- Scope resolution runs before policy, so a denial there is explained only
+  when caller discovery lists the action for the caller in that execution
+  context: the same grant, precedence, token-restriction and local credential
+  checks as the caller's catalog and MCP tool list.
 - Explaining is bounded. Inputs larger than about 32 KiB (an estimate of
   their in-memory size), and schemas whose `anyOf`/`oneOf` branches or other
   keywords could produce too many errors for them, are not validated.

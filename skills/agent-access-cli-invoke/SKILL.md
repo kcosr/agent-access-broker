@@ -838,8 +838,8 @@ Preserve `agentRequestId` and `brokerRequestId` when reporting failures. If the
 broker returns `decision: "deny"`, do not retry with broader inputs. Narrow the
 request to allowed scope or ask the user for the correct grant.
 
-An `input_invalid` denial whose inputs break the action's input schema names
-up to three problems, for example `jira.comment.list inputs are invalid:
+For built-in services, an `input_invalid` denial whose inputs break the
+action's input schema names up to three problems, for example `jira.comment.list inputs are invalid:
 inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy,
 startAt, url`. Fix what it names and keep the other valid inputs; do not drop
 options or retry blindly. A message without that detail is the provider's own;

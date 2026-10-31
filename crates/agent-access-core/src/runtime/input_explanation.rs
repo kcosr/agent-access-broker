@@ -1,8 +1,13 @@
-//! Field-specific explanations of a provider's `input_invalid` denial.
+//! Field-specific explanations of a native provider's `input_invalid` denial.
 //!
 //! Providers parse an action's inputs strictly and often deny malformed ones
 //! with a generic message. On that failure path only, the host validates the
-//! request's inputs against the action's published input schema. When the
+//! request's inputs against the action's published input schema. Only native
+//! actions are explained: their schemas are written in Broker code and
+//! tested against a diagnostic profile, while imported and command-backed
+//! actions keep their adapter's message and their schemas are never
+//! compiled or evaluated here (see `BrokerRuntime::explain_input_denial`).
+//! When the
 //! schema finds problems, the message names up to [`MAX_PROBLEMS`] of them,
 //! for example `jira.comment.list inputs are invalid: inputs.maxResults must
 //! be an integer`. When it finds none, the provider enforced a rule the schema
@@ -17,9 +22,9 @@
 //! supplied property name appears only when the schema declares it or it is
 //! a plain identifier; any other key is shown as `<key>`.
 //!
-//! Explaining costs work the provider's own denial did not, so it runs only
-//! within a [diagnostic budget](within_budget) checked before the schema is
-//! compiled or any input validated.
+//! Explaining costs work the provider's own denial did not, so, as defence in
+//! depth, it runs only within a [diagnostic budget](within_budget) checked
+//! before the schema is compiled or any input validated.
 use crate::imports::BoundedImportSchema;
 use agent_access_provider::{Decision, ProviderError, ReasonCode};
 use jsonschema::error::{TypeKind, ValidationErrorKind};
@@ -48,9 +53,12 @@ const SEE_SCHEMA: &str = "see the action's input schema";
 // failing branches and a large input multiply into gigabytes of copies before
 // the first problem is read. An explanation therefore runs only when both
 // factors are small: the input's size, and the errors the schema can yield
-// for it, which `SchemaCost` bounds from the schema alone. Every native
-// action schema fits with room to spare (`native_schemas_fit_the_budget`);
-// outside the budget the provider's own message stands.
+// for it, which `SchemaCost` bounds from the schema alone. The budget does
+// not bound everything the validator does (it clones `const` and `enum`
+// values into errors and evaluates `not`, `if` and `contains` subschemas in
+// full), which is why only native schemas are explained and each must fit
+// the diagnostic profile of `native_schemas_fit_the_diagnostic_profile`.
+// Outside the budget the provider's own message stands.
 
 /// The largest input explained, as an estimate of its in-memory size: 64
 /// bytes for every JSON value plus its string and key bytes. An input
