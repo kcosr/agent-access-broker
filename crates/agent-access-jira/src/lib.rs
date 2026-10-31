@@ -526,7 +526,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                     "issue": { "type": "string" },
                     "url": { "type": "string" },
                     "includeBodies": { "type": "boolean", "default": false },
-                    "maxResults": { "type": "integer", "minimum": 1, "maximum": config.comments.max_results },
+                    "maxResults": { "type": "integer", "minimum": 1 },
                     "startAt": { "type": "integer", "minimum": 0 },
                     "orderBy": { "type": "string", "enum": ["created", "-created", "+created"] }
                 },

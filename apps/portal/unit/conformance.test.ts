@@ -55,8 +55,8 @@ describe("a backend the portal was not written for", () => {
     expect(choices.resources.map(({ id }) => id)).toEqual(["item"]);
     expect(choices.groups[0].included).toEqual(["item"]);
     expect(choices.hasMismatch).toBe(false);
-    expect(service.actions.map(({ action }) => action)).toEqual(["item.view", "item.download", "item.upload", "item.list"]);
-    expect(service.actions.map(({ readOnly }) => readOnly)).toEqual([true, true, false, true]);
+    expect(service.actions.map(({ action }) => action)).toEqual(["item.view", "item.download", "item.upload", "item.list", "item.note.view"]);
+    expect(service.actions.map(({ readOnly }) => readOnly)).toEqual([true, true, false, true, true]);
   });
 
   test("recognizes explicit live enumeration from an unfamiliar backend", () => {

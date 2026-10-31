@@ -3,9 +3,10 @@
 //! projection and configured roots, typed configuration, a
 //! managed credential profile, JSON, raw-download, and multipart-upload
 //! actions (the upload token-only), an explicitly declared live collection
-//! filtered by native search authority, a presenter with an embedded body and a
-//! whole-result Markdown renderer, and (when `endpoints` is enabled) a
-//! resource type whose entries keep a private attribute that a
+//! filtered by native search authority, an optional companion read with a
+//! host-issued authorization proof, a presenter with required and optional
+//! embedded bodies and a whole-result Markdown renderer, and (when `endpoints`
+//! is enabled) a resource type whose entries keep a private attribute that a
 //! single-attempt action consumes. Its writes
 //! report a request the SDK proved unsent with a mutation receipt. Broker
 //! acceptance tests register it beside the linked
@@ -226,6 +227,8 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         "type": "object", "required": ["item"],
         "properties": {"item": item()}, "additionalProperties": false
     });
+    let mut view = locator.clone();
+    view["properties"]["includeNote"] = json!({"type": "boolean", "default": false});
     let upload = json!({
         "type": "object", "required": ["item", "attachments"],
         "properties": {
@@ -261,9 +264,10 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         ),
     )]);
     let mut actions = vec![
-        action("item.view", "View an item and its text body", &locator)
+        action("item.view", "View an item and optionally its note", &view)
             .read_only()
             .reports_universal_reach()
+            .companion_read("item.note.view")
             .presentation(Some(ITEM_PRESENTATION))
             .audit_input("item", "Item"),
         action("item.download", "Download an item's content", &locator)
@@ -288,6 +292,10 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
         .read_only()
         .native_search(NativeSearchEnforcement::ResultFiltered)
         .listing_of(CONFORMANCE_ITEM_RESOURCE.id().clone()),
+        action("item.note.view", "Read an item's note", &locator)
+            .read_only()
+            .presentation(Some(NOTE_PRESENTATION))
+            .audit_input("item", "Item"),
     ];
     if config.endpoints {
         resource_scopes.insert(
@@ -342,11 +350,19 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
 }
 
 const ITEM_PRESENTATION: ActionPresentation = ActionPresentation::new(
+    &[
+        EmbeddedBody::new(&[BodyPathSegment::Field("item")], &PlainBody),
+        EmbeddedBody::new(&[BodyPathSegment::OptionalField("note")], &PlainBody),
+    ],
+    Some(&render_item),
+);
+
+const NOTE_PRESENTATION: ActionPresentation = ActionPresentation::new(
     &[EmbeddedBody::new(
-        &[BodyPathSegment::Field("item")],
+        &[BodyPathSegment::Field("note")],
         &PlainBody,
     )],
-    Some(&render_item),
+    None,
 );
 
 /// An item's `body` is plain text: Markdown escapes it, text keeps it.
@@ -393,7 +409,17 @@ fn render_item(result: &Value, context: &mut RenderContext) -> Result<(), Render
     context.out.push_code(field("path")?)?;
     context.out.push("\n\n")?;
     context.out.push_escaped(field("body")?)?;
-    context.out.push("\n")
+    context.out.push("\n")?;
+    if let Some(note) = result.get("note") {
+        let body = note
+            .get("body")
+            .and_then(Value::as_str)
+            .ok_or(RenderError)?;
+        context.out.push("\n## Note\n\n")?;
+        context.out.push_escaped(body)?;
+        context.out.push("\n")?;
+    }
+    Ok(())
 }
 
 struct ConformanceProvider {
@@ -432,6 +458,14 @@ fn ping_inputs(inputs: &Value) -> Result<PingInputs, ProviderError> {
 #[serde(deny_unknown_fields)]
 struct ItemInputs {
     item: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ViewInputs {
+    item: String,
+    #[serde(default)]
+    include_note: bool,
 }
 
 fn list_inputs(inputs: &Value) -> Result<(), ProviderError> {
@@ -749,6 +783,13 @@ impl ConformanceProvider {
         request: &ProviderInvocation,
         item: &str,
     ) -> Result<ProviderResult, ProviderError> {
+        let include_note = parse::<ViewInputs>(request.inputs())?.include_note;
+        if include_note && !request.companion_reads_authorized() {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "including a note requires item.note.view authority with the same credential mode",
+            ));
+        }
         let authorization = Self::authorization(request)?;
         let started = Instant::now();
         let response = self
@@ -793,7 +834,53 @@ impl ConformanceProvider {
         if let Some(related_title) = related_title {
             result["item"]["relatedTitle"] = json!(related_title);
         }
+        if include_note {
+            result["note"] = self.note(request, item).await?.result["note"].clone();
+        }
         Ok(Self::result("item.view", item, result, status, started))
+    }
+
+    async fn note(
+        &self,
+        request: &ProviderInvocation,
+        item: &str,
+    ) -> Result<ProviderResult, ProviderError> {
+        let authorization = Self::authorization(request)?;
+        let started = Instant::now();
+        let mut url = self.url(item, false);
+        url.path_segments_mut()
+            .expect("base URLs have a path")
+            .push("note");
+        let response = self
+            .requests
+            .send(
+                self.requests.request(reqwest::Method::GET, url),
+                UpstreamCall::new("item.note.view").with_authorization(&authorization),
+            )
+            .await
+            .map_err(upstream_error)?;
+        let status = response.status().as_u16();
+        let body = self
+            .read_json(response, |value| {
+                value
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        ProviderError::error(
+                            ReasonCode::UpstreamProtocolFailed,
+                            "conformance note is malformed",
+                        )
+                    })
+            })
+            .await?;
+        Ok(Self::result(
+            "item.note.view",
+            item,
+            json!({"note": {"body": body}}),
+            status,
+            started,
+        ))
     }
 
     async fn download(
@@ -966,7 +1053,8 @@ impl ConformanceProvider {
             return Ok(BTreeMap::from([("item".into(), vec![])]));
         }
         let item = match action {
-            "item.view" | "item.download" => parse::<ItemInputs>(inputs)?.item,
+            "item.view" => parse::<ViewInputs>(inputs)?.item,
+            "item.download" | "item.note.view" => parse::<ItemInputs>(inputs)?.item,
             "item.upload" => upload_inputs(inputs, self.max_upload_bytes)?.item,
             _ => {
                 return Err(ProviderError::deny(
@@ -1044,6 +1132,7 @@ impl Provider for ConformanceProvider {
             .ok_or_else(|| invalid("conformance item scope is missing"))?;
         match request.action() {
             "item.view" => self.view(&request, &item).await,
+            "item.note.view" => self.note(&request, &item).await,
             "item.download" => self.download(&request, &item).await,
             "item.upload" => self.upload(&request, &item).await,
             _ => Err(ProviderError::deny(
@@ -1564,8 +1653,27 @@ mod tests {
             Some(CONFORMANCE_ITEM_RESOURCE.id())
         );
         assert!(action("item.view").reports_universal_reach);
-        for name in ["item.download", "item.upload", "item.list", "endpoint.ping"] {
+        assert_eq!(
+            action("item.view").companion_read_actions,
+            ["item.note.view"]
+        );
+        assert!(action("item.note.view").read_only);
+        let bodies = action("item.view")
+            .presentation
+            .as_ref()
+            .unwrap()
+            .embedded_bodies();
+        assert_eq!(bodies[1].owner_pointer(), "/note");
+        assert_eq!(bodies[1].owner_optional_prefixes(), ["/note"]);
+        for name in [
+            "item.download",
+            "item.upload",
+            "item.list",
+            "item.note.view",
+            "endpoint.ping",
+        ] {
             assert!(!action(name).reports_universal_reach);
+            assert!(action(name).companion_read_actions.is_empty());
         }
         let view = response_capabilities(action("item.view").presentation.as_ref());
         assert!(view.supports_markdown_response() && view.supports_read_content());
@@ -1585,7 +1693,12 @@ mod tests {
                 .map(|input| (input.input(), input.label()))
                 .collect::<Vec<_>>()
         };
-        for name in ["item.view", "item.download", "item.upload"] {
+        for name in [
+            "item.view",
+            "item.download",
+            "item.upload",
+            "item.note.view",
+        ] {
             assert_eq!(audited(name), [("item", "Item")], "{name}");
         }
         assert!(audited("item.list").is_empty());

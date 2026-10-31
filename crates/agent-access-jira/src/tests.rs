@@ -429,6 +429,7 @@ struct StubJiraBackend {
     search_page: Mutex<Option<JiraSearchPage>>,
     last_search: Mutex<Option<JiraSearchRequest>>,
     last_comment_list: Mutex<Option<JiraCommentListRequest>>,
+    comment_page_override: Mutex<Option<JiraCommentPage>>,
     comments: Mutex<BTreeMap<String, JiraComment>>,
     comment_issue_keys: Mutex<BTreeMap<String, String>>,
     added_comments: Mutex<Vec<JiraCommentAddRequest>>,
@@ -753,6 +754,13 @@ impl JiraBackend for StubJiraBackend {
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         self.record_credential("comments", credential);
         *self.last_comment_list.lock().unwrap() = Some(request.clone());
+        if let Some(page) = self.comment_page_override.lock().unwrap().clone() {
+            return Ok(JiraBackendResponse {
+                value: page,
+                status: 200,
+                duration_ms: 10,
+            });
+        }
         let comment_issue_keys = self.comment_issue_keys.lock().unwrap().clone();
         let comments = self
             .comments

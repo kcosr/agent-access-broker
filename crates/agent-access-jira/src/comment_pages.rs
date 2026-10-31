@@ -21,7 +21,6 @@ pub(super) fn project(
     budget: &mut RenderBudget,
 ) -> Result<ProjectedCommentPage, ProviderError> {
     if page.start_at != inputs.start_at
-        || page.max_results == 0
         || page.comments.len() > inputs.max_results as usize
         || page.comments.len() > page.max_results as usize
     {

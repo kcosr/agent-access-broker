@@ -443,3 +443,127 @@ fn comment_page_configuration_inherits_body_cap_and_rejects_zero_progress_limits
         ["providers.jira.comments.body_max_results must be non-zero"]
     );
 }
+
+#[tokio::test]
+async fn empty_zero_sized_upstream_pages_preserve_completion_in_all_collection_reads() {
+    let backend = collection_backend(0);
+    let provider =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+    for total in [Some(0_u32), None] {
+        // Exercise the HTTP adapter's parser before the provider's page projection.
+        let parsed = backend::comment_page_from_value(
+            json!({"comments":[], "startAt":0, "maxResults":0, "total":total}),
+            20,
+        )
+        .unwrap();
+        assert_eq!(parsed.max_results, 0);
+        *backend.comment_page_override.lock().unwrap() = Some(parsed);
+        for (action, inputs) in [
+            ("comment.list", json!({"issue":"PROJ-1"})),
+            (
+                "comment.list",
+                json!({"issue":"PROJ-1", "includeBodies":true}),
+            ),
+            (
+                "issue.view",
+                json!({"issue":"PROJ-1", "includeComments":true}),
+            ),
+        ] {
+            let result = provider
+                .invoke(body_invocation(action, inputs))
+                .await
+                .unwrap();
+            let page = if action == "issue.view" {
+                &result.result["commentPage"]
+            } else {
+                &result.result
+            };
+            assert_eq!(page["comments"], json!([]));
+            assert_eq!(page["maxResults"], 0);
+            assert_eq!(page["count"], 0);
+            assert_eq!(page["total"], json!(total));
+            assert_eq!(page["isLast"], json!(total.map(|_| true)));
+            assert!(page["nextStartAt"].is_null());
+            assert_eq!(result.object_ids.as_ref().unwrap()["commentIds"], json!([]));
+            assert!(
+                backend
+                    .last_comment_list
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .max_results
+                    > 0
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn nonempty_zero_sized_upstream_pages_are_still_rejected_in_all_collection_reads() {
+    let backend = collection_backend(0);
+    let provider =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+    let mut upstream = page(1, 0, Some(1));
+    upstream.max_results = 0;
+    *backend.comment_page_override.lock().unwrap() = Some(upstream);
+    for (action, inputs) in [
+        ("comment.list", json!({"issue":"PROJ-1"})),
+        (
+            "comment.list",
+            json!({"issue":"PROJ-1", "includeBodies":true}),
+        ),
+        (
+            "issue.view",
+            json!({"issue":"PROJ-1", "includeComments":true}),
+        ),
+    ] {
+        let error = provider
+            .invoke(body_invocation(action, inputs))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert!(error.result.is_none());
+    }
+}
+
+#[tokio::test]
+async fn comment_list_schema_and_dispatch_allow_larger_requests_and_clamp_upstream_page_size() {
+    let mut config = jira_config();
+    config.comments.max_results = 7;
+    let descriptor = jira_descriptor(&config);
+    let action = descriptor
+        .actions
+        .iter()
+        .find(|action| action.action == "comment.list")
+        .unwrap();
+    let max_results_schema = &action.input_schema["properties"]["maxResults"];
+    assert_eq!(max_results_schema["type"], "integer");
+    assert_eq!(max_results_schema["minimum"], 1);
+    assert!(max_results_schema.get("maximum").is_none());
+
+    let backend = collection_backend(0);
+    let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
+    for include_bodies in [false, true] {
+        let result = provider
+            .invoke(body_invocation(
+                "comment.list",
+                json!({
+                    "issue":"PROJ-1", "includeBodies":include_bodies, "maxResults":1000,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.result["maxResults"], 7);
+        assert_eq!(
+            backend
+                .last_comment_list
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .max_results,
+            7
+        );
+    }
+}

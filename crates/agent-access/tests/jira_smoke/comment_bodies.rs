@@ -188,6 +188,92 @@ fn tool<'a>(listing: &'a Value, action: &str) -> &'a Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_comment_pages_accept_zero_upstream_maximum_across_read_modes() {
+    let server = MockServer::start().await;
+    mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{API}/issue/PROJ-1/comment")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "startAt":0, "maxResults":0, "total":0, "comments":[]
+        })))
+        .with_priority(1)
+        .expect(3)
+        .mount(&server)
+        .await;
+    let broker = start(&server, READ_ACTIONS, None).await;
+    let base = broker.public_url();
+
+    for (arguments, embedded, include_bodies, requested_maximum) in [
+        (
+            vec!["jira", "issue", "comment", "list", "--issue", "PROJ-1"],
+            false,
+            false,
+            "50",
+        ),
+        (
+            vec![
+                "jira",
+                "issue",
+                "comment",
+                "list",
+                "--issue",
+                "PROJ-1",
+                "--include-bodies",
+                "--read-content-format",
+                "text",
+            ],
+            false,
+            true,
+            "20",
+        ),
+        (
+            vec![
+                "jira",
+                "issue",
+                "view",
+                "PROJ-1",
+                "--include-comments",
+                "--read-content-format",
+                "text",
+            ],
+            true,
+            true,
+            "20",
+        ),
+    ] {
+        let before = server.received_requests().await.unwrap().len();
+        let result = run(&base, &arguments);
+        let page = if embedded {
+            &result["result"]["commentPage"]
+        } else {
+            &result["result"]
+        };
+        assert_eq!(page["comments"], json!([]));
+        assert_eq!(page["startAt"], 0);
+        assert_eq!(page["maxResults"], 0);
+        assert_eq!(page["count"], 0);
+        assert_eq!(page["total"], 0);
+        assert_eq!(page["isLast"], true);
+        assert!(page["nextStartAt"].is_null());
+        assert_eq!(page["includeBodies"], include_bodies);
+        assert_eq!(page["orderBy"], "+created");
+        assert!(page.get("limitedBy").is_none());
+
+        let requests = server.received_requests().await.unwrap();
+        let collections = requests[before..]
+            .iter()
+            .filter(|request| request.url.path().ends_with("/comment"))
+            .collect::<Vec<_>>();
+        assert_eq!(collections.len(), 1);
+        let parameters = collections[0].url.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(parameters["startAt"], "0");
+        assert_eq!(parameters["maxResults"], requested_maximum);
+        assert_eq!(parameters["orderBy"], "+created");
+    }
+    stop(broker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() {
     let server = MockServer::start().await;
     mount(&server).await;

@@ -45,10 +45,14 @@
           "service",
           "per_user"
         ],
-        "description": "View an item and its text body",
+        "description": "View an item and optionally its note",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "includeNote": {
+              "default": false,
+              "type": "boolean"
+            },
             "item": {
               "description": "Item path, such as shelf-one/item-one",
               "type": "string"
@@ -170,6 +174,33 @@
           "type": "object"
         },
         "listingOf": "conformance_item",
+        "lookupRequired": false,
+        "readOnly": true,
+        "requiredScopeTypes": [
+          "item"
+        ]
+      },
+      {
+        "action": "item.note.view",
+        "available": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "description": "Read an item's note",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "item": {
+              "description": "Item path, such as shelf-one/item-one",
+              "type": "string"
+            }
+          },
+          "required": [
+            "item"
+          ],
+          "type": "object"
+        },
         "lookupRequired": false,
         "readOnly": true,
         "requiredScopeTypes": [

@@ -18289,6 +18289,7 @@ fn assert_jira_read_response_capability_matrix(
 ) {
     const EMBEDDED: &[&str] = &[
         "comment.add",
+        "comment.list",
         "comment.reply",
         "comment.update",
         "comment.view",
@@ -18341,13 +18342,34 @@ fn assert_jira_read_response_capability_matrix(
         owners,
         std::collections::BTreeMap::from([
             ("comment.add", json!(["/result/comment"])),
+            ("comment.list", json!(["/result/comments/*"])),
             ("comment.reply", json!(["/result/comment"])),
             ("comment.update", json!(["/result/comment"])),
             ("comment.view", json!(["/result/comment"])),
             ("issue.create", json!(["/result/issue"])),
             ("issue.update", json!(["/result/issue"])),
-            ("issue.view", json!(["/result", "/result/customFields/*"])),
+            (
+                "issue.view",
+                json!([
+                    "/result",
+                    "/result/customFields/*",
+                    "/result/commentPage/comments/*"
+                ])
+            ),
         ])
+    );
+    let optional_prefixes = jira_actions
+        .iter()
+        .filter_map(|action| {
+            Some((
+                action["action"].as_str()?,
+                action.get("optionalRenderedBodyOwnerPrefixes")?.clone(),
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        optional_prefixes,
+        std::collections::BTreeMap::from([("issue.view", json!(["/result/commentPage"]))])
     );
 
     for action in jira_actions {
