@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
   issue reads: older clients cannot interpret optional body-owner prefixes.
   See [the provider SDK](docs/provider-sdk.md#companion-reads) and
   [presentation metadata](docs/http-api.md).
+  ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
 
 - **Uploaded import documents add a managed-store migration.** Back up before
   applying `032_imported_source_documents` and upgrade the Broker, CLI and
@@ -89,6 +90,7 @@ All notable changes to this project are documented in this file.
   declarations and host proofs preserve existing comment-body permissions and
   credential modes, so existing grants gain no additional disclosure. See
   [comment reads](docs/providers-jira.md#reading-comment-bodies).
+  ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
 
 - **Audit records show what a request concerned.** Invocation audit records
   carry `auditInputs`: the supplied values of the few inputs each action opts
@@ -210,6 +212,7 @@ All notable changes to this project are documented in this file.
   comments with an explicit indicator; individual bodies are never shortened.
   Every page remains independently authorized. See
   [comment pagination](docs/providers-jira.md#comment-pagination-and-limits).
+  ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
 
 - **Import validation is stricter.** OpenAPI documents with
   duplicate names now fail discovery or refresh instead of using the last value;
