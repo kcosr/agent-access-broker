@@ -41,6 +41,14 @@ const ISSUE_BODIES: &[EmbeddedBody] = &[
         ],
         &CustomFieldBody,
     ),
+    EmbeddedBody::new(
+        &[
+            BodyPathSegment::OptionalField("commentPage"),
+            BodyPathSegment::Field("comments"),
+            BodyPathSegment::Each,
+        ],
+        &AdfBody("body"),
+    ),
 ];
 
 const NESTED_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(
@@ -50,6 +58,11 @@ const NESTED_ISSUE_DESCRIPTION: &[EmbeddedBody] = &[EmbeddedBody::new(
 
 const COMMENT_BODY: &[EmbeddedBody] = &[EmbeddedBody::new(
     &[BodyPathSegment::Field("comment")],
+    &AdfBody("body"),
+)];
+
+const COMMENT_LIST_BODIES: &[EmbeddedBody] = &[EmbeddedBody::new(
+    &[BodyPathSegment::Field("comments"), BodyPathSegment::Each],
     &AdfBody("body"),
 )];
 
@@ -111,7 +124,7 @@ const RESULT_DESCRIPTORS: &[ResultDescriptor] = &[
     },
     ResultDescriptor {
         action: "comment.list",
-        embedded_bodies: NO_BODIES,
+        embedded_bodies: COMMENT_LIST_BODIES,
         whole: Some(WholeRenderer::CommentList),
     },
     ResultDescriptor {
@@ -209,7 +222,7 @@ impl WholeResultRenderer for WholeRenderer {
             WholeRenderer::IssueTypeList => render_issue_type_list(result, out, budget)?,
             WholeRenderer::Issue => render_issue(result, true, "# ", out, max_body_bytes, budget)?,
             WholeRenderer::Search => render_search(result, out, budget)?,
-            WholeRenderer::CommentList => render_comment_list(result, out, budget)?,
+            WholeRenderer::CommentList => render_comment_list(result, out, max_body_bytes, budget)?,
             WholeRenderer::Comment => render_comment_view(result, out, max_body_bytes, budget)?,
             WholeRenderer::PropertyList => render_property_list(result, out, budget)?,
             WholeRenderer::Property => render_property(result, out, budget)?,
@@ -345,6 +358,10 @@ fn render_issue(
             max_body_bytes,
             budget,
         )?;
+        if let Some(page) = object.get("commentPage") {
+            out.push("\n## Comments\n")?;
+            render_comment_page(as_object(page)?, out, max_body_bytes, budget, true)?;
+        }
     }
     Ok(())
 }
@@ -842,36 +859,87 @@ fn render_search(
 fn render_comment_list(
     value: &Value,
     out: &mut MarkdownWriter,
+    max_body_bytes: u64,
     budget: &mut PresentationBudget,
 ) -> Result<(), RenderError> {
     let object = as_object(value)?;
     let issue = as_object(required(object, "issue")?)?;
-    let comments = array(required(object, "comments")?)?;
-    budget.charge_work(comments.len().saturating_add(object.len()))?;
     out.push("# Jira comments for ")?;
     out.push_code(required_scalar(issue, "key")?)?;
     out.push("\n")?;
     render_issue_metadata(issue, out)?;
+    render_comment_page(object, out, max_body_bytes, budget, false)
+}
+
+fn render_comment_page(
+    object: &Map<String, Value>,
+    out: &mut MarkdownWriter,
+    max_body_bytes: u64,
+    budget: &mut PresentationBudget,
+    embedded: bool,
+) -> Result<(), RenderError> {
+    let comments = array(required(object, "comments")?)?;
+    budget.charge_work(comments.len().saturating_add(object.len()))?;
     field(out, "Count", &comments.len().to_string())?;
+    if let Some(include_bodies) = optional_display(object, "includeBodies")? {
+        field(out, "Bodies included", &include_bodies)?;
+    }
     if comments.is_empty() {
         out.push("\nNo results.\n")?;
     }
     for comment in comments {
+        let comment = as_object(comment)?;
+        budget.charge_work(comment.len())?;
         out.push("\n")?;
-        render_comment_summary(comment, out)?;
+        out.push(if embedded {
+            "### Comment "
+        } else {
+            "## Comment "
+        })?;
+        out.push_code(required_scalar(comment, "commentId")?)?;
+        out.push("\n")?;
+        render_comment_fields(comment, out)?;
+        render_comment_body(
+            comment,
+            out,
+            max_body_bytes,
+            budget,
+            if embedded { "#### Body" } else { "### Body" },
+        )?;
     }
-    out.push("\n## Pagination\n")?;
+    out.push(if embedded {
+        "\n### Pagination\n"
+    } else {
+        "\n## Pagination\n"
+    })?;
     let start_at = optional_display(object, "startAt")?;
     let maximum_results = optional_display(object, "maxResults")?;
-    let total = optional_display(object, "total")?;
+    let total = match object.get("total") {
+        Some(Value::Null) => Some("unknown".to_string()),
+        _ => optional_display(object, "total")?,
+    };
+    let is_last = match object.get("isLast") {
+        Some(Value::Null) => Some("unknown".to_string()),
+        _ => optional_display(object, "isLast")?,
+    };
+    let next_start_at = optional_display(object, "nextStartAt")?;
     fields(
         out,
         &[
             ("Start at", start_at.as_deref()),
             ("Maximum results", maximum_results.as_deref()),
             ("Total", total.as_deref()),
+            ("Last page", is_last.as_deref()),
+            ("Next start at", next_start_at.as_deref()),
         ],
-    )
+    )?;
+    if let Some(order) = optional_scalar(object, "orderBy")? {
+        field_code(out, "Order by", order)?;
+    }
+    if let Some(limit) = optional_scalar(object, "limitedBy")? {
+        field_code(out, "Limited by", limit)?;
+    }
+    Ok(())
 }
 
 fn render_comment_view(
@@ -891,6 +959,16 @@ fn render_comment_view(
     out.push("\n")?;
     render_issue_metadata(issue, out)?;
     render_comment_fields(comment, out)?;
+    render_comment_body(comment, out, max_body_bytes, budget, "## Body")
+}
+
+fn render_comment_body(
+    comment: &Map<String, Value>,
+    out: &mut MarkdownWriter,
+    max_body_bytes: u64,
+    budget: &mut PresentationBudget,
+    heading: &str,
+) -> Result<(), RenderError> {
     if let Some(body) = comment.get("body").filter(|value| !value.is_null()) {
         let rendered = render_adf_bounded_with_budget(
             body,
@@ -901,7 +979,9 @@ fn render_comment_view(
         )
         .map_err(|_| RenderError)?
         .ok_or(RenderError)?;
-        out.push("\n## Body\n\n")?;
+        out.push("\n")?;
+        out.push(heading)?;
+        out.push("\n\n")?;
         out.push(&rendered.value)?;
         out.push("\n")?;
     }
@@ -1057,14 +1137,6 @@ fn render_issue_metadata(
     Ok(())
 }
 
-fn render_comment_summary(value: &Value, out: &mut MarkdownWriter) -> Result<(), RenderError> {
-    let comment = as_object(value)?;
-    out.push("## Comment ")?;
-    out.push_code(required_scalar(comment, "commentId")?)?;
-    out.push("\n")?;
-    render_comment_fields(comment, out)
-}
-
 fn render_comment_fields(
     comment: &Map<String, Value>,
     out: &mut MarkdownWriter,
@@ -1160,6 +1232,303 @@ mod tests {
         })
     }
 
+    fn comment_page_with_bodies() -> Value {
+        json!({
+            "comments":[
+                {"commentId":"21","body":adf("first *body*"),
+                 "author":{"accountId":"a1","displayName":"Ada\n## forged"},
+                 "created":"2026-10-01T12:00:00Z"},
+                {"commentId":"22","parentCommentId":"21","body":adf("reply body"),
+                 "updated":"2026-10-02T12:00:00Z"}
+            ],
+            "startAt":0,"maxResults":20,"count":2,"total":3,
+            "isLast":false,"nextStartAt":2,"orderBy":"+created",
+            "includeBodies":true,"limitedBy":"body_bytes"
+        })
+    }
+
+    #[test]
+    fn comment_pages_normalize_every_body_and_metadata_is_a_no_op() {
+        for embedded in [false, true] {
+            let mut page = comment_page_with_bodies();
+            if !embedded {
+                page["issue"] = json!({"key":"PROJ-1"});
+            }
+            let source = if embedded {
+                json!({"key":"PROJ-1","description":adf("issue body"),
+                       "customFields":[],"commentPage":page})
+            } else {
+                page
+            };
+            let action = if embedded {
+                "issue.view"
+            } else {
+                "comment.list"
+            };
+            let mut result = source.clone();
+            present_provider_result(
+                action,
+                &mut result,
+                ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
+                4096,
+                16384,
+            )
+            .unwrap();
+            let page = if embedded {
+                &result["commentPage"]
+            } else {
+                &result
+            };
+            assert_eq!(page["comments"][0]["body"], adf("first *body*"));
+            assert_eq!(
+                page["comments"][0]["renderedBody"],
+                json!({"format":"text","value":"first *body*"})
+            );
+            assert_eq!(page["comments"][1]["renderedBody"]["value"], "reply body");
+            assert_eq!(page["comments"][1]["parentCommentId"], "21");
+            assert_eq!(page["nextStartAt"], 2);
+            if embedded {
+                assert_eq!(result["renderedBody"]["value"], "issue body");
+            }
+
+            let mut native = source;
+            present_provider_result(action, &mut native, ResponseOptions::default(), 4096, 16384)
+                .unwrap();
+            let page = if embedded {
+                &native["commentPage"]
+            } else {
+                &native
+            };
+            assert!(page["comments"][0].get("renderedBody").is_none());
+        }
+
+        let mut metadata = comment_page_with_bodies();
+        metadata["issue"] = json!({"key":"PROJ-1"});
+        metadata["includeBodies"] = json!(false);
+        for comment in metadata["comments"].as_array_mut().unwrap() {
+            comment.as_object_mut().unwrap().remove("body");
+        }
+        let original = metadata.clone();
+        present_provider_result(
+            "comment.list",
+            &mut metadata,
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
+            4096,
+            16384,
+        )
+        .unwrap();
+        assert_eq!(metadata, original);
+    }
+
+    #[test]
+    fn comment_page_markdown_preserves_bodies_reply_order_and_continuation() {
+        for embedded in [false, true] {
+            let mut page = comment_page_with_bodies();
+            page["issue"] = json!({"key":"PROJ-1"});
+            let mut result = if embedded {
+                page.as_object_mut().unwrap().remove("issue");
+                json!({"key":"PROJ-1","description":adf("issue body"),
+                       "customFields":[],"commentPage":page})
+            } else {
+                page
+            };
+            present_provider_result(
+                if embedded {
+                    "issue.view"
+                } else {
+                    "comment.list"
+                },
+                &mut result,
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+                4096,
+                16384,
+            )
+            .unwrap();
+            let markdown = result["value"].as_str().unwrap();
+            for expected in [
+                "Comment `21`",
+                "Comment `22`",
+                "first \\*body\\*",
+                "reply body",
+                "- Parent comment ID: `21`",
+                "- Bodies included: true",
+                "- Start at: 0",
+                "- Maximum results: 20",
+                "- Total: 3",
+                "- Last page: false",
+                "- Next start at: 2",
+                "- Order by: `+created`",
+                "- Limited by: `body_bytes`",
+            ] {
+                assert!(
+                    markdown.contains(expected),
+                    "missing {expected:?}: {markdown}"
+                );
+            }
+            assert!(
+                markdown.find("Comment `21`").unwrap() < markdown.find("Comment `22`").unwrap()
+            );
+            assert!(!markdown.contains("\n## forged"));
+            if embedded {
+                assert!(
+                    markdown.find("issue body").unwrap() < markdown.find("## Comments").unwrap()
+                );
+                assert!(markdown.contains("\n### Comment `21`\n"));
+                assert!(markdown.contains("\n#### Body\n"));
+                assert!(markdown.contains("\n### Pagination\n"));
+            }
+        }
+    }
+
+    #[test]
+    fn issue_comments_distinguish_not_requested_from_an_empty_page() {
+        let source = json!({"key":"PROJ-1","description":null,"customFields":[]});
+        for format in [
+            ReadContentFormat::Native,
+            ReadContentFormat::Text,
+            ReadContentFormat::Markdown,
+        ] {
+            let mut absent = source.clone();
+            present_provider_result(
+                "issue.view",
+                &mut absent,
+                ResponseOptions::new(format, ResponseFormat::Json),
+                4096,
+                16384,
+            )
+            .unwrap();
+            assert_eq!(absent, source);
+        }
+        let options = ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown);
+        let mut absent = source.clone();
+        present_provider_result("issue.view", &mut absent, options, 4096, 16384).unwrap();
+        assert!(!absent["value"].as_str().unwrap().contains("## Comments"));
+
+        let mut empty = source;
+        empty["commentPage"] = json!({
+            "comments":[],"count":0,"total":0,"startAt":0,"maxResults":20,
+            "isLast":true,"nextStartAt":null,"orderBy":"+created","includeBodies":true
+        });
+        present_provider_result("issue.view", &mut empty, options, 4096, 16384).unwrap();
+        let markdown = empty["value"].as_str().unwrap();
+        assert!(markdown.contains("\n## Comments\n"));
+        assert!(markdown.contains("- Count: 0\n"));
+        assert!(markdown.contains("- Total: 0\n"));
+        assert!(markdown.contains("- Last page: true\n"));
+        assert!(!markdown.contains("Next start at"));
+    }
+
+    #[test]
+    fn issue_comment_page_requires_valid_structure_when_present() {
+        for page in [
+            Value::Null,
+            json!([]),
+            json!({}),
+            json!({"comments":null}),
+            json!({"comments":{}}),
+        ] {
+            for options in [
+                ResponseOptions::default(),
+                ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
+                ResponseOptions::new(ReadContentFormat::Markdown, ResponseFormat::Json),
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+            ] {
+                let mut result = json!({
+                    "key":"PROJ-1","description":null,"customFields":[],"commentPage":page
+                });
+                let error =
+                    present_provider_result("issue.view", &mut result, options, 4096, 16384)
+                        .unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+            }
+        }
+    }
+
+    #[test]
+    fn comment_page_markdown_marks_unknown_total_and_completion_explicitly() {
+        for empty in [false, true] {
+            let mut result = json!({
+                "issue":{"key":"PROJ-1"},"comments":[{"commentId":"21"}],
+                "startAt":20,"maxResults":20,"total":null,"isLast":null,
+                "nextStartAt":21,"orderBy":"+created","includeBodies":false
+            });
+            if empty {
+                result["comments"] = json!([]);
+                result["nextStartAt"] = Value::Null;
+            }
+            present_provider_result(
+                "comment.list",
+                &mut result,
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+                4096,
+                16384,
+            )
+            .unwrap();
+            let markdown = result["value"].as_str().unwrap();
+            assert!(markdown.contains("- Total: unknown\n"));
+            assert!(markdown.contains("- Last page: unknown\n"));
+            assert!(!markdown.contains("- Last page: true\n"));
+            if empty {
+                assert!(!markdown.contains("Next start at"));
+            } else {
+                assert!(markdown.contains("- Next start at: 21\n"));
+            }
+        }
+    }
+
+    #[test]
+    fn comment_collections_share_complexity_budget_with_the_issue() {
+        const BODY_LIMIT: u64 = 1024 * 1024;
+        const RESULT_LIMIT: u64 = 16 * 1024 * 1024;
+        let body = json!({
+            "type":"doc","version":1,
+            "content":vec![json!({"type":"paragraph","content":[]});22_000]
+        });
+        for options in [
+            ResponseOptions::default(),
+            ResponseOptions::new(ReadContentFormat::Text, ResponseFormat::Json),
+            ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+        ] {
+            let mut single = json!({"issue":{"key":"PROJ-1"},
+                                    "comment":{"commentId":"1","body":body}});
+            present_provider_result(
+                "comment.view",
+                &mut single,
+                options,
+                BODY_LIMIT,
+                RESULT_LIMIT,
+            )
+            .unwrap();
+            for embedded in [false, true] {
+                let count = if embedded { 5 } else { 6 };
+                let comments = (1..=count)
+                    .map(|id| json!({"commentId":id.to_string(),"body":body}))
+                    .collect::<Vec<_>>();
+                let mut result = if embedded {
+                    json!({"key":"PROJ-1","description":body,"customFields":[],
+                           "commentPage":{"comments":comments}})
+                } else {
+                    json!({"issue":{"key":"PROJ-1"},"comments":comments})
+                };
+                let error = present_provider_result(
+                    if embedded {
+                        "issue.view"
+                    } else {
+                        "comment.list"
+                    },
+                    &mut result,
+                    options,
+                    BODY_LIMIT,
+                    RESULT_LIMIT,
+                )
+                .unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+                assert_eq!(error.message, RENDER_FAILURE_MESSAGE);
+                assert!(error.result.is_none());
+            }
+        }
+    }
+
     #[test]
     fn project_view_markdown_keeps_search_references_and_collection_limits() {
         let source = json!({
@@ -1214,6 +1583,7 @@ mod tests {
                 "comment.add",
                 "comment.reply",
                 "comment.update",
+                "comment.list",
             ]
         );
         let whole = RESULT_DESCRIPTORS
@@ -1927,7 +2297,11 @@ mod tests {
                 .map(EmbeddedBody::owner_pointer)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(owners("issue.view"), ["", "/customFields/*"]);
+        assert_eq!(
+            owners("issue.view"),
+            ["", "/customFields/*", "/commentPage/comments/*"]
+        );
+        assert_eq!(owners("comment.list"), ["/comments/*"]);
         assert_eq!(owners("issue.create"), ["/issue"]);
         assert_eq!(owners("issue.update"), ["/issue"]);
         assert!(owners("search").is_empty());

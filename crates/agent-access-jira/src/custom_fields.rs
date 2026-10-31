@@ -214,7 +214,7 @@ pub(super) fn preflight_issue_view_content(
     description: Option<&Value>,
     custom_fields: &mut [Value],
     max_body_bytes: u64,
-) -> Result<(), ProviderError> {
+) -> Result<RenderBudget, ProviderError> {
     let mut budget = RenderBudget::default();
     if let Some(description) = description {
         preflight_adf(description, max_body_bytes, &mut budget).map_err(|_| {
@@ -224,7 +224,8 @@ pub(super) fn preflight_issue_view_content(
             )
         })?;
     }
-    preflight_custom_adf(custom_fields, max_body_bytes, &mut budget)
+    preflight_custom_adf(custom_fields, max_body_bytes, &mut budget)?;
+    Ok(budget)
 }
 
 fn preflight_custom_adf(

@@ -1066,6 +1066,8 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
     } = content;
     let JiraCommentsConfig {
         max_results,
+        body_max_results,
+        max_page_body_bytes,
         max_property_value_bytes,
         allowed_property_key_prefixes,
         allowed_visibility,
@@ -1105,6 +1107,8 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
             "comments",
             Fields::default()
                 .int("max_results", *max_results)
+                .int("body_max_results", *body_max_results)
+                .opt_int("max_page_body_bytes", *max_page_body_bytes)
                 .int("max_property_value_bytes", *max_property_value_bytes)
                 .put(
                     "allowed_property_key_prefixes",

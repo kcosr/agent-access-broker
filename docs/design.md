@@ -638,6 +638,19 @@ current target identity, upstream visibility or successful lookup on a later
 direct view. The hint defaults to false and is not projected into client
 catalogs, OpenAPI or send schemas.
 
+Optional companion reads have a separate native action contract. The descriptor
+names a flat set of ordinary scoped JSON reads in the same service and scope.
+The host checks each direct companion for the already-resolved resources under
+the admitted snapshot and all identity, context, token, resource and read-only
+ceilings. Each ordinary winning grant must select the primary's credential mode;
+there is no fallback to another grant, recursive companion traversal, credential
+acquisition or upstream request for the proof. The immutable
+`companion_reads_authorized()` result defaults to false, and the ordinary source
+operation stays usable when it is false. The provider gates its optional expanded
+read on that proof and reuses the source execution credential and exact scopes.
+Static `companionReadActions` discovery metadata describes dependencies without
+exposing the proof result. See [the SDK contract](provider-sdk.md#companion-reads).
+
 The grant picker separates Read-only and Write-capable actions, with independent
 All/None controls for search matches. Grant listings derive a Write-capable
 checkmark from their explicit action selections. Unreviewed actions are treated
@@ -695,9 +708,17 @@ existence, ownership of a particular object, or an authorization outcome.
   Format, a `{ "type": "doc", "version": 1, "content": [...] }` JSON
   document). Comment property actions require an issue locator and are limited
   to broker-owned key prefixes.
-  Jira normalized reads cover seven actions whose
+  `issue.view` can include one chronological page of full comment bodies through
+  `includeComments`; `comment.list` returns metadata by default and full bodies
+  only with `includeBodies`. Both use the dedicated collection endpoint and
+  explicit continuation, preserving reply parent IDs. The embedded page requires
+  `comment.list` and `comment.view` in the primary's winning credential mode;
+  a full-body list requires `comment.view` in the list's mode. These optional
+  reads preserve existing action and token restrictions. Each page reflects its
+  own authorized visibility; there is no multi-page snapshot.
+  Jira normalized reads cover eight actions whose
   results declare ADF advertise `readContentFormats = [native, markdown, text]`:
-  `issue.view`, `issue.create`, `issue.update`, `comment.view`, `comment.add`,
+  `issue.view`, `issue.create`, `issue.update`, `comment.list`, `comment.view`, `comment.add`,
   `comment.reply`, and `comment.update`. Eleven non-streaming retrieval actions
   advertise `responseFormats = [json, markdown]`: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`,
   `comment.list`, `comment.view`, `comment.property.list`,
@@ -1050,7 +1071,8 @@ sequenceDiagram
    receive resources. A provider asking for an authority its action was not
    admitted with fails closed with a `broker_provider_contract_failed` error.
    An eligible opted-in native read also receives the host's immutable
-   same-mode universal-reach hint; its ordinary resource authority is unchanged.
+   same-mode universal-reach hint and, when declared, the companion-read proof;
+   its ordinary resource authority is unchanged.
    Multipart admission sees this context with the inputs and selected
    credentials, but no body data or decrypted private attributes.
 13. **Provider invoke**, then **finalize/audit**. The final invocation is built

@@ -44,6 +44,14 @@ details and searchable fields under its own project grant. Use a returned
 authorized `search` tool. Optional `include` and `query` select and narrow
 metadata; see [project discovery](providers-jira.md#project-details-and-searchable-fields).
 
+Jira `issue.view` accepts `inputs: {"issue":"PROJ-123","includeComments":true}`
+to include a chronological page of full comment and reply bodies. `comment.list`
+remains metadata-only by default; add `includeBodies: true` to retrieve bodies
+in batches, using the returned `nextStartAt` for continuation. Both flags use
+Broker defaults for count and ordering and require the existing comment-read
+permissions in the selected credential mode. Format controls remain alongside
+`inputs`. See [comment reads](providers-jira.md#reading-comment-bodies).
+
 The separately grantable `confluence.space.list` action accepts `inputs` with
 only `maxResults` and optional `pageToken`. Results use canonical space grants,
 not URL aliases. Continue `more` and `scan_budget` pages even when empty.

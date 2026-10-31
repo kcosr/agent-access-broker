@@ -275,6 +275,7 @@ its builder methods:
 | `.token_only()` | That the upstream accepts only a static (token) credential for the action, never delegated (OAuth) access. See [token-only actions](#token-only-actions). |
 | `.read_only()` | A reviewed read. Actions default to `read_only = false`; never infer it from a name. |
 | `.reports_universal_reach()` | Ask the host whether this scoped native read has effective access to every resource in its selected credential mode; see [universal reach](#universal-reach). |
+| `.companion_read(action)` | Declare one additional native read whose same-scope, same-mode authority is required for an optional part of this action's result; repeat for multiple direct companions. See [companion reads](#companion-reads). |
 | `.lookup(LookupRequirement::ScopeResolution)` | That scope resolution needs a host-selected lookup credential before policy. `LookupRequirement::Execution` asks for one only at execution. |
 | `.native_search(NativeSearchEnforcement::UpstreamConstrained)` or `.native_search(NativeSearchEnforcement::ResultFiltered)` | Reviewed native search with a complete host-admitted boundary and the declared query/result enforcement. |
 | `.listing_of(resource_type)` | Explicit live enumeration of the action's scoped resource type; advertises `listingOf` for discovery. |
@@ -288,6 +289,18 @@ its builder methods:
 Keep the description and input schema concise; they are part of initial MCP tool
 discovery. Put grammar, limits and examples in `documentation`, which detailed
 discovery, OpenAPI and the send schema carry but MCP tool definitions omit.
+
+Embedded presentation paths use `presentation::BodyPathSegment::Field` for a
+required object field and `Each` for array elements. `OptionalField` skips a
+path only when that property is absent from an object, as with an unrequested
+Jira `commentPage`. A present value must satisfy the remaining path and body
+validation; null or malformed intermediate values still fail. Required `Field`
+segments retain their strict behavior. `EmbeddedBody::owner_optional_prefixes()`
+returns escaped pointer prefixes ending at optional fields, relative to the
+provider result. The catalog adds `/result` and exposes these as
+`optionalRenderedBodyOwnerPrefixes`, omitting an empty list. A shared prefix is
+optional only if every declared body path through it permits absence; ordinary
+`renderedBodyOwners` pointers are unchanged.
 
 `listing_of(ResourceType)` declares ordinary live enumeration of canonical items
 of that type without a required query, such as a project collection. Query
@@ -596,6 +609,7 @@ only view of the operation:
 | `credential_mode()` | `CredentialMode::Service` or `CredentialMode::PerUser`. |
 | `authority()`, `resource_scopes()`, `search_authorization()` | The exact admitted authority. |
 | `universal_reach()` | Whether an opted-in read has universal same-mode resource coverage for disclosing metadata already carried in the same upstream response. |
+| `companion_reads_authorized()` | Whether every declared direct companion read is authorized for the admitted resources in the selected credential mode. |
 | `inputs()` | Inputs validated against the action's schema. |
 | `execution()`, `lookup_access()` | The selected execution material and any [lookup access](#lookup-access). |
 | `body_parts()`, `resource_attributes()`, `state()` | Staged body parts, the admitted resource's private attributes and provider state. |
@@ -737,6 +751,52 @@ required field follows that struct's intentionally exhaustive construction
 contract. Provider tests use `InvocationBuilder::universal_reach(bool)`,
 whose default is `false`; test opt-in behavior through real host admission as
 well as through synthetic invocations.
+
+### Companion reads
+
+A native action can declare direct companion reads with
+`ActionDescriptor::companion_read("action")`. Repeated calls populate
+`companion_read_actions`. The source and each companion must be ordinary,
+scoped, read-only JSON actions in the same service and with the same resource scope.
+The descriptor rejects duplicate, self, unknown or noncanonical companion names,
+searches, private-resource-attribute actions and imported/command actions.
+Declarations are a flat set: the host does not recursively follow another
+companion's declarations.
+
+After selecting the primary action's execution and lookup access, the host
+checks each companion against the same resolved resources, admitted policy
+snapshot, identity, execution context, token caveats, read-only ceiling and
+resource restrictions. Each companion's ordinary winning grant must select the
+primary action's credential mode; a lower-priority grant in that mode does not
+satisfy the proof. This check does not acquire credentials or call an upstream.
+
+The immutable `companion_reads_authorized()` accessor is available on
+`AdmittedContext`, `AdmittedRequest` and `ProviderInvocation`. It defaults to
+`false` without an explicit declaration and host proof. A false proof does not
+deny the ordinary source operation. The provider must check it before fetching
+or releasing the optional companion content and reject a requested expansion
+when the proof is false. Preliminary host scope-resolution reads may already
+have occurred. Reuse the primary execution credential and exact admitted source
+resources; the proof does not authorize another resource or credential mode.
+
+Jira `issue.view` declares `comment.list` and `comment.view` to guard
+`includeComments`; `comment.list` declares `comment.view` to guard `includeBodies`.
+Omitted or false flags preserve ordinary issue and metadata-only reads without
+requiring the companions. All pages are independently authorized; matching modes
+within one admission do not make later pages a visibility or policy snapshot.
+
+The static dependency list is exposed as `companionReadActions` in capabilities,
+the runtime catalog and service/action detail, and as
+`x-agent-access-companion-read-actions` in OpenAPI and the send schema. These
+are declarations, not the caller's proof result; tool inputs cannot supply the
+proof or change the dependencies. Providers should document which optional
+input requires the companions. Do not shape input properties per caller.
+
+Host constructors supply
+`host::AdmittedRequestParts.companion_reads_authorized`; set it only after the
+proof above. Provider fixtures use the test-support-only
+`InvocationBuilder::companion_reads_authorized(bool)`, whose default is `false`.
+Actual authorization needs host-level coverage as well.
 
 ### Static credentials
 

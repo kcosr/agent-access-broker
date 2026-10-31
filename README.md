@@ -81,6 +81,13 @@ when effective `issue.view` access covers every project in the selected credenti
 mode. Gaps in that coverage withhold all three reference fields. Subtasks are
 not a complete list of epic children or descendants.
 
+Use `jira issue view PROJ-123 --include-comments` to read an issue with a page of
+full comment and reply bodies in chronological order. Comment lists remain
+metadata-only unless `--include-bodies` is supplied; follow the returned
+continuation to read longer discussions in batches, or use `comment view` for
+selected individual bodies. Included bodies require the existing comment-read
+authority in the same credential mode. See [comment reads](docs/providers-jira.md#reading-comment-bodies).
+
 GitLab's [live project listing](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
 action, `project.list`, returns authorized repositories, including namespace-granted
 projects without individual Broker resource registrations. It accepts only pagination,

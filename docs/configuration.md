@@ -1266,6 +1266,9 @@ max_scan_bytes = 16777216
 
 [providers.jira.comments]
 max_results = 50
+body_max_results = 20
+# Optional; defaults to content.max_body_bytes and must be at least that limit.
+max_page_body_bytes = 1048576
 max_property_value_bytes = 32768
 allowed_property_key_prefixes = ["agent-access."]
 
@@ -1381,8 +1384,19 @@ dependency_inward = "is blocked by"
   credential supplies visibility; listing does not require lookup credentials.
 - `[providers.jira.search].max_results` defaults to `50` and must be non-zero.
 - `[providers.jira.comments].max_results` defaults to `50` and must be
-  non-zero. `max_property_value_bytes` defaults to `32768`, must be non-zero,
-  and must not exceed Jira's 32768-byte property-value cap.
+  non-zero. It caps both comment metadata and body-page counts.
+  `body_max_results` defaults to `20`, must be non-zero, and is capped by
+  `max_results` when selecting the default body page. Both `issue.view` with
+  `includeComments` and `comment.list` with `includeBodies` use that default.
+  `max_page_body_bytes` is optional; omission uses `content.max_body_bytes`
+  (normally 1 MiB). An explicit value must be at least the per-body limit.
+  It bounds the sum of native body bytes returned in a page: a budget-limited
+  page returns fewer complete comments with an explicit continuation and
+  `limitedBy: "body_bytes"`, never a shortened body. Shared complexity,
+  rendering and response limits still apply. See
+  [comment pagination](providers-jira.md#comment-pagination-and-limits).
+  `max_property_value_bytes` defaults to `32768`, must be non-zero, and must
+  not exceed Jira's 32768-byte property-value cap.
 - `[providers.jira.comments].allowed_property_key_prefixes` defaults to
   `["agent-access."]`. Entries must be non-empty ASCII prefixes with no
   whitespace or slash, must not duplicate each other, and must not use reserved

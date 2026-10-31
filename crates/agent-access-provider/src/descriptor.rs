@@ -94,6 +94,9 @@ pub struct ActionDescriptor {
     /// Ask the host to report universal same-mode reach for this ordinary
     /// scoped read; see [`Self::reports_universal_reach`].
     pub reports_universal_reach: bool,
+    /// Direct same-service reads whose exact-scope, same-mode authority the
+    /// host reports for optional content; see [`Self::companion_read`].
+    pub companion_read_actions: Vec<String>,
     pub upstream_resource_ownership: Option<UpstreamResourceOwnership>,
     pub io: ActionIo,
     /// JSON pointers into sensitive response values, including deliberate secret
@@ -344,6 +347,7 @@ impl ActionDescriptor {
             lookup: LookupRequirement::None,
             native_search: None,
             reports_universal_reach: false,
+            companion_read_actions: Vec::new(),
             upstream_resource_ownership: None,
             io: ActionIo::Json,
             sensitive_output_pointers: Vec::new(),
@@ -436,6 +440,24 @@ impl ActionDescriptor {
         self
     }
 
+    /// Ask the host to prove this companion read on the admitted resources.
+    ///
+    /// Companions are direct, canonical action names in this service, declared
+    /// once each. Source and companion must be ordinary native scoped JSON
+    /// reads without private resource attributes. The host independently
+    /// selects each companion's winning grant under the same snapshot and
+    /// caller ceilings and requires the source credential mode. It never
+    /// follows a companion's own declarations or selects another credential.
+    ///
+    /// A false proof does not deny the source operation: the provider must
+    /// require [`crate::AdmittedContext::companion_reads_authorized`] before
+    /// retrieving any optional companion content. The proof never widens
+    /// resource scopes and does not authorize arbitrary nested invocations.
+    pub fn companion_read(mut self, action: impl Into<String>) -> Self {
+        self.companion_read_actions.push(action.into());
+        self
+    }
+
     pub fn upstream_resource_ownership(mut self, ownership: UpstreamResourceOwnership) -> Self {
         self.upstream_resource_ownership = Some(ownership);
         self
@@ -499,6 +521,7 @@ impl ActionDescriptor {
             documentation: self.documentation.clone(),
             required_scope_types: self.required_scope_types(),
             listing_of: self.listing_of.clone(),
+            companion_read_actions: self.companion_read_actions.clone(),
             credential_modes: self.credential_modes.clone(),
             lookup_required: self.lookup.credential_required(),
             upstream_resource_ownership: self.upstream_resource_ownership,
@@ -807,6 +830,43 @@ impl ServiceDescriptor {
                 errors.push(format!(
                     "{service}.{name} universal reach requires a native ordinary scoped read without private resource attributes"
                 ));
+            }
+            if !action.companion_read_actions.is_empty() {
+                let ordinary_read = |candidate: &ActionDescriptor| {
+                    candidate.read_only
+                        && candidate.resource_scope.is_some()
+                        && candidate.native_search.is_none()
+                        && !candidate.requires_resource_attributes
+                        && matches!(candidate.io, ActionIo::Json)
+                        && matches!(
+                            candidate.scoped_mcp_name_source,
+                            ScopedMcpNameSource::CanonicalAction
+                        )
+                };
+                if !ordinary_read(action) {
+                    errors.push(format!(
+                        "{service}.{name} companion reads require a native ordinary scoped JSON read without private resource attributes"
+                    ));
+                }
+                let mut companions = BTreeSet::new();
+                for companion in &action.companion_read_actions {
+                    if !crate::is_action_name(companion)
+                        || companion == name
+                        || !companions.insert(companion)
+                    {
+                        errors.push(format!(
+                            "{service}.{name} companion reads must be distinct canonical action names other than the source"
+                        ));
+                        continue;
+                    }
+                    if self.action(companion).is_none_or(|target| {
+                        !ordinary_read(target) || target.resource_scope != action.resource_scope
+                    }) {
+                        errors.push(format!(
+                            "{service}.{name} companion read {companion} must name a native ordinary scoped JSON read in the same service and resource scope"
+                        ));
+                    }
+                }
             }
             if action.credential_modes.is_empty() {
                 errors.push(format!("{service}.{name} declares no credential modes"));
@@ -1245,6 +1305,57 @@ mod tests {
                     .any(|error| error.contains("universal reach requires")),
             );
         }
+    }
+
+    #[test]
+    fn companion_reads_are_direct_native_same_scope_json_reads() {
+        let source = action("item.view").read_only().companion_read("item.list");
+        let target = action("item.list").read_only();
+        assert!(errors(vec![source.clone(), target.clone()]).is_empty());
+        assert_eq!(source.capabilities().companion_read_actions, ["item.list"]);
+        assert!(action("plain").companion_read_actions.is_empty());
+        for invalid in [
+            source.clone().companion_read("item.list"),
+            source.clone().companion_read("item.view"),
+            source.clone().companion_read(""),
+            source.clone().companion_read("unknown"),
+            source.clone().companion_read("bad action"),
+            source.clone().raw_download(),
+            source.clone().resource_attributes(),
+            source
+                .clone()
+                .native_search(NativeSearchEnforcement::ResultFiltered),
+        ] {
+            assert!(!errors(vec![invalid, target.clone()]).is_empty());
+        }
+        let mut unscoped = target.clone();
+        unscoped.resource_scope = None;
+        let mut write = target.clone();
+        write.read_only = false;
+        let mut imported = target.clone();
+        imported.scoped_mcp_name_source = ScopedMcpNameSource::Imported {
+            name: Some("list".into()),
+        };
+        for invalid in [
+            unscoped,
+            write,
+            imported,
+            target.clone().raw_download(),
+            target.clone().resource_attributes(),
+            target
+                .clone()
+                .native_search(NativeSearchEnforcement::ResultFiltered),
+        ] {
+            assert!(
+                errors(vec![source.clone(), invalid])
+                    .iter()
+                    .any(|error| error.contains("companion read"))
+            );
+        }
+        // The declaration is a flat set. A target may itself declare a
+        // companion, but that does not change the source's declaration.
+        let target = target.companion_read("item.body");
+        assert!(errors(vec![source, target, action("item.body").read_only()]).is_empty());
     }
 
     #[test]

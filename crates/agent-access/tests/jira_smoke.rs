@@ -1,3 +1,5 @@
+#[path = "jira_smoke/comment_bodies.rs"]
+mod comment_bodies;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "jira_smoke/project_list.rs"]
@@ -10,15 +12,14 @@ use agent_access_broker_host::test_support::{
 use agent_access_jira::{
     JIRA_PROJECT_RESOURCE, JiraAttachment, JiraAttachmentContent, JiraAttachmentUpload,
     JiraBackend, JiraBackendError, JiraBackendResponse, JiraComment, JiraCommentAddRequest,
-    JiraCommentListRequest, JiraCommentPage, JiraCommentPropertyKeys, JiraCommentSummary,
-    JiraCommentUpdateRequest, JiraCreatedIssue, JiraIssue, JiraIssueAttachmentList,
-    JiraIssueCreateRequest, JiraIssueLink, JiraIssueLinkCreateRequest, JiraIssueLinkDirection,
-    JiraIssueLinkType, JiraIssueLinks, JiraIssueParent, JiraIssueParentReadback,
-    JiraIssueParentSetRequest, JiraIssueType, JiraIssueTypeListRequest, JiraIssueTypePage,
-    JiraIssueUpdateRequest, JiraIssueView, JiraIssueViewContext, JiraIssueViewLink,
-    JiraIssueViewNamedValue, JiraIssueViewReference, JiraIssueViewStatusCategory,
-    JiraPrioritySummary, JiraProvider, JiraProviderConfig, JiraSearchPage, JiraSearchRequest,
-    JiraUserSummary,
+    JiraCommentListRequest, JiraCommentPage, JiraCommentPropertyKeys, JiraCommentUpdateRequest,
+    JiraCreatedIssue, JiraIssue, JiraIssueAttachmentList, JiraIssueCreateRequest, JiraIssueLink,
+    JiraIssueLinkCreateRequest, JiraIssueLinkDirection, JiraIssueLinkType, JiraIssueLinks,
+    JiraIssueParent, JiraIssueParentReadback, JiraIssueParentSetRequest, JiraIssueType,
+    JiraIssueTypeListRequest, JiraIssueTypePage, JiraIssueUpdateRequest, JiraIssueView,
+    JiraIssueViewContext, JiraIssueViewLink, JiraIssueViewNamedValue, JiraIssueViewReference,
+    JiraIssueViewStatusCategory, JiraPrioritySummary, JiraProvider, JiraProviderConfig,
+    JiraSearchPage, JiraSearchRequest, JiraUserSummary,
 };
 use agent_access_provider::test_support::basic_credential;
 use agent_access_provider::{REQUEST_ID_HEADER, RESULT_METADATA_HEADER, SearchLimitsConfig};
@@ -3807,15 +3808,9 @@ impl JiraBackend for StubJiraBackend {
                     .get(&comment.id)
                     .is_none_or(|owner_issue_key| owner_issue_key.as_str() == issue_key)
             })
+            .skip(request.start_at as usize)
             .take(request.max_results as usize)
-            .map(|comment| JiraCommentSummary {
-                id: comment.id.clone(),
-                parent_id: comment.parent_id.clone(),
-                author: comment.author.clone(),
-                created: comment.created.clone(),
-                updated: comment.updated.clone(),
-                visibility: comment.visibility.clone(),
-            })
+            .cloned()
             .collect::<Vec<_>>();
         Ok(JiraBackendResponse {
             value: JiraCommentPage {

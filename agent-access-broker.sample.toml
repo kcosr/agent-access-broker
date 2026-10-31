@@ -790,6 +790,9 @@ max_scan_bytes = 16777216
 
 [providers.jira.comments]
 max_results = 50
+body_max_results = 20
+# Optional; defaults to content.max_body_bytes and must be at least that limit.
+max_page_body_bytes = 1048576
 max_property_value_bytes = 32768
 allowed_property_key_prefixes = ["agent-access."]
 

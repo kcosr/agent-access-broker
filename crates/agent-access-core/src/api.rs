@@ -72,6 +72,9 @@ pub struct ApiActionSpec {
     /// Resource type this explicitly declared live-listing action enumerates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_of: Option<agent_access_provider::ResourceType>,
+    /// Direct companion reads required for optional action content.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companion_read_actions: Vec<String>,
     pub description: String,
     /// Extended usage details, omitted from MCP tools/list definitions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +103,10 @@ pub struct ApiActionSpec {
     /// segment matches every element of an array.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_body_owners: Vec<String>,
+    /// Prefixes of `rendered_body_owners` ending at optional object fields.
+    /// Only an absent property at these prefixes may be skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_rendered_body_owner_prefixes: Vec<String>,
 }
 
 fn required_nullable_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -326,16 +333,39 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
     let response_capabilities =
         agent_access_provider::presentation::response_capabilities(action.presentation.as_ref());
     let mut rendered_body_owners = Vec::new();
+    let mut optional_rendered_body_owner_prefixes = Vec::new();
+    let mut body_paths = Vec::new();
     for body in action
         .presentation
         .iter()
         .flat_map(|presentation| presentation.embedded_bodies())
     {
         let pointer = format!("/result{}", body.owner_pointer());
+        let optional_prefixes = body
+            .owner_optional_prefixes()
+            .into_iter()
+            .map(|prefix| format!("/result{prefix}"))
+            .collect::<Vec<_>>();
+        for prefix in &optional_prefixes {
+            if !optional_rendered_body_owner_prefixes.contains(prefix) {
+                optional_rendered_body_owner_prefixes.push(prefix.clone());
+            }
+        }
+        body_paths.push((pointer.clone(), optional_prefixes));
         if !rendered_body_owners.contains(&pointer) {
             rendered_body_owners.push(pointer);
         }
     }
+    // A shared prefix is optional only if every path through it declares it so.
+    optional_rendered_body_owner_prefixes.retain(|prefix| {
+        body_paths.iter().all(|(pointer, optional)| {
+            !(pointer == prefix
+                || pointer
+                    .strip_prefix(prefix.as_str())
+                    .is_some_and(|suffix| suffix.starts_with('/')))
+                || optional.contains(prefix)
+        })
+    });
     Some(ApiActionSpec {
         scoped_mcp_name: action
             .raw_scoped_mcp_name()
@@ -344,6 +374,7 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         action: action.action.clone(),
         read_only: action.read_only,
         listing_of: action.listing_of.clone(),
+        companion_read_actions: action.companion_read_actions.clone(),
         description: action.description.clone(),
         documentation: action.documentation.clone(),
         required_scope_types: action.required_scope_types(),
@@ -369,6 +400,7 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
             .map(|format| (*format).to_string())
             .collect(),
         rendered_body_owners,
+        optional_rendered_body_owner_prefixes,
     })
 }
 
@@ -549,6 +581,10 @@ pub fn openapi_from_catalog(
             }
             if let Some(resource_type) = &action.listing_of {
                 operation["post"]["x-agent-access-listing-of"] = json!(resource_type);
+            }
+            if !action.companion_read_actions.is_empty() {
+                operation["post"]["x-agent-access-companion-read-actions"] =
+                    json!(action.companion_read_actions);
             }
             operation["post"]["description"] = json!(action.description);
             paths.insert(path, operation);
@@ -3570,6 +3606,9 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
     }
     if let Some(resource_type) = &action.listing_of {
         schema["x-agent-access-listing-of"] = json!(resource_type);
+    }
+    if !action.companion_read_actions.is_empty() {
+        schema["x-agent-access-companion-read-actions"] = json!(action.companion_read_actions);
     }
     schema
 }

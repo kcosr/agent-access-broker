@@ -102,6 +102,15 @@ actions and exposes typed wrappers for supported services.
   it only for embedded links, parent and subtasks in `issue.view`. Withheld
   properties are absent; an eligible missing/null parent becomes null, meaning
   no parent was returned. Subtasks do not enumerate all epic children.
+- Optional companion reads use a flat native action declaration and a host-issued
+  same-mode proof under the admitted snapshot and every ordinary caller ceiling.
+  Never evaluate policy inside a provider, recurse through companion declarations,
+  fall back to lower grants, or widen the source scopes. A false proof leaves the
+  primary action usable; gate only the optional body read. Jira issue comments
+  require `comment.list` and `comment.view`; body-enabled lists require
+  `comment.view`. Metadata listing stays independently usable. Keep comment
+  pages bounded, preserve full bodies and reply parent IDs, and report exact
+  continuation after any whole-comment byte-budget cut.
 - Backend invocation context comes from the host-authorized execution context,
   never a tool input. Seal resumable provider cursors with the SDK continuation
   envelope, bound to that context and current principal/resource/query settings

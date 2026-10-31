@@ -90,6 +90,7 @@ struct ContextInner {
     credential_mode: CredentialMode,
     authority: InvocationAuthority,
     universal_reach: bool,
+    companion_reads_authorized: bool,
 }
 
 impl AdmittedContext {
@@ -134,6 +135,15 @@ impl AdmittedContext {
     /// continues to describe the exact admitted source resources.
     pub fn universal_reach(&self) -> bool {
         self.0.universal_reach
+    }
+
+    /// Whether all directly declared companion reads were admitted on these
+    /// exact resources, in this credential mode, under the same policy
+    /// snapshot and caller ceilings. False unless the action opts in and the
+    /// host proves every companion. This never expands resource authority or
+    /// permits acquisition of another credential.
+    pub fn companion_reads_authorized(&self) -> bool {
+        self.0.companion_reads_authorized
     }
 
     /// The admitted resources; any other authority fails closed.
@@ -220,6 +230,12 @@ macro_rules! admitted_accessors {
         /// execution authority. See [`AdmittedContext::universal_reach`].
         pub fn universal_reach(&self) -> bool {
             self.context().universal_reach()
+        }
+
+        /// Host-proved authority for the action's direct companion reads.
+        /// See [`AdmittedContext::companion_reads_authorized`].
+        pub fn companion_reads_authorized(&self) -> bool {
+            self.context().companion_reads_authorized()
         }
 
         /// The admitted resources; any other authority fails closed.
@@ -326,6 +342,7 @@ impl AdmittedContext {
         credential_mode: CredentialMode,
         authority: InvocationAuthority,
         universal_reach: bool,
+        companion_reads_authorized: bool,
     ) -> Self {
         Self(Arc::new(ContextInner {
             service,
@@ -336,6 +353,7 @@ impl AdmittedContext {
             credential_mode,
             authority,
             universal_reach,
+            companion_reads_authorized,
         }))
     }
 }
@@ -391,6 +409,25 @@ mod tests {
             error.internal_diagnostic_code,
             Some("provider_authority_not_resources")
         );
+    }
+
+    #[test]
+    fn companion_proof_defaults_false_and_survives_clone_without_widening_authority() {
+        let ordinary = InvocationBuilder::new("svc", "view")
+            .resources(scopes())
+            .build();
+        assert!(!ordinary.companion_reads_authorized());
+        assert!(!ordinary.admitted().companion_reads_authorized());
+        let admitted = InvocationBuilder::from(ordinary)
+            .companion_reads_authorized(true)
+            .build();
+        let copy = InvocationBuilder::from(admitted.clone()).build();
+        for invocation in [admitted, copy] {
+            assert!(invocation.companion_reads_authorized());
+            assert!(invocation.context().clone().companion_reads_authorized());
+            assert_eq!(invocation.resource_scopes(), Ok(&scopes()));
+            assert!(!invocation.universal_reach());
+        }
     }
 
     #[test]

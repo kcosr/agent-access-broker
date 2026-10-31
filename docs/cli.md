@@ -1014,13 +1014,16 @@ the Markdown value and retain exit 2. Denials and errors remain JSON. Direct HTT
 always preserve the JSON envelope.
 
 For Jira, embedded read formats are supported by `issue view`, `issue create`,
-`issue update`, `issue comment view`, `issue comment add`, `issue comment reply`,
-and `issue comment update`. Whole-result output is supported by `project list`, `project view`, `issue-type list`, `issue view`,
+`issue update`, `issue comment list`, `issue comment view`, `issue comment add`,
+`issue comment reply`, and `issue comment update`. Whole-result output is supported by `project list`, `project view`, `issue-type list`, `issue view`,
 `issue search`, `issue comment list`, `issue comment view`, `issue comment
 property list`, `issue comment property get`, `issue attachment list`, and
 `issue verify`. Other Jira typed commands reject these flags during argument
 parsing with exit 2. A malformed promised Markdown wrapper is a malformed Broker
-response and exits 5.
+response and exits 5. For embedded formats, catalog
+`optionalRenderedBodyOwnerPrefixes` allows an absent declared branch such as
+`commentPage`; malformed present fields or missing required descendants still
+fail response validation.
 
 For Confluence, embedded read formats are supported by current page/blog view,
 page/blog draft view, every page/blog footer/inline comment list/view/reply-list
@@ -1510,6 +1513,8 @@ See [project issue types](providers-jira.md#project-issue-types).
 
 ```bash
 agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123
+agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --include-comments
+agent-access --url http://127.0.0.1:8787 jira issue comment list --issue PROJ-123 --include-bodies
 agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --read-content-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --output-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
@@ -1526,6 +1531,14 @@ agent-access --url http://127.0.0.1:8787 jira issue comment reply 10042 --issue 
 agent-access --url http://127.0.0.1:8787 jira issue attach PROJ-123 ./design.md --content-type text/markdown
 agent-access --url http://127.0.0.1:8787 jira issue verify PROJ-123 --expect-comment-id 10042 --expect-attachment-id 10055
 ```
+
+`--include-comments` includes one chronological page of full comment and reply
+bodies with the issue. `jira issue comment list` remains metadata-only by default;
+add `--include-bodies` to retrieve bodies in batches and continue with
+`--start-at` using the returned `nextStartAt`. The flags have Broker page-size
+and ordering defaults. Optional list overrides use `--max-results` and
+`--order-by`. Included bodies require the existing comment-read permissions in
+the selected credential mode. See [comment reads](providers-jira.md#reading-comment-bodies).
 
 For an Epic/child/dependency workflow, create the Epic with `jira issue create`,
 create already-parented child issues with `jira issue child create`, then link

@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Comment inclusion extends host and presentation contracts.** Downstream hosts
+  constructing `AdmittedRequestParts` must supply `companion_reads_authorized`.
+  Set it to `false` unless the host proves every declared direct companion read
+  for the admitted resources in the selected credential mode. `ApiActionSpec`
+  literals also require `companion_read_actions` and
+  `optional_rendered_body_owner_prefixes`; use empty vectors when the respective
+  declarations are absent. Upgrade the CLI with the Broker for embedded formatted
+  issue reads: older clients cannot interpret optional body-owner prefixes.
+  See [the provider SDK](docs/provider-sdk.md#companion-reads) and
+  [presentation metadata](docs/http-api.md).
+
 - **Uploaded import documents add a managed-store migration.** Back up before
   applying `032_imported_source_documents` and upgrade the Broker, CLI and
   portal together. Existing imports are unchanged; rollback across this schema
@@ -69,6 +80,15 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Jira comment bodies in batches.** `issue.view` accepts `includeComments`
+  (`jira issue view --include-comments`) for one chronological page of full
+  comment and reply bodies. `comment.list` remains metadata-only by default;
+  `includeBodies` (`jira issue comment list --include-bodies`) adds full bodies
+  with explicit continuation and bounded page bytes. Native SDK companion-read
+  declarations and host proofs preserve existing comment-body permissions and
+  credential modes, so existing grants gain no additional disclosure. See
+  [comment reads](docs/providers-jira.md#reading-comment-bodies).
 
 - **Audit records show what a request concerned.** Invocation audit records
   carry `auditInputs`: the supplied values of the few inputs each action opts
@@ -183,6 +203,13 @@ All notable changes to this project are documented in this file.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Changed
+
+- **Jira comment pagination is explicit.** Metadata and body pages send an
+  explicit chronological order by default and return the effective ordering,
+  completion status and next offset. Byte-limited body pages return fewer whole
+  comments with an explicit indicator; individual bodies are never shortened.
+  Every page remains independently authorized. See
+  [comment pagination](docs/providers-jira.md#comment-pagination-and-limits).
 
 - **Import validation is stricter.** OpenAPI documents with
   duplicate names now fail discovery or refresh instead of using the last value;

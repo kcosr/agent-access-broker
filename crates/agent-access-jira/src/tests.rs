@@ -11,6 +11,9 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "comment_page_tests.rs"]
+mod comment_page_tests;
+
 #[path = "issue_type_tests.rs"]
 mod issue_type_tests;
 
@@ -761,15 +764,9 @@ impl JiraBackend for StubJiraBackend {
                     .get(&comment.id)
                     .is_none_or(|owner_issue_key| owner_issue_key.as_str() == issue_key)
             })
+            .skip(request.start_at as usize)
             .take(request.max_results as usize)
-            .map(|comment| JiraCommentSummary {
-                id: comment.id.clone(),
-                parent_id: comment.parent_id.clone(),
-                author: comment.author.clone(),
-                created: comment.created.clone(),
-                updated: comment.updated.clone(),
-                visibility: comment.visibility.clone(),
-            })
+            .cloned()
             .collect::<Vec<_>>();
         Ok(JiraBackendResponse {
             value: JiraCommentPage {

@@ -4,6 +4,7 @@
 #[cfg(test)]
 mod access_tests;
 mod backend;
+mod comment_pages;
 mod config;
 mod custom_fields;
 mod issue_view_context;
@@ -31,8 +32,9 @@ pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
     AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_routes,
 };
-use agent_access_content::append_adf_attribution;
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
+use agent_access_content::{append_adf_attribution, render_adf_bounded_with_budget};
+use agent_access_provider::presentation::{ReadContentFormat, RenderBudget};
 #[allow(unused_imports)]
 use agent_access_provider::*;
 use async_trait::async_trait;
@@ -249,14 +251,18 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 ],
                 "properties": {
                     "issue": { "type": "string" },
-                    "url": { "type": "string" }
+                    "url": { "type": "string" },
+                    "includeComments": { "type": "boolean", "default": false, "description": "Include a chronological page of comment bodies when comment reads are authorized." }
                 },
                 "additionalProperties": false
             }),
         )
         .lookup(LookupRequirement::ScopeResolution)
         .reports_universal_reach()
+        .companion_read("comment.list")
+        .companion_read("comment.view")
         .documentation(json!({
+            "comments": "includeComments defaults to false. True adds commentPage: one default-size oldest-first page of full comments and replies, fetched through the dedicated comments endpoint. Requires comment.list and comment.view authority on the issue project in the same winning credential mode. Follow commentPage.nextStartAt with comment.list includeBodies=true. Comments share issue rich-content limits; no individual-comment fetches or automatic page draining occur.",
             "context": "Always includes nullable resolution, resolutionDate, dueDate, components, fixVersions, affectedVersions and statusCategory. Resolution, components and versions contain string id and nullable name; statusCategory contains a nonnegative integer id, string key and nullable name. Date strings retain Jira's representation. Missing and null values both become null, including fields hidden or not returned by Jira; null is not proof that a value is unset. Explicit empty collections remain [], and array order and duplicates are preserved. Only these allowlisted properties are disclosed; malformed supplied shapes fail the request. This context is exclusive to issue.view, not search or mutation readbacks.",
             "customFields": "Always includes an array of custom fields returned by Jira, ordered by numeric field ID. Each entry has id, nullable Jira display name, nullable normalized type, and status (supported, unsupported, or withheld). Supported values retain JSON types; unsupported implementations and malformed known values omit nonempty values. Explicit null and empty-array values are retained with their status. Only reviewed built-in text, URL, number, date, datetime, ADF, option, user and Labels field implementations are supported; arbitrary app and resource-reference values are not disclosed. Labels require Jira's built-in labels implementation with an array-of-string schema and preserve order and duplicates. Field values, names and type metadata share the authorized issue fetch, with no extra request.",
             "customFieldContent": "ADF custom values use the same per-document content byte limit and shared rendering complexity limits as the description. readContentFormat adds renderedBody beside each supported non-null ADF value. Malformed custom ADF is withheld; any byte or complexity limit fails the whole request. Search and mutation readbacks do not return customFields.",
@@ -265,7 +271,8 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "omission": "Missing parent means hierarchy was withheld. A null parent is not independent proof that the issue has no parent. Missing subtasks or issueLinks means withheld or not returned; an explicit empty list only describes that returned field. Any gap in universal same-mode authority withholds all links, parent and subtasks. A listed reference does not guarantee a later issue.view succeeds, including when lookup and execution credentials differ."
         }))
         .audit_input("issue", "Issue")
-        .audit_input("url", "URL"),
+        .audit_input("url", "URL")
+        .audit_input("includeComments", "Include comments"),
         jira_action(
             "issue.create",
             "Create a Jira issue in an authorized project with bounded summary and optional explicitly formatted content",
@@ -508,7 +515,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         .audit_input("projects", "Projects"),
         jira_read_action(
             "comment.list",
-            "List Jira issue comment metadata after project confirmation",
+            "List Jira comment metadata or an authorized page of full comment bodies",
             json!({
                 "type": "object",
                 "oneOf": [
@@ -518,7 +525,8 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 "properties": {
                     "issue": { "type": "string" },
                     "url": { "type": "string" },
-                    "maxResults": { "type": "integer", "minimum": 1 },
+                    "includeBodies": { "type": "boolean", "default": false },
+                    "maxResults": { "type": "integer", "minimum": 1, "maximum": config.comments.max_results },
                     "startAt": { "type": "integer", "minimum": 0 },
                     "orderBy": { "type": "string", "enum": ["created", "-created", "+created"] }
                 },
@@ -526,8 +534,15 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             }),
         )
         .lookup(LookupRequirement::ScopeResolution)
+        .companion_read("comment.view")
+        .documentation(json!({
+            "bodies": "includeBodies defaults to false: metadata listing remains independently authorized. True includes complete validated ADF bodies, requires comment.view authority in the same winning credential mode, and supports readContentFormat. Reply entries carry parentCommentId; a page may not include the parent.",
+            "pagination": "startAt defaults to 0 and orderBy to +created (oldest first). Body pages use the configured body_max_results default capped by max_results; metadata pages default to max_results. Follow nextStartAt using the same includeBodies, maxResults and orderBy. Each page is independently authorized against live Jira visibility; offsets are not a snapshot. isLast=true proves this page reaches the reported total; missing total yields total=null and isLast=null, even on an empty page. nextStartAt=null with isLast=null means completeness is unknown, not complete.",
+            "limits": "A full page may return fewer whole comments to fit max_page_body_bytes, reporting limitedBy=body_bytes and an exact nextStartAt. Bodies are never shortened. Malformed or oversized fetched bodies fail the whole request. Native and rendered content share complexity limits."
+        }))
         .audit_input("issue", "Issue")
-        .audit_input("url", "URL"),
+        .audit_input("url", "URL")
+        .audit_input("includeBodies", "Include bodies"),
         jira_read_action(
             "comment.view",
             "View one Jira issue comment body after project confirmation",
@@ -1223,9 +1238,15 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
+        let (locator, include_comments) = parse_issue_view_inputs(request.inputs(), &self.config)?;
+        if include_comments && !request.companion_reads_authorized() {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "Including Jira comments requires comment.list and comment.view in the same credential mode",
+            ));
+        }
         let credential = &self.execution_credential(request.admitted())?;
         let lookup_credential = &self.lookup_credential(request.admitted())?;
-        let locator = issue_locator_from_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_authorized_issue(&locator, lookup_credential, request.resource_scopes()?)
             .await?;
@@ -1254,7 +1275,7 @@ impl JiraProvider {
                 "Jira issue response did not include a valid current key and project",
             ));
         }
-        custom_fields::preflight_issue_view_content(
+        let mut content_budget = custom_fields::preflight_issue_view_content(
             issue.description.as_ref(),
             &mut custom_fields,
             self.config.content.max_body_bytes,
@@ -1300,28 +1321,70 @@ impl JiraProvider {
         } else {
             json!({"status": "not-returned"})
         };
+        let mut comment_ids = Vec::new();
+        let mut comment_duration_ms = 0;
+        let mut comment_audit = None;
+        if include_comments {
+            let inputs = CommentListInputs {
+                locator: locator.clone(),
+                max_results: self
+                    .config
+                    .comments
+                    .body_max_results
+                    .min(self.config.comments.max_results),
+                start_at: 0,
+                order_by: Some("+created".to_string()),
+                include_bodies: true,
+            };
+            let comments = self
+                .backend
+                .comments(
+                    &metadata.key,
+                    JiraCommentListRequest {
+                        max_results: inputs.max_results,
+                        start_at: inputs.start_at,
+                        order_by: inputs.order_by.clone(),
+                    },
+                    credential,
+                )
+                .await
+                .map_err(jira_backend_error)?;
+            comment_duration_ms = comments.duration_ms;
+            let page = comment_pages::project(
+                &comments.value,
+                &inputs,
+                &self.config,
+                &mut content_budget,
+            )?;
+            comment_ids = page.comment_ids;
+            comment_audit = Some(page.audit);
+            result["commentPage"] = page.result;
+        }
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        let mut audit = json!({
+            "provider": "jira",
+            "operation": "issue.view",
+            "issueKey": issue.key,
+            "project": issue.project,
+            "credentialMode": request.credential_mode(),
+            "egressProxy": self.backend.egress_proxy_audit(credential),
+            "issueLinks": links_audit,
+            "parent": parent_audit,
+            "subtasks": subtasks_audit,
+            "customFields": custom_fields_audit,
+        });
+        let mut object_ids = json!({"issueId": issue.id, "issueKey": issue.key});
+        if let Some(comments) = comment_audit {
+            audit["comments"] = comments;
+            object_ids["commentIds"] = json!(comment_ids);
+        }
         Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
-                "operation": "issue.view",
-                "issueKey": issue.key,
-                "project": issue.project,
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-                "issueLinks": links_audit,
-                "parent": parent_audit,
-                "subtasks": subtasks_audit,
-                "customFields": custom_fields_audit,
-            }))
+            .with_audit(audit)
             .with_upstream(
                 Some(response.status),
-                Some(metadata_response.duration_ms + response.duration_ms),
+                Some(metadata_response.duration_ms + response.duration_ms + comment_duration_ms),
             )
-            .with_object_ids(json!({
-                "issueId": issue.id,
-                "issueKey": issue.key,
-            })))
+            .with_object_ids(object_ids))
     }
 
     async fn invoke_issue_create(
@@ -2412,9 +2475,15 @@ impl JiraProvider {
         &self,
         request: ProviderInvocation,
     ) -> Result<ProviderResult, ProviderError> {
+        let inputs = parse_comment_list_inputs(request.inputs(), &self.config)?;
+        if inputs.include_bodies && !request.companion_reads_authorized() {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "Including Jira comment bodies requires comment.view in the same credential mode",
+            ));
+        }
         let credential = &self.execution_credential(request.admitted())?;
         let lookup_credential = &self.lookup_credential(request.admitted())?;
-        let inputs = parse_comment_list_inputs(request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_authorized_issue(
                 &inputs.locator,
@@ -2423,7 +2492,7 @@ impl JiraProvider {
             )
             .await?;
         let metadata = metadata_response.value;
-        let list_response = self
+        let response = self
             .backend
             .comments(
                 &metadata.key,
@@ -2436,50 +2505,33 @@ impl JiraProvider {
             )
             .await
             .map_err(jira_backend_error)?;
-        let comments = list_response
-            .value
-            .comments
-            .iter()
-            .map(comment_summary_result)
-            .collect::<Vec<_>>();
-        let comment_ids = list_response
-            .value
-            .comments
-            .iter()
-            .map(|comment| comment.id.clone())
-            .collect::<Vec<_>>();
-        let count = comments.len();
-        let result = json!({
-            "operation": "comment.list",
-            "issue": issue_metadata_result(&metadata, &self.config),
-            "comments": comments,
-            "startAt": list_response.value.start_at,
-            "maxResults": list_response.value.max_results,
-            "total": list_response.value.total,
-            "count": count,
-        });
+        let page = comment_pages::project(
+            &response.value,
+            &inputs,
+            &self.config,
+            &mut RenderBudget::default(),
+        )?;
+        let mut result = page.result;
+        result["operation"] = json!("comment.list");
+        result["issue"] = issue_metadata_result(&metadata, &self.config);
         enforce_result_size(&result, self.limits.max_upstream_response_bytes)?;
+        let mut audit = page.audit;
+        audit["provider"] = json!("jira");
+        audit["operation"] = json!("comment.list");
+        audit["issueKey"] = json!(metadata.key);
+        audit["project"] = json!(metadata.project);
+        audit["credentialMode"] = json!(request.credential_mode());
+        audit["egressProxy"] = self.backend.egress_proxy_audit(credential);
         Ok(ProviderResult::new(result)
-            .with_audit(json!({
-                "provider": "jira",
-                "operation": "comment.list",
-                "issueKey": metadata.key,
-                "project": metadata.project,
-                "startAt": list_response.value.start_at,
-                "maxResults": list_response.value.max_results,
-                "orderBy": inputs.order_by,
-                "commentCount": count,
-                "credentialMode": request.credential_mode(),
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }))
+            .with_audit(audit)
             .with_upstream(
-                Some(list_response.status),
-                Some(metadata_response.duration_ms + list_response.duration_ms),
+                Some(response.status),
+                Some(metadata_response.duration_ms + response.duration_ms),
             )
             .with_object_ids(json!({
                 "issueId": metadata.id,
                 "issueKey": metadata.key,
-                "commentIds": comment_ids,
+                "commentIds": page.comment_ids,
             })))
     }
 
@@ -3753,26 +3805,26 @@ struct IssueLocator {
     issue_key: String,
 }
 
-fn issue_locator_from_inputs(
+fn parse_issue_view_inputs(
     inputs: &Value,
     config: &JiraProviderConfig,
-) -> Result<IssueLocator, ProviderError> {
-    let object = inputs.as_object().ok_or_else(|| {
+) -> Result<(IssueLocator, bool), ProviderError> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct Inputs {
+        issue: Option<String>,
+        url: Option<String>,
+        #[serde(default)]
+        include_comments: bool,
+    }
+    let parsed: Inputs = serde_json::from_value(inputs.clone()).map_err(|_| {
         ProviderError::deny(
             ReasonCode::InputInvalid,
-            "jira.issue.view requires issue or url",
+            "jira.issue.view inputs are invalid",
         )
     })?;
-    let issue = object.get("issue").and_then(Value::as_str);
-    let url = object.get("url").and_then(Value::as_str);
-    match (issue, url) {
-        (Some(issue), None) => issue_locator_from_key(issue),
-        (None, Some(url)) => issue_locator_from_url(url, config),
-        _ => Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "jira.issue.view requires exactly one of issue or url",
-        )),
-    }
+    let locator = issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.issue.view")?;
+    Ok((locator, parsed.include_comments))
 }
 
 fn issue_locator_for_action(
@@ -3781,7 +3833,7 @@ fn issue_locator_for_action(
     config: &JiraProviderConfig,
 ) -> Result<IssueLocator, ProviderError> {
     match action {
-        "issue.view" => issue_locator_from_inputs(inputs, config),
+        "issue.view" => parse_issue_view_inputs(inputs, config).map(|(locator, _)| locator),
         "issue.update" => parse_issue_update_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.list" => parse_comment_list_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.view" => parse_comment_view_inputs(inputs, config).map(|inputs| inputs.locator),
@@ -4224,6 +4276,8 @@ struct CommentListRawInputs {
     max_results: Option<u32>,
     start_at: Option<u32>,
     order_by: Option<String>,
+    #[serde(default)]
+    include_bodies: bool,
 }
 
 #[derive(Debug)]
@@ -4232,6 +4286,7 @@ struct CommentListInputs {
     max_results: u32,
     start_at: u32,
     order_by: Option<String>,
+    include_bodies: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4860,7 +4915,15 @@ fn parse_comment_list_inputs(
     })?;
     let locator =
         issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment.list")?;
-    let max_results = parsed.max_results.unwrap_or(config.comments.max_results);
+    let default_results = if parsed.include_bodies {
+        config
+            .comments
+            .body_max_results
+            .min(config.comments.max_results)
+    } else {
+        config.comments.max_results
+    };
+    let max_results = parsed.max_results.unwrap_or(default_results);
     if max_results == 0 {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
@@ -4880,7 +4943,14 @@ fn parse_comment_list_inputs(
         locator,
         max_results,
         start_at: parsed.start_at.unwrap_or(0),
-        order_by: parsed.order_by,
+        order_by: Some(
+            match parsed.order_by.as_deref() {
+                Some("-created") => "-created",
+                _ => "+created",
+            }
+            .to_string(),
+        ),
+        include_bodies: parsed.include_bodies,
     })
 }
 
@@ -5894,7 +5964,7 @@ fn comment_result(comment: &JiraComment) -> Value {
     value
 }
 
-fn comment_summary_result(comment: &JiraCommentSummary) -> Value {
+fn comment_summary_result(comment: &JiraComment) -> Value {
     let mut value = json!({
         "commentId": comment.id,
     });

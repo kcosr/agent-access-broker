@@ -273,6 +273,31 @@ credential, not every issue type's field configuration or option inventory.
 
 ## Jira issue views
 
+For an issue plus a page of full discussion bodies, call the discovered
+`issue.view` tool with:
+
+```json
+{"inputs":{"issue":"PROJ-123","includeComments":true}}
+```
+
+The result adds `commentPage`. Ordering defaults to chronological oldest first,
+and the Broker chooses the page size. The `comment.list` tool remains metadata-only
+with `{"inputs":{"issue":"PROJ-123"}}`; add `"includeBodies": true` inside
+`inputs` for full bodies. Follow `nextStartAt` with the list's `startAt` input,
+retaining `includeBodies` and any chosen list size/order settings. Common format
+controls stay alongside `inputs`.
+
+`isLast: true` establishes visible completion for that page; null means unknown.
+A byte-limited page contains fewer complete comments, never shortened bodies.
+Each page is independently authorized and is not a snapshot. Reply entries
+retain `parentCommentId`; the parent can be on another page. You can instead
+list metadata and call `comment.view` for selected IDs in any order.
+
+Issue inclusion requires `comment.list` and `comment.view` on the project in
+the issue read's winning credential mode. Full lists require `comment.view` in
+the list's mode. Ordinary token/context/resource restrictions still apply;
+false or omitted inclusion flags do not require these companions.
+
 `jira.issue.view` returns `resolution`, `resolutionDate`, `dueDate`,
 `components`, `fixVersions`, `affectedVersions`, and `statusCategory`. These
 keys are always present in detailed JSON; null can mean unset, hidden, or not

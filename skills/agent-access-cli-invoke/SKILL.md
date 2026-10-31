@@ -344,6 +344,29 @@ agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --read-c
 agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --output-format markdown
 ```
 
+Read an issue with its discussion by adding only `includeComments: true`:
+
+```bash
+agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123","includeComments":true}'
+agent-access invoke jira.comment.list --input-json '{"issue":"PROJ-123"}'
+agent-access invoke jira.comment.list --input-json '{"issue":"PROJ-123","includeBodies":true}'
+```
+
+The issue result's `commentPage` and a body-enabled list use the same
+Broker-selected page size and chronological ordering. `comment.list` remains
+metadata-only unless `includeBodies` is true. Follow `nextStartAt` using the
+list's `startAt` input, retaining `includeBodies: true` and any explicit list
+size/order settings. `isLast: true` establishes visible completion for that
+page; null means completeness is unknown. A byte-limited page returns fewer
+whole comments, never shortened bodies. Each page is independently authorized,
+and reply `parentCommentId` may identify a comment on another page. You can
+also list metadata and use `comment.view` for selected IDs in any order.
+
+Issue inclusion requires `comment.list` and `comment.view` for the same project
+in the issue read's winning credential mode; full lists require `comment.view`
+in the list's mode. All ordinary token/context/resource restrictions apply.
+Omitted or false inclusion flags do not need these companion permissions.
+
 Search with broker-bounded query input:
 
 ```bash
@@ -353,13 +376,14 @@ agent-access invoke jira.search --input-json '{"query":{"type":"text","value":"r
 ```
 
 Jira embedded normalization is advertised by `issue.view`, `issue.create`,
-`issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
+`issue.update`, `comment.list`, `comment.view`, `comment.add`, `comment.reply`, and
 `comment.update`. Markdown/text companions are added beside the owning issue or
 comment while its ADF remains unchanged. Whole-result Markdown is advertised by
 `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
 `comment.property.list`, `comment.property.get`, `attachment.list`, and
-`verify`. Body-free searches and lists remain body-free; their whole-result
-renderer does not fetch additional bodies. Semantic Markdown emits copyable
+`verify`. Comment bodies are included only when requested through the action's
+inclusion flag; selecting a format alone never fetches bodies. Searches and
+metadata-only lists stay body-free. Semantic Markdown emits copyable
 identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes
 metadata controls/newlines, and fences arbitrary comment-property JSON,
 including `null`.
