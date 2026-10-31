@@ -610,7 +610,7 @@ only view of the operation:
 | `authority()`, `resource_scopes()`, `search_authorization()` | The exact admitted authority. |
 | `universal_reach()` | Whether an opted-in read has universal same-mode resource coverage for disclosing metadata already carried in the same upstream response. |
 | `companion_reads_authorized()` | Whether every declared direct companion read is authorized for the admitted resources in the selected credential mode. |
-| `inputs()` | Inputs validated against the action's schema. |
+| `inputs()` | The caller's inputs as supplied; the host does not validate them against the action's schema. |
 | `execution()`, `lookup_access()` | The selected execution material and any [lookup access](#lookup-access). |
 | `body_parts()`, `resource_attributes()`, `state()` | Staged body parts, the admitted resource's private attributes and provider state. |
 
@@ -1800,6 +1800,20 @@ concealment.
 
 `upstream_rate_limited` must carry the upstream rate-limit result that
 `upstream_rate_limited(service, retry_after)` builds, naming the invoked service.
+
+### Input denials
+
+Parse inputs strictly, for example with `deny_unknown_fields`, and deny
+malformed ones with `input_invalid` (`decision = deny`). When a scope
+resolution, body admission or invocation denies that way, the host checks the
+request's inputs against the action's input schema and, when they break it,
+replaces the message with field-specific problems built from the schema, such
+as `notes.note.view inputs are invalid: inputs.note is required`.
+The provider's message stands when the inputs satisfy the schema, so give a
+rule the schema cannot express its own specific message, without supplied
+values. Keep the schema as exact as the parser: declare every accepted
+property, `required`, `additionalProperties: false`, types, enums and bounds.
+See [input explanations](http-api.md#input-explanations).
 
 ### Domain reasons
 

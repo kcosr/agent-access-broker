@@ -94,6 +94,14 @@ read fails, waking a holder that waits for a frame, dropped unread when handed
 over later, and releasing them at once when it ends; after a successful
 response it stays with its holder. These tests do not use live upstream
 services.
+Core `runtime::input_explanation` tests cover the message for each JSON Schema
+error kind, alternative forms, path rendering, the three-problem cap, the
+provider-message fallback and secret-like values that must never appear. Host
+`tests::input_explanations` drives the production Jira and Confluence providers
+through HTTP and HTTP MCP to denials in scope resolution and invocation, before
+any upstream request, and checks that responses, service logs and audit records
+carry no supplied value and that a caller without a grant keeps the provider's
+message.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.

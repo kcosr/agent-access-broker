@@ -549,6 +549,20 @@ credential-verification hook of the imported service; an adapter reports
 invalid settings or document destinations as a typed configuration failure,
 which the host reports as `config_validation_failed`.
 
+The host does not validate inputs against the action's input schema before
+dispatch; providers parse them strictly. When a scope-resolution, command
+admission, body-admission or invocation hook denies with `input_invalid`, the
+host validates the request's inputs against the action's input schema on that
+failure path only, compiled under the bounded local profile of imported
+schemas. If the schema finds problems, the host replaces the message with up
+to three field-specific ones built from each problem's location and schema
+constants, never from supplied values; otherwise the provider's message
+stands. The reason, decision, result and audit data are unchanged, and a
+caller without a grant naming the action keeps the provider's message. The
+invocation hook consumes the request, so the host keeps a shared handle to
+its inputs (`host::admitted_inputs`). See
+[input explanations](http-api.md#input-explanations).
+
 ### Service descriptors
 
 Each service has one authoritative `ServiceDescriptor`. A built-in backend
@@ -1025,7 +1039,7 @@ sequenceDiagram
    `["*"]` summary. The matched grants stay with the broker and appear only in
    the audit record's `searchAuthorization`. For
    other actions, the provider's single `resolve_scopes` hook receives the
-   action, validated inputs, host-selected execution context, minimal caller
+   action, the caller's inputs, host-selected execution context, minimal caller
    identity, correlation, and only the lookup access the runtime selected; it
    never receives execution authority or an execution credential. It
    returns canonical scopes and optional in-process `ProviderState`. That state

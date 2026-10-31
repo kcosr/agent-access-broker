@@ -701,7 +701,12 @@ impl BrokerRuntime {
                 )),
             ),
         )
-        .await?
+        .await
+        .map_err(|error| {
+            self.explain_input_denial(service, action, inputs, error, || {
+                self.caller_has_action_grant(snapshot, identity, context, service, action)
+            })
+        })?
         .into_parts();
         let mismatch = || {
             ProviderError::error(

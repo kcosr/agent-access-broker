@@ -17,7 +17,7 @@ pub(super) struct Fixture {
     pub(super) app: Router,
     token_path: PathBuf,
     state: Arc<ReloadableState>,
-    audit_path: PathBuf,
+    pub(super) audit_path: PathBuf,
     _directory: tempfile::TempDir,
 }
 

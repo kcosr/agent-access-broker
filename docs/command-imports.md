@@ -851,6 +851,10 @@ A command reports a failure with one of these codes:
   empty, with no control characters except tab, and must not contain a
   supplied credential or proxy secret
   ([secrets in responses](#secrets-in-responses)).
+- Inputs that break the accepted input schema never reach the command: the
+  Broker denies them with `input_invalid` naming the problems (see
+  [input explanations](http-api.md#input-explanations)). A command's own
+  `input_invalid` keeps the command's message.
 - `upstream_rate_limited` may carry `retryAfterSeconds` inside `error`, from 1
   to 86,400:
   `{"ok": false, "error": {"code": "upstream_rate_limited", "message": "Slow down.", "retryAfterSeconds": 30}}`.

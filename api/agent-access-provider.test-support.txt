@@ -212,6 +212,7 @@ pub trait agent_access_provider::host::UpstreamClientFactory: core::marker::Send
 pub fn agent_access_provider::host::UpstreamClientFactory::build_client(&self, &agent_access_provider::host::ClientTransportSpec<'_>) -> core::result::Result<agent_access_provider::host::TransportClient, agent_access_provider::host::UpstreamClientFactoryError>
 impl agent_access_provider::host::UpstreamClientFactory for agent_access_provider::test_support::TestHost
 pub fn agent_access_provider::test_support::TestHost::build_client(&self, &agent_access_provider::host::ClientTransportSpec<'_>) -> core::result::Result<agent_access_provider::host::TransportClient, agent_access_provider::host::UpstreamClientFactoryError>
+pub fn agent_access_provider::host::admitted_inputs(&agent_access_provider::AdmittedRequest) -> alloc::sync::Arc<serde_json::value::Value>
 pub fn agent_access_provider::host::admitted_request(agent_access_provider::host::AdmittedRequestParts) -> agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::host::authorize_host_request(reqwest::async_impl::request::RequestBuilder, &agent_access_provider::UpstreamAuthorization) -> reqwest::async_impl::request::RequestBuilder
 pub fn agent_access_provider::host::basic_credential(alloc::string::String, alloc::string::String) -> agent_access_provider::ExecutionCredential

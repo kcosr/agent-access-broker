@@ -167,13 +167,15 @@ impl std::fmt::Debug for AdmittedContext {
     }
 }
 
-/// The view multipart admission receives: the admitted context, validated
+/// The view multipart admission receives: the admitted context, the caller's
 /// inputs and the selected execution and lookup material. It has neither
 /// consumed body data nor decrypted private resource attributes.
 #[derive(Debug, Clone)]
 pub struct AdmittedRequest {
     context: AdmittedContext,
-    inputs: Value,
+    /// Shared so the host can keep them after the final invocation consumes
+    /// the request ([`crate::host::admitted_inputs`]).
+    inputs: Arc<Value>,
     execution: ExecutionAccess,
     lookup_access: Option<LookupAccess>,
 }
@@ -248,7 +250,9 @@ macro_rules! admitted_accessors {
             self.context().search_authorization()
         }
 
-        /// Inputs validated against the action's schema.
+        /// The caller's inputs as supplied. The host does not validate them
+        /// against the action's input schema; the provider parses and checks
+        /// them.
         pub fn inputs(&self) -> &Value {
             &self.$request().inputs
         }
@@ -277,7 +281,7 @@ impl AdmittedRequest {
     ) -> Self {
         Self {
             context,
-            inputs,
+            inputs: Arc::new(inputs),
             execution,
             lookup_access,
         }
@@ -287,6 +291,10 @@ impl AdmittedRequest {
     /// [`ProviderInvocation`]'s.
     fn request(&self) -> &Self {
         self
+    }
+
+    pub(crate) fn shared_inputs(&self) -> Arc<Value> {
+        Arc::clone(&self.inputs)
     }
 
     admitted_accessors!(request);

@@ -2361,6 +2361,38 @@ not inspect or expose response bodies for lookup and read phases, or for
 authentication, permission, existence, scope, conflict, throttling, or server
 failures. Unrecognized validation shapes retain the generic upstream failure.
 
+#### Input explanations
+
+When a provider denies a request's inputs with `input_invalid` during scope
+resolution, body admission or invocation, the Broker checks those inputs
+against the action's published input schema. If they break it, `reason` and
+`error.message` name up to three problems after the action, for example:
+
+```text
+jira.comment.list inputs are invalid: inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy, startAt, url
+confluence.search inputs are invalid: inputs.maxResults must be an integer; inputs.query.value is required
+jira.comment.list inputs are invalid: inputs must include issue or url
+```
+
+Paths start at `inputs`, with dotted property names and `[n]` array indexes.
+Each problem names a missing, unexpected or mistyped property, a schema bound,
+the accepted `enum` or `const` values, or a pattern or format the value does
+not match; alternative forms (`oneOf`, `anyOf`, `if`/`then`) report the problem
+of the form that applies, or point to the schema. More problems end with
+`and N more`. Messages are built from the problem's location and schema
+constants only and never contain a supplied value. A supplied property name
+appears only when the schema declares it or it is a plain identifier
+(`^[A-Za-z][A-Za-z0-9_]{0,63}$`); other keys are reported as an unexpected
+property or `<key>`.
+
+When the inputs satisfy the schema, the provider enforced a rule the schema
+cannot express, and its own message is returned unchanged. A caller with no
+grant naming the action keeps the provider's message too, because scope
+resolution can run before policy. Only the message changes: the reason code,
+decision, HTTP status, `result` and audit record are the provider's. The
+schema is consulted only after a denial and never rejects a request the
+provider accepted. Audit records and service logs carry no messages.
+
 `body_size_denied` is specific to oversized rich-content writes (including
 conversion or attribution expansion) and returns HTTP 413. It does not replace
 existing read-body or attachment failure reasons. Unsupported rich-content

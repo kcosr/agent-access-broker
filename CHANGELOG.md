@@ -203,6 +203,8 @@ All notable changes to this project are documented in this file.
 - **SDK:** profile labels, a route-bound flag, `ExecutionCredential::profile()`
   and `base_covered_by_patterns`.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
+- **SDK:** `host::admitted_inputs`, the host's shared handle to an admitted
+  request's inputs.
 
 ### Changed
 
@@ -213,6 +215,16 @@ All notable changes to this project are documented in this file.
   Every page remains independently authorized. See
   [comment pagination](docs/providers-jira.md#comment-pagination-and-limits).
   ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
+
+- **`input_invalid` denials name the problems.** When a provider denies an
+  action's inputs and they break the action's published input schema, `reason`
+  and `error.message` name up to three problems by path, such as
+  `jira.comment.list inputs are invalid: inputs.maxResults must be an integer`.
+  Native, imported and command actions are covered. Messages use schema
+  constants only, never supplied values, and a rule the schema cannot express
+  keeps the provider's message. Reason codes, statuses, decisions and audit
+  records are unchanged. See
+  [input explanations](docs/http-api.md#input-explanations).
 
 - **Import validation is stricter.** OpenAPI documents with
   duplicate names now fail discovery or refresh instead of using the last value;

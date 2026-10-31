@@ -1,4 +1,5 @@
-//! Bounded local JSON Schema compilation shared by imported protocol adapters.
+//! Bounded local JSON Schema compilation shared by imported protocol adapters
+//! and the host's explanation of `input_invalid` denials.
 //! Library validation is synchronous: byte/depth/regex bounds are not a general
 //! CPU deadline for every possible schema.
 use serde_json::Value;
@@ -35,6 +36,11 @@ impl BoundedImportSchema {
     }
     pub fn is_valid(&self, value: &Value) -> bool {
         self.0.is_valid(value)
+    }
+    /// The compiled validator, for the host's own explanation of a value's
+    /// failures; its error messages quote values and never leave the host.
+    pub(crate) fn validator(&self) -> &jsonschema::Validator {
+        &self.0
     }
 }
 

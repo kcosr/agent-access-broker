@@ -1,0 +1,654 @@
+//! Field-specific explanations of a provider's `input_invalid` denial.
+//!
+//! Providers parse an action's inputs strictly and often deny malformed ones
+//! with a generic message. On that failure path only, the host validates the
+//! request's inputs against the action's published input schema. When the
+//! schema finds problems, the message names up to [`MAX_PROBLEMS`] of them,
+//! for example `jira.comment.list inputs are invalid: inputs.maxResults must
+//! be an integer`. When it finds none, the provider enforced a rule the schema
+//! cannot express, and its own message stands. Only the message changes: the
+//! reason, decision, status, result and audit data are the provider's, so an
+//! explanation never adds or removes a rejection.
+//!
+//! Messages reach responses, so they are built only from each problem's
+//! location and kind and from schema constants: declared property names,
+//! bounds, `enum` and `const` values and format names. They never contain a
+//! supplied value or the validator's own messages, which quote values. A
+//! supplied property name appears only when the schema declares it or it is
+//! a plain identifier; any other key is shown as `<key>`.
+use crate::imports::BoundedImportSchema;
+use agent_access_provider::{Decision, ProviderError, ReasonCode};
+use jsonschema::error::{TypeKind, ValidationErrorKind};
+use jsonschema::paths::Location;
+use jsonschema::{JsonType, ValidationError};
+use serde_json::Value;
+use std::collections::BTreeSet;
+
+/// The most problems one message names.
+const MAX_PROBLEMS: usize = 3;
+/// The most validator errors read for one denial.
+const MAX_ERRORS: usize = 32;
+/// The most names or values one list shows.
+const MAX_LISTED: usize = 12;
+/// The most supplied property names one problem echoes.
+const MAX_ECHOED: usize = 5;
+/// The longest `const` value a message shows.
+const MAX_CONSTANT_BYTES: usize = 64;
+/// How a supplied key that may not be echoed is shown.
+const HIDDEN_KEY: &str = "<key>";
+const SEE_SCHEMA: &str = "see the action's input schema";
+
+/// Whether `error` is a provider's own `input_invalid` denial, the only
+/// failure an explanation may reword.
+pub(super) fn is_input_denial(error: &ProviderError) -> bool {
+    error.reason_code() == ReasonCode::InputInvalid
+        && error.reason_code().host_port().is_none()
+        && error.decision() == Decision::Deny
+}
+
+/// `error` with its message naming the problems `schema` finds in `inputs`,
+/// or unchanged when it is not an input denial, the schema does not compile
+/// within the bounded local profile, or the inputs satisfy it.
+pub(super) fn explain(
+    service: &str,
+    action: &str,
+    schema: &Value,
+    inputs: &Value,
+    mut error: ProviderError,
+) -> ProviderError {
+    if !is_input_denial(&error) {
+        return error;
+    }
+    let problems = problems(schema, inputs);
+    if problems.is_empty() {
+        return error;
+    }
+    let shown = problems.len().min(MAX_PROBLEMS);
+    let mut message = format!(
+        "{service}.{action} inputs are invalid: {}",
+        problems[..shown].join("; ")
+    );
+    if problems.len() > shown {
+        message.push_str(&format!("; and {} more", problems.len() - shown));
+    }
+    error.message = message;
+    error
+}
+
+/// The distinct problems `schema` finds in `inputs`, in the validator's
+/// order; empty when the schema does not compile or the inputs satisfy it.
+fn problems(schema: &Value, inputs: &Value) -> Vec<String> {
+    let Ok(compiled) = BoundedImportSchema::compile(schema) else {
+        return Vec::new();
+    };
+    let explainer = Explainer::new(schema, inputs);
+    let mut problems = Vec::new();
+    for error in compiled.validator().iter_errors(inputs).take(MAX_ERRORS) {
+        explainer.describe(&error, &mut problems);
+    }
+    problems
+}
+
+struct Explainer<'a> {
+    schema: &'a Value,
+    inputs: &'a Value,
+    /// Every property name the schema declares or requires anywhere.
+    declared: BTreeSet<&'a str>,
+}
+
+impl<'a> Explainer<'a> {
+    fn new(schema: &'a Value, inputs: &'a Value) -> Self {
+        let mut declared = BTreeSet::new();
+        declared_names(schema, &mut declared);
+        Self {
+            schema,
+            inputs,
+            declared,
+        }
+    }
+
+    fn describe(&self, error: &ValidationError<'_>, out: &mut Vec<String>) {
+        let at = self.path(error.instance_path());
+        let problem = match error.kind() {
+            ValidationErrorKind::AdditionalProperties { unexpected } => {
+                self.unexpected(&at, unexpected, self.allowed(error.schema_path()))
+            }
+            ValidationErrorKind::UnevaluatedProperties { unexpected } => {
+                self.unexpected(&at, unexpected, None)
+            }
+            ValidationErrorKind::Required { property } => match property.as_str() {
+                Some(name) => format!("{at}.{name} is required"),
+                None => format!("{at} is missing a required property"),
+            },
+            ValidationErrorKind::Type { kind } => format!("{at} must be {}", type_names(kind)),
+            ValidationErrorKind::Enum { options } => match options.as_array() {
+                Some(options) => format!(
+                    "{at} must be one of: {}",
+                    listed(options.iter().map(rendered))
+                ),
+                None => format!("{at} must be one of the documented values; {SEE_SCHEMA}"),
+            },
+            ValidationErrorKind::Constant { expected_value } => {
+                let value = rendered(expected_value);
+                if value.len() <= MAX_CONSTANT_BYTES {
+                    format!("{at} must be {value}")
+                } else {
+                    format!("{at} must be the documented constant; {SEE_SCHEMA}")
+                }
+            }
+            ValidationErrorKind::Minimum { limit } => format!("{at} must be at least {limit}"),
+            ValidationErrorKind::ExclusiveMinimum { limit } => {
+                format!("{at} must be greater than {limit}")
+            }
+            ValidationErrorKind::Maximum { limit } => format!("{at} must be at most {limit}"),
+            ValidationErrorKind::ExclusiveMaximum { limit } => {
+                format!("{at} must be less than {limit}")
+            }
+            ValidationErrorKind::MultipleOf { multiple_of } => {
+                format!("{at} must be a multiple of {multiple_of}")
+            }
+            ValidationErrorKind::MinLength { limit } => format!(
+                "{at} must be at least {limit} {} long",
+                plural(*limit, "character", "characters")
+            ),
+            ValidationErrorKind::MaxLength { limit } => format!(
+                "{at} must be at most {limit} {} long",
+                plural(*limit, "character", "characters")
+            ),
+            ValidationErrorKind::MinItems { limit } => format!(
+                "{at} must contain at least {limit} {}",
+                plural(*limit, "item", "items")
+            ),
+            ValidationErrorKind::MaxItems { limit } => format!(
+                "{at} must contain at most {limit} {}",
+                plural(*limit, "item", "items")
+            ),
+            ValidationErrorKind::AdditionalItems { limit } => format!(
+                "{at} must contain at most {limit} {}",
+                plural(*limit as u64, "item", "items")
+            ),
+            ValidationErrorKind::MinProperties { limit } => format!(
+                "{at} must contain at least {limit} {}",
+                plural(*limit, "property", "properties")
+            ),
+            ValidationErrorKind::MaxProperties { limit } => format!(
+                "{at} must contain at most {limit} {}",
+                plural(*limit, "property", "properties")
+            ),
+            ValidationErrorKind::UniqueItems => format!("{at} must not contain duplicate items"),
+            ValidationErrorKind::Contains => {
+                format!("{at} must contain an item of the documented form; {SEE_SCHEMA}")
+            }
+            ValidationErrorKind::UnevaluatedItems { .. } => {
+                format!("{at} contains items that are not allowed")
+            }
+            ValidationErrorKind::Pattern { .. }
+            | ValidationErrorKind::BacktrackLimitExceeded { .. }
+            | ValidationErrorKind::RegexEngineFailure { .. } => {
+                format!("{at} does not match the required format")
+            }
+            ValidationErrorKind::Format { format } => format!("{at} must be a valid {format}"),
+            ValidationErrorKind::ContentEncoding { content_encoding } => {
+                format!("{at} must be {content_encoding}-encoded")
+            }
+            ValidationErrorKind::FromUtf8 { .. } => format!("{at} must decode to UTF-8 text"),
+            ValidationErrorKind::ContentMediaType { content_media_type } => {
+                format!("{at} must be {content_media_type} content")
+            }
+            ValidationErrorKind::PropertyNames { .. } => {
+                format!("{at} has a property name that is not allowed")
+            }
+            ValidationErrorKind::FalseSchema => self.refused(&at, error),
+            ValidationErrorKind::Not { schema } => self.forbidden(&at, schema),
+            ValidationErrorKind::AnyOf { context }
+            | ValidationErrorKind::OneOfNotValid { context } => {
+                return self.alternatives(error.instance_path(), &at, context, out);
+            }
+            ValidationErrorKind::OneOfMultipleValid { .. } => self.ambiguous(&at, error),
+            // A reference the schema cannot resolve says nothing about the inputs.
+            ValidationErrorKind::Referencing(_) => return,
+            _ => format!("{at} is invalid; {SEE_SCHEMA}"),
+        };
+        push(out, problem);
+    }
+
+    /// The `oneOf` or `anyOf` problem at `location`: the problems of the one
+    /// form that applies to the inputs, the properties every remaining form
+    /// requires, or the types they accept; otherwise a pointer to the schema.
+    fn alternatives(
+        &self,
+        location: &Location,
+        at: &str,
+        forms: &[Vec<ValidationError<'static>>],
+        out: &mut Vec<String>,
+    ) {
+        let here = location.as_str();
+        // A form that forbids something supplied (`not`) explains less than
+        // one the inputs only partly satisfy.
+        let mut candidates: Vec<&[ValidationError<'static>]> = forms
+            .iter()
+            .map(Vec::as_slice)
+            .filter(|errors| {
+                !errors
+                    .iter()
+                    .any(|error| matches!(error.kind(), ValidationErrorKind::Not { .. }))
+            })
+            .collect();
+        if candidates.is_empty() {
+            candidates = forms.iter().map(Vec::as_slice).collect();
+        }
+        // A form whose discriminating constant below this location the
+        // inputs do not match does not apply to them.
+        let applicable: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|errors| {
+                !errors.iter().any(|error| {
+                    matches!(error.kind(), ValidationErrorKind::Constant { .. })
+                        && is_below(error.instance_path().as_str(), here)
+                })
+            })
+            .collect();
+        if !applicable.is_empty() {
+            candidates = applicable;
+        }
+        if let [form] = candidates.as_slice() {
+            for error in *form {
+                self.describe(error, out);
+            }
+            return;
+        }
+        if let Some(sets) = required_sets(&candidates, here) {
+            if let [names] = sets.as_slice() {
+                for name in names {
+                    push(out, format!("{at}.{name} is required"));
+                }
+            } else {
+                let sets: Vec<String> = sets.iter().map(|names| all_of(names)).collect();
+                push(out, format!("{at} must include {}", either(&sets)));
+            }
+            return;
+        }
+        if let Some(types) = accepted_types(&candidates, here) {
+            push(out, format!("{at} must be {}", either(&types)));
+            return;
+        }
+        push(
+            out,
+            format!("{at} must match one of the documented forms; {SEE_SCHEMA}"),
+        );
+    }
+
+    /// The problem of inputs that satisfy several `oneOf` forms, naming them
+    /// when each form is one required property.
+    fn ambiguous(&self, at: &str, error: &ValidationError<'_>) -> String {
+        let names: Option<Vec<&str>> = self
+            .schema
+            .pointer(error.schema_path().as_str())
+            .and_then(Value::as_array)
+            .and_then(|forms| {
+                forms
+                    .iter()
+                    .map(|form| match required_only(form).as_deref() {
+                        Some([name]) => Some(*name),
+                        _ => None,
+                    })
+                    .collect()
+            });
+        match names {
+            Some(names) if names.len() > 1 => {
+                format!("{at} must include only one of: {}", listed(names))
+            }
+            _ => format!("{at} matches more than one documented form; {SEE_SCHEMA}"),
+        }
+    }
+
+    /// The problem of inputs a `not` schema forbids, naming the properties
+    /// when it forbids a set of them.
+    fn forbidden(&self, at: &str, schema: &Value) -> String {
+        match required_only(schema).as_deref() {
+            Some([name]) => format!("{at}.{name} is not allowed with these inputs"),
+            Some(names) if names.len() > 1 => format!("{at} must not include {}", all_of(names)),
+            _ => format!("{at} combines inputs in a way the action does not allow; {SEE_SCHEMA}"),
+        }
+    }
+
+    /// A value a `false` schema refuses. `additionalProperties: false` on an
+    /// object that declares no properties refuses the whole object, so its
+    /// supplied properties are reported as unexpected ones.
+    fn refused(&self, at: &str, error: &ValidationError<'_>) -> String {
+        let keyword = error.schema_path();
+        if keyword.as_str().ends_with("/additionalProperties")
+            && let Some(Value::Object(supplied)) =
+                self.inputs.pointer(error.instance_path().as_str())
+        {
+            let declared = keyword
+                .as_str()
+                .strip_suffix("/additionalProperties")
+                .and_then(|parent| self.schema.pointer(parent))
+                .and_then(|node| node.get("properties"))
+                .and_then(Value::as_object);
+            let unexpected: Vec<String> = supplied
+                .keys()
+                .filter(|name| declared.is_none_or(|declared| !declared.contains_key(*name)))
+                .cloned()
+                .collect();
+            if !unexpected.is_empty() {
+                return self.unexpected(at, &unexpected, self.allowed(keyword));
+            }
+        }
+        format!("{at} is not allowed")
+    }
+
+    /// Unexpected properties at `at`, echoing only names it may show.
+    fn unexpected(&self, at: &str, unexpected: &[String], allowed: Option<String>) -> String {
+        let mut named = Vec::new();
+        let mut others = 0usize;
+        for name in unexpected {
+            if named.len() < MAX_ECHOED && self.displayable(name) {
+                named.push(format!("{at}.{name}"));
+            } else {
+                others += 1;
+            }
+        }
+        let mut problem = match (named.as_slice(), others) {
+            ([], 1) => format!("an unexpected property in {at} is not allowed"),
+            ([], count) => format!("{count} unexpected properties in {at} are not allowed"),
+            ([name], 0) => format!("{name} is not allowed"),
+            (names, 0) => format!("{} are not allowed", and_list(names)),
+            (names, count) => format!(
+                "{} and {count} other unexpected {} are not allowed",
+                names.join(", "),
+                plural(count as u64, "property", "properties")
+            ),
+        };
+        if let Some(allowed) = allowed {
+            problem.push_str("; allowed: ");
+            problem.push_str(&allowed);
+        }
+        problem
+    }
+
+    /// The properties the object whose `additionalProperties` keyword is at
+    /// `keyword` declares; none when it also admits patterns.
+    fn allowed(&self, keyword: &Location) -> Option<String> {
+        let parent = keyword.as_str().strip_suffix("/additionalProperties")?;
+        let node = self.schema.pointer(parent)?;
+        if node.get("patternProperties").is_some() {
+            return None;
+        }
+        Some(match node.get("properties").and_then(Value::as_object) {
+            Some(properties) if !properties.is_empty() => {
+                listed(properties.keys().map(String::as_str))
+            }
+            _ => "none".to_owned(),
+        })
+    }
+
+    /// `inputs` followed by the dotted or indexed segments of `location`,
+    /// with a key it may not show replaced by [`HIDDEN_KEY`].
+    fn path(&self, location: &Location) -> String {
+        let mut path = String::from("inputs");
+        let mut node = Some(self.inputs);
+        for raw in location.as_str().split('/').skip(1) {
+            let segment = raw.replace("~1", "/").replace("~0", "~");
+            match node {
+                Some(Value::Array(items)) => match segment.parse::<usize>() {
+                    Ok(index) => {
+                        path.push_str(&format!("[{index}]"));
+                        node = items.get(index);
+                    }
+                    Err(_) => {
+                        path.push_str("[]");
+                        node = None;
+                    }
+                },
+                _ => {
+                    path.push('.');
+                    path.push_str(if self.displayable(&segment) {
+                        &segment
+                    } else {
+                        HIDDEN_KEY
+                    });
+                    node = node.and_then(|node| node.get(&segment));
+                }
+            }
+        }
+        path
+    }
+
+    /// Whether a supplied property name may appear in a message: the schema
+    /// declares it, or it is a plain identifier.
+    fn displayable(&self, name: &str) -> bool {
+        self.declared.contains(name) || is_identifier(name)
+    }
+}
+
+/// `^[A-Za-z][A-Za-z0-9_]{0,63}$`.
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 64
+        && chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|rest| rest.is_ascii_alphanumeric() || rest == '_')
+}
+
+/// Collects the names under every `properties` and `required` keyword of
+/// `schema`, without descending into data keywords.
+fn declared_names<'a>(schema: &'a Value, names: &mut BTreeSet<&'a str>) {
+    match schema {
+        Value::Object(keywords) => {
+            for (keyword, value) in keywords {
+                match keyword.as_str() {
+                    "enum" | "const" | "default" | "examples" => continue,
+                    "properties" => {
+                        if let Some(properties) = value.as_object() {
+                            names.extend(properties.keys().map(String::as_str));
+                        }
+                    }
+                    "required" => {
+                        if let Some(required) = value.as_array() {
+                            names.extend(required.iter().filter_map(Value::as_str));
+                        }
+                    }
+                    _ => {}
+                }
+                declared_names(value, names);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                declared_names(item, names);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The names of a schema that only requires properties, such as the forms
+/// of `oneOf: [{required: [issue]}, {required: [url]}]`.
+fn required_only(schema: &Value) -> Option<Vec<&str>> {
+    let keywords = schema.as_object()?;
+    if keywords.len() != 1 {
+        return None;
+    }
+    let names: Vec<&str> = keywords
+        .get("required")?
+        .as_array()?
+        .iter()
+        .map(Value::as_str)
+        .collect::<Option<_>>()?;
+    (!names.is_empty()).then_some(names)
+}
+
+/// The distinct sets of properties each form is missing at `here`, when
+/// missing properties are each form's only problems.
+fn required_sets<'e>(
+    forms: &[&'e [ValidationError<'static>]],
+    here: &str,
+) -> Option<Vec<Vec<&'e str>>> {
+    let mut sets: Vec<Vec<&str>> = Vec::new();
+    for form in forms {
+        if form.is_empty() {
+            return None;
+        }
+        let names = form
+            .iter()
+            .map(|error| match error.kind() {
+                ValidationErrorKind::Required { property }
+                    if error.instance_path().as_str() == here =>
+                {
+                    property.as_str()
+                }
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if !sets.contains(&names) {
+            sets.push(names);
+        }
+    }
+    Some(sets)
+}
+
+/// The types the forms accept at `here`, when each form's only problem is
+/// a type mismatch there.
+fn accepted_types(forms: &[&[ValidationError<'static>]], here: &str) -> Option<Vec<String>> {
+    let mut types = Vec::new();
+    for form in forms {
+        let [error] = form else {
+            return None;
+        };
+        match error.kind() {
+            ValidationErrorKind::Type { kind } if error.instance_path().as_str() == here => {
+                types.extend(json_types(kind));
+            }
+            _ => return None,
+        }
+    }
+    Some(ordered_type_names(types))
+}
+
+fn json_types(kind: &TypeKind) -> Vec<JsonType> {
+    match kind {
+        TypeKind::Single(json_type) => vec![*json_type],
+        TypeKind::Multiple(types) => types.iter().collect(),
+    }
+}
+
+fn type_names(kind: &TypeKind) -> String {
+    either(&ordered_type_names(json_types(kind)))
+}
+
+/// Distinct type names with an article, in order with `null` last.
+fn ordered_type_names(types: Vec<JsonType>) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for json_type in types
+        .iter()
+        .filter(|json_type| **json_type != JsonType::Null)
+        .chain(
+            types
+                .iter()
+                .filter(|json_type| **json_type == JsonType::Null),
+        )
+    {
+        let name = type_name(*json_type).to_owned();
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+fn type_name(json_type: JsonType) -> &'static str {
+    match json_type {
+        JsonType::Array => "an array",
+        JsonType::Boolean => "a boolean",
+        JsonType::Integer => "an integer",
+        JsonType::Null => "null",
+        JsonType::Number => "a number",
+        JsonType::Object => "an object",
+        JsonType::String => "a string",
+    }
+}
+
+/// A schema constant as a message shows it: a plain string as itself, any
+/// other value as compact JSON.
+fn rendered(value: &Value) -> String {
+    match value.as_str() {
+        Some(text)
+            if !text.is_empty()
+                && !text
+                    .chars()
+                    .any(|c| c == ',' || c == ';' || c.is_whitespace() || c.is_control()) =>
+        {
+            text.to_owned()
+        }
+        _ => value.to_string(),
+    }
+}
+
+/// At most [`MAX_LISTED`] items joined by commas, then how many remain.
+fn listed<T: AsRef<str>>(items: impl IntoIterator<Item = T>) -> String {
+    let items: Vec<T> = items.into_iter().collect();
+    let shown: Vec<&str> = items.iter().take(MAX_LISTED).map(AsRef::as_ref).collect();
+    let mut list = shown.join(", ");
+    if items.len() > shown.len() {
+        list.push_str(&format!(", and {} more", items.len() - shown.len()));
+    }
+    list
+}
+
+/// `a`, `both a and b`, or `all of a, b and c`.
+fn all_of(names: &[&str]) -> String {
+    match names {
+        [name] => (*name).to_owned(),
+        [first, second] => format!("both {first} and {second}"),
+        names => format!("all of {}", and_list(names)),
+    }
+}
+
+/// `a`, `a and b`, or `a, b and c`.
+fn and_list<T: AsRef<str>>(items: &[T]) -> String {
+    joined(items, "and")
+}
+
+/// `a`, `a or b`, or `a, b or c`.
+fn either<T: AsRef<str>>(items: &[T]) -> String {
+    joined(items, "or")
+}
+
+fn joined<T: AsRef<str>>(items: &[T], conjunction: &str) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.as_ref().to_owned(),
+        [init @ .., last] => format!(
+            "{} {conjunction} {}",
+            init.iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>()
+                .join(", "),
+            last.as_ref()
+        ),
+    }
+}
+
+fn plural(count: u64, one: &'static str, many: &'static str) -> &'static str {
+    if count == 1 { one } else { many }
+}
+
+/// Whether `path` is strictly below `here`.
+fn is_below(path: &str, here: &str) -> bool {
+    path.strip_prefix(here)
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn push(out: &mut Vec<String>, problem: String) {
+    if !out.contains(&problem) {
+        out.push(problem);
+    }
+}
+
+#[cfg(test)]
+#[path = "input_explanation_tests.rs"]
+mod tests;

@@ -923,6 +923,14 @@ IDs when reporting failures. If the broker returns `decision: "deny"`, do not
 try to bypass policy; narrow the request to allowed project, space, repository,
 or ask the user for the correct scope.
 
+An `input_invalid` denial whose inputs break the action's input schema names
+up to three problems by input property, for example `jira.comment.list inputs
+are invalid: inputs.maxResults must be an integer`; typed commands set those
+properties through their flags. Fix what it names and keep the other valid
+options; do not drop options or retry blindly. A message without that detail
+states a provider rule the schema cannot express; check the command's help and
+the action documentation before another attempt.
+
 `agent-access services describe SERVICE` includes authenticated caller `limits`:
 rate/window, `maxWaitSeconds`, counted/queued requests, next unreserved admission
 and approximate shared request occupancy. These process-local observations reserve
