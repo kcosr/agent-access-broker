@@ -205,6 +205,7 @@ All notable changes to this project are documented in this file.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
 - **SDK:** `host::admitted_inputs`, the host's shared handle to an admitted
   request's inputs.
+  ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
 
@@ -228,6 +229,7 @@ All notable changes to this project are documented in this file.
   action. Reason codes, statuses, decisions and audit records are unchanged.
   See
   [input explanations](docs/http-api.md#input-explanations).
+  ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 - **Import validation is stricter.** OpenAPI documents with
   duplicate names now fail discovery or refresh instead of using the last value;
@@ -280,6 +282,7 @@ All notable changes to this project are documented in this file.
   transport now returns an error that names it, when it is a plain identifier,
   and lists the arguments the tool accepts. See
   [tool arguments](docs/mcp.md#tool-arguments).
+  ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 - **Git pushes over 1 MiB work through the gateway.** With default Git
   settings, a push larger than `http.postBuffer` failed with `HTTP 400`
