@@ -175,7 +175,9 @@ HTTP offers the same five discovery helpers and individual JSON provider tools.
 It excludes multipart upload and raw download tools. Those actions remain
 visible in discovery, but `actions_describe` omits `mcpTool` for them. HTTP tools
 require inline `inputs`; `requestFile`, `files`, `outputPath`, and `secretSources`
-are rejected. Use the local stdio adapter for those filesystem operations.
+are rejected with an error that names the argument and points to stdio MCP (see
+[tool arguments](#tool-arguments)). Use the local stdio adapter for those
+filesystem operations.
 Neither transport changes the broker's resource/grant enforcement.
 
 For Codex, put the following in client configuration:
@@ -655,6 +657,19 @@ an absolute local file path and pass:
 The file contains `{"issue":"ABC-123"}`, not a `send` or HTTP invoke envelope.
 Exactly one of `inputs` or `requestFile` is required. This lets the agent edit a
 file and submit its path without reproducing its contents in a tool call.
+
+The tool schema's top level is a plain object without `oneOf`, `anyOf`, or
+`allOf`, so MCP clients that render input schemas as type declarations, or
+that validate arguments locally, still see every argument. The `inputs` and
+`requestFile` descriptions state the choice, a top-level `not` forbids sending
+both, and the adapter rejects a call that sends neither.
+
+An argument the tool schema does not declare is a tool error that names it and
+lists the arguments the tool accepts, for example
+``unsupported argument `readContentFormat`; this tool accepts: inputs, outputPath, requestFile``.
+Both transports and the discovery helpers apply this rule. The error repeats
+only names that are plain identifiers (a letter followed by up to 63 letters,
+digits, or underscores) and never argument values.
 
 JSON and multipart-upload tools, including writes, accept optional `outputPath`:
 

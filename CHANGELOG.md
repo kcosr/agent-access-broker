@@ -256,6 +256,16 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- **Local stdio MCP action tools show their arguments in more clients.** Their
+  input schemas no longer use a top-level `oneOf` for the `inputs` or
+  `requestFile` choice, which MCP clients that render tool input schemas as
+  type declarations or validate arguments locally could reduce to an untyped
+  object. The property descriptions state the choice and the adapter still
+  requires exactly one. An undeclared top-level argument on either MCP
+  transport now returns an error that names it, when it is a plain identifier,
+  and lists the arguments the tool accepts. See
+  [tool arguments](docs/mcp.md#tool-arguments).
+
 - **Git pushes over 1 MiB work through the gateway.** With default Git
   settings, a push larger than `http.postBuffer` failed with `HTTP 400`
   because the gateway rejected the probe request Git sends first. The probe

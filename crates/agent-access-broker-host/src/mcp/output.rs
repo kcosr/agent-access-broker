@@ -76,7 +76,7 @@ pub(super) fn admission_failure(envelope: Value, limit: usize) -> Result<CallToo
         message,
     ))
 }
-pub(super) fn message(message: &'static str) -> CallToolResult {
+pub(super) fn message(message: &str) -> CallToolResult {
     CallToolResult::structured_error(json!({"error":{"code":"mcp_tool_error","message":message}}))
 }
 pub(super) fn broker(

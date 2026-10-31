@@ -134,13 +134,7 @@ pub(super) async fn call_tool(
                 .map(|action| (&service.service, action))
         })
         .ok_or(UnknownToolError)?;
-    let schema = input_schema(action);
-    let supported = schema["properties"]
-        .as_object()
-        .context("invalid action input schema")?;
-    if arguments.keys().any(|key| !supported.contains_key(key)) {
-        bail!("argument is not supported by this tool's schema");
-    }
+    agent_access_core::mcp::check_declared_arguments(&arguments, &input_schema(action))?;
     if arguments.contains_key("inputs") == arguments.contains_key("requestFile") {
         bail!("provide exactly one of inputs or requestFile");
     }
@@ -1572,8 +1566,8 @@ mod tests {
             fresh.services[0].actions[0].input_schema
         );
         assert_eq!(
-            detail["mcpTool"]["inputSchema"]["properties"]["inputs"],
-            detail["inputSchema"]
+            detail["mcpTool"]["inputSchema"],
+            input_schema(&fresh.services[0].actions[0])
         );
         assert!(detail.get("scopedMcpName").is_none());
         server.verify().await;
@@ -1927,6 +1921,67 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn unsupported_arguments_are_named_without_values_before_local_io_or_dispatch() {
+        let server = MockServer::start().await;
+        serve_catalog(&server, action()).await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("result.json");
+        let secret = "synthetic-secret-value";
+        let accepts = "this tool accepts: inputs, outputPath, requestFile";
+        for (arguments, expected) in [
+            (
+                json!({"inputs":{"issue":"ABC-1"},"readContentFormat":"markdown"}),
+                format!("unsupported argument `readContentFormat`; {accepts}"),
+            ),
+            (
+                json!({"issue":"ABC-1","token":secret}),
+                format!("unsupported arguments `issue`, `token`; {accepts}"),
+            ),
+            (
+                json!({"inputs":{"issue":"ABC-1"},"not an identifier":secret}),
+                format!("unsupported argument; {accepts}"),
+            ),
+            (
+                json!({"inputs":{"issue":"ABC-1"},"outputPath":output,"x-token":secret}),
+                format!("unsupported argument; {accepts}"),
+            ),
+        ] {
+            let error = call_tool(
+                &settings(&server),
+                &McpView::Aggregate,
+                &tool_name("jira-team", "issue.view"),
+                arguments.as_object().unwrap().clone(),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert_eq!(error, expected);
+            assert!(!error.contains(secret), "{error}");
+        }
+        // The schema forbids only sending both input modes; omitting both is
+        // still rejected at call time.
+        let error = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            &tool_name("jira-team", "issue.view"),
+            json!({"outputPath":output}).as_object().unwrap().clone(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "provide exactly one of inputs or requestFile"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        server.verify().await;
     }
 
     #[tokio::test]

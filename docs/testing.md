@@ -519,9 +519,10 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   and stdio MCP `requestFile`, including grant narrowing and secret redaction.
 - `mcp_stdio.rs` drives the real local MCP process against the real broker,
   covering action discovery, edited request files, resource denials, token
-  rotation, stale tools, error recovery, and EOF shutdown. MCP unit tests also
-  cover bounded framing, pagination, uploads, verified downloads, and secret
-  sources. Discovery coverage includes the five fixed helpers, resource-access
+  rotation, stale tools, error recovery, named unsupported-argument errors, and
+  EOF shutdown. MCP unit tests also cover bounded framing, pagination, uploads,
+  verified downloads, and secret sources. Discovery coverage includes the five
+  fixed helpers, resource-access
   summaries and registered-reference pages, targeted action names, exact native
   schemas, malformed helper arguments,
   broker denials, and recovery. Shared client tests cover inconsistent/failing

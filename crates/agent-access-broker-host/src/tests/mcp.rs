@@ -368,19 +368,47 @@ async fn mcp_file_fields_and_helper_errors_are_rejected_without_poisoning_sessio
     let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;
     let name = agent_access_core::mcp::tool_name("fake", "echo");
-    for (index, arguments) in [
-        json!({"requestFile":"/etc/passwd"}),
-        json!({"inputs":{"project":"TEST","message":"x"},"files":[]}),
-        json!({"inputs":{"project":"TEST","message":"x"},"outputPath":"/tmp/never-create"}),
-        json!({"inputs":{"project":"TEST","message":"x"},"secretSources":[]}),
+    let local = "; local file and secret-source arguments require stdio MCP";
+    let secret = "synthetic-secret-value";
+    for (index, (arguments, message)) in [
+        (
+            json!({"requestFile":"/etc/passwd"}),
+            format!("unsupported argument `requestFile`; this tool accepts: inputs{local}"),
+        ),
+        (
+            json!({"inputs":{"project":"TEST","message":"x"},"files":[]}),
+            format!("unsupported argument `files`; this tool accepts: inputs{local}"),
+        ),
+        (
+            json!({"inputs":{"project":"TEST","message":"x"},"outputPath":"/tmp/never-create"}),
+            format!("unsupported argument `outputPath`; this tool accepts: inputs{local}"),
+        ),
+        (
+            json!({"inputs":{"project":"TEST","message":"x"},"secretSources":[]}),
+            format!("unsupported argument `secretSources`; this tool accepts: inputs{local}"),
+        ),
+        (
+            json!({"message":"x","project":"TEST"}),
+            "unsupported arguments `message`, `project`; this tool accepts: inputs".into(),
+        ),
+        (
+            json!({"inputs":{"project":"TEST","message":"x"},"not an identifier":secret}),
+            "unsupported argument; this tool accepts: inputs".into(),
+        ),
+        (
+            json!({"inputs":"TEST"}),
+            "inputs is required and must be a JSON object".into(),
+        ),
     ]
     .into_iter()
     .enumerate()
     {
         let result = fixture
-            .call(&session, index as u64 + 2, &name, arguments)
+            .call(&session, index as u64 + 20, &name, arguments)
             .await;
         assert_eq!(result["result"]["isError"], true, "{result}");
+        assert_eq!(structured(&result)["error"]["message"], message);
+        assert!(!result.to_string().contains(secret), "{result}");
     }
     let malformed_helper = fixture
         .call(
@@ -391,6 +419,23 @@ async fn mcp_file_fields_and_helper_errors_are_rejected_without_poisoning_sessio
         )
         .await;
     assert_eq!(malformed_helper["result"]["isError"], true);
+    assert_eq!(
+        structured(&malformed_helper)["error"]["message"],
+        "limit must be between 1 and 100"
+    );
+    let unsupported_helper = fixture
+        .call(
+            &session,
+            15,
+            "actions_list",
+            json!({"service":"fake","query":secret}),
+        )
+        .await;
+    assert_eq!(unsupported_helper["result"]["isError"], true);
+    assert_eq!(
+        structured(&unsupported_helper)["error"]["message"],
+        "unsupported argument `query`; this tool accepts: prefix, resource, resourceType, service"
+    );
     let unknown = fixture.call(&session, 11, "unknown_tool", json!({})).await;
     assert!(unknown.get("error").is_some(), "{unknown}");
     let retired = fixture
