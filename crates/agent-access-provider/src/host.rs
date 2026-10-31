@@ -23,7 +23,9 @@
 //!   [`basic_credential`] and [`bearer_credential`] for static material,
 //!   with [`credential_with_profile`] naming the token profile it was stored
 //!   or configured as,
-//!   [`admitted_request`] for the admission decision, [`spooled_body_part`] and
+//!   [`admitted_request`] for the admission decision, with
+//!   [`admitted_inputs`] sharing its inputs back with the host,
+//!   [`spooled_body_part`] and
 //!   [`spooled_body_file`] for body parts the host spooled to disk, and
 //!   [`invocation`] for the final invocation built after staging.
 //! - **Initial scopes**: [`with_correlation_context`] and
@@ -252,7 +254,7 @@ pub fn configure_client_profile(
     }
 }
 
-/// The host's inputs for one scope-resolution request: validated inputs, the
+/// The host's inputs for one scope-resolution request: the caller's inputs, the
 /// host-selected execution context, minimal identity, correlation and the
 /// lookup access the host selected, if any.
 ///
@@ -312,7 +314,7 @@ pub fn credential_with_profile(
 }
 
 /// The host's admission decision for one operation: the admitted context, the
-/// validated inputs and the execution and lookup material it selected.
+/// caller's inputs and the execution and lookup material it selected.
 ///
 /// Intentionally exhaustive: the host supplies every input, so a new one
 /// fails to compile until the host provides it. The `universal_reach` field
@@ -376,6 +378,13 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
         execution,
         lookup_access,
     )
+}
+
+/// A shared handle to `request`'s inputs. The host keeps it after the final
+/// invocation consumes the request, so that it can explain an
+/// `input_invalid` denial of those inputs from the action's input schema.
+pub fn admitted_inputs(request: &AdmittedRequest) -> Arc<Value> {
+    request.shared_inputs()
 }
 
 /// A body part the host spooled to `path` while consuming the request body,

@@ -985,6 +985,14 @@ HTTP request files use `kind = "http"` and cataloged broker routes; inspect
 Preserve request IDs from JSON/metadata. If `decision: "deny"`, do not retry broader
 scope. Narrow the request or ask the user for the correct access.
 
+For built-in services, an `input_invalid` denial whose inputs break the
+action's input schema names up to three problems, for example `jira.comment.list inputs are invalid:
+inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy,
+startAt, url`. Fix what it names and keep the other valid inputs; do not drop
+options or retry blindly. A message without that detail is the provider's own;
+compare the inputs with the action's schema and documentation before another
+attempt.
+
 `agent-access services describe SERVICE` includes authenticated caller `limits`:
 rate/window, `maxWaitSeconds`, counted/queued requests, next unreserved admission
 and approximate shared request occupancy. These process-local observations reserve

@@ -610,7 +610,7 @@ only view of the operation:
 | `authority()`, `resource_scopes()`, `search_authorization()` | The exact admitted authority. |
 | `universal_reach()` | Whether an opted-in read has universal same-mode resource coverage for disclosing metadata already carried in the same upstream response. |
 | `companion_reads_authorized()` | Whether every declared direct companion read is authorized for the admitted resources in the selected credential mode. |
-| `inputs()` | Inputs validated against the action's schema. |
+| `inputs()` | The caller's inputs as supplied; the host does not validate them against the action's schema. |
 | `execution()`, `lookup_access()` | The selected execution material and any [lookup access](#lookup-access). |
 | `body_parts()`, `resource_attributes()`, `state()` | Staged body parts, the admitted resource's private attributes and provider state. |
 
@@ -1800,6 +1800,26 @@ concealment.
 
 `upstream_rate_limited` must carry the upstream rate-limit result that
 `upstream_rate_limited(service, retry_after)` builds, naming the invoked service.
+
+### Input denials
+
+Parse inputs strictly, for example with `deny_unknown_fields`, and deny
+malformed ones with `input_invalid` (`decision = deny`). When a native
+provider's scope resolution, body admission or invocation denies that way,
+the host checks the request's inputs against the action's input schema and,
+when they break it, replaces the message with field-specific problems built
+from the schema, such as
+`notes.note.view inputs are invalid: inputs.note is required`. Keep input
+schemas cheap to evaluate: no `$ref`, a few KiB of `const` and `enum` values
+at most, and small `not`, `if` and `contains` subschemas; the shipped
+providers are tested against that profile.
+The provider's message stands when the inputs satisfy the schema, and when
+explaining is outside the host's budget or discovery hides the action from
+the caller, so give each denial a specific message without supplied values.
+Never make the schema stricter than the parser. A schema may leave a rule,
+such as a cross-field requirement, to the parser, which keeps the provider's
+message for it; a stricter schema could explain a problem the parser accepts.
+See [input explanations](http-api.md#input-explanations).
 
 ### Domain reasons
 

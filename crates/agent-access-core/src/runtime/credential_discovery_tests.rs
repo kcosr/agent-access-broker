@@ -446,3 +446,81 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
     assert_eq!(service.availability.state, AvailabilityState::Unknown);
     assert!(service.actions.is_empty());
 }
+
+/// The message of the input denial `identity` receives for a malformed
+/// `jira.issue.view` call, which scope resolution rejects before policy and
+/// before any upstream request.
+async fn issue_view_denial(runtime: &BrokerRuntime, identity: IdentityContext) -> String {
+    let response = runtime
+        .invoke(
+            governed(OperationContext {
+                agent_request_id: "agent-input-denial".into(),
+                broker_request_id: "broker-input-denial".into(),
+                identity,
+                service: "jira".into(),
+                action: "issue.view".into(),
+                source: SourceContext::unknown(),
+            }),
+            InvokeRequest::new(json!({"issue": 7})),
+        )
+        .await;
+    assert_eq!(
+        response.envelope.reason_code,
+        Some(ReasonCode::InputInvalid.into())
+    );
+    response.envelope.reason.unwrap()
+}
+
+/// Scope resolution runs before policy, so a native input denial is
+/// explained only when caller discovery lists the action: not under a token
+/// whose resources miss every grant, nor once the winning grant's credential
+/// is unusable.
+#[tokio::test]
+async fn native_input_denials_before_policy_follow_caller_discovery() {
+    const PROVIDER: &str = "jira.issue.view inputs are invalid";
+    let config = jira_config();
+    let token = config.credentials.service["jira"]
+        .token_ref
+        .as_ref()
+        .unwrap()
+        .strip_prefix("file:")
+        .unwrap()
+        .to_owned();
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let context = default_execution_context();
+    let listed = |identity: &IdentityContext| {
+        runtime
+            .api_services_for_identity(identity, &context)
+            .iter()
+            .any(|service| {
+                service
+                    .actions
+                    .iter()
+                    .any(|action| action.action == "issue.view")
+            })
+    };
+
+    assert!(listed(&agent_one_identity()));
+    assert_eq!(
+        issue_view_denial(&runtime, agent_one_identity()).await,
+        "jira.issue.view inputs are invalid: inputs.issue must be a string"
+    );
+
+    let restricted = shell_token_identity(json!({
+        "allowedServices": ["jira"],
+        "allowedExecutionContexts": ["default"],
+        "serviceRestrictions": {"jira": {
+            "actions": ["issue.view"],
+            "resources": {"resourceIds": ["project-OTHER"]}
+        }}
+    }));
+    assert!(!listed(&restricted));
+    assert_eq!(issue_view_denial(&runtime, restricted).await, PROVIDER);
+
+    fs::remove_file(&token).unwrap();
+    assert!(!listed(&agent_one_identity()));
+    assert_eq!(
+        issue_view_denial(&runtime, agent_one_identity()).await,
+        PROVIDER
+    );
+}

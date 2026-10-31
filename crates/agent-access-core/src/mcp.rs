@@ -16,6 +16,78 @@ pub enum ProjectionMode {
 #[error("{0}")]
 pub struct ProjectionError(pub &'static str);
 
+/// Rejected MCP tool arguments. Messages never include argument values.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ArgumentError(String);
+
+impl From<ProjectionError> for ArgumentError {
+    fn from(error: ProjectionError) -> Self {
+        Self(error.0.to_owned())
+    }
+}
+
+/// At most this many rejected argument names appear in one error.
+const NAMED_ARGUMENT_LIMIT: usize = 3;
+
+/// Rejects top-level arguments that `schema` does not declare in `properties`.
+/// The error names rejected keys only when they are plain identifiers, lists
+/// the declared argument names in sorted order, and never echoes values.
+pub fn check_declared_arguments(
+    arguments: &Map<String, Value>,
+    schema: &Value,
+) -> Result<(), ArgumentError> {
+    let declared = schema.get("properties").and_then(Value::as_object);
+    let rejected: Vec<&str> = arguments
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !declared.is_some_and(|declared| declared.contains_key(*key)))
+        .collect();
+    if rejected.is_empty() {
+        return Ok(());
+    }
+    let named: Vec<String> = rejected
+        .iter()
+        .filter(|key| is_plain_identifier(key))
+        .take(NAMED_ARGUMENT_LIMIT)
+        .map(|key| format!("`{key}`"))
+        .collect();
+    let mut message = String::from(if rejected.len() == 1 {
+        "unsupported argument"
+    } else {
+        "unsupported arguments"
+    });
+    if !named.is_empty() {
+        message.push(' ');
+        message.push_str(&named.join(", "));
+        if named.len() < rejected.len() {
+            message.push_str(" and others");
+        }
+    }
+    let mut accepted: Vec<&str> = declared
+        .into_iter()
+        .flat_map(|declared| declared.keys().map(String::as_str))
+        .collect();
+    accepted.sort_unstable();
+    if accepted.is_empty() {
+        message.push_str("; this tool accepts no arguments");
+    } else {
+        message.push_str("; this tool accepts: ");
+        message.push_str(&accepted.join(", "));
+    }
+    Err(ArgumentError(message))
+}
+
+/// `^[A-Za-z][A-Za-z0-9_]{0,63}$`: safe to echo in an error message.
+fn is_plain_identifier(key: &str) -> bool {
+    let mut chars = key.chars();
+    key.len() <= 64
+        && chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
 /// Whether `mode` can serve the action: HTTP serves JSON I/O only, and stdio
 /// also stages multipart uploads and raw downloads locally. An I/O kind this
 /// build does not know is never served.
@@ -115,9 +187,10 @@ pub fn input_schema(action: &ApiActionSpec, mode: ProjectionMode) -> Value {
         }
     }
     crate::api::relocate_local_schema_refs(&mut inputs, "#/properties/inputs");
+    describe_local_inputs(&mut inputs);
     let mut properties = json!({
         "inputs": inputs,
-        "requestFile": {"type":"string", "description":"Absolute local path to a JSON object containing action inputs (not an invoke envelope). Maximum 16 MiB. Mutually exclusive with inputs."}
+        "requestFile": {"type":"string", "description":"Absolute local path to a JSON object containing action inputs (not an invoke envelope); use instead of inputs. Maximum 16 MiB."}
     });
     if !action.sensitive_input_pointers.is_empty() {
         properties["secretSources"] = json!({"type":"array","description":"Inject catalog-declared sensitive fields from local environment variables or files; pointers address /inputs/... . stdin is unavailable.", "items": {
@@ -161,8 +234,30 @@ pub fn input_schema(action: &ApiActionSpec, mode: ProjectionMode) -> Value {
     if !action.response_formats.is_empty() {
         properties["responseFormat"] = json!({"type":"string","enum":action.response_formats});
     }
+    // Keep the top level a plain object: clients that render input schemas as
+    // type declarations replace one with a top-level oneOf/anyOf/allOf by an
+    // untyped map, hiding every argument. `not` forbids sending both inputs
+    // and requestFile; the adapter requires exactly one at call time.
     json!({"type":"object","additionalProperties":false,"properties":properties,"required":required,
-        "oneOf":[{"required":["inputs"],"not":{"required":["requestFile"]}},{"required":["requestFile"],"not":{"required":["inputs"]}}]})
+        "not":{"required":["inputs","requestFile"]}})
+}
+
+/// State the stdio `inputs`/`requestFile` choice where clients display it,
+/// keeping any description the action's input schema already has.
+fn describe_local_inputs(inputs: &mut Value) {
+    const RULE: &str = "Required unless requestFile is given.";
+    let Some(schema) = inputs.as_object_mut() else {
+        return;
+    };
+    let description = match schema
+        .get("description")
+        .and_then(Value::as_str)
+        .map(|existing| existing.trim_end().trim_end_matches('.'))
+    {
+        Some(existing) if !existing.is_empty() => format!("{existing}. {RULE}"),
+        _ => format!("Action inputs. {RULE}"),
+    };
+    schema.insert("description".into(), json!(description));
 }
 
 fn remove_generated_input(schema: &mut Value, pointer: &str) {
@@ -315,7 +410,7 @@ pub fn validate_helper_arguments_for_view(
     arguments: &Map<String, Value>,
     mode: ProjectionMode,
     view: &McpView,
-) -> Result<(), ProjectionError> {
+) -> Result<(), ArgumentError> {
     validate_helper_arguments(name, arguments, mode)?;
     if view.service().is_some_and(|service| {
         arguments
@@ -323,7 +418,7 @@ pub fn validate_helper_arguments_for_view(
             .and_then(Value::as_str)
             .is_some_and(|requested| requested != service)
     }) {
-        return Err(ProjectionError("service is outside this MCP view"));
+        return Err(ProjectionError("service is outside this MCP view").into());
     }
     Ok(())
 }
@@ -332,26 +427,21 @@ pub fn validate_helper_arguments(
     name: &str,
     arguments: &Map<String, Value>,
     mode: ProjectionMode,
-) -> Result<(), ProjectionError> {
+) -> Result<(), ArgumentError> {
     let definition = helper_definitions(mode)
         .into_iter()
         .find(|tool| tool["name"] == name)
         .ok_or(ProjectionError("unknown discovery helper"))?;
     let schema = &definition["inputSchema"];
-    let properties = schema["properties"].as_object().expect("static properties");
-    if arguments.keys().any(|key| !properties.contains_key(key)) {
-        return Err(ProjectionError(
-            "argument is not supported by this tool's schema",
-        ));
-    }
+    check_declared_arguments(arguments, schema)?;
     for key in schema["required"]
         .as_array()
         .expect("static required fields")
     {
         if !arguments.contains_key(key.as_str().expect("static field name")) {
-            return Err(ProjectionError(
-                "invalid tool arguments: required field is missing",
-            ));
+            return Err(
+                ProjectionError("invalid tool arguments: required field is missing").into(),
+            );
         }
     }
     for (key, value) in arguments {
@@ -360,10 +450,10 @@ pub fn validate_helper_arguments(
                 .as_u64()
                 .is_some_and(|value| (1..=100).contains(&value))
             {
-                return Err(ProjectionError("limit must be between 1 and 100"));
+                return Err(ProjectionError("limit must be between 1 and 100").into());
             }
         } else if !value.is_string() {
-            return Err(ProjectionError("invalid tool arguments: expected a string"));
+            return Err(ProjectionError("invalid tool arguments: expected a string").into());
         }
     }
     if arguments
@@ -371,14 +461,14 @@ pub fn validate_helper_arguments(
         .and_then(Value::as_str)
         .is_some_and(|value| !agent_access_provider::is_service_name(value))
     {
-        return Err(ProjectionError("service name is invalid"));
+        return Err(ProjectionError("service name is invalid").into());
     }
     if arguments
         .get("action")
         .and_then(Value::as_str)
         .is_some_and(|value| !agent_access_provider::is_action_name(value))
     {
-        return Err(ProjectionError("action name is invalid"));
+        return Err(ProjectionError("action name is invalid").into());
     }
     for (key, message) in [
         ("prefix", "prefix must not be empty"),
@@ -388,7 +478,7 @@ pub fn validate_helper_arguments(
         ("outputPath", "outputPath must not be empty"),
     ] {
         if arguments.get(key).and_then(Value::as_str) == Some("") {
-            return Err(ProjectionError(message));
+            return Err(ProjectionError(message).into());
         }
     }
     Ok(())
@@ -671,6 +761,159 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn stdio_schema_is_a_plain_object_that_forbids_both_input_modes() {
+        let mut action = action("file.write", json!({"type":"json"}));
+        let schema = input_schema(&action, ProjectionMode::Stdio);
+        // Clients rendering schemas as type declarations hide every argument
+        // behind a top-level combinator, so none may appear.
+        for keyword in ["oneOf", "anyOf", "allOf"] {
+            assert!(schema.get(keyword).is_none(), "top-level {keyword}");
+        }
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["not"], json!({"required":["inputs","requestFile"]}));
+        assert_eq!(schema["required"], json!([]));
+        assert_eq!(
+            schema["properties"]["inputs"]["description"],
+            "Action inputs. Required unless requestFile is given."
+        );
+        let request_file = schema["properties"]["requestFile"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            request_file.contains("use instead of inputs"),
+            "{request_file}"
+        );
+        assert!(request_file.contains("Maximum 16 MiB"), "{request_file}");
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&json!({"inputs":{"project":"team/repo"}})));
+        assert!(validator.is_valid(&json!({"requestFile":"/tmp/input.json"})));
+        assert!(
+            !validator.is_valid(
+                &json!({"inputs":{"project":"team/repo"},"requestFile":"/tmp/input.json"})
+            )
+        );
+        assert!(
+            !validator.is_valid(&json!({"inputs":{"secret":"value"}})),
+            "inputs still follow the action schema"
+        );
+        // An action's own description is kept ahead of the rule.
+        action.input_schema["description"] = json!("Write one file.");
+        assert_eq!(
+            input_schema(&action, ProjectionMode::Stdio)["properties"]["inputs"]["description"],
+            "Write one file. Required unless requestFile is given."
+        );
+        let http = input_schema(&action, ProjectionMode::Http);
+        assert_eq!(
+            http["properties"]["inputs"]["description"],
+            "Write one file."
+        );
+        assert_eq!(http["required"], json!(["inputs"]));
+        assert!(http.get("not").is_none());
+    }
+
+    #[test]
+    fn unsupported_arguments_are_named_only_as_identifiers_and_never_echo_values() {
+        let schema = json!({"type":"object","properties":{
+            "responseFormat":{},"inputs":{},"requestFile":{}
+        }});
+        let message = |arguments: Value| {
+            check_declared_arguments(arguments.as_object().unwrap(), &schema)
+                .unwrap_err()
+                .to_string()
+        };
+        let accepts = "this tool accepts: inputs, requestFile, responseFormat";
+        assert_eq!(
+            message(json!({"readContentFormat":"markdown"})),
+            format!("unsupported argument `readContentFormat`; {accepts}")
+        );
+        assert_eq!(
+            message(json!({"issue":"ABC-123","project":"ABC"})),
+            format!("unsupported arguments `issue`, `project`; {accepts}")
+        );
+        assert_eq!(
+            message(json!({"alpha":1,"bravo":2,"charlie":3,"delta":4})),
+            format!("unsupported arguments `alpha`, `bravo`, `charlie` and others; {accepts}")
+        );
+        let longest = "a".repeat(64);
+        assert_eq!(
+            message(json!({longest.clone():true})),
+            format!("unsupported argument `{longest}`; {accepts}")
+        );
+        for key in [
+            "a".repeat(65),
+            "1st".into(),
+            "_private".into(),
+            "has-dash".into(),
+            "has space".into(),
+            "line\nbreak".into(),
+            "`quoted`".into(),
+            "caf\u{e9}".into(),
+            String::new(),
+        ] {
+            assert_eq!(
+                message(json!({key.clone():true})),
+                format!("unsupported argument; {accepts}"),
+                "{key:?}"
+            );
+        }
+        assert_eq!(
+            message(json!({"alpha":1,"not an identifier":2})),
+            format!("unsupported arguments `alpha` and others; {accepts}")
+        );
+        let secret = "synthetic-secret-value";
+        for arguments in [
+            json!({"token":secret}),
+            json!({"not an identifier":secret}),
+            json!({"nested":{"token":secret}}),
+        ] {
+            let text = message(arguments);
+            assert!(!text.contains(secret), "{text}");
+        }
+        assert!(
+            check_declared_arguments(
+                json!({"inputs":{},"responseFormat":"json"})
+                    .as_object()
+                    .unwrap(),
+                &schema
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            check_declared_arguments(
+                json!({"extra":1}).as_object().unwrap(),
+                &json!({"type":"object"})
+            )
+            .unwrap_err()
+            .to_string(),
+            "unsupported argument `extra`; this tool accepts no arguments"
+        );
+        // Helpers share the rule on both transports.
+        for (mode, accepted) in [
+            (
+                ProjectionMode::Http,
+                "prefix, resource, resourceType, service",
+            ),
+            (
+                ProjectionMode::Stdio,
+                "outputPath, prefix, resource, resourceType, service",
+            ),
+        ] {
+            assert_eq!(
+                validate_helper_arguments(
+                    "actions_list",
+                    json!({"service":"gitlab","query":secret})
+                        .as_object()
+                        .unwrap(),
+                    mode
+                )
+                .unwrap_err()
+                .to_string(),
+                format!("unsupported argument `query`; this tool accepts: {accepted}")
+            );
+        }
     }
 
     #[test]

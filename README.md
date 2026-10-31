@@ -143,7 +143,9 @@ that links them alongside upstream modules; see the
 The Rust broker, `agent-access` CLI, and administration portal share one
 permission model. Agents connect through typed CLI commands, JSON request files,
 HTTP, local stdio MCP, or authenticated HTTP MCP. Git clients use the Git smart
-HTTP gateway.
+HTTP gateway. MCP action tools publish their arguments as a plain object schema,
+and an unsupported argument is refused with an error that names it and lists the
+accepted ones; see [tool arguments](docs/mcp.md#tool-arguments).
 
 ```mermaid
 flowchart LR

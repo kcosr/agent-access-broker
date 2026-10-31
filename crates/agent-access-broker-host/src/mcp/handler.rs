@@ -134,15 +134,18 @@ impl Handler {
                     };
                     let limit = request.snapshot.runtime.config().mcp.max_response_bytes;
                     let arguments = params.arguments.unwrap_or_default();
+                    if let Err(error) = mcp::validate_helper_arguments_for_view(
+                        helper.as_str(),
+                        &arguments,
+                        ProjectionMode::Http,
+                        &request.view,
+                    ) {
+                        return Ok(PreparedDiscovery::Helper(Ok(output::message(
+                            &error.to_string(),
+                        ))));
+                    }
                     if *helper == mcp::HelperKind::ServicesDescribe {
                         let detail = || {
-                            mcp::validate_helper_arguments_for_view(
-                                helper.as_str(),
-                                &arguments,
-                                ProjectionMode::Http,
-                                &request.view,
-                            )
-                            .map_err(|_| "Invalid discovery helper arguments")?;
                             let service = arguments
                                 .get("service")
                                 .and_then(Value::as_str)
@@ -282,6 +285,7 @@ impl Handler {
         })?;
         Ok(result)
     }
+    /// Runs a helper whose arguments the caller has already validated.
     fn helper(
         &self,
         request: &Admitted,
@@ -290,8 +294,6 @@ impl Handler {
         name: &str,
         args: Map<String, Value>,
     ) -> Result<Value, &'static str> {
-        mcp::validate_helper_arguments_for_view(name, &args, ProjectionMode::Http, &request.view)
-            .map_err(|_| "Invalid discovery helper arguments")?;
         let runtime = &request.snapshot.runtime;
         let service = args.get("service").and_then(Value::as_str);
         let prefix = args.get("prefix").and_then(Value::as_str);
@@ -517,16 +519,21 @@ impl ServerHandler for Handler {
             .ok_or_else(|| {
                 ErrorData::internal_error("Broker tool registry is inconsistent", None)
             })?;
-        if !args.contains_key("inputs")
-            || !args["inputs"].is_object()
-            || args.keys().any(|k| {
-                !matches!(
-                    k.as_str(),
-                    "inputs" | "readContentFormat" | "responseFormat"
-                )
-            })
+        if let Err(error) =
+            mcp::check_declared_arguments(&args, &mcp::input_schema(&action, ProjectionMode::Http))
         {
-            return Ok(output::message("Use inputs and supported presentation options; local file/source arguments require stdio MCP").into());
+            let local = ["requestFile", "files", "outputPath", "secretSources"]
+                .iter()
+                .any(|key| args.contains_key(*key));
+            let message = if local {
+                format!("{error}; local file and secret-source arguments require stdio MCP")
+            } else {
+                error.to_string()
+            };
+            return Ok(output::message(&message).into());
+        }
+        if !args.get("inputs").is_some_and(Value::is_object) {
+            return Ok(output::message("inputs is required and must be a JSON object").into());
         }
         for (key, allowed) in [
             ("readContentFormat", &action.read_content_formats),

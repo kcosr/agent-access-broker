@@ -203,6 +203,9 @@ All notable changes to this project are documented in this file.
 - **SDK:** profile labels, a route-bound flag, `ExecutionCredential::profile()`
   and `base_covered_by_patterns`.
   ([#55](https://github.com/kcosr/agent-access-broker/pull/55))
+- **SDK:** `host::admitted_inputs`, the host's shared handle to an admitted
+  request's inputs.
+  ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
 
@@ -213,6 +216,20 @@ All notable changes to this project are documented in this file.
   Every page remains independently authorized. See
   [comment pagination](docs/providers-jira.md#comment-pagination-and-limits).
   ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
+
+- **`input_invalid` denials name the problems.** When a built-in provider
+  denies an action's inputs and they break its published input schema, `reason`
+  and `error.message` name up to three problems by path, such as
+  `jira.comment.list inputs are invalid: inputs.maxResults must be an integer`.
+  Built-in provider actions are covered; imported and command-backed actions
+  keep their adapter's message. Messages use schema constants only, never
+  supplied values. The provider's message stands for a rule the schema does
+  not express, for inputs above about 32 KiB or schemas that could produce
+  too many errors, and before policy unless caller discovery lists the
+  action. Reason codes, statuses, decisions and audit records are unchanged.
+  See
+  [input explanations](docs/http-api.md#input-explanations).
+  ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 - **Import validation is stricter.** OpenAPI documents with
   duplicate names now fail discovery or refresh instead of using the last value;
@@ -255,6 +272,17 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- **Local stdio MCP action tools show their arguments in more clients.** Their
+  input schemas no longer use a top-level `oneOf` for the `inputs` or
+  `requestFile` choice, which MCP clients that render tool input schemas as
+  type declarations or validate arguments locally could reduce to an untyped
+  object. The property descriptions state the choice and the adapter still
+  requires exactly one. An undeclared top-level argument on either MCP
+  transport now returns an error that names it, when it is a plain identifier,
+  and lists the arguments the tool accepts. See
+  [tool arguments](docs/mcp.md#tool-arguments).
+  ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 - **Git pushes over 1 MiB work through the gateway.** With default Git
   settings, a push larger than `http.postBuffer` failed with `HTTP 400`

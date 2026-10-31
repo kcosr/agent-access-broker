@@ -152,6 +152,34 @@ impl BrokerRuntime {
             .collect()
     }
 
+    /// Whether caller discovery lists `action` for `identity` in `context`:
+    /// [`Self::available_service_descriptors`] on `snapshot`, with the
+    /// catalog's own policy, token and local credential checks. Like
+    /// discovery, it contacts no upstream, refreshes no OAuth connection and
+    /// records no credential use; its store reads run off the async executor.
+    /// A failed check counts as not listed.
+    pub(super) async fn caller_discovers_action(
+        &self,
+        snapshot: &Arc<PolicySnapshot>,
+        identity: &IdentityContext,
+        context: &ExecutionContext,
+        service: &str,
+        action: &str,
+    ) -> bool {
+        let runtime = self.clone();
+        let snapshot = Arc::clone(snapshot);
+        let (identity, context) = (identity.clone(), context.clone());
+        let (service, action) = (service.to_owned(), action.to_owned());
+        managed_store_blocking(move || {
+            Ok(runtime
+                .available_service_descriptors(&identity, &context, &snapshot, Some(&service))
+                .iter()
+                .any(|available| available.descriptor.action(&action).is_some()))
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     fn available_service_descriptor(
         &self,
         mut descriptor: ServiceDescriptor,

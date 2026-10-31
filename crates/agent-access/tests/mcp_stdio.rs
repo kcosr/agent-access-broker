@@ -594,6 +594,28 @@ async fn stdio_discovers_authorized_actions_and_enforces_resources_with_live_tok
         )
         .await;
     assert_eq!(malformed["result"]["isError"], true, "{malformed}");
+    // Flattened inputs are named in the error with the accepted arguments.
+    let mut accepted: Vec<_> = native_schema["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    accepted.sort_unstable();
+    let flattened = client
+        .request(
+            "tools/call",
+            json!({"name":name,"arguments":{"message":"flattened","project":"TEST"}}),
+        )
+        .await;
+    assert_eq!(flattened["result"]["isError"], true, "{flattened}");
+    assert_eq!(
+        flattened["result"]["content"][0]["text"],
+        format!(
+            "unsupported arguments `message`, `project`; this tool accepts: {}",
+            accepted.join(", ")
+        )
+    );
     let unknown = client
         .request("tools/call", json!({"name":"unknown_tool","arguments":{}}))
         .await;

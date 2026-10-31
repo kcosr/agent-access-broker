@@ -94,6 +94,25 @@ read fails, waking a holder that waits for a frame, dropped unread when handed
 over later, and releasing them at once when it ends; after a successful
 response it stays with its holder. These tests do not use live upstream
 services.
+Core `runtime::input_explanation` tests cover the message for each JSON Schema
+error kind, alternative forms, path rendering, the three-problem cap, the
+provider-message fallback and secret-like values that must never appear.
+`native_schemas_fit_the_diagnostic_profile` holds every shipped native action
+schema (Jira, Confluence, GitLab, CloudBees CI, Gmail and Teams) to the
+diagnostic profile and budget, and budget tests check that large inputs and
+schemas with thousands of failing branches keep the provider's message
+without being validated. Command-authority tests check that imported and
+command-backed denials keep the adapter's message, including for schemas
+crafted to make evaluation explode, without compiling them. A credential
+discovery test checks that a native denial in scope resolution is explained
+only when caller discovery lists the action: not under a token whose
+resources miss every grant, nor once the winning grant's credential is
+unusable. Host
+`tests::input_explanations` drives the production Jira and Confluence providers
+through HTTP and HTTP MCP to denials in scope resolution and invocation, before
+any upstream request, and checks that responses, service logs and audit records
+carry no supplied value and that a caller without a grant keeps the provider's
+message.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.
@@ -519,9 +538,10 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   and stdio MCP `requestFile`, including grant narrowing and secret redaction.
 - `mcp_stdio.rs` drives the real local MCP process against the real broker,
   covering action discovery, edited request files, resource denials, token
-  rotation, stale tools, error recovery, and EOF shutdown. MCP unit tests also
-  cover bounded framing, pagination, uploads, verified downloads, and secret
-  sources. Discovery coverage includes the five fixed helpers, resource-access
+  rotation, stale tools, error recovery, named unsupported-argument errors, and
+  EOF shutdown. MCP unit tests also cover bounded framing, pagination, uploads,
+  verified downloads, and secret sources. Discovery coverage includes the five
+  fixed helpers, resource-access
   summaries and registered-reference pages, targeted action names, exact native
   schemas, malformed helper arguments,
   broker denials, and recovery. Shared client tests cover inconsistent/failing

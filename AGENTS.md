@@ -64,6 +64,17 @@ actions and exposes typed wrappers for supported services.
   Put extended grammar, limits, and examples in action `documentation`; preserve
   its detail/catalog/OpenAPI/send projections and keep it out of `tools/list`.
   MCP describe hints use stable service/action IDs, never client-renamed names.
+- A native provider's `input_invalid` denial is explained from the action's
+  input schema only after the hook fails (`runtime/input_explanation.rs`);
+  never validate inputs on success or add a rejection. Build messages from
+  problem locations and schema constants, never supplied values or the
+  validator's own messages; keep the reason, decision, result and audit
+  unchanged, and never make a schema stricter than the provider's parser.
+  Never explain imported or command-backed actions: their schemas come from
+  outside the Broker. Keep native schemas within the diagnostic profile (no
+  references, small constants and `not`/`if`/`contains` subschemas), keep the
+  budget check before compiling, and before policy explain only when caller
+  discovery lists the action.
 - Caller discovery and native MCP lists expose only authority with locally usable
   selected execution and lookup credentials. Preserve grant precedence and hide
   unknown availability too. Discovery must not contact upstream services,

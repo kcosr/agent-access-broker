@@ -927,6 +927,14 @@ data, and request IDs. Preserve `agentRequestId` and `brokerRequestId` when
 reporting failures. If `decision` is `deny`, do not bypass policy; narrow the
 request or ask the user for the correct access.
 
+For built-in services, an `input_invalid` denial whose inputs break the
+action's input schema names up to three problems, for example `jira.comment.list inputs are invalid:
+inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy,
+startAt, url`. Fix what it names and keep the other valid inputs; do not drop
+options or retry blindly. A message without that detail is the provider's own;
+compare the inputs with the action's schema and documentation before another
+attempt.
+
 `GET /v1/services/{service}` includes authenticated caller `limits`: effective
 rate/window, `maxWaitSeconds`, counted/queued requests, next unreserved admission
 and approximate shared request occupancy. It uses independent bounded capacity;

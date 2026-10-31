@@ -168,6 +168,14 @@ fn assert_input_contract(result: &Value, discovery: bool) {
     assert_secret_free(result);
 }
 
+/// The accepted `inputs` schema of a tool, without its stdio-only description
+/// of the `requestFile` alternative.
+fn accepted_inputs(tool_schema: &Value) -> Value {
+    let mut inputs = tool_schema["properties"]["inputs"].clone();
+    inputs.as_object_mut().unwrap().remove("description");
+    inputs
+}
+
 fn assert_secret_free(result: &Value) {
     let public = result.to_string();
     for secret in [
@@ -908,8 +916,8 @@ async fn exercise_basic_import(swagger: bool) {
         &["actions", "describe", "--service", "readers", "item.search"],
     );
     assert_eq!(
-        described["mcpTool"]["inputSchema"]["properties"]["inputs"],
-        expected_schema.as_ref().unwrap()["properties"]["inputs"]
+        accepted_inputs(&described["mcpTool"]["inputSchema"]),
+        accepted_inputs(expected_schema.as_ref().unwrap())
     );
     for (config, is_personal) in [(&agent_config, false), (&personal_config, true)] {
         for scoped in [false, true] {
@@ -934,11 +942,12 @@ async fn exercise_basic_import(swagger: bool) {
                 .iter()
                 .find(|tool| tool["name"] == name)
                 .unwrap();
-            // Stdio adds local output options to the tool envelope. Its accepted
-            // `inputs` schema must still be identical to HTTP MCP's.
+            // Stdio adds local output options to the tool envelope and describes
+            // the requestFile alternative on `inputs`. Its accepted `inputs`
+            // schema must still be identical to HTTP MCP's.
             assert_eq!(
-                tool["inputSchema"]["properties"]["inputs"],
-                expected_schema.as_ref().unwrap()["properties"]["inputs"]
+                accepted_inputs(&tool["inputSchema"]),
+                accepted_inputs(expected_schema.as_ref().unwrap())
             );
             assert!(!listed.to_string().contains("createItems"));
             let result = stdio

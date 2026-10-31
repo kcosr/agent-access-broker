@@ -36,6 +36,7 @@ mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
 pub use imports::{PreparedImportedCredentialContract, PreparedImportedDocumentUpload};
+mod input_explanation;
 mod lookup_access;
 mod mcp_views;
 mod owned;
@@ -5146,6 +5147,17 @@ impl BrokerRuntime {
                 {
                     Ok(scopes) => scopes,
                     Err(error) => {
+                        let error = self
+                            .explain_input_denial_before_policy(
+                                &policy_snapshot,
+                                &identity,
+                                &execution_context,
+                                &service,
+                                &action,
+                                &request.inputs,
+                                error,
+                            )
+                            .await;
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 admission: admission_audit,
@@ -5516,9 +5528,17 @@ impl BrokerRuntime {
                 prepared.body_part_specs = body_part_specs;
                 Ok(prepared)
             }
-            Err(error) => Err(Box::new(
-                self.finalize(prepared.finalize_context, Err(error)).await,
-            )),
+            Err(error) => {
+                let error = self.explain_input_denial(
+                    context.service(),
+                    context.action(),
+                    prepared.request.inputs(),
+                    error,
+                );
+                Err(Box::new(
+                    self.finalize(prepared.finalize_context, Err(error)).await,
+                ))
+            }
         }
     }
 
@@ -5661,6 +5681,9 @@ impl BrokerRuntime {
                         .await?
                 }
                 None => {
+                    // The invocation consumes the request; keep its inputs
+                    // to explain an input denial.
+                    let inputs = agent_access_provider::host::admitted_inputs(&request);
                     run_provider_hook(
                         hook.clone(),
                         provider.invoke(agent_access_provider::host::invocation(
@@ -5670,7 +5693,8 @@ impl BrokerRuntime {
                             state,
                         )),
                     )
-                    .await?
+                    .await
+                    .map_err(|error| self.explain_input_denial(&service, &action, &inputs, error))?
                 }
             };
             Ok(checked_result_stream(result, hook))
@@ -6183,6 +6207,74 @@ impl BrokerRuntime {
     fn served_action_descriptor(&self, service: &str, action: &str) -> Option<&ActionDescriptor> {
         self.action_descriptor(service, action)
             .filter(|descriptor| crate::api::supported_action_io(&descriptor.io))
+    }
+
+    /// A provider hook's failure, with a native provider's `input_invalid`
+    /// denial of the request's `inputs` explained from the action's input
+    /// schema (see [`input_explanation`]). Every native hook that judges the
+    /// request's own inputs (scope resolution, body admission and invocation)
+    /// passes its failure here, and only its failure: nothing is validated on
+    /// success. Hooks after policy call it directly; the caller was admitted
+    /// to the action.
+    fn explain_input_denial(
+        &self,
+        service: &str,
+        action: &str,
+        inputs: &Value,
+        error: ProviderError,
+    ) -> ProviderError {
+        if !input_explanation::is_input_denial(&error) {
+            return error;
+        }
+        match self.native_action_descriptor(service, action) {
+            Some(descriptor) => {
+                input_explanation::explain(service, action, &descriptor.input_schema, inputs, error)
+            }
+            None => error,
+        }
+    }
+
+    /// The descriptor of an action a native provider serves, whose input
+    /// schema is written in Broker code. Imported actions, command-backed
+    /// ones included, carry schemas accepted from outside, so their denials
+    /// keep the adapter's message: no explanation compiles or evaluates them.
+    fn native_action_descriptor(&self, service: &str, action: &str) -> Option<&ActionDescriptor> {
+        if self.imported_catalog.service(service).is_some() {
+            return None;
+        }
+        self.action_descriptor(service, action)
+            .filter(|descriptor| {
+                matches!(
+                    descriptor.scoped_mcp_name_source,
+                    ScopedMcpNameSource::CanonicalAction
+                )
+            })
+    }
+
+    /// [`Self::explain_input_denial`] for a hook that runs before policy:
+    /// only a caller to whom discovery lists the action, on the admitted
+    /// `snapshot`, learns anything of its schema. Discovery is consulted only
+    /// for a native provider's input denial.
+    #[allow(clippy::too_many_arguments)]
+    async fn explain_input_denial_before_policy(
+        &self,
+        snapshot: &Arc<PolicySnapshot>,
+        identity: &IdentityContext,
+        context: &ExecutionContext,
+        service: &str,
+        action: &str,
+        inputs: &Value,
+        error: ProviderError,
+    ) -> ProviderError {
+        if !input_explanation::is_input_denial(&error)
+            || self.native_action_descriptor(service, action).is_none()
+            || !self
+                .caller_discovers_action(snapshot, identity, context, service, action)
+                .await
+        {
+            return error;
+        }
+        self.explain_input_denial(service, action, inputs, error)
     }
 
     fn enforce_agent_invoke_token_caveats_with(

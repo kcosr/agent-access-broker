@@ -549,6 +549,29 @@ credential-verification hook of the imported service; an adapter reports
 invalid settings or document destinations as a typed configuration failure,
 which the host reports as `config_validation_failed`.
 
+The host does not validate inputs against the action's input schema before
+dispatch; providers parse them strictly. When a native provider's
+scope-resolution, body-admission or invocation hook denies with
+`input_invalid`, the host validates the request's inputs against the action's
+input schema on that failure path only, compiled under the bounded local
+profile of imported schemas. If the schema finds problems, the host replaces
+the message with up to three field-specific ones built from each problem's
+location and schema constants, never from supplied values; otherwise the
+provider's message stands. The reason, decision, result and audit data are
+unchanged. Only native actions are explained: their schemas are written in
+Broker code, and a test holds every shipped one to a diagnostic profile (no
+references, small constants and small `not`/`if`/`contains` subschemas).
+Imported and command-backed actions keep their adapter's message, and their
+schemas are never evaluated for it. As defence in depth, a diagnostic budget
+checked before compiling bounds the input's estimated size and the errors the
+schema can produce for it, because the validator copies the input into every
+`anyOf`/`oneOf` branch error and has no deadline. Scope resolution explains
+only when caller discovery lists the action on the admitted snapshot, so a
+malformed call reveals no schema that discovery hides. The invocation hook
+consumes the request, so the host keeps a shared handle to its inputs
+(`host::admitted_inputs`). See
+[input explanations](http-api.md#input-explanations).
+
 ### Service descriptors
 
 Each service has one authoritative `ServiceDescriptor`. A built-in backend
@@ -1025,7 +1048,7 @@ sequenceDiagram
    `["*"]` summary. The matched grants stay with the broker and appear only in
    the audit record's `searchAuthorization`. For
    other actions, the provider's single `resolve_scopes` hook receives the
-   action, validated inputs, host-selected execution context, minimal caller
+   action, the caller's inputs, host-selected execution context, minimal caller
    identity, correlation, and only the lookup access the runtime selected; it
    never receives execution authority or an execution credential. It
    returns canonical scopes and optional in-process `ProviderState`. That state
