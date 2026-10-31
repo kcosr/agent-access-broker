@@ -7,7 +7,8 @@ use super::*;
 /// A secret-like value that must never reach a message, log or audit record.
 const SECRET: &str = "secret-value-123";
 
-const COMMENT_LIST_ALLOWED: &str = "allowed: issue, maxResults, orderBy, startAt, url";
+const COMMENT_LIST_ALLOWED: &str =
+    "allowed: includeBodies, issue, maxResults, orderBy, startAt, url";
 
 /// Grants `user:mcp-user` Jira `comment.list` on `PROJ` and Confluence
 /// `search` on `ENG`, with synthetic static credentials. `issue_type.list`

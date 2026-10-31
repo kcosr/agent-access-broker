@@ -477,7 +477,7 @@ async fn issue_view_denial(runtime: &BrokerRuntime, identity: IdentityContext) -
 /// is unusable.
 #[tokio::test]
 async fn native_input_denials_before_policy_follow_caller_discovery() {
-    const PROVIDER: &str = "jira.issue.view requires exactly one of issue or url";
+    const PROVIDER: &str = "jira.issue.view inputs are invalid";
     let config = jira_config();
     let token = config.credentials.service["jira"]
         .token_ref
