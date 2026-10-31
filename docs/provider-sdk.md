@@ -2011,9 +2011,11 @@ behavior:
 `agent-access-conformance` is a test-only provider that uses every extension
 point: a namespace-capable resource type with an action-input projection and
 configured roots, typed configuration, a managed credential profile, JSON,
-raw-download and multipart-upload actions (the upload token-only), embedded
-and whole-result presentation, and an endpoint type whose private key a single-attempt action
-consumes. It depends only on the SDK. Its unit tests show how to drive each
+raw-download and multipart-upload actions (the upload token-only), a declared
+companion read guarded by `companion_reads_authorized()`, required and optional
+(`OptionalField`) embedded bodies, whole-result presentation, and an endpoint
+type whose private key a single-attempt action consumes. It depends only on
+the SDK. Its unit tests show how to drive each
 shape with `TestHost`, `InvocationBuilder` and a mock upstream, and the host's
 `tests::conformance` suite registers it beside the shipped providers to prove
 that a provider needs no host changes. Use it as the reference for an
