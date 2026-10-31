@@ -221,8 +221,10 @@ All notable changes to this project are documented in this file.
   and `error.message` name up to three problems by path, such as
   `jira.comment.list inputs are invalid: inputs.maxResults must be an integer`.
   Native, imported and command actions are covered. Messages use schema
-  constants only, never supplied values, and a rule the schema cannot express
-  keeps the provider's message. Reason codes, statuses, decisions and audit
+  constants only, never supplied values. The provider's message stands for a
+  rule the schema does not express, for inputs above about 32 KiB or schemas
+  that could produce too many errors, and before policy unless caller
+  discovery lists the action. Reason codes, statuses, decisions and audit
   records are unchanged. See
   [input explanations](docs/http-api.md#input-explanations).
 

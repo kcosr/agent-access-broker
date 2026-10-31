@@ -557,10 +557,15 @@ failure path only, compiled under the bounded local profile of imported
 schemas. If the schema finds problems, the host replaces the message with up
 to three field-specific ones built from each problem's location and schema
 constants, never from supplied values; otherwise the provider's message
-stands. The reason, decision, result and audit data are unchanged, and a
-caller without a grant naming the action keeps the provider's message. The
-invocation hook consumes the request, so the host keeps a shared handle to
-its inputs (`host::admitted_inputs`). See
+stands. The reason, decision, result and audit data are unchanged. A
+diagnostic budget, checked before compiling, bounds the input's estimated
+size and the errors the schema can produce for it, because the validator
+copies the input into every `anyOf`/`oneOf` branch error and has no deadline;
+outside it the provider's message stands. Hooks before policy explain only
+when caller discovery lists the action on the admitted snapshot, so a
+malformed call reveals no schema that discovery hides. The invocation hook
+consumes the request, so the host keeps a shared handle to its inputs
+(`host::admitted_inputs`). See
 [input explanations](http-api.md#input-explanations).
 
 ### Service descriptors

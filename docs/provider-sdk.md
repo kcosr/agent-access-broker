@@ -1809,10 +1809,12 @@ resolution, body admission or invocation denies that way, the host checks the
 request's inputs against the action's input schema and, when they break it,
 replaces the message with field-specific problems built from the schema, such
 as `notes.note.view inputs are invalid: inputs.note is required`.
-The provider's message stands when the inputs satisfy the schema, so give a
-rule the schema cannot express its own specific message, without supplied
-values. Keep the schema as exact as the parser: declare every accepted
-property, `required`, `additionalProperties: false`, types, enums and bounds.
+The provider's message stands when the inputs satisfy the schema, and when
+explaining is outside the host's budget or discovery hides the action from
+the caller, so give each denial a specific message without supplied values.
+Never make the schema stricter than the parser. A schema may leave a rule,
+such as a cross-field requirement, to the parser, which keeps the provider's
+message for it; a stricter schema could explain a problem the parser accepts.
 See [input explanations](http-api.md#input-explanations).
 
 ### Domain reasons

@@ -68,8 +68,11 @@ actions and exposes typed wrappers for supported services.
   schema only after the hook fails (`runtime/input_explanation.rs`); never
   validate inputs on success or add a rejection. Build messages from problem
   locations and schema constants, never supplied values or the validator's own
-  messages; keep the reason, decision, result and audit unchanged, and keep
-  schemas as exact as the provider's parser.
+  messages; keep the reason, decision, result and audit unchanged, and never
+  make a schema stricter than the provider's parser. Check the diagnostic budget
+  before compiling: the validator copies the input into every `anyOf`/`oneOf`
+  branch error and has no deadline. Before policy, explain only when caller
+  discovery lists the action.
 - Caller discovery and native MCP lists expose only authority with locally usable
   selected execution and lookup credentials. Preserve grant precedence and hide
   unknown availability too. Discovery must not contact upstream services,

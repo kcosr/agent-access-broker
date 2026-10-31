@@ -2386,12 +2386,22 @@ appears only when the schema declares it or it is a plain identifier
 property or `<key>`.
 
 When the inputs satisfy the schema, the provider enforced a rule the schema
-cannot express, and its own message is returned unchanged. A caller with no
-grant naming the action keeps the provider's message too, because scope
-resolution can run before policy. Only the message changes: the reason code,
-decision, HTTP status, `result` and audit record are the provider's. The
-schema is consulted only after a denial and never rejects a request the
-provider accepted. Audit records and service logs carry no messages.
+does not express, such as a cross-field requirement left to the provider, and
+its own message is returned unchanged. The provider's message also stands in
+two other cases:
+
+- Scope resolution and command admission run before policy, so a denial there
+  is explained only when caller discovery lists the action for the caller in
+  that execution context: the same grant, precedence, token-restriction and
+  local credential checks as the caller's catalog and MCP tool list.
+- Explaining is bounded. Inputs larger than about 32 KiB (an estimate of
+  their in-memory size), and schemas whose `anyOf`/`oneOf` branches or other
+  keywords could produce too many errors for them, are not validated.
+
+Only the message changes: the reason code, decision, HTTP status, `result` and
+audit record are the provider's. The schema is consulted only after a denial
+and never rejects a request the provider accepted. Audit records and service
+logs carry no messages.
 
 `body_size_denied` is specific to oversized rich-content writes (including
 conversion or attribution expansion) and returns HTTP 413. It does not replace

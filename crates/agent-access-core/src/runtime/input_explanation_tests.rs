@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 const SECRET: &str = "secret-value-123";
 
@@ -601,4 +602,192 @@ fn supplied_values_never_appear_in_an_explanation() {
     }
     let explained = message(schema, inputs);
     assert!(!explained.contains("secret"), "{explained}");
+}
+
+/// Every action schema of the native providers this crate tests against.
+fn native_schemas() -> Vec<(String, Value)> {
+    let gitlab: agent_access_gitlab::GitlabProviderConfig = toml::from_str(
+        "api_base_url = \"https://gitlab.example.com/api/v4\"\nweb_base_url = \"https://gitlab.example.com\"",
+    )
+    .unwrap();
+    let cloudbees: agent_access_cloudbees_ci::CloudbeesCiProviderConfig =
+        toml::from_str("[controllers.team]\nbase_url = \"https://ci.example.com\"").unwrap();
+    [
+        agent_access_jira::jira_descriptor(
+            &toml::from_str("tenant_host = \"example.atlassian.net\"").unwrap(),
+        ),
+        agent_access_confluence::confluence_descriptor(
+            &toml::from_str("tenant_host = \"example.atlassian.net\"").unwrap(),
+        ),
+        agent_access_gitlab::gitlab_descriptor(&gitlab),
+        agent_access_cloudbees_ci::cloudbees_ci_descriptor(&cloudbees),
+    ]
+    .into_iter()
+    .flat_map(|descriptor| {
+        let service = descriptor.service.clone();
+        descriptor
+            .actions
+            .into_iter()
+            .map(move |action| (format!("{service}.{}", action.action), action.input_schema))
+    })
+    .collect()
+}
+
+/// The most values an input within the footprint budget can carry.
+const MOST_VALUES: u64 = MAX_INPUT_FOOTPRINT / VALUE_FOOTPRINT;
+
+#[test]
+fn native_schemas_fit_the_budget() {
+    let schemas = native_schemas();
+    assert!(schemas.len() > 150, "{}", schemas.len());
+    for (action, schema) in schemas {
+        let positions = SchemaCost::of(&schema, 1).unwrap();
+        let errors = SchemaCost::of(&schema, MOST_VALUES).unwrap();
+        assert!(
+            positions.copied <= MAX_COPIED_ERRORS,
+            "{action}: {positions:?}"
+        );
+        assert!(
+            errors.returned + errors.held <= MAX_SCHEMA_ERRORS,
+            "{action}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn the_most_expensive_native_schemas_are_still_explained() {
+    let schemas: BTreeMap<String, Value> = native_schemas().into_iter().collect();
+    let explain_native = |action: &str, inputs: Value| {
+        let (service, action) = action.split_once('.').unwrap();
+        explain(
+            service,
+            action,
+            &schemas[&format!("{service}.{action}")],
+            &inputs,
+            denial(),
+        )
+        .message
+    };
+    assert_eq!(
+        explain_native(
+            "gitlab.merge_request.draft_note.add",
+            json!({
+                "project": "group/project",
+                "iid": 7,
+                "content": "x".repeat(16 * 1024),
+                "contentFormat": "markdown",
+                "position": {"positionType": "text", "oldPath": "a.rs", "newPath": "a.rs", "newLine": 4},
+                "extra": true
+            })
+        ),
+        "gitlab.merge_request.draft_note.add inputs are invalid: inputs.extra is not allowed; \
+         allowed: content, contentFormat, expectedHeadSha, iid, inReplyToDiscussionId, position, \
+         project, resolveDiscussion; inputs.expectedHeadSha is required"
+    );
+    assert_eq!(
+        explain_native(
+            "jira.comment.list",
+            json!({"issue": "DEMO-1", "maxResults": "ten"})
+        ),
+        "jira.comment.list inputs are invalid: inputs.maxResults must be an integer"
+    );
+}
+
+/// An input whose footprint passes the budget is never validated.
+#[test]
+fn a_large_input_keeps_the_provider_message() {
+    let started = std::time::Instant::now();
+    let inputs = json!({"issue": "DEMO-1", "padding": "x".repeat(MAX_INPUT_FOOTPRINT as usize)});
+    assert_eq!(message(list_schema(), inputs), denial().message);
+    let mut many = InputSize::default();
+    assert!(!many.fits(&json!(vec![Value::Null; 100_000])));
+    assert!(many.values <= MOST_VALUES + 1, "{}", many.values);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// The branches of an `anyOf` each copy the input into their errors, so a
+/// schema with many failing branches is never validated, however small the
+/// input, and a large input never reaches the schema at all.
+#[test]
+fn many_failing_branches_keep_the_provider_message_without_validating() {
+    let names: Vec<String> = (0..10_000).map(|index| format!("p{index}")).collect();
+    let wide = json!({"type": "object", "anyOf": [{"required": names}, {"required": ["q"]}]});
+    let branches: Vec<Value> = (0..10_000)
+        .map(|index| json!({"required": [format!("p{index}")]}))
+        .collect();
+    let many = json!({"type": "object", "anyOf": branches});
+    for schema in [wide, many] {
+        let started = std::time::Instant::now();
+        assert_eq!(message(schema.clone(), json!({"r": 1})), denial().message);
+        let padded = json!({"padding": "x".repeat(512 * 1024)});
+        assert_eq!(message(schema, padded), denial().message);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+}
+
+#[test]
+fn schema_cost_counts_copies_by_position_and_errors_by_location() {
+    // `additionalProperties: false` reports every unexpected member at once.
+    let flat = json!({"type": "object", "required": ["a", "b"], "additionalProperties": false});
+    assert_eq!(
+        SchemaCost::of(&flat, 100),
+        Some(SchemaCost {
+            returned: 4,
+            held: 0,
+            copied: 0
+        })
+    );
+    // Each branch error is held and copied; a nested alternative's errors
+    // are copied once more only as its own error.
+    let nested = json!({"anyOf": [
+        {"required": ["a"]},
+        {"oneOf": [{"required": ["b"]}, {"type": "string"}]}
+    ]});
+    assert_eq!(
+        SchemaCost::of(&nested, 1),
+        Some(SchemaCost {
+            returned: 1,
+            held: 4,
+            copied: 4
+        })
+    );
+    // Items are judged once per value, but their copies are disjoint.
+    let items =
+        json!({"type": "array", "items": {"anyOf": [{"type": "string"}, {"type": "integer"}]}});
+    assert_eq!(
+        SchemaCost::of(&items, 1),
+        Some(SchemaCost {
+            returned: 2,
+            held: 2,
+            copied: 2
+        })
+    );
+    assert_eq!(
+        SchemaCost::of(&items, 50),
+        Some(SchemaCost {
+            returned: 51,
+            held: 100,
+            copied: 100
+        })
+    );
+    // A reference costs its target at every use.
+    let referenced = json!({
+        "$defs": {"pair": {"anyOf": [{"required": ["a"]}, {"required": ["b"]}]}},
+        "allOf": [{"$ref": "#/$defs/pair"}, {"$ref": "#/$defs/pair"}]
+    });
+    assert_eq!(
+        SchemaCost::of(&referenced, 1),
+        Some(SchemaCost {
+            returned: 2,
+            held: 4,
+            copied: 4
+        })
+    );
+    // A cycle or a reference outside the document has no bound.
+    let cyclic = json!({"$defs": {"node": {"properties": {"child": {"$ref": "#/$defs/node"}}}},
+        "$ref": "#/$defs/node"});
+    assert_eq!(SchemaCost::of(&cyclic, 1), None);
+    let external = json!({"$ref": "https://example.com/schema"});
+    assert_eq!(SchemaCost::of(&external, 1), None);
+    assert_eq!(message(cyclic, json!({"child": 1})), denial().message);
 }

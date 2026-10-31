@@ -6,7 +6,7 @@
 //! schema finds problems, the message names up to [`MAX_PROBLEMS`] of them,
 //! for example `jira.comment.list inputs are invalid: inputs.maxResults must
 //! be an integer`. When it finds none, the provider enforced a rule the schema
-//! cannot express, and its own message stands. Only the message changes: the
+//! does not express, and its own message stands. Only the message changes: the
 //! reason, decision, status, result and audit data are the provider's, so an
 //! explanation never adds or removes a rejection.
 //!
@@ -16,13 +16,17 @@
 //! supplied value or the validator's own messages, which quote values. A
 //! supplied property name appears only when the schema declares it or it is
 //! a plain identifier; any other key is shown as `<key>`.
+//!
+//! Explaining costs work the provider's own denial did not, so it runs only
+//! within a [diagnostic budget](within_budget) checked before the schema is
+//! compiled or any input validated.
 use crate::imports::BoundedImportSchema;
 use agent_access_provider::{Decision, ProviderError, ReasonCode};
 use jsonschema::error::{TypeKind, ValidationErrorKind};
 use jsonschema::paths::Location;
 use jsonschema::{JsonType, ValidationError};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// The most problems one message names.
 const MAX_PROBLEMS: usize = 3;
@@ -38,6 +42,32 @@ const MAX_CONSTANT_BYTES: usize = 64;
 const HIDDEN_KEY: &str = "<key>";
 const SEE_SCHEMA: &str = "see the action's input schema";
 
+// The diagnostic budget. The validator has no deadline, and it collects the
+// errors of every `anyOf` and `oneOf` branch eagerly, copying into each one
+// the input value at its location. Without a bound, a schema with many
+// failing branches and a large input multiply into gigabytes of copies before
+// the first problem is read. An explanation therefore runs only when both
+// factors are small: the input's size, and the errors the schema can yield
+// for it, which `SchemaCost` bounds from the schema alone. Every native
+// action schema fits with room to spare (`native_schemas_fit_the_budget`);
+// outside the budget the provider's own message stands.
+
+/// The largest input explained, as an estimate of its in-memory size: 64
+/// bytes for every JSON value plus its string and key bytes. An input
+/// within it has at most 512 values.
+const MAX_INPUT_FOOTPRINT: u64 = 32 * 1024;
+const VALUE_FOOTPRINT: u64 = 64;
+/// The most schema positions whose errors the validator copies input values
+/// into. The values one position judges are disjoint, so its copies add up
+/// to at most the input, and all copies to at most 256 × 32 KiB = 8 MiB.
+/// The most expensive native schema has 92.
+const MAX_COPIED_ERRORS: u64 = 256;
+/// The most errors the validator may produce in all, copied or not, for an
+/// input of the measured number of values. Each is a small record of its
+/// location and kind, a few hundred bytes, so all fit in a few MiB. Native
+/// schemas reach at most about 8,700 at 512 values.
+const MAX_SCHEMA_ERRORS: u64 = 16 * 1024;
+
 /// Whether `error` is a provider's own `input_invalid` denial, the only
 /// failure an explanation may reword.
 pub(super) fn is_input_denial(error: &ProviderError) -> bool {
@@ -47,8 +77,9 @@ pub(super) fn is_input_denial(error: &ProviderError) -> bool {
 }
 
 /// `error` with its message naming the problems `schema` finds in `inputs`,
-/// or unchanged when it is not an input denial, the schema does not compile
-/// within the bounded local profile, or the inputs satisfy it.
+/// or unchanged when it is not an input denial, explaining is outside the
+/// diagnostic budget, the schema does not compile within the bounded local
+/// profile, or the inputs satisfy it.
 pub(super) fn explain(
     service: &str,
     action: &str,
@@ -76,8 +107,12 @@ pub(super) fn explain(
 }
 
 /// The distinct problems `schema` finds in `inputs`, in the validator's
-/// order; empty when the schema does not compile or the inputs satisfy it.
+/// order; empty when explaining them is outside the diagnostic budget, the
+/// schema does not compile or the inputs satisfy it.
 fn problems(schema: &Value, inputs: &Value) -> Vec<String> {
+    if !within_budget(schema, inputs) {
+        return Vec::new();
+    }
     let Ok(compiled) = BoundedImportSchema::compile(schema) else {
         return Vec::new();
     };
@@ -87,6 +122,261 @@ fn problems(schema: &Value, inputs: &Value) -> Vec<String> {
         explainer.describe(&error, &mut problems);
     }
     problems
+}
+
+/// Whether validating `inputs` against `schema` fits the diagnostic budget:
+/// the input's footprint is at most [`MAX_INPUT_FOOTPRINT`], the schema has
+/// at most [`MAX_COPIED_ERRORS`] copying positions, and it can yield at most
+/// [`MAX_SCHEMA_ERRORS`] errors for an input of that many values. The input
+/// measurement stops at the budget and the schema walks are linear in the
+/// schema's size, so the check itself is bounded.
+fn within_budget(schema: &Value, inputs: &Value) -> bool {
+    let mut input = InputSize::default();
+    if !input.fits(inputs) {
+        return false;
+    }
+    let (Some(positions), Some(errors)) = (
+        SchemaCost::of(schema, 1),
+        SchemaCost::of(schema, input.values),
+    ) else {
+        return false;
+    };
+    positions.copied <= MAX_COPIED_ERRORS
+        && errors.returned.saturating_add(errors.held) <= MAX_SCHEMA_ERRORS
+}
+
+/// The footprint and number of values of an input, measured until the
+/// footprint passes [`MAX_INPUT_FOOTPRINT`].
+#[derive(Default)]
+struct InputSize {
+    footprint: u64,
+    values: u64,
+}
+
+impl InputSize {
+    fn fits(&mut self, value: &Value) -> bool {
+        self.values += 1;
+        self.footprint = self.footprint.saturating_add(VALUE_FOOTPRINT);
+        let fits = match value {
+            Value::String(text) => self.add(text.len()),
+            Value::Array(items) => items.iter().all(|item| self.fits(item)),
+            Value::Object(members) => members
+                .iter()
+                .all(|(key, member)| self.add(key.len()) && self.fits(member)),
+            Value::Null | Value::Bool(_) | Value::Number(_) => true,
+        };
+        fits && self.footprint <= MAX_INPUT_FOOTPRINT
+    }
+
+    fn add(&mut self, bytes: usize) -> bool {
+        self.footprint = self.footprint.saturating_add(bytes as u64);
+        self.footprint <= MAX_INPUT_FOOTPRINT
+    }
+}
+
+/// Upper bounds on the errors validating one input can produce: those
+/// returned at the top level, those held inside `anyOf` and `oneOf` errors,
+/// and those the validator copies an input value into, which are the
+/// errors of each branch it collects.
+///
+/// [`Self::of`] takes how many locations a schema applied to each member
+/// can judge: the input's number of values, or 1 to count schema positions.
+/// A keyword judges one location, except under `items`, `patternProperties`,
+/// `additionalProperties` and the other keywords that apply a schema to
+/// each member. Only `anyOf` and `oneOf` copy: `allOf`, `then`, `else` and
+/// `properties` pass their errors on, and `if`, `not` and `contains` decide
+/// without keeping any. A reference adds its target's cost wherever it is
+/// used; a reference the walk cannot resolve within the document, or a
+/// cycle, has no bound.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SchemaCost {
+    returned: u64,
+    held: u64,
+    copied: u64,
+}
+
+impl SchemaCost {
+    fn of(schema: &Value, each: u64) -> Option<Self> {
+        CostWalk {
+            root: schema,
+            each,
+            memo: HashMap::new(),
+            active: HashSet::new(),
+        }
+        .cost(schema, 1)
+    }
+
+    fn add(&mut self, other: Self) {
+        self.returned = self.returned.saturating_add(other.returned);
+        self.held = self.held.saturating_add(other.held);
+        self.copied = self.copied.saturating_add(other.copied);
+    }
+
+    /// One error at each of `locations`.
+    fn error(&mut self, locations: u64) {
+        self.returned = self.returned.saturating_add(locations);
+    }
+}
+
+struct CostWalk<'a> {
+    root: &'a Value,
+    /// The locations a schema applied to each member can judge.
+    each: u64,
+    memo: HashMap<(&'a str, u64), SchemaCost>,
+    active: HashSet<(&'a str, u64)>,
+}
+
+impl<'a> CostWalk<'a> {
+    fn cost(&mut self, schema: &'a Value, locations: u64) -> Option<SchemaCost> {
+        let mut cost = SchemaCost::default();
+        let keywords = match schema {
+            Value::Object(keywords) => keywords,
+            Value::Bool(false) => {
+                cost.error(locations);
+                return Some(cost);
+            }
+            _ => return Some(cost),
+        };
+        let each = self.each;
+        for (keyword, value) in keywords {
+            match keyword.as_str() {
+                "$schema" | "$id" | "$anchor" | "$dynamicAnchor" | "$recursiveAnchor"
+                | "$vocabulary" | "$comment" | "$defs" | "definitions" | "title"
+                | "description" | "default" | "examples" | "deprecated" | "readOnly"
+                | "writeOnly" | "contentSchema" | "if" => {}
+                keyword if keyword.starts_with("x-") => {}
+                "required" => cost.error(locations.saturating_mul(array_len(value))),
+                "dependentRequired" => {
+                    for names in value.as_object().into_iter().flat_map(|map| map.values()) {
+                        cost.error(locations.saturating_mul(array_len(names)));
+                    }
+                }
+                "properties" | "dependentSchemas" => {
+                    for member in value.as_object().into_iter().flat_map(|map| map.values()) {
+                        cost.add(self.cost(member, locations)?);
+                    }
+                }
+                "dependencies" => {
+                    for member in value.as_object().into_iter().flat_map(|map| map.values()) {
+                        match member {
+                            Value::Array(names) => {
+                                cost.error(locations.saturating_mul(names.len() as u64))
+                            }
+                            member => cost.add(self.cost(member, locations)?),
+                        }
+                    }
+                }
+                "patternProperties" => {
+                    for member in value.as_object().into_iter().flat_map(|map| map.values()) {
+                        cost.add(self.cost(member, each)?);
+                    }
+                }
+                "prefixItems" => {
+                    for item in value.as_array().into_iter().flatten() {
+                        cost.add(self.cost(item, locations)?);
+                    }
+                }
+                "items"
+                | "additionalItems"
+                | "additionalProperties"
+                | "unevaluatedItems"
+                | "unevaluatedProperties"
+                | "propertyNames" => match value {
+                    // `false` reports every unexpected member in one error.
+                    Value::Bool(false) => cost.error(locations),
+                    // A tuple of item schemas, each judging one location.
+                    Value::Array(items) => {
+                        for item in items {
+                            cost.add(self.cost(item, locations)?);
+                        }
+                    }
+                    value => cost.add(self.cost(value, each)?),
+                },
+                "allOf" | "then" | "else" => {
+                    for member in members(value) {
+                        cost.add(self.cost(member, locations)?);
+                    }
+                }
+                "anyOf" | "oneOf" => {
+                    cost.error(locations);
+                    for branch in members(value) {
+                        let branch = self.cost(branch, locations)?;
+                        cost.held = cost
+                            .held
+                            .saturating_add(branch.returned)
+                            .saturating_add(branch.held);
+                        cost.copied = cost
+                            .copied
+                            .saturating_add(branch.returned)
+                            .saturating_add(branch.copied);
+                    }
+                }
+                "$ref" | "$dynamicRef" | "$recursiveRef" => {
+                    cost.add(self.reference(value.as_str()?, locations)?);
+                }
+                _ => cost.error(locations),
+            }
+        }
+        Some(cost)
+    }
+
+    /// The cost of the local schema `reference` points to.
+    fn reference(&mut self, reference: &'a str, locations: u64) -> Option<SchemaCost> {
+        let key = (reference, locations);
+        if let Some(cost) = self.memo.get(&key) {
+            return Some(*cost);
+        }
+        if !self.active.insert(key) {
+            return None;
+        }
+        let pointer = reference.strip_prefix('#')?;
+        let target = if pointer.is_empty() {
+            self.root
+        } else if pointer.starts_with('/') {
+            self.root.pointer(&percent_decoded(pointer)?)?
+        } else {
+            return None;
+        };
+        let cost = self.cost(target, locations)?;
+        self.active.remove(&key);
+        self.memo.insert(key, cost);
+        Some(cost)
+    }
+}
+
+/// The subschemas of a keyword whose value is one schema or a list of them.
+fn members(value: &Value) -> impl Iterator<Item = &Value> {
+    match value {
+        Value::Array(items) => items.iter().collect::<Vec<_>>(),
+        value => vec![value],
+    }
+    .into_iter()
+}
+
+fn array_len(value: &Value) -> u64 {
+    value.as_array().map_or(0, |items| items.len() as u64)
+}
+
+/// A URI fragment's JSON pointer with its percent escapes decoded; `None`
+/// when an escape is malformed.
+fn percent_decoded(pointer: &str) -> Option<String> {
+    if !pointer.contains('%') {
+        return Some(pointer.to_owned());
+    }
+    let bytes = pointer.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(bytes.get(index + 1..index + 3)?).ok()?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 struct Explainer<'a> {

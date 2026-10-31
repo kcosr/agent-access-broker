@@ -989,8 +989,9 @@ An `input_invalid` denial whose inputs break the action's input schema names
 up to three problems, for example `jira.comment.list inputs are invalid:
 inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy,
 startAt, url`. Fix what it names and keep the other valid inputs; do not drop
-options or retry blindly. A message without that detail states a provider rule
-the schema cannot express; read the action documentation before another attempt.
+options or retry blindly. A message without that detail is the provider's own;
+compare the inputs with the action's schema and documentation before another
+attempt.
 
 `agent-access services describe SERVICE` includes authenticated caller `limits`:
 rate/window, `maxWaitSeconds`, counted/queued requests, next unreserved admission

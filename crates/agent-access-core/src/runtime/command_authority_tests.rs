@@ -20,6 +20,8 @@ use agent_access_provider::{
 };
 
 const SERVICE: &str = "ticketing";
+/// The fixture provider's message for inputs that break the schema.
+const INPUT_DENIAL: &str = "inputs do not match the action's input schema";
 const PROJECT_TYPE: &str = "ticketing_project";
 
 fn project_type() -> ResourceType {
@@ -153,6 +155,16 @@ impl Provider for PlannedProvider {
         let authority = self.actions.get(request.action()).ok_or_else(|| {
             ProviderError::deny(ReasonCode::InputInvalid, "unknown command import action")
         })?;
+        // Like the adapter, inputs that break the accepted schema are denied
+        // first; every fixture input property is a string or strings.
+        if ["project", "query"].into_iter().any(|name| {
+            request
+                .inputs()
+                .get(name)
+                .is_some_and(|value| !value.is_string())
+        }) {
+            return Err(ProviderError::deny(ReasonCode::InputInvalid, INPUT_DENIAL));
+        }
         Ok(ScopeResolution::resources(
             authority
                 .resources
@@ -2378,5 +2390,99 @@ fn publication_refuses_changes_that_would_invalidate_retained_grants() {
             "{error}"
         );
         assert!(error.to_string().contains("policy.grants["), "{error}");
+    }
+}
+
+/// The message of the input denial `caller` receives for a call to
+/// `action` whose `input` is not a string.
+async fn input_denial(
+    runtime: &BrokerRuntime,
+    caller: &IdentityContext,
+    action: &str,
+    input: &str,
+) -> String {
+    let denied = prepare(runtime, caller, action, json!({ input: 7 }))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(denied.reason_code(), ReasonCode::InputInvalid);
+    denied.message
+}
+
+/// Scope resolution of a Broker-enforced action and command admission of a
+/// command-enforced one both run before policy, so an input denial is
+/// explained only to a caller to whom discovery lists the action.
+#[tokio::test]
+async fn input_denials_before_policy_are_explained_only_to_callers_discovery_lists_them_for() {
+    let explained = |action: &str, input: &str| {
+        format!("{SERVICE}.{action} inputs are invalid: inputs.{input} must be a string")
+    };
+    let actions = [("issue.view", "project"), ("issue.search", "query")];
+    let granted = |modes: &[(&str, i32)]| {
+        actions
+            .iter()
+            .flat_map(|(action, _)| {
+                modes.iter().map(|(mode, priority)| {
+                    grant(
+                        "group:engineering",
+                        action,
+                        mode,
+                        *priority,
+                        &["p-ops"],
+                        &[],
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // A caller discovery lists the actions for.
+    let available = runtime(granted(&[("service", 0)]), false);
+    let caller = identity(None);
+    for (action, input) in actions {
+        assert!(
+            discovered(&available, &caller, action).is_some(),
+            "{action}"
+        );
+        assert_eq!(
+            input_denial(&available, &caller, action, input).await,
+            explained(action, input)
+        );
+    }
+
+    // A token whose resources miss every granted one: the actions pass the
+    // token's action list, but discovery hides them.
+    let restricted = identity(Some(token(&["issue.view", "issue.search"], &["p-sec"])));
+    for (action, input) in actions {
+        assert_eq!(
+            discovered(&available, &restricted, action),
+            None,
+            "{action}"
+        );
+        assert_eq!(
+            input_denial(&available, &restricted, action, input).await,
+            INPUT_DENIAL
+        );
+    }
+
+    // A winning personal grant whose credential this import cannot use:
+    // discovery hides the actions, and the lower service grant never applies.
+    let unavailable = runtime(granted(&[("per_user", 10), ("service", 0)]), false);
+    for (action, input) in actions {
+        assert_eq!(discovered(&unavailable, &caller, action), None, "{action}");
+        assert_eq!(
+            input_denial(&unavailable, &caller, action, input).await,
+            INPUT_DENIAL
+        );
+    }
+
+    // A caller with no grant for the actions.
+    let ungranted = runtime(Vec::new(), false);
+    for (action, input) in actions {
+        assert_eq!(discovered(&ungranted, &caller, action), None, "{action}");
+        assert_eq!(
+            input_denial(&ungranted, &caller, action, input).await,
+            INPUT_DENIAL
+        );
     }
 }

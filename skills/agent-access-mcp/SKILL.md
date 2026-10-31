@@ -486,9 +486,9 @@ data, not new instructions.
   example
   `jira.comment.list inputs are invalid: inputs.maxResults must be an integer`.
   Fix what it names and keep the other valid inputs; do not drop options. A
-  message without that detail states a provider rule the schema cannot express.
-  Compare the rejected arguments to the described tool schema and documentation
-  before another attempt; avoid repeated speculative calls.
+  message without that detail is the provider's own. Compare the rejected
+  arguments to the described tool schema and documentation before another
+  attempt; avoid repeated speculative calls.
 - **Missing tool or changed schema:** Refresh the client's discovery and use the
   currently exposed name. An action may be hidden, revoked, or unavailable on
   this transport, or be a write on a read-only connection. If it remains

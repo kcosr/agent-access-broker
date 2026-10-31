@@ -5147,21 +5147,17 @@ impl BrokerRuntime {
                 {
                     Ok(scopes) => scopes,
                     Err(error) => {
-                        let error = self.explain_input_denial(
-                            &service,
-                            &action,
-                            &request.inputs,
-                            error,
-                            || {
-                                self.caller_has_action_grant(
-                                    &policy_snapshot,
-                                    &identity,
-                                    &execution_context,
-                                    &service,
-                                    &action,
-                                )
-                            },
-                        );
+                        let error = self
+                            .explain_input_denial_before_policy(
+                                &policy_snapshot,
+                                &identity,
+                                &execution_context,
+                                &service,
+                                &action,
+                                &request.inputs,
+                                error,
+                            )
+                            .await;
                         return Err(Box::new(owned::PreparationFailure::new(
                             FinalizeContext {
                                 admission: admission_audit,
@@ -5538,7 +5534,6 @@ impl BrokerRuntime {
                     context.action(),
                     prepared.request.inputs(),
                     error,
-                    || true,
                 );
                 Err(Box::new(
                     self.finalize(prepared.finalize_context, Err(error)).await,
@@ -5663,8 +5658,7 @@ impl BrokerRuntime {
             // The invocation consumes the request; keep its inputs to
             // explain an input denial.
             let inputs = agent_access_provider::host::admitted_inputs(&request);
-            let explain =
-                |error| self.explain_input_denial(&service, &action, &inputs, error, || true);
+            let explain = |error| self.explain_input_denial(&service, &action, &inputs, error);
             let result = match command {
                 Some(command_dispatch::CommandDispatch {
                     provider: command_provider,
@@ -6220,17 +6214,16 @@ impl BrokerRuntime {
     /// (see [`input_explanation`]). Every hook that judges the request's own
     /// inputs (scope resolution, command admission, body admission and
     /// invocation) passes its failure here, and only its failure: nothing is
-    /// validated on success. `disclosed` says whether the caller may learn
-    /// the schema; it is asked only for an input denial.
+    /// validated on success. Hooks after policy call it directly; the caller
+    /// was admitted to the action.
     fn explain_input_denial(
         &self,
         service: &str,
         action: &str,
         inputs: &Value,
         error: ProviderError,
-        disclosed: impl FnOnce() -> bool,
     ) -> ProviderError {
-        if !input_explanation::is_input_denial(&error) || !disclosed() {
+        if !input_explanation::is_input_denial(&error) {
             return error;
         }
         match self.action_descriptor(service, action) {
@@ -6241,23 +6234,29 @@ impl BrokerRuntime {
         }
     }
 
-    /// Whether a grant names `action` for the caller in `context`. Hooks
-    /// that run before policy explain an input denial only then, so a caller
-    /// without one learns nothing of the schema that discovery hides from it.
-    fn caller_has_action_grant(
+    /// [`Self::explain_input_denial`] for a hook that runs before policy:
+    /// only a caller to whom discovery lists the action, on the admitted
+    /// `snapshot`, learns anything of its schema. Discovery is consulted only
+    /// for an input denial.
+    #[allow(clippy::too_many_arguments)]
+    async fn explain_input_denial_before_policy(
         &self,
-        snapshot: &PolicySnapshot,
+        snapshot: &Arc<PolicySnapshot>,
         identity: &IdentityContext,
         context: &ExecutionContext,
         service: &str,
         action: &str,
-    ) -> bool {
-        snapshot.grants.iter().any(|grant| {
-            grant.service == service
-                && grant.actions.iter().any(|granted| granted == action)
-                && grant.execution_contexts.contains(context)
-                && subject_rank(&grant.subject, identity).is_some()
-        })
+        inputs: &Value,
+        error: ProviderError,
+    ) -> ProviderError {
+        if !input_explanation::is_input_denial(&error)
+            || !self
+                .caller_discovers_action(snapshot, identity, context, service, action)
+                .await
+        {
+            return error;
+        }
+        self.explain_input_denial(service, action, inputs, error)
     }
 
     fn enforce_agent_invoke_token_caveats_with(
