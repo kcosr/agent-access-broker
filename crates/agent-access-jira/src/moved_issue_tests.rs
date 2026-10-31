@@ -216,8 +216,10 @@ fn single_issue_actions() -> Vec<(&'static str, Value)> {
     let content = json!({"contentFormat": "plain_text", "content": "hello"});
     vec![
         ("issue.view", issue(json!({}))),
+        ("issue.view", issue(json!({"includeComments": true}))),
         ("issue.update", issue(json!({"summary": "Updated summary"}))),
         ("comment.list", issue(json!({}))),
+        ("comment.list", issue(json!({"includeBodies": true}))),
         ("comment.view", issue(comment.clone())),
         ("comment.add", issue(content.clone())),
         (
@@ -286,6 +288,7 @@ async fn issue_moved_out_of_the_admitted_project_is_denied_before_any_upstream_c
         let mut invocation = InvocationBuilder::new("jira", action)
             .inputs(inputs)
             .resources(scopes)
+            .companion_reads_authorized(true)
             .credential(test_credential())
             .lookup_credential(test_lookup_credential());
         if action == "attachment.add" {

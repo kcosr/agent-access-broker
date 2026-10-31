@@ -549,21 +549,10 @@ pub struct JiraComment {
     pub visibility: Option<JiraCommentVisibility>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct JiraCommentSummary {
-    pub id: String,
-    pub parent_id: Option<String>,
-    pub author: Option<JiraUserSummary>,
-    pub created: Option<String>,
-    pub updated: Option<String>,
-    pub visibility: Option<JiraCommentVisibility>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct JiraCommentPage {
-    pub comments: Vec<JiraCommentSummary>,
+    pub comments: Vec<JiraComment>,
     pub max_results: u32,
     pub start_at: u32,
     pub total: Option<u32>,
@@ -2880,7 +2869,7 @@ pub(crate) fn comment_page_from_value(
         .ok_or_else(|| JiraBackendError::Protocol("comment page comments missing".to_string()))?
         .iter()
         .cloned()
-        .map(comment_summary_from_value)
+        .map(comment_from_value)
         .collect::<Result<Vec<_>, _>>()?;
     if comments.len() > requested_max_results as usize {
         return Err(JiraBackendError::Protocol(
@@ -2899,29 +2888,17 @@ pub(crate) fn comment_page_from_value(
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
             .unwrap_or(0),
-        total: value
-            .get("total")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok()),
-    })
-}
-
-pub(crate) fn comment_summary_from_value(
-    value: Value,
-) -> Result<JiraCommentSummary, JiraBackendError> {
-    Ok(JiraCommentSummary {
-        id: string_or_number(&value, "id")?,
-        parent_id: optional_string_or_number(&value, "parentId")?,
-        author: optional_user_summary_from_value(&value, "author")?,
-        created: value
-            .get("created")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        updated: value
-            .get("updated")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        visibility: optional_visibility_from_value(&value)?,
+        total: match value.get("total").filter(|value| !value.is_null()) {
+            None => None,
+            Some(total) => Some(
+                total
+                    .as_u64()
+                    .and_then(|total| u32::try_from(total).ok())
+                    .ok_or_else(|| {
+                        JiraBackendError::Protocol("comment page total was invalid".to_string())
+                    })?,
+            ),
+        },
     })
 }
 

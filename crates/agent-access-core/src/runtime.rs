@@ -42,6 +42,8 @@ mod owned;
 mod personal_credentials;
 pub use personal_credentials::ConnectionTokenProfile;
 #[cfg(test)]
+mod companion_read_tests;
+#[cfg(test)]
 mod provider_contract_tests;
 #[cfg(test)]
 mod provider_fixture_tests;
@@ -5423,6 +5425,16 @@ impl BrokerRuntime {
             token_caveats.as_ref(),
             &policy.credential_mode,
         );
+        let companion_reads_authorized = self.admitted_companion_reads(
+            &policy_snapshot,
+            &identity,
+            &execution_context,
+            &service,
+            &action_descriptor,
+            &scopes,
+            token_caveats.as_ref(),
+            &policy.credential_mode,
+        );
         let admitted = agent_access_provider::host::admitted_request(
             agent_access_provider::host::AdmittedRequestParts {
                 service: service.clone(),
@@ -5436,6 +5448,7 @@ impl BrokerRuntime {
                 credential_mode,
                 authority,
                 universal_reach,
+                companion_reads_authorized,
                 inputs: request.inputs,
                 execution: credentials,
                 lookup_access,

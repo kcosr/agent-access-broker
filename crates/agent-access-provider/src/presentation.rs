@@ -319,13 +319,23 @@ impl EmbeddedBody {
     pub fn owner_pointer(&self) -> String {
         self.owner_path
             .iter()
-            .map(|segment| match segment {
-                BodyPathSegment::Field(field) => {
-                    format!("/{}", field.replace('~', "~0").replace('/', "~1"))
-                }
-                BodyPathSegment::Each => "/*".to_string(),
-            })
+            .map(BodyPathSegment::pointer_segment)
             .collect()
+    }
+
+    /// JSON pointer prefixes ending at optional fields in this owner path.
+    /// Only absent object properties may be skipped; present values must still
+    /// satisfy the remaining path and body shape.
+    pub fn owner_optional_prefixes(&self) -> Vec<String> {
+        let mut pointer = String::new();
+        let mut prefixes = Vec::new();
+        for segment in self.owner_path {
+            pointer.push_str(&segment.pointer_segment());
+            if matches!(segment, BodyPathSegment::OptionalField(_)) {
+                prefixes.push(pointer.clone());
+            }
+        }
+        prefixes
     }
 }
 
@@ -347,8 +357,23 @@ impl PartialEq for EmbeddedBody {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyPathSegment {
+    /// A required field of an object.
     Field(&'static str),
+    /// A field of an object that skips this body path when absent.
+    /// Present values must still satisfy the remaining path and body shape.
+    OptionalField(&'static str),
     Each,
+}
+
+impl BodyPathSegment {
+    fn pointer_segment(&self) -> String {
+        match self {
+            Self::Field(field) | Self::OptionalField(field) => {
+                format!("/{}", field.replace('~', "~0").replace('/', "~1"))
+            }
+            Self::Each => "/*".to_string(),
+        }
+    }
 }
 
 /// Renders the native body one owner object carries.
@@ -551,6 +576,13 @@ fn visit_owners_mut(
                 .as_object_mut()
                 .and_then(|value| value.get_mut(*field))
                 .ok_or(RenderError)?;
+            visit_owners_mut(child, rest, visitor)
+        }
+        BodyPathSegment::OptionalField(field) => {
+            let object = value.as_object_mut().ok_or(RenderError)?;
+            let Some(child) = object.get_mut(*field) else {
+                return Ok(());
+            };
             visit_owners_mut(child, rest, visitor)
         }
         BodyPathSegment::Each => {
@@ -965,6 +997,18 @@ mod tests {
         &ShoutCodec,
     )];
     const EMBEDDED: ActionPresentation = ActionPresentation::new(BODIES, None);
+    const OPTIONAL_BODIES: &[EmbeddedBody] = &[
+        EmbeddedBody::new(&[], &ShoutCodec),
+        EmbeddedBody::new(
+            &[
+                BodyPathSegment::OptionalField("page"),
+                BodyPathSegment::Field("items"),
+                BodyPathSegment::Each,
+            ],
+            &ShoutCodec,
+        ),
+    ];
+    const OPTIONAL_EMBEDDED: ActionPresentation = ActionPresentation::new(OPTIONAL_BODIES, None);
     const WHOLE: ActionPresentation = ActionPresentation::new(&[], Some(&heading));
 
     fn options(read: ReadContentFormat, response: ResponseFormat) -> ResponseOptions {
@@ -981,6 +1025,39 @@ mod tests {
             &ShoutCodec,
         );
         assert_eq!(escaped.owner_pointer(), "/a~1b~0c/*");
+        let optional = EmbeddedBody::new(
+            &[
+                BodyPathSegment::OptionalField("a/b~c"),
+                BodyPathSegment::Each,
+            ],
+            &ShoutCodec,
+        );
+        assert_eq!(optional.owner_pointer(), "/a~1b~0c/*");
+    }
+
+    #[test]
+    fn owner_optional_prefixes_only_mark_declared_optional_fields() {
+        assert!(BODIES[0].owner_optional_prefixes().is_empty());
+        assert!(
+            EmbeddedBody::new(&[], &ShoutCodec)
+                .owner_optional_prefixes()
+                .is_empty()
+        );
+        let body = EmbeddedBody::new(
+            &[
+                BodyPathSegment::Field("required"),
+                BodyPathSegment::OptionalField("a/b~c"),
+                BodyPathSegment::Each,
+                BodyPathSegment::OptionalField("nested"),
+                BodyPathSegment::Field("owner"),
+            ],
+            &ShoutCodec,
+        );
+        assert_eq!(
+            body.owner_optional_prefixes(),
+            ["/required/a~1b~0c", "/required/a~1b~0c/*/nested"]
+        );
+        assert_eq!(body.owner_pointer(), "/required/a~1b~0c/*/nested/owner");
     }
 
     #[test]
@@ -1083,6 +1160,95 @@ mod tests {
                 options(ReadContentFormat::Markdown, ResponseFormat::Json),
                 1024,
                 96,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn optional_body_paths_skip_absent_fields_and_render_present_owners() {
+        for page in [None, Some(json!({"items": [{"text": "two"}]}))] {
+            let mut result = json!({"text": "one"});
+            if let Some(page) = page {
+                result["page"] = page;
+            }
+            present_result(
+                Some(&OPTIONAL_EMBEDDED),
+                &mut result,
+                options(ReadContentFormat::Text, ResponseFormat::Json),
+                1024,
+                1024,
+            )
+            .unwrap();
+            assert_eq!(
+                result["renderedBody"],
+                json!({"format": "text", "value": "ONE"})
+            );
+            if let Some(page) = result.get("page") {
+                assert_eq!(
+                    page["items"][0],
+                    json!({"text": "two", "renderedBody": {"format": "text", "value": "TWO"}})
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    json!({"text": "one", "renderedBody": {"format": "text", "value": "ONE"}})
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn optional_body_paths_reject_malformed_present_fields_and_nonobject_parents() {
+        for source in [
+            json!(null),
+            json!([]),
+            json!({"page": null}),
+            json!({"page": "invalid"}),
+            json!({"page": []}),
+            json!({"page": {}}),
+            json!({"page": {"items": null}}),
+            json!({"page": {"items": [null]}}),
+        ] {
+            for format in [
+                ReadContentFormat::Native,
+                ReadContentFormat::Text,
+                ReadContentFormat::Markdown,
+            ] {
+                let mut result = source.clone();
+                let error = present_result(
+                    Some(&ActionPresentation::new(&OPTIONAL_BODIES[1..], None)),
+                    &mut result,
+                    options(format, ResponseFormat::Json),
+                    1024,
+                    1024,
+                )
+                .unwrap_err();
+                assert_eq!(error.reason_code, ReasonCode::UpstreamProtocolFailed);
+            }
+        }
+    }
+
+    #[test]
+    fn optional_body_paths_share_the_presentation_budget() {
+        let mut result = json!({"text": "one", "page": {"items": [{"text": "two"}]}});
+        let mut budget = PresentationBudget::new(5);
+        normalize_embedded_body(
+            &mut result,
+            &OPTIONAL_BODIES[0],
+            ReadContentFormat::Text,
+            1024,
+            &mut budget,
+        )
+        .unwrap();
+        assert_eq!(budget.remaining_rendered_bytes, 2);
+        assert!(
+            normalize_embedded_body(
+                &mut result,
+                &OPTIONAL_BODIES[1],
+                ReadContentFormat::Text,
+                1024,
+                &mut budget,
             )
             .is_err()
         );

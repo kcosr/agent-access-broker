@@ -390,13 +390,34 @@ curl -fsS \
   "$BROKER_URL/v1/invoke/jira/issue.view"
 ```
 
+To include one page of full comment/reply bodies, send
+`{"inputs":{"issue":"PROJ-123","includeComments":true}}` to
+`/v1/invoke/jira/issue.view`. The result adds `commentPage` with chronological
+ordering and a Broker-selected page size. For `/v1/invoke/jira/comment.list`,
+`{"inputs":{"issue":"PROJ-123"}}` returns metadata only; add
+`"includeBodies": true` inside `inputs` for full bodies. Continue with `startAt`
+set to the returned `nextStartAt`, retaining any explicit list size/order.
+Format controls remain beside `inputs`.
+
+`isLast: true` establishes visible completion for that page; null means unknown.
+A byte-limited page returns fewer complete comments, never shortened bodies.
+Pages are independently authorized and not a snapshot. Replies retain
+`parentCommentId`, which can point to another page; metadata listing followed
+by `comment.view` can retrieve selected bodies in any order.
+Issue inclusion requires `comment.list` and `comment.view` on the project in
+the issue read's winning credential mode. Body-enabled listing requires
+`comment.view` in the list's mode, under all ordinary token/context/resource
+restrictions. Without the flags, plain issue and metadata reads remain usable
+without these companions.
+
 Jira embedded normalization is advertised by `issue.view`, `issue.create`,
-`issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
+`issue.update`, `comment.list`, `comment.view`, `comment.add`, `comment.reply`, and
 `comment.update`. Whole-result Markdown is advertised by `project.list`, `project.view`, `issue_type.list`, `issue.view`,
 `search`, `comment.list`, `comment.view`, `comment.property.list`,
-`comment.property.get`, `attachment.list`, and `verify`. Search and comment
-list remain body-free, and format selection never causes an extra upstream
-fetch. Semantic Markdown emits copyable identifiers/timestamps as code spans
+`comment.property.get`, `attachment.list`, and `verify`. Search and metadata-only
+comment lists stay body-free; bodies appear only when the action's inclusion
+flag requests them. Format selection never causes an extra upstream fetch.
+Semantic Markdown emits copyable identifiers/timestamps as code spans
 and safe URLs as autolinks, neutralizes metadata controls/newlines, and fences
 arbitrary comment-property JSON, including `null`. Raw attachment download
 advertises neither non-default option.

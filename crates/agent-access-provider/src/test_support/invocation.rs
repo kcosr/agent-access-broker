@@ -21,6 +21,7 @@ pub struct InvocationBuilder {
     credential_mode: CredentialMode,
     authority: InvocationAuthority,
     universal_reach: bool,
+    companion_reads_authorized: bool,
     execution: ExecutionAccess,
     lookup_access: Option<LookupAccess>,
     body_parts: Vec<BrokerBodyPart>,
@@ -40,6 +41,7 @@ impl InvocationBuilder {
             credential_mode: CredentialMode::Service,
             authority: InvocationAuthority::ActionOnly,
             universal_reach: false,
+            companion_reads_authorized: false,
             execution: ExecutionAccess::None,
             lookup_access: None,
             body_parts: Vec::new(),
@@ -112,6 +114,12 @@ impl InvocationBuilder {
 
     pub fn authority(mut self, authority: InvocationAuthority) -> Self {
         self.authority = authority;
+        self
+    }
+
+    /// Set the host proof for optional companion read content.
+    pub fn companion_reads_authorized(mut self, authorized: bool) -> Self {
+        self.companion_reads_authorized = authorized;
         self
     }
 
@@ -194,6 +202,7 @@ impl InvocationBuilder {
             credential_mode: self.credential_mode,
             authority: self.authority.clone(),
             universal_reach: self.universal_reach,
+            companion_reads_authorized: self.companion_reads_authorized,
             inputs: self.inputs.clone(),
             execution: self.execution.clone(),
             lookup_access: self.lookup_access.clone(),
@@ -225,6 +234,7 @@ impl From<ProviderInvocation> for InvocationBuilder {
             credential_mode: context.credential_mode(),
             authority: context.authority().clone(),
             universal_reach: context.universal_reach(),
+            companion_reads_authorized: context.companion_reads_authorized(),
             execution: invocation.execution().clone(),
             lookup_access: invocation.lookup_access().cloned(),
             body_parts: invocation.body_parts().to_vec(),

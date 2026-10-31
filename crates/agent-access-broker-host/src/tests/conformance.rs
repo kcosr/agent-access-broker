@@ -84,7 +84,7 @@ allowed_execution_contexts = ["default"]
 [[policy.grants]]
 subjects = ["user:conformance-user"]
 service = "conformance"
-actions = ["item.view", "item.download", "item.upload", "item.list"]
+actions = ["item.view", "item.download", "item.upload", "item.list", "item.note.view"]
 resources = {{ resource_ids = ["shelf-one"] }}
 credential_mode = "service"
 
@@ -114,6 +114,15 @@ async fn conformance() -> Conformance {
 }
 
 async fn conformance_with_universal_reach(universal: bool) -> Conformance {
+    conformance_with_config(|config| {
+        if universal {
+            config.policy.resources[0].selector = agent_access_provider::ResourceSelector::All;
+        }
+    })
+    .await
+}
+
+async fn conformance_with_config(configure: impl FnOnce(&mut BrokerConfig)) -> Conformance {
     let dir = tempfile::tempdir().unwrap();
     create_private_dir(dir.path());
     std::fs::write(dir.path().join("upstream-token"), UPSTREAM_TOKEN).unwrap();
@@ -125,9 +134,7 @@ async fn conformance_with_universal_reach(universal: bool) -> Conformance {
         &registry(),
     )
     .unwrap();
-    if universal {
-        config.policy.resources[0].selector = agent_access_provider::ResourceSelector::All;
-    }
+    configure(&mut config);
     validate_broker_config(&config).unwrap();
     let broker = TestBroker::start_config(&config).await;
     let app = broker.app();
@@ -180,6 +187,126 @@ async fn conformance_universal_reach_discloses_only_embedded_metadata_after_real
             assert!(!response.to_string().contains("Other resource title"));
         }
         assert_eq!(fixture.server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn conformance_companion_reads_use_real_admission_without_changing_plain_reads() {
+    for companion_allowed in [false, true] {
+        let fixture = conformance_with_config(|config| {
+            if !companion_allowed {
+                config.policy.grants[0]
+                    .actions
+                    .retain(|action| action != "item.note.view");
+            }
+        })
+        .await;
+        fixture
+            .item("shelf-one/item-one", "Item One", "Primary *body*")
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/items/shelf-one/item-one/note"))
+            .and(header_is(
+                "authorization",
+                format!("Bearer {UPSTREAM_TOKEN}").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"body": "Note *body*"})))
+            .expect(if companion_allowed { 3 } else { 0 })
+            .mount(&fixture.server)
+            .await;
+
+        let included = response_json(
+            fixture
+                .invoke(
+                    "item.view",
+                    json!({
+                        "inputs": {"item": "shelf-one/item-one", "includeNote": true},
+                        "readContentFormat": "text"
+                    }),
+                    None,
+                )
+                .await,
+        )
+        .await;
+        if companion_allowed {
+            assert_eq!(included["decision"], "allow", "{included}");
+            assert_eq!(
+                included["resourceScopes"],
+                json!({"item": ["shelf-one/item-one"]})
+            );
+            assert_eq!(
+                included["result"]["note"]["renderedBody"],
+                json!({"format": "text", "value": "Note *body*"})
+            );
+            // Only the requested item and its note were fetched; proving the
+            // companion did not perform another upstream operation.
+            assert_eq!(fixture.server.received_requests().await.unwrap().len(), 2);
+        } else {
+            assert_eq!(included["decision"], "deny", "{included}");
+            assert_eq!(included["reasonCode"], "service_action_denied");
+            assert!(fixture.server.received_requests().await.unwrap().is_empty());
+        }
+
+        let plain = response_json(
+            fixture
+                .invoke(
+                    "item.view",
+                    json!({"inputs": {"item": "shelf-one/item-one"}, "readContentFormat": "text"}),
+                    None,
+                )
+                .await,
+        )
+        .await;
+        assert_eq!(plain["decision"], "allow", "{plain}");
+        assert_eq!(
+            plain["resourceScopes"],
+            json!({"item": ["shelf-one/item-one"]})
+        );
+        assert!(plain["result"].get("note").is_none());
+        assert_eq!(
+            plain["result"]["item"]["renderedBody"],
+            json!({"format": "text", "value": "Primary *body*"})
+        );
+
+        if companion_allowed {
+            let direct = response_json(
+                fixture
+                    .invoke(
+                        "item.note.view",
+                        json!({"inputs": {"item": "shelf-one/item-one"}, "readContentFormat": "text"}),
+                        None,
+                    )
+                    .await,
+            )
+            .await;
+            assert_eq!(direct["decision"], "allow", "{direct}");
+            assert_eq!(direct["result"]["note"], included["result"]["note"]);
+            let markdown = response_json(
+                fixture
+                    .invoke(
+                        "item.view",
+                        json!({
+                            "inputs": {"item": "shelf-one/item-one", "includeNote": true},
+                            "responseFormat": "markdown"
+                        }),
+                        None,
+                    )
+                    .await,
+            )
+            .await;
+            assert_eq!(markdown["decision"], "allow", "{markdown}");
+            assert!(
+                markdown["result"]["value"]
+                    .as_str()
+                    .unwrap()
+                    .contains("## Note\n\nNote \\*body\\*")
+            );
+        }
+        assert_eq!(
+            fixture.server.received_requests().await.unwrap().len(),
+            if companion_allowed { 6 } else { 1 }
+        );
+        fixture.server.verify().await;
     }
 }
 
@@ -375,6 +502,15 @@ async fn conformance_actions_reach_every_discovery_surface() {
             .as_array()
             .unwrap()
             .iter()
+            .find(|action| action["action"] == "item.view")
+            .unwrap()["companionReadActions"],
+        json!(["item.note.view"])
+    );
+    assert_eq!(
+        capabilities["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
             .find(|action| action["action"] == "item.list")
             .unwrap()["listingOf"],
         "conformance_item"
@@ -411,7 +547,24 @@ async fn conformance_actions_reach_every_discovery_surface() {
     let view = action("item.view");
     assert_eq!(view["io"]["type"], "json");
     assert_eq!(view["responseFormats"], json!(["json", "markdown"]));
-    assert_eq!(view["renderedBodyOwners"], json!(["/result/item"]));
+    assert_eq!(view["companionReadActions"], json!(["item.note.view"]));
+    assert_eq!(
+        view["renderedBodyOwners"],
+        json!(["/result/item", "/result/note"])
+    );
+    assert_eq!(
+        view["optionalRenderedBodyOwnerPrefixes"],
+        json!(["/result/note"])
+    );
+    assert_eq!(
+        action("item.note.view")["renderedBodyOwners"],
+        json!(["/result/note"])
+    );
+    assert!(
+        action("item.note.view")
+            .get("optionalRenderedBodyOwnerPrefixes")
+            .is_none()
+    );
     assert_eq!(action("item.download")["io"]["type"], "raw_download");
     assert_eq!(action("item.upload")["io"]["type"], "multipart_upload");
     assert_eq!(action("item.upload")["io"]["plan"]["maxFiles"], 1);
@@ -424,6 +577,10 @@ async fn conformance_actions_reach_every_discovery_surface() {
     let operation =
         |action: &str| openapi["paths"][format!("/v1/invoke/conformance/{action}")]["post"].clone();
     let view = operation("item.view");
+    assert_eq!(
+        view["x-agent-access-companion-read-actions"],
+        json!(["item.note.view"])
+    );
     assert_eq!(
         operation("item.list")["x-agent-access-listing-of"],
         "conformance_item"
@@ -469,6 +626,15 @@ async fn conformance_actions_reach_every_discovery_surface() {
     // The send schema accepts each shape's request and rejects its
     // malformed variants.
     let send_schema = fixture.get("/v1/spec/send-schema.json").await;
+    assert_eq!(
+        send_schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|variant| variant.get("x-agent-access-companion-read-actions"))
+            .collect::<Vec<_>>(),
+        vec![&json!(["item.note.view"])]
+    );
     assert_eq!(
         send_schema["oneOf"]
             .as_array()
@@ -533,7 +699,13 @@ async fn conformance_actions_reach_every_discovery_surface() {
         .await;
     assert_eq!(
         actions["actions"],
-        json!(["item.download", "item.list", "item.upload", "item.view"])
+        json!([
+            "item.download",
+            "item.list",
+            "item.note.view",
+            "item.upload",
+            "item.view"
+        ])
     );
     let outside = fixture
         .get("/v1/services/conformance/actions?resource=shelf-two%2Fitem-one")

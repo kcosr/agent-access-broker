@@ -205,6 +205,8 @@ Typed CLI examples:
 
 ```bash
 agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123
+agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --include-comments
+agent-access --url http://127.0.0.1:8787 jira issue comment list --issue PROJ-123 --include-bodies
 agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100
 agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --content-file description.md --content-format markdown
@@ -543,18 +545,22 @@ no receipt.
 
 Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
 `readContentFormat` accepts `native`, `markdown`, or `text`; omission is
-`native`. It is advertised on exactly these seven actions:
+`native`. It is advertised on exactly these eight actions:
 
 - `issue.view`, whose `renderedBody` is beside root `description`, with a
-  companion inside each supported non-null ADF custom-field entry;
+  companion inside each supported non-null ADF custom-field entry and beside
+  each included `commentPage.comments[].body`;
+- `comment.list`, whose companion is beside each returned `comments[].body`
+  when `includeBodies` is true;
 - `issue.create` and `issue.update`, whose companion is inside `result.issue`;
 - `comment.view`, `comment.add`, `comment.reply`, and `comment.update`, whose
   companion is inside `result.comment` beside `body`.
 
 Markdown and text preserve the native ADF field unchanged. Missing or null
 native content has no companion; a present empty document has a present,
-possibly empty companion. `search` stays description-free, `comment.list`
-stays body-free, `issue.child.create` does not expose its internal description
+possibly empty companion. `search` stays description-free. `comment.list`
+without `includeBodies` stays body-free, so `readContentFormat` has no effect
+on that metadata-only result. `issue.child.create` does not expose its internal description
 readback, and comment-property JSON is never guessed to be ADF.
 
 The deterministic ADF subset covers documents, paragraphs, headings, hard
@@ -595,9 +601,12 @@ their declared actions.
 Every returned declared ADF field is structurally validated and bounded by
 `providers.jira.content.max_body_bytes` even in native mode. Malformed custom
 ADF is explicitly withheld as described under [custom fields](#custom-fields);
-malformed descriptions or comment bodies fail the request. Oversized,
-over-complex, or over-budget native/rendered content fails the complete request
-without truncation as sanitized `upstream_protocol_failed`/502. Native ADF,
+malformed descriptions or comment bodies fail the request. Oversized individual
+bodies and over-complex or over-budget native/rendered content fail the complete
+request without truncation as sanitized `upstream_protocol_failed`/502. The
+separate [comment-page byte budget](#comment-pagination-and-limits) can select
+fewer complete comments with an explicit continuation; it never shortens a body.
+Native ADF,
 custom-field names and values, rendered content, whole-result Markdown, property
 values, and pagination tokens are excluded from audit, tracing, logs, errors,
 and object identifiers.
@@ -744,6 +753,16 @@ linked-resource fetch is added. An ordinary full Broker invocation makes three
 requests: scope-resolution metadata lookup, invocation-time metadata
 confirmation, and the authorized issue fetch. Existing credential selection
 and OAuth recovery rules still apply.
+
+Set `includeComments: true` to add one page of complete comment and reply bodies
+in `commentPage`. The flag defaults to `false`; there are no page-size or order
+inputs on `issue.view`. The page uses the Broker's body-page defaults and
+chronological order, oldest first. After the issue read, the Broker makes one
+additional request to the dedicated `issue/{key}/comment` collection with the
+same execution credential. It does not fetch comments individually or rely on
+the issue response's embedded comments. Continue through `comment.list` with
+`includeBodies: true` and the returned `nextStartAt`. See
+[comment reads and permissions](#reading-comment-bodies).
 
 Successful results include issue id/key/project, generated `webUrl`, summary,
 status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
@@ -1615,11 +1634,13 @@ All comment actions accept exactly one issue locator, either `issue` or `url`.
 The broker resolves the issue to an authoritative current project before policy
 authorization and re-confirms the issue during invocation.
 
-- `comment.list` returns metadata only. It accepts optional `maxResults`,
-  `startAt`, and `orderBy` (`created`, `-created`, or `+created`), caps
-  `maxResults` at `providers.jira.comments.max_results`, and strips upstream
-  comment bodies, raw URLs, avatar URLs, rendered HTML, update-author fields,
-  and email-like user fields. Use `comment.view` for ADF body reads.
+- `comment.list` returns metadata by default. Set `includeBodies: true` for a
+  page of full ADF bodies. It accepts optional `maxResults`, `startAt`, and
+  `orderBy` (`created`, `-created`, or `+created`) and caps the requested count
+  at `providers.jira.comments.max_results`. Both projections retain comment
+  IDs, reply parent IDs, author summaries, timestamps and visibility; neither
+  exposes raw URLs, avatar URLs, upstream rendered HTML, update-author fields
+  or email-like user fields. Use `comment.view` for a selected individual body.
 - `comment.view` fetches one comment through the scoped
   `issue/{key}/comment/{id}` path and validates that Jira returned the requested
   numeric comment id. Its returned ADF body is structurally validated and
@@ -1643,6 +1664,97 @@ authorization and re-confirms the issue during invocation.
   returns an indeterminate visibility shape, the update fails before PUT.
 - `comment.delete` deletes through the scoped issue-comment path and returns a
   small broker result after Jira returns success.
+
+### Reading comment bodies
+
+The two inclusion flags default to `false`:
+
+| Read | Result |
+| --- | --- |
+| `issue.view` with `includeComments: true` | The issue and a `commentPage` containing one page of full comment and reply bodies. |
+| `comment.list` | One page of comment metadata without bodies. |
+| `comment.list` with `includeBodies: true` | One page of full comment and reply bodies. |
+| `comment.view` with `commentId` | One selected comment's full body. |
+
+The common case needs only the inclusion flag; ordering and page size have
+Broker defaults. The typed CLI equivalents are:
+
+```bash
+agent-access jira issue view PROJ-123 --include-comments
+agent-access jira issue comment list --issue PROJ-123
+agent-access jira issue comment list --issue PROJ-123 --include-bodies
+agent-access jira issue comment view 10042 --issue PROJ-123
+```
+
+For generic invocation, put flags in action inputs:
+
+```bash
+agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123","includeComments":true}'
+agent-access invoke jira.comment.list --input-json '{"issue":"PROJ-123","includeBodies":true}'
+```
+
+`readContentFormat` and `responseFormat` remain common invocation fields,
+not action inputs. Body-enabled lists and embedded pages support the same native
+ADF, Markdown/text companions and whole-result Markdown as the individual
+comment read. Replies remain flat entries with `parentCommentId`; a reply's
+parent can be on another page. Metadata listing followed by `comment.view`
+remains useful for selecting individual comments in any order.
+
+The flags preserve existing read authority. `issue.view` with comments also
+requires `comment.list` and `comment.view` on the resolved project, each with
+an ordinary winning grant in the issue read's credential mode. A body-enabled
+`comment.list` requires `comment.view` in the list's winning mode. All ordinary
+identity, execution-context, token, read-only and resource restrictions still
+apply. A lower-priority grant in a matching mode cannot replace a winning grant
+in another mode. The host proves these direct companion reads from the admitted
+snapshot; the provider uses that proof and reuses its selected execution
+credential. A missing proof denies the requested inclusion before provider
+content reads, although host scope-resolution lookup may already have occurred.
+Without an inclusion flag, the ordinary issue or metadata-list read does not
+require the companion permissions. See [companion reads](provider-sdk.md#companion-reads).
+
+### Comment pagination and limits
+
+Metadata lists default to `comments.max_results` (50). Full-body lists and
+embedded pages default to `comments.body_max_results` (20), capped by
+`comments.max_results`. Omitted `startAt` selects zero. The Broker explicitly
+sends `+created` when `orderBy` is omitted; `comment.list` supports the existing
+count, offset and order overrides, including `-created` for newest first.
+
+A `commentPage` and a list result carry `comments`, `startAt`, `maxResults`,
+`count`, `total`, `isLast`, `nextStartAt`, `orderBy` and `includeBodies`. The list
+also retains its root `operation` and `issue` metadata. The embedded object is
+absent when comments were not requested. `count` is the number actually returned,
+including replies. Follow `nextStartAt` with `comment.list`; keep `includeBodies`
+and any chosen order and page size consistent. The next offset advances by the
+actual returned count, not the requested maximum. A short page alone does not
+prove completion.
+
+`total` is Jira's visible comment count when supplied. If Jira omits it or
+returns null, `total` and `isLast` are null: completeness is unknown.
+`nextStartAt` still advances on a nonempty page; an empty page with an unknown
+total has no next offset and does not prove that every comment was read.
+An invalid supplied total fails the request. Treat `isLast: true` as
+completion under that page's visible collection, not a permanent snapshot.
+Each page is independently authorized, and policies, credentials, comment counts
+and Jira visibility can change between calls. Deduplicate by comment ID when
+assembling a discussion and restart if a changed collection makes offsets
+unreliable.
+
+Full-body pages also use `comments.max_page_body_bytes`, which defaults to
+`content.max_body_bytes` (normally 1 MiB). An explicit value must be at least
+the per-body limit. The budget applies to serialized native bodies and may
+return a shorter prefix of complete comments with `limitedBy: "body_bytes"` and
+a continuation at the first unreturned comment. No body's content is shortened.
+Individual body caps and structural checks still apply to fetched bodies;
+malformed or oversized bodies fail the requested read. Shared complexity,
+rendered-output, complete-result and transport limits also apply, including the
+issue description and custom fields for a combined read. Those limits may fail
+the invocation rather than return a partial rendering.
+
+Audit records describe the requested flags, counts, offsets and order, with
+returned comment IDs in object identifiers. Native and rendered bodies stay out
+of audit, traces, logs, errors and object identifiers.
 
 Visibility restrictions are denied unless allowlisted in
 `providers.jira.comments.allowed_visibility`. Group visibility inputs require

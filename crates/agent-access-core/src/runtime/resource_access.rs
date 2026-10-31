@@ -169,6 +169,85 @@ impl BrokerRuntime {
         boundaries_cover(&reachable, &ResourceSelector::All)
     }
 
+    /// Prove direct companion reads on the source's exact resolved resources.
+    /// This uses ordinary winning policy, never searches lower bands for a
+    /// matching mode and never follows another action's companion declarations.
+    /// All observations are local; the primary admission already selected the
+    /// only execution and lookup credentials this operation may use.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn admitted_companion_reads(
+        &self,
+        snapshot: &PolicySnapshot,
+        identity: &IdentityContext,
+        context: &ExecutionContext,
+        service: &str,
+        action: &ActionDescriptor,
+        scopes: &ResourceScopes,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
+        selected_mode: &str,
+    ) -> bool {
+        if action.companion_read_actions.is_empty()
+            || !action.read_only
+            || action.native_search.is_some()
+            || action.requires_resource_attributes
+            || !matches!(action.io, agent_access_provider::ActionIo::Json)
+            || !matches!(
+                action.scoped_mcp_name_source,
+                ScopedMcpNameSource::CanonicalAction
+            )
+            || self.command_enforced(service, &action.action)
+        {
+            return false;
+        }
+        let Some(scope) = action.resource_scope.as_ref() else {
+            return false;
+        };
+        let Some(resource_scope) = self.action_resource_scope(service, &action.action) else {
+            return false;
+        };
+        // An absent, foreign, or noncanonical resolved scope cannot support a
+        // supplemental proof, even if a malformed caller bypassed admission.
+        if scopes.len() != 1
+            || scopes.get(scope).is_none_or(|values| {
+                values.is_empty()
+                    || values
+                        .iter()
+                        .any(|value| !resource_scope.resource_type.is_canonical_target(value))
+            })
+        {
+            return false;
+        }
+        action.companion_read_actions.iter().all(|name| {
+            let Some(companion) = self.served_action_descriptor(service, name) else {
+                return false;
+            };
+            if name == &action.action
+                || !companion.read_only
+                || companion.resource_scope != action.resource_scope
+                || companion.native_search.is_some()
+                || companion.requires_resource_attributes
+                || !matches!(companion.io, agent_access_provider::ActionIo::Json)
+                || !matches!(
+                    companion.scoped_mcp_name_source,
+                    ScopedMcpNameSource::CanonicalAction
+                )
+                || self.command_enforced(service, name)
+                || self
+                    .enforce_agent_invoke_token_caveats_with(token, service, name, context)
+                    .is_err()
+                || self
+                    .enforce_agent_invoke_token_resource_caveats_with(
+                        snapshot, context, token, service, name, scopes,
+                    )
+                    .is_err()
+            {
+                return false;
+            }
+            self.select_policy(snapshot, identity, context, service, name, scopes)
+                .is_ok_and(|policy| policy.credential_mode == selected_mode)
+        })
+    }
+
     /// Catalog management views are filtered by the caller's delegated service authority.
     /// A mixed group is projected to visible resource IDs, never leaking foreign IDs.
     pub fn policy_resource_catalog_for_scope(

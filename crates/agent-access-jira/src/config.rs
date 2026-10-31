@@ -83,6 +83,10 @@ pub(crate) fn default_jira_body_max_bytes() -> u64 {
 pub struct JiraCommentsConfig {
     #[serde(default = "default_comment_max_results")]
     pub max_results: u32,
+    #[serde(default = "default_comment_body_max_results")]
+    pub body_max_results: u32,
+    /// Aggregate native ADF bytes per body page; omission inherits the per-body cap.
+    pub max_page_body_bytes: Option<u64>,
     #[serde(default = "default_comment_property_value_max_bytes")]
     pub max_property_value_bytes: u64,
     #[serde(default = "default_comment_property_key_prefixes")]
@@ -95,6 +99,8 @@ impl Default for JiraCommentsConfig {
     fn default() -> Self {
         Self {
             max_results: default_comment_max_results(),
+            body_max_results: default_comment_body_max_results(),
+            max_page_body_bytes: None,
             max_property_value_bytes: default_comment_property_value_max_bytes(),
             allowed_property_key_prefixes: default_comment_property_key_prefixes(),
             allowed_visibility: vec![],
@@ -104,6 +110,10 @@ impl Default for JiraCommentsConfig {
 
 pub(crate) fn default_comment_max_results() -> u32 {
     50
+}
+
+pub(crate) fn default_comment_body_max_results() -> u32 {
+    20
 }
 
 pub(crate) fn default_comment_property_value_max_bytes() -> u64 {
@@ -163,6 +173,12 @@ pub(crate) fn validate_jira_comments_config(
 ) {
     if config.max_results == 0 {
         errors.push(format!("{label}.max_results must be non-zero"));
+    }
+    if config.body_max_results == 0 {
+        errors.push(format!("{label}.body_max_results must be non-zero"));
+    }
+    if config.max_page_body_bytes == Some(0) {
+        errors.push(format!("{label}.max_page_body_bytes must be non-zero"));
     }
     if config.max_property_value_bytes == 0 {
         errors.push(format!("{label}.max_property_value_bytes must be non-zero"));
@@ -327,6 +343,13 @@ impl BackendConfig for JiraProviderConfig {
             errors.push("providers.jira.search.max_results must be non-zero".to_string());
         }
         validate_jira_comments_config("providers.jira.comments", &self.comments, errors);
+        if self
+            .comments
+            .max_page_body_bytes
+            .is_some_and(|cap| cap < self.content.max_body_bytes)
+        {
+            errors.push("providers.jira.comments.max_page_body_bytes must be at least content.max_body_bytes".to_string());
+        }
         if !(1..=100).contains(&self.listing.max_results)
             || self.listing.max_candidate_pages == 0
             || self.listing.max_upstream_requests == 0

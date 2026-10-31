@@ -317,7 +317,8 @@ pub fn credential_with_profile(
 /// Intentionally exhaustive: the host supplies every input, so a new one
 /// fails to compile until the host provides it. The `universal_reach` field
 /// intentionally requires every constructor to supply the host's proof;
-/// constructors that do not compute it must pass false.
+/// constructors that do not compute it must pass false. The same rule applies
+/// to `companion_reads_authorized`.
 #[derive(Debug)]
 pub struct AdmittedRequestParts {
     pub service: String,
@@ -332,6 +333,9 @@ pub struct AdmittedRequestParts {
     /// Host-computed disclosure proof, false unless the action opts in.
     /// Does not expand `authority`; see [`AdmittedContext::universal_reach`].
     pub universal_reach: bool,
+    /// All declared companion reads are admitted on the exact resources in
+    /// the selected mode. False when not computed or not requested.
+    pub companion_reads_authorized: bool,
     pub inputs: Value,
     pub execution: ExecutionAccess,
     /// Delegated lookup access holds the same lease as delegated
@@ -351,6 +355,7 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
         credential_mode,
         authority,
         universal_reach,
+        companion_reads_authorized,
         inputs,
         execution,
         lookup_access,
@@ -365,6 +370,7 @@ pub fn admitted_request(parts: AdmittedRequestParts) -> AdmittedRequest {
             credential_mode,
             authority,
             universal_reach,
+            companion_reads_authorized,
         ),
         inputs,
         execution,
