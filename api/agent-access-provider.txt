@@ -94,6 +94,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::host::HostP
 pub struct agent_access_provider::host::AdmittedRequestParts
 pub agent_access_provider::host::AdmittedRequestParts::action: alloc::string::String
 pub agent_access_provider::host::AdmittedRequestParts::authority: agent_access_provider::InvocationAuthority
+pub agent_access_provider::host::AdmittedRequestParts::companion_reads_authorized: bool
 pub agent_access_provider::host::AdmittedRequestParts::correlation: agent_access_provider::CorrelationContext
 pub agent_access_provider::host::AdmittedRequestParts::credential_mode: agent_access_provider::CredentialMode
 pub agent_access_provider::host::AdmittedRequestParts::execution: agent_access_provider::ExecutionAccess
@@ -232,6 +233,7 @@ pub mod agent_access_provider::presentation
 #[non_exhaustive] pub enum agent_access_provider::presentation::BodyPathSegment
 pub agent_access_provider::presentation::BodyPathSegment::Each
 pub agent_access_provider::presentation::BodyPathSegment::Field(&'static str)
+pub agent_access_provider::presentation::BodyPathSegment::OptionalField(&'static str)
 impl core::clone::Clone for agent_access_provider::presentation::BodyPathSegment
 pub fn agent_access_provider::presentation::BodyPathSegment::clone(&self) -> agent_access_provider::presentation::BodyPathSegment
 impl core::cmp::Eq for agent_access_provider::presentation::BodyPathSegment
@@ -349,6 +351,7 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentati
 impl agent_access_provider::presentation::EmbeddedBody
 pub const fn agent_access_provider::presentation::EmbeddedBody::codec(&self) -> &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec
 pub const fn agent_access_provider::presentation::EmbeddedBody::new(&'static [agent_access_provider::presentation::BodyPathSegment], &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec) -> Self
+pub fn agent_access_provider::presentation::EmbeddedBody::owner_optional_prefixes(&self) -> alloc::vec::Vec<alloc::string::String>
 pub const fn agent_access_provider::presentation::EmbeddedBody::owner_path(&self) -> &'static [agent_access_provider::presentation::BodyPathSegment]
 pub fn agent_access_provider::presentation::EmbeddedBody::owner_pointer(&self) -> alloc::string::String
 impl core::clone::Clone for agent_access_provider::presentation::EmbeddedBody
@@ -1769,6 +1772,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Upstream
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::UpstreamResourceOwnership
 #[non_exhaustive] pub struct agent_access_provider::ActionCapabilities
 pub agent_access_provider::ActionCapabilities::action: alloc::string::String
+pub agent_access_provider::ActionCapabilities::companion_read_actions: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionCapabilities::credential_modes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionCapabilities::description: alloc::string::String
 pub agent_access_provider::ActionCapabilities::documentation: core::option::Option<serde_json::value::Value>
@@ -1800,6 +1804,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionCapab
 pub agent_access_provider::ActionDescriptor::action: alloc::string::String
 pub agent_access_provider::ActionDescriptor::attribution: core::option::Option<agent_access_provider::AttributionCapability>
 pub agent_access_provider::ActionDescriptor::audit_inputs: alloc::vec::Vec<agent_access_provider::AuditInput>
+pub agent_access_provider::ActionDescriptor::companion_read_actions: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::credential_modes: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::description: alloc::string::String
 pub agent_access_provider::ActionDescriptor::documentation: core::option::Option<serde_json::value::Value>
@@ -1822,6 +1827,7 @@ impl agent_access_provider::ActionDescriptor
 pub fn agent_access_provider::ActionDescriptor::attribution(self, agent_access_provider::AttributionCapability) -> Self
 pub fn agent_access_provider::ActionDescriptor::audit_input(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::capabilities(&self) -> agent_access_provider::ActionCapabilities
+pub fn agent_access_provider::ActionDescriptor::companion_read(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::credential_modes<I, S>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = S>, S: core::convert::Into<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::documentation(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ActionDescriptor::listing_of(self, agent_access_provider::ResourceType) -> Self
@@ -1870,6 +1876,7 @@ pub struct agent_access_provider::AdmittedContext(_)
 impl agent_access_provider::AdmittedContext
 pub fn agent_access_provider::AdmittedContext::action(&self) -> &str
 pub fn agent_access_provider::AdmittedContext::authority(&self) -> &agent_access_provider::InvocationAuthority
+pub fn agent_access_provider::AdmittedContext::companion_reads_authorized(&self) -> bool
 pub fn agent_access_provider::AdmittedContext::correlation(&self) -> &agent_access_provider::CorrelationContext
 pub fn agent_access_provider::AdmittedContext::credential_mode(&self) -> agent_access_provider::CredentialMode
 pub fn agent_access_provider::AdmittedContext::execution_context(&self) -> &str
@@ -1893,6 +1900,7 @@ pub struct agent_access_provider::AdmittedRequest
 impl agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::AdmittedRequest::action(&self) -> &str
 pub fn agent_access_provider::AdmittedRequest::authority(&self) -> &agent_access_provider::InvocationAuthority
+pub fn agent_access_provider::AdmittedRequest::companion_reads_authorized(&self) -> bool
 pub fn agent_access_provider::AdmittedRequest::context(&self) -> &agent_access_provider::AdmittedContext
 pub fn agent_access_provider::AdmittedRequest::correlation(&self) -> &agent_access_provider::CorrelationContext
 pub fn agent_access_provider::AdmittedRequest::credential_mode(&self) -> agent_access_provider::CredentialMode
@@ -3109,6 +3117,7 @@ pub fn agent_access_provider::ProviderInvocation::action(&self) -> &str
 pub fn agent_access_provider::ProviderInvocation::admitted(&self) -> &agent_access_provider::AdmittedRequest
 pub fn agent_access_provider::ProviderInvocation::authority(&self) -> &agent_access_provider::InvocationAuthority
 pub fn agent_access_provider::ProviderInvocation::body_parts(&self) -> &[agent_access_provider::BrokerBodyPart]
+pub fn agent_access_provider::ProviderInvocation::companion_reads_authorized(&self) -> bool
 pub fn agent_access_provider::ProviderInvocation::context(&self) -> &agent_access_provider::AdmittedContext
 pub fn agent_access_provider::ProviderInvocation::correlation(&self) -> &agent_access_provider::CorrelationContext
 pub fn agent_access_provider::ProviderInvocation::credential_mode(&self) -> agent_access_provider::CredentialMode

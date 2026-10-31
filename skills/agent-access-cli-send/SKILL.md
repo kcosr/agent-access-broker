@@ -421,8 +421,27 @@ Whole-result Markdown request:
 }
 ```
 
+To read an issue and one page of its full discussion, set
+`"includeComments": true` inside the issue-view envelope's `inputs`. The result
+adds `commentPage`, with chronological ordering and a Broker-selected page size.
+Use the `comment.list` action with `"inputs":{"issue":"PROJ-123"}` for metadata
+only, or `"inputs":{"issue":"PROJ-123","includeBodies":true}` for full bodies.
+Continue the latter with its `startAt` input set to the returned `nextStartAt`.
+Retain any chosen list size/order settings. The default flags are false, and
+format fields stay at the envelope's top level.
+
+`isLast: true` establishes visible completion for the page; null means unknown.
+A byte-limited page contains fewer complete comments, never shortened bodies.
+Each page is independently authorized. Reply entries retain `parentCommentId`;
+a parent can be on another page. Metadata plus `comment.view` remains available
+for selected individual bodies. Issue inclusion requires `comment.list` and
+`comment.view` on the same project in the issue read's winning credential mode;
+full listing requires `comment.view` in the list's mode, subject to ordinary
+token/context/resource restrictions. Plain issue and metadata reads do not
+require these companions.
+
 Jira embedded normalization is available for `issue.view`, `issue.create`,
-`issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
+`issue.update`, `comment.list`, `comment.view`, `comment.add`, `comment.reply`, and
 `comment.update`. Whole-result Markdown is available for `project.list`, `project.view`, `issue_type.list`, `issue.view`,
 `search`, `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`. Always generate the

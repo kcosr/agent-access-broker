@@ -162,7 +162,8 @@ impl JiraBackend for RenamedJira {
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         self.resolve("comments", issue_key)?;
         ok(JiraCommentPage {
-            comments: vec![JiraCommentSummary {
+            comments: vec![JiraComment {
+                body: None,
                 id: "10200".to_string(),
                 parent_id: None,
                 author: None,

@@ -11,6 +11,9 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "comment_page_tests.rs"]
+mod comment_page_tests;
+
 #[path = "issue_type_tests.rs"]
 mod issue_type_tests;
 
@@ -426,6 +429,7 @@ struct StubJiraBackend {
     search_page: Mutex<Option<JiraSearchPage>>,
     last_search: Mutex<Option<JiraSearchRequest>>,
     last_comment_list: Mutex<Option<JiraCommentListRequest>>,
+    comment_page_override: Mutex<Option<JiraCommentPage>>,
     comments: Mutex<BTreeMap<String, JiraComment>>,
     comment_issue_keys: Mutex<BTreeMap<String, String>>,
     added_comments: Mutex<Vec<JiraCommentAddRequest>>,
@@ -750,6 +754,13 @@ impl JiraBackend for StubJiraBackend {
     ) -> Result<JiraBackendResponse<JiraCommentPage>, JiraBackendError> {
         self.record_credential("comments", credential);
         *self.last_comment_list.lock().unwrap() = Some(request.clone());
+        if let Some(page) = self.comment_page_override.lock().unwrap().clone() {
+            return Ok(JiraBackendResponse {
+                value: page,
+                status: 200,
+                duration_ms: 10,
+            });
+        }
         let comment_issue_keys = self.comment_issue_keys.lock().unwrap().clone();
         let comments = self
             .comments
@@ -761,15 +772,9 @@ impl JiraBackend for StubJiraBackend {
                     .get(&comment.id)
                     .is_none_or(|owner_issue_key| owner_issue_key.as_str() == issue_key)
             })
+            .skip(request.start_at as usize)
             .take(request.max_results as usize)
-            .map(|comment| JiraCommentSummary {
-                id: comment.id.clone(),
-                parent_id: comment.parent_id.clone(),
-                author: comment.author.clone(),
-                created: comment.created.clone(),
-                updated: comment.updated.clone(),
-                visibility: comment.visibility.clone(),
-            })
+            .cloned()
             .collect::<Vec<_>>();
         Ok(JiraBackendResponse {
             value: JiraCommentPage {

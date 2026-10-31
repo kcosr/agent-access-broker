@@ -281,6 +281,7 @@ pub(super) async fn call_tool(
             &value,
             options.read_content_format,
             &action.rendered_body_owners,
+            &action.optional_rendered_body_owner_prefixes,
         )
         .map_err(|_| anyhow::anyhow!("broker response has an invalid rendered body"))?;
         if options.response_format == agent_access_provider::presentation::ResponseFormat::Markdown

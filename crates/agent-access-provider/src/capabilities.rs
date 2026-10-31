@@ -67,6 +67,9 @@ pub struct ActionCapabilities {
     /// Explicit live enumeration, with authority independent of other actions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_of: Option<ResourceType>,
+    /// Direct companion reads for optional content, checked at admission.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub companion_read_actions: Vec<String>,
     pub credential_modes: Vec<String>,
     #[serde(default)]
     pub lookup_required: bool,

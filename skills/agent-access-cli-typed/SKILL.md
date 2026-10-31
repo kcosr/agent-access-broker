@@ -358,8 +358,35 @@ View issues by key or URL:
 
 ```bash
 agent-access jira issue view PROJ-123
+agent-access jira issue view PROJ-123 --include-comments
 agent-access jira issue view --issue-url 'https://example.atlassian.net/browse/PROJ-123'
 ```
+
+Use `--include-comments` when you need the issue and its discussion. It includes
+one page of full comment/reply bodies in `commentPage`, with chronological order
+and a Broker-selected page size; no other parameter is needed. For comment-only
+reads, listing stays lightweight unless you ask for bodies:
+
+```bash
+agent-access jira issue comment list --issue PROJ-123
+agent-access jira issue comment list --issue PROJ-123 --include-bodies
+agent-access jira issue comment view 10042 --issue PROJ-123
+```
+
+Follow the page's `nextStartAt` with `comment list --include-bodies --start-at N`,
+using the returned number for `N`. Keep any chosen list size/order overrides
+consistent. `isLast: true` establishes completion for that page's visible
+collection; null means completeness is unknown. A byte-limited page returns
+fewer complete comments, never shortened bodies. Replies are flat entries with
+`parentCommentId`, and their parents can be on another page. Each page is
+independently authorized and is not a snapshot. Metadata listing followed by
+individual `comment view` calls lets you select bodies in any order.
+
+Issue comment inclusion also requires `comment.list` and `comment.view` on the
+project in the issue read's winning credential mode. Body-enabled listing
+requires `comment.view` in the list's mode. Token/context/resource restrictions
+still apply; the Broker does not switch credentials to satisfy these checks.
+A plain issue read or metadata list does not require those extra permissions.
 
 Search with text or broker-bounded JQL:
 
@@ -380,8 +407,9 @@ The companion is, for example,
 `renderedBody: {"format":"markdown","value":"..."}` beside the owning issue
 or comment, and inside each supported non-null ADF custom-field entry on
 issue view; text requests use `"format":"text"`. It is available on `issue
-view`, `issue create`, `issue update`, and comment `view`, `add`, `reply`, and
-`update`.
+view`, `issue create`, `issue update`, and comment `list`, `view`, `add`, `reply`, and
+`update`. List companions appear only with `--include-bodies`; embedded issue
+comments gain companions only with `--include-comments`.
 Missing or null native bodies do not gain a companion. Native content remains
 present and unchanged.
 

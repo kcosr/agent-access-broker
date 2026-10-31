@@ -480,6 +480,11 @@ provider-owned JSON object containing extended usage guidance. It is metadata,
 never an invocation input. Runtime OpenAPI operations and action-specific send
 schema variants expose it as `x-agent-access-documentation`. MCP action details
 return it while initial MCP tool definitions include only concise guidance.
+Native actions with optional companion reads advertise `companionReadActions`
+in capabilities, service detail and the catalog. OpenAPI and send-schema variants
+use `x-agent-access-companion-read-actions`. This static list names required
+same-scope reads; it does not assert that the caller has the same-mode authority
+needed for an optional inclusion. See [companion reads](provider-sdk.md#companion-reads).
 
 Jira JQL and Confluence CQL syntax, unsupported fields/operators/functions, and
 query complexity limits return `input_invalid`. Scope resolution and returned
@@ -497,6 +502,14 @@ response envelope, such as `/result` or `/result/comments/*`, to the objects
 that carry a `renderedBody` companion beside their native body. A `*` segment
 matches every element of an array. Clients inspect companions only at these
 owners; any other `renderedBody` key belongs to upstream content.
+`optionalRenderedBodyOwnerPrefixes` lists escaped prefixes at which an absent
+object property may skip the remainder of an owner path, for example
+`/result/commentPage`. The field is omitted when no prefixes are optional and
+does not change `renderedBodyOwners`. Present fields, including null values,
+still undergo normal path validation; required descendants and malformed parents
+cannot be skipped. A shared prefix is optional only when every declared owner
+path through it permits absence. The CLI uses this metadata when validating
+embedded formatted responses.
 
 Sensitive input metadata applies to provider actions and management routes:
 
@@ -1922,10 +1935,20 @@ Unknown top-level fields also return `input_invalid`/400. Neither response field
 is forwarded upstream.
 
 Jira advertises embedded formats on `issue.view`, `issue.create`,
-`issue.update`, `comment.view`, `comment.add`, `comment.reply`, and
+`issue.update`, `comment.list`, `comment.view`, `comment.add`, `comment.reply`, and
 `comment.update`. Jira whole-result Markdown is advertised on `project.list`, `project.view`, `issue_type.list`, `issue.view`,
 `search`, `comment.list`, `comment.view`, `comment.property.list`,
 `comment.property.get`, `attachment.list`, and `verify`.
+
+For an issue and a chronological page of full comment/reply bodies, send
+`{"inputs":{"issue":"PROJ-123","includeComments":true}}` to
+`/v1/invoke/jira/issue.view`. The result adds `commentPage`. For
+`/v1/invoke/jira/comment.list`, `includeBodies: true` inside `inputs` includes
+full bodies; omission or false preserves metadata-only listing. Both use Broker
+page-size and ordering defaults, with `nextStartAt` for continuation through
+`comment.list`. Included bodies require the existing same-project comment-read
+authority in the primary action's winning credential mode. Selecting a format
+alone never fetches bodies. See [comment reads](providers-jira.md#reading-comment-bodies).
 
 Confluence advertises embedded formats on these 26 actions:
 

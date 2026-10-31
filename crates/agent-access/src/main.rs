@@ -1850,6 +1850,11 @@ enum JiraIssueCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
+        #[arg(
+            long,
+            help = "Include one chronological page of full comment and reply bodies"
+        )]
+        include_comments: bool,
         #[arg(long, value_enum)]
         read_content_format: Option<ReadContentFormatArg>,
         #[arg(long, value_enum)]
@@ -2024,6 +2029,10 @@ enum JiraCommentCommand {
         start_at: Option<u32>,
         #[arg(long)]
         order_by: Option<String>,
+        #[arg(long, help = "Include full comment and reply bodies in this page")]
+        include_bodies: bool,
+        #[arg(long, value_enum)]
+        read_content_format: Option<ReadContentFormatArg>,
         #[arg(long, value_enum)]
         output_format: Option<OutputFormatArg>,
     },
@@ -10761,6 +10770,7 @@ async fn run_send_invoke(
                 &value,
                 request.response_options.read_content_format,
                 &action_spec.rendered_body_owners,
+                &action_spec.optional_rendered_body_owner_prefixes,
             )
             .map_err(DeferredCliError::malformed)?;
             if request.response_options.response_format == ResponseFormat::Markdown {
@@ -10837,6 +10847,7 @@ async fn run_send_upload(
         &value,
         response_options.read_content_format,
         &action_spec.rendered_body_owners,
+        &action_spec.optional_rendered_body_owner_prefixes,
     )
     .map_err(DeferredCliError::malformed)?;
     if response_options.response_format == ResponseFormat::Markdown {
@@ -10884,6 +10895,7 @@ async fn run_upload_with_plan(
             &value,
             response_options.read_content_format,
             &spec.rendered_body_owners,
+            &spec.optional_rendered_body_owner_prefixes,
         )
         .map_err(DeferredCliError::malformed)?;
     }
@@ -14714,16 +14726,20 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             JiraIssueCommand::View {
                 issue,
                 issue_url,
+                include_comments,
                 read_content_format,
                 output_format,
             } => {
-                let inputs = match (issue.as_deref(), issue_url.as_deref()) {
+                let mut inputs = match (issue.as_deref(), issue_url.as_deref()) {
                     (Some(issue), None) => serde_json::json!({ "issue": issue }),
                     (None, Some(url)) => serde_json::json!({ "url": url }),
                     _ => require_cli_input(Err(anyhow::anyhow!(
                         "jira issue view requires exactly one issue argument or --issue-url"
                     ))),
                 };
+                if *include_comments {
+                    inputs["includeComments"] = serde_json::json!(true);
+                }
                 run_typed_invoke_value(
                     ctx,
                     "jira.issue.view",
@@ -15032,6 +15048,8 @@ async fn run_jira_comment_command(
             max_results,
             start_at,
             order_by,
+            include_bodies,
+            read_content_format,
             output_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
@@ -15048,11 +15066,14 @@ async fn run_jira_comment_command(
             if let Some(order_by) = order_by {
                 inputs.insert("orderBy".to_string(), serde_json::json!(order_by));
             }
+            if *include_bodies {
+                inputs.insert("includeBodies".to_string(), serde_json::json!(true));
+            }
             run_typed_invoke_value(
                 ctx,
                 "jira.comment.list",
                 serde_json::Value::Object(inputs),
-                None,
+                *read_content_format,
                 *output_format,
             )
             .await
@@ -16089,6 +16110,7 @@ fn resolve_response_options(
 struct InvokeResponseOptions {
     options: ResponseOptions,
     rendered_body_owners: Vec<String>,
+    optional_rendered_body_owner_prefixes: Vec<String>,
     action_spec: Option<ApiActionSpec>,
 }
 
@@ -16138,9 +16160,13 @@ async fn resolve_generic_invoke_options(
             "runtime catalog advertises readContentFormats for {service_action} without renderedBodyOwners"
         ));
     }
+    let optional_rendered_body_owner_prefixes = action_spec
+        .map(|action_spec| action_spec.optional_rendered_body_owner_prefixes.clone())
+        .unwrap_or_default();
     Ok(InvokeResponseOptions {
         options,
         rendered_body_owners,
+        optional_rendered_body_owner_prefixes,
         action_spec: action_spec.cloned(),
     })
 }
@@ -16255,6 +16281,7 @@ async fn run_invoke_parts_with_options(
     let InvokeResponseOptions {
         options,
         rendered_body_owners,
+        optional_rendered_body_owner_prefixes,
         action_spec,
     } = response_options;
     let reserved = if let Some(output) = ctx.output {
@@ -16307,6 +16334,7 @@ async fn run_invoke_parts_with_options(
         &response.1,
         options.read_content_format,
         &rendered_body_owners,
+        &optional_rendered_body_owner_prefixes,
     )
     .map_err(DeferredCliError::malformed)?;
     if options.response_format == ResponseFormat::Markdown {
@@ -16592,13 +16620,15 @@ fn markdown_result_value(value: &serde_json::Value) -> Result<Option<&str>> {
 
 /// Checks the `renderedBody` companions of a normalized allow result at the
 /// owners the runtime catalog declares for the action: each owner must be
-/// present and an object, and a companion must be an object carrying the
+/// present and an object unless its path has an explicitly optional missing
+/// field. A companion must be an object carrying the
 /// requested format and a string value. The rest of the result, including
 /// the preserved native bodies, is upstream content and is not inspected.
 fn validate_embedded_invoke_result(
     envelope: &serde_json::Value,
     format: ReadContentFormat,
     rendered_body_owners: &[String],
+    optional_rendered_body_owner_prefixes: &[String],
 ) -> Result<()> {
     if format == ReadContentFormat::Native {
         return Ok(());
@@ -16615,7 +16645,13 @@ fn validate_embedded_invoke_result(
             .ok_or_else(|| anyhow::anyhow!("invalid renderedBody owner pointer {pointer:?}"))?
             .split('/')
             .collect::<Vec<_>>();
-        validate_rendered_body_owners(envelope, &segments, format)?;
+        validate_rendered_body_owners(
+            envelope,
+            &segments,
+            "",
+            optional_rendered_body_owner_prefixes,
+            format,
+        )?;
     }
     Ok(())
 }
@@ -16623,25 +16659,33 @@ fn validate_embedded_invoke_result(
 fn validate_rendered_body_owners(
     value: &serde_json::Value,
     segments: &[&str],
+    pointer: &str,
+    optional_prefixes: &[String],
     format: ReadContentFormat,
 ) -> Result<()> {
     let Some((segment, rest)) = segments.split_first() else {
         return validate_rendered_body_owner(value, format);
     };
+    let child_pointer = format!("{pointer}/{segment}");
     if *segment == "*" {
         let items = value
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("normalized result body collection is not an array"))?;
-        return items
-            .iter()
-            .try_for_each(|item| validate_rendered_body_owners(item, rest, format));
+        return items.iter().try_for_each(|item| {
+            validate_rendered_body_owners(item, rest, &child_pointer, optional_prefixes, format)
+        });
     }
     let field = segment.replace("~1", "/").replace("~0", "~");
-    let child = value
+    let object = value
         .as_object()
-        .and_then(|object| object.get(&field))
-        .ok_or_else(|| anyhow::anyhow!("normalized result is missing body owner field {field}"))?;
-    validate_rendered_body_owners(child, rest, format)
+        .ok_or_else(|| anyhow::anyhow!("normalized result body owner parent is not an object"))?;
+    let Some(child) = object.get(&field) else {
+        if optional_prefixes.contains(&child_pointer) {
+            return Ok(());
+        }
+        anyhow::bail!("normalized result is missing body owner field {field}");
+    };
+    validate_rendered_body_owners(child, rest, &child_pointer, optional_prefixes, format)
 }
 
 fn validate_rendered_body_owner(
@@ -19201,6 +19245,7 @@ mod tests {
         ApiActionSpec {
             scoped_mcp_name: Some("issue.view".to_owned()),
             documentation: None,
+            companion_read_actions: Vec::new(),
             listing_of: None,
             read_only: true,
             action: "issue.view".to_string(),
@@ -19224,6 +19269,7 @@ mod tests {
                 .map(|value| (*value).to_string())
                 .collect(),
             rendered_body_owners: Vec::new(),
+            optional_rendered_body_owner_prefixes: Vec::new(),
         }
     }
 
@@ -19353,6 +19399,7 @@ upload_spool_dir = "upload-spool"
             (&["jira", "issue", "view"][..], "issue.view"),
             (&["jira", "issue", "create"][..], "issue.create"),
             (&["jira", "issue", "update"][..], "issue.update"),
+            (&["jira", "issue", "comment", "list"][..], "comment.list"),
             (&["jira", "issue", "comment", "view"][..], "comment.view"),
             (&["jira", "issue", "comment", "add"][..], "comment.add"),
             (&["jira", "issue", "comment", "reply"][..], "comment.reply"),
@@ -21365,7 +21412,7 @@ upload_spool_dir = "upload-spool"
         ));
         assert!(is_mutation_verification_failure(&envelope));
         assert_eq!(markdown_result_value(&envelope).unwrap(), None);
-        validate_embedded_invoke_result(&envelope, ReadContentFormat::Markdown, &[]).unwrap();
+        validate_embedded_invoke_result(&envelope, ReadContentFormat::Markdown, &[], &[]).unwrap();
         assert_eq!(
             envelope["result"]["safeLocators"],
             serde_json::json!({"discussionId": "discussion-1", "noteId": 12})
@@ -21406,7 +21453,8 @@ upload_spool_dir = "upload-spool"
             ));
             assert!(!is_mutation_verification_failure(&envelope));
             assert_eq!(markdown_result_value(&envelope).unwrap(), None);
-            validate_embedded_invoke_result(&envelope, ReadContentFormat::Markdown, &[]).unwrap();
+            validate_embedded_invoke_result(&envelope, ReadContentFormat::Markdown, &[], &[])
+                .unwrap();
             assert_eq!(
                 envelope["result"],
                 serde_json::json!({"inputCategory": category})
@@ -21435,8 +21483,13 @@ upload_spool_dir = "upload-spool"
                 "renderedBody": {"format": "markdown", "value": ""}
             }
         });
-        validate_embedded_invoke_result(&issue, ReadContentFormat::Markdown, &owners(&["/result"]))
-            .unwrap();
+        validate_embedded_invoke_result(
+            &issue,
+            ReadContentFormat::Markdown,
+            &owners(&["/result"]),
+            &[],
+        )
+        .unwrap();
 
         let comments = serde_json::json!({
             "decision": "allow",
@@ -21449,7 +21502,7 @@ upload_spool_dir = "upload-spool"
             }
         });
         let comment_owners = owners(&["/result/comments/*"]);
-        validate_embedded_invoke_result(&comments, ReadContentFormat::Text, &comment_owners)
+        validate_embedded_invoke_result(&comments, ReadContentFormat::Text, &comment_owners, &[])
             .unwrap();
 
         for (result, expected) in [
@@ -21480,11 +21533,98 @@ upload_spool_dir = "upload-spool"
                 &envelope,
                 ReadContentFormat::Text,
                 &comment_owners,
+                &[],
             )
             .unwrap_err()
             .to_string();
             assert!(error.contains(expected), "{error} lacks {expected}");
         }
+    }
+
+    #[test]
+    fn embedded_result_validation_only_skips_declared_optional_missing_fields() {
+        let body_owners = owners(&["/result", "/result/commentPage/comments/*"]);
+        let optional_prefixes = owners(&["/result/commentPage"]);
+        for result in [
+            serde_json::json!({"key": "PROJ-1"}),
+            serde_json::json!({"commentPage": {"comments": []}}),
+            serde_json::json!({"commentPage": {"comments": [
+                {"renderedBody": {"format": "text", "value": "reply"}}
+            ]}}),
+        ] {
+            let envelope = serde_json::json!({"decision": "allow", "result": result});
+            validate_embedded_invoke_result(
+                &envelope,
+                ReadContentFormat::Text,
+                &body_owners,
+                &optional_prefixes,
+            )
+            .unwrap();
+        }
+
+        for (result, expected) in [
+            (
+                serde_json::json!({"commentPage": null}),
+                "body owner parent is not an object",
+            ),
+            (
+                serde_json::json!({"commentPage": {}}),
+                "missing body owner field comments",
+            ),
+            (
+                serde_json::json!({"commentPage": {"comments": null}}),
+                "body collection is not an array",
+            ),
+            (
+                serde_json::json!({"commentPage": {"comments": [null]}}),
+                "body owner is not an object",
+            ),
+            (
+                serde_json::json!({"commentPage": {"comments": [
+                    {"renderedBody": {"format": "text"}}
+                ]}}),
+                "missing renderedBody.value",
+            ),
+        ] {
+            let envelope = serde_json::json!({"decision": "allow", "result": result});
+            let error = validate_embedded_invoke_result(
+                &envelope,
+                ReadContentFormat::Text,
+                &body_owners,
+                &optional_prefixes,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(expected), "{error} lacks {expected}");
+        }
+
+        // An optional descendant cannot make its required parent optional.
+        let error = validate_embedded_invoke_result(
+            &serde_json::json!({"decision": "allow"}),
+            ReadContentFormat::Text,
+            &body_owners,
+            &optional_prefixes,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("missing body owner field result")
+        );
+
+        // Match encoded wildcard paths exactly, without treating adjacent fields as optional.
+        let nested_owners = owners(&["/result/items/*/optional~1body"]);
+        let nested_optional = owners(&["/result/items/*/optional~1body"]);
+        let envelope = serde_json::json!({"decision": "allow", "result": {"items": [
+            {}, {"optional/body": {"renderedBody": {"format": "text", "value": "body"}}}
+        ]}});
+        validate_embedded_invoke_result(
+            &envelope,
+            ReadContentFormat::Text,
+            &nested_owners,
+            &nested_optional,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -21508,8 +21648,13 @@ upload_spool_dir = "upload-spool"
                 "renderedBody": {"format": "markdown", "value": "macro"}
             }
         });
-        validate_embedded_invoke_result(&issue, ReadContentFormat::Markdown, &owners(&["/result"]))
-            .unwrap();
+        validate_embedded_invoke_result(
+            &issue,
+            ReadContentFormat::Markdown,
+            &owners(&["/result"]),
+            &[],
+        )
+        .unwrap();
     }
 
     #[test]
@@ -21522,6 +21667,7 @@ upload_spool_dir = "upload-spool"
             &unnormalized,
             ReadContentFormat::Native,
             &owners(&["/result"]),
+            &[],
         )
         .unwrap();
 
@@ -21533,6 +21679,7 @@ upload_spool_dir = "upload-spool"
             &denied,
             ReadContentFormat::Markdown,
             &owners(&["/result"]),
+            &[],
         )
         .unwrap();
     }
@@ -22918,6 +23065,7 @@ upload_spool_dir = "upload-spool"
                 actions: vec![ApiActionSpec {
                     scoped_mcp_name: Some("call".to_owned()),
                     documentation: None,
+                    companion_read_actions: Vec::new(),
                     listing_of: None,
                     read_only: true,
                     action: "call".to_string(),
@@ -22935,6 +23083,7 @@ upload_spool_dir = "upload-spool"
                     read_content_formats: Vec::new(),
                     response_formats: Vec::new(),
                     rendered_body_owners: Vec::new(),
+                    optional_rendered_body_owner_prefixes: Vec::new(),
                 }],
             }],
             routes: Vec::new(),

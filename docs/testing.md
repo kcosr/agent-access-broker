@@ -1244,9 +1244,20 @@ and lower the configured HTTP MCP response cap to require the explicit
 generic invoke, JSON send, and direct HTTP. These fixtures use synthetic Jira
 responses; they do not validate a live tenant.
 
+Comment-body acceptance fixtures use a discussion longer than the default body
+page to exercise issue inclusion, list continuation, flat reply parent IDs and
+selected individual reads. They require one collection request per batch with
+no individual-comment fanout, preserve metadata-only defaults, compare native,
+embedded text and whole-result Markdown, and exercise typed CLI, JSON send and
+stdio MCP. Missing companion grants and a different winning credential mode
+must deny body inclusion before content requests while ordinary reads remain
+usable. Separate core tests cover exact resources, precedence, caller ceilings,
+snapshot use and direct-only companion proofs.
+
 Capability projection tests require `readContentFormats` on exactly
-`issue.view`, `issue.create`, `issue.update`, `comment.view`, `comment.add`,
-`comment.reply`, and `comment.update`. They require `responseFormats` on exactly
+`issue.view`, `issue.create`, `issue.update`, `comment.list`, `comment.view`,
+`comment.add`, `comment.reply`, and `comment.update`. They require
+`responseFormats` on exactly
 `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
 `comment.property.list`, `comment.property.get`, `attachment.list`, and
 `verify`. Representative child-create, property mutation, attachment mutation,
@@ -1254,9 +1265,10 @@ and raw-download actions assert absence rather than accepting a compatibility
 fallback.
 
 Whole-result contract snapshots cover every eligible Jira retrieval family:
-project details/searchable fields, project issue-type metadata, singleton issue/comment, body-free search, metadata-only comment and attachment
-lists, comment-property list/get with arbitrary JSON, verification success, and
-the `allow_with_result` verification mismatch. Assertions require stable field
+project details/searchable fields, project issue-type metadata, singleton issue/comment,
+issue views with comment pages, body-free search, metadata and full-body comment
+lists, attachment lists, comment-property list/get with arbitrary JSON,
+verification success, and the `allow_with_result` verification mismatch. Assertions require stable field
 and collection ordering, exact identifiers/timestamps/URLs/booleans/counts and
 pagination tokens, field-specific absent/null handling, one terminal newline,
 no raw ADF, and the same provider request count, endpoint, query, selected fields, and
