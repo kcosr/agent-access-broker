@@ -16,19 +16,23 @@ async fn fixture() -> Fixture {
         lookup.read_only = Some(true);
         config.credentials.service.insert("jira".into(), credential);
         config.credentials.lookup.insert("jira".into(), lookup);
-        config.providers.insert(
-            serde_json::from_value::<agent_access_jira::JiraProviderConfig>(json!({
-                "tenant_host": "example.atlassian.net",
-                "allowed_upstream_hosts": ["https://example.atlassian.net/rest/api/3/**"],
-                "content": {"comment_formats": ["adf"]}
-            }))
-            .unwrap(),
-        );
+        let jira_config = serde_json::from_value::<agent_access_jira::JiraProviderConfig>(json!({
+            "tenant_host": "example.atlassian.net",
+            "allowed_upstream_hosts": ["https://example.atlassian.net/rest/api/3/**"],
+            "content": {"comment_formats": ["adf"]}
+        }))
+        .unwrap();
+        let actions = agent_access_jira::jira_descriptor(&jira_config)
+            .actions
+            .into_iter()
+            .map(|action| action.action)
+            .collect();
+        config.providers.insert(jira_config);
         config.policy.grants = vec![PolicyGrantConfig {
             subjects: vec!["user:mcp-user".into()],
             execution_contexts: None,
             service: "jira".into(),
-            actions: vec!["*".into()],
+            actions,
             resources: selected_resources(&[("jira-project", &["PROJ"])]),
             credential_mode: "service".into(),
             priority: None,
