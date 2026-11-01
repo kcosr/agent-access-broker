@@ -185,6 +185,11 @@ Direct HTTP clients should primarily use:
 - `/v1/spec/send-schema.json` only when producing `agent-access send` request
   files.
 
+Read field descriptions for relationships the schema does not enforce, including
+exactly-one locators, paired content fields and requirements tied to a mode.
+Jira inputs use plain object schemas; a field being optional in the schema does
+not make a request valid when its required alternative or companion is absent.
+
 The catalog's per-action `readContentFormats` and `responseFormats`, together
 with each OpenAPI invoke request schema, are authoritative for response-format
 support. Every invoke schema allows explicit `native`/`json` protocol defaults;
@@ -929,8 +934,8 @@ request or ask the user for the correct access.
 
 For built-in services, an `input_invalid` denial whose inputs break the
 action's input schema names up to three problems, for example `jira.comment.list inputs are invalid:
-inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy,
-startAt, url`. Fix what it names and keep the other valid inputs; do not drop
+inputs.readContentFormat is not allowed; allowed: includeBodies, issue, maxResults,
+orderBy, startAt, url`. Fix what it names and keep the other valid inputs; do not drop
 options or retry blindly. A message without that detail is the provider's own;
 compare the inputs with the action's schema and documentation before another
 attempt.

@@ -604,35 +604,374 @@ fn supplied_values_never_appear_in_an_explanation() {
     assert!(!explained.contains("secret"), "{explained}");
 }
 
-/// Every shipped native action schema, from representative configurations.
-fn native_schemas() -> Vec<(String, Value)> {
-    let gitlab: agent_access_gitlab::GitlabProviderConfig = toml::from_str(
-        "api_base_url = \"https://gitlab.example.com/api/v4\"\nweb_base_url = \"https://gitlab.example.com\"",
+/// One action under a named configuration. Configuration identity is part of
+/// the case so collecting the cases cannot silently replace another variant.
+struct NativeSchemaCase {
+    configuration: &'static str,
+    service: String,
+    action: agent_access_provider::ActionDescriptor,
+}
+
+impl NativeSchemaCase {
+    fn key(&self) -> (&'static str, &str, &str) {
+        (self.configuration, &self.service, &self.action.action)
+    }
+
+    fn label(&self) -> String {
+        format!(
+            "{}/{}.{}",
+            self.configuration, self.service, self.action.action
+        )
+    }
+}
+
+/// Shipped native actions under the configurations that change availability,
+/// accepted content formats, search routes, and optional schema constraints.
+/// Search requests with omitted or explicit engines share each descriptor.
+fn native_service_descriptors() -> Vec<(&'static str, agent_access_provider::ServiceDescriptor)> {
+    fn validated_descriptor(
+        configuration: &str,
+        config: &dyn agent_access_provider::BackendConfig,
+    ) -> agent_access_provider::ServiceDescriptor {
+        use agent_access_provider::{
+            CredentialSource, ProviderLimits, ServiceCredentialKinds, ValidationContext,
+        };
+        let credentials = match config.kind() {
+            "jira" | "confluence" | "cloudbees_ci" => ServiceCredentialKinds::default()
+                .with_service(Some(CredentialSource::static_kind("basic_api_token"))),
+            "gitlab" => ServiceCredentialKinds::default()
+                .with_service(Some(CredentialSource::static_kind("bearer_token"))),
+            "gmail" => ServiceCredentialKinds::default().with_per_user_delegated(true),
+            "teams" => ServiceCredentialKinds::default(),
+            other => panic!("missing synthetic validation context for {other}"),
+        };
+        let limits = ProviderLimits::default();
+        let context = ValidationContext::new("production", "managed", &limits, credentials);
+        let mut errors = Vec::new();
+        config.validate(&context, &mut errors);
+        assert!(
+            errors.is_empty(),
+            "{configuration}/{}: {errors:?}",
+            config.kind()
+        );
+        let descriptor = config.descriptor();
+        descriptor
+            .validate()
+            .unwrap_or_else(|errors| panic!("{configuration}/{}: {errors:?}", descriptor.service));
+        descriptor
+    }
+
+    let jira = |configuration, settings: &str| {
+        let config: agent_access_jira::JiraProviderConfig = toml::from_str(&format!(
+            r#"tenant_host = "example.atlassian.net"
+allowed_upstream_hosts = ["https://example.atlassian.net/**"]
+{settings}"#
+        ))
+        .unwrap();
+        validated_descriptor(configuration, &config)
+    };
+    let confluence = |configuration, settings: &str| {
+        let config: agent_access_confluence::ConfluenceProviderConfig = toml::from_str(&format!(
+            r#"tenant_host = "example.atlassian.net"
+allowed_upstream_hosts = ["https://example.atlassian.net/**"]
+{settings}"#
+        ))
+        .unwrap();
+        validated_descriptor(configuration, &config)
+    };
+    let cloudbees: agent_access_cloudbees_ci::CloudbeesCiProviderConfig = toml::from_str(
+        r#"allowed_upstream_hosts = ["https://ci.example.com/**"]
+[controllers.team]
+base_url = "https://ci.example.com/"
+"#,
     )
     .unwrap();
-    let cloudbees: agent_access_cloudbees_ci::CloudbeesCiProviderConfig =
-        toml::from_str("[controllers.team]\nbase_url = \"https://ci.example.com\"").unwrap();
-    [
-        agent_access_jira::jira_descriptor(
-            &toml::from_str("tenant_host = \"example.atlassian.net\"").unwrap(),
+    let teams: agent_access_teams::TeamsConfig = toml::from_str(
+        r#"allowed_upstream_hosts = ["https://example.environment.api.powerplatform.com/**"]"#,
+    )
+    .unwrap();
+    let mut descriptors = vec![
+        ("default", jira("default", "")),
+        (
+            "comments-enabled",
+            jira("comments-enabled", "[content]\ncomment_formats = [\"adf\"]"),
         ),
-        agent_access_confluence::confluence_descriptor(
-            &toml::from_str("tenant_host = \"example.atlassian.net\"").unwrap(),
+        (
+            "all-enabled",
+            jira(
+                "all-enabled",
+                r#"[content]
+comment_formats = ["adf"]
+[attachments]
+media_types = ["text/plain", "application/json"]
+[comments]
+allowed_visibility = [{ type = "role", value = "Developers" }]
+"#,
+            ),
         ),
-        agent_access_gitlab::gitlab_descriptor(&gitlab),
-        agent_access_cloudbees_ci::cloudbees_ci_descriptor(&cloudbees),
-        agent_access_gmail::descriptor(),
-        agent_access_teams::descriptor(),
-    ]
-    .into_iter()
-    .flat_map(|descriptor| {
-        let service = descriptor.service.clone();
-        descriptor
-            .actions
-            .into_iter()
-            .map(move |action| (format!("{service}.{}", action.action), action.input_schema))
-    })
-    .collect()
+        ("default", confluence("default", "")),
+        (
+            "content-disabled",
+            confluence(
+                "content-disabled",
+                r#"[content]
+page_formats = []
+blog_formats = []
+comment_formats = []
+"#,
+            ),
+        ),
+        (
+            "pages-text-only",
+            confluence("pages-text-only", "[content]\npage_formats = [\"storage\"]"),
+        ),
+        (
+            "pages-object-only",
+            confluence(
+                "pages-object-only",
+                "[content]\npage_formats = [\"atlas_doc_format\"]",
+            ),
+        ),
+        (
+            "all-enabled",
+            confluence(
+                "all-enabled",
+                r#"[content]
+page_formats = ["storage", "atlas_doc_format"]
+blog_formats = ["storage"]
+comment_formats = ["storage"]
+[attachments]
+media_types = ["text/plain", "application/json"]
+"#,
+            ),
+        ),
+        ("default", validated_descriptor("default", &cloudbees)),
+        (
+            "default",
+            validated_descriptor("default", &agent_access_gmail::GmailConfig::default()),
+        ),
+        ("default", validated_descriptor("default", &teams)),
+    ];
+    let gitlab_default: agent_access_gitlab::GitlabProviderConfig = toml::from_str(
+        r#"api_base_url = "https://gitlab.example.com/api/v4"
+web_base_url = "https://gitlab.example.com"
+allowed_upstream_hosts = ["https://gitlab.example.com/**"]"#,
+    )
+    .unwrap();
+    // Start from the provider's complete default category set, rather than
+    // maintaining another list which could omit a newly supported category.
+    let categories = gitlab_default
+        .search
+        .engines
+        .basic
+        .project_categories
+        .clone();
+    for configuration in [
+        "default",
+        "search-disabled",
+        "project-only",
+        "instance-only",
+        "both",
+        "mixed",
+        "zoekt-default",
+        "all-enabled",
+    ] {
+        let mut config = gitlab_default.clone();
+        match configuration {
+            "default" => {}
+            "search-disabled" => {
+                config.search.engines.basic.project_categories.clear();
+                config.search.engines.basic.instance_categories.clear();
+            }
+            "project-only" => config.search.engines.basic.instance_categories.clear(),
+            "instance-only" | "both" => {
+                config.search.engines.basic.project_categories.clear();
+                config.search.engines.basic.instance_categories.clear();
+                config.search.default_engine = "advanced".into();
+                config.search.engines.advanced.instance_categories = categories.clone();
+                if configuration == "both" {
+                    config.search.engines.advanced.project_categories = categories.clone();
+                }
+            }
+            "mixed" => {
+                config.search.engines.advanced.instance_categories = categories.clone();
+                config.search.engines.zoekt.project_categories = vec!["code".into()];
+            }
+            "zoekt-default" => {
+                config.search.engines.basic.project_categories.clear();
+                config.search.engines.basic.instance_categories.clear();
+                config.search.default_engine = "zoekt".into();
+                config.search.engines.zoekt.project_categories = vec!["code".into()];
+                config.search.engines.zoekt.instance_categories = vec!["code".into()];
+            }
+            "all-enabled" => {
+                config.search.default_engine = "advanced".into();
+                config.search.engines.advanced.project_categories = categories.clone();
+                config.search.engines.advanced.instance_categories = categories.clone();
+                config.search.engines.zoekt.project_categories = vec!["code".into()];
+                config.search.engines.zoekt.instance_categories = vec!["code".into()];
+                config.provisioning.enabled = true;
+                config.provisioning.max_access_level = 40;
+                config.provisioning.max_token_lifetime_days = 365;
+                config.provisioning.allowed_token_scopes = [
+                    "api",
+                    "read_api",
+                    "read_repository",
+                    "write_repository",
+                    "read_registry",
+                    "write_registry",
+                    "self_rotate",
+                ]
+                .map(str::to_string)
+                .into();
+                config.webhooks.allowed_destinations = vec!["https://hooks.example.com/*".into()];
+                config.webhooks.allow_disable_ssl_verification = true;
+                config.attachments.media_types =
+                    vec!["text/plain".into(), "application/json".into()];
+            }
+            _ => unreachable!("known schema configuration"),
+        }
+        descriptors.push((configuration, validated_descriptor(configuration, &config)));
+    }
+    descriptors
+}
+
+fn native_schemas() -> Vec<NativeSchemaCase> {
+    let mut keys = std::collections::BTreeSet::new();
+    native_service_descriptors()
+        .into_iter()
+        .flat_map(|(configuration, descriptor)| {
+            let service = descriptor.service;
+            descriptor
+                .actions
+                .into_iter()
+                .map(move |action| NativeSchemaCase {
+                    configuration,
+                    service: service.clone(),
+                    action,
+                })
+        })
+        .inspect(|case| {
+            let key = (
+                case.configuration,
+                case.service.clone(),
+                case.action.action.clone(),
+            );
+            assert!(keys.insert(key), "duplicate schema case {}", case.label());
+        })
+        .collect()
+}
+
+#[test]
+fn native_schema_cases_cover_optional_actions_and_content_formats() {
+    let cases = native_schemas();
+    let schema = |configuration, service, action| {
+        &cases
+            .iter()
+            .find(|case| case.key() == (configuration, service, action))
+            .unwrap_or_else(|| panic!("missing schema {configuration}/{service}.{action}"))
+            .action
+            .input_schema
+    };
+    assert!(
+        !cases
+            .iter()
+            .any(|case| case.key() == ("default", "jira", "comment.add"))
+    );
+    assert_eq!(
+        schema("comments-enabled", "jira", "comment.add")["properties"]["contentFormat"]["enum"],
+        json!(["adf", "markdown", "plain_text"])
+    );
+    assert!(
+        !cases
+            .iter()
+            .any(|case| case.key() == ("default", "confluence", "page.create"))
+    );
+    assert_eq!(
+        schema("pages-object-only", "confluence", "page.create")["properties"]["contentFormat"]["enum"],
+        json!(["atlas_doc_format"])
+    );
+    assert_eq!(
+        schema("pages-text-only", "confluence", "page.create")["properties"]["contentFormat"]["enum"],
+        json!(["storage", "markdown", "plain_text"])
+    );
+    assert_eq!(
+        schema("all-enabled", "confluence", "page.create")["properties"]["contentFormat"]["enum"],
+        json!(["storage", "atlas_doc_format", "markdown", "plain_text"])
+    );
+    for configuration in [
+        "project-only",
+        "instance-only",
+        "both",
+        "mixed",
+        "zoekt-default",
+        "all-enabled",
+    ] {
+        let search = schema(configuration, "gitlab", "search.code");
+        assert!(
+            search["properties"]["engine"]["enum"]
+                .as_array()
+                .is_some_and(|engines| !engines.is_empty())
+        );
+    }
+    assert_eq!(
+        schema("zoekt-default", "gitlab", "search.code")["properties"]["engine"]["default"],
+        "zoekt"
+    );
+    assert!(
+        !cases
+            .iter()
+            .any(|case| case.configuration == "search-disabled"
+                && case.service == "gitlab"
+                && case.action.action.starts_with("search."))
+    );
+}
+
+#[test]
+fn native_schemas_have_plain_roots() {
+    // These providers retain their existing schemas until their conversions.
+    // Keep this list explicit so a newly linked provider is checked by default.
+    const PENDING: &[&str] = &["confluence", "gitlab", "cloudbees_ci", "teams"];
+    const RELATIONAL: &[&str] = &["oneOf", "anyOf", "allOf", "if", "then", "else", "not"];
+
+    let cases = native_schemas();
+    for pending in PENDING {
+        assert!(
+            cases.iter().any(|case| case.service == *pending
+                && RELATIONAL.iter().any(|keyword| case
+                    .action
+                    .input_schema
+                    .get(*keyword)
+                    .is_some())),
+            "{pending} has no root combinator; remove its pending exception"
+        );
+    }
+    for case in cases {
+        let schema = &case.action.input_schema;
+        let properties = schema["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("{} must declare root properties", case.label()));
+        if let agent_access_provider::ActionIo::MultipartUpload { plan } = &case.action.io {
+            for locator in &plan.locator_inputs {
+                assert!(
+                    properties.contains_key(locator),
+                    "{} upload locator {locator} must be a root property",
+                    case.label()
+                );
+            }
+        }
+        if PENDING.contains(&case.service.as_str()) {
+            continue;
+        }
+        assert_eq!(schema["type"], "object", "{} root type", case.label());
+        for keyword in RELATIONAL {
+            assert!(
+                schema.get(keyword).is_none(),
+                "{} root must not contain {keyword}",
+                case.label()
+            );
+        }
+    }
 }
 
 /// The most values an input within the footprint budget can carry.
@@ -696,7 +1035,9 @@ impl DiagnosticProfile {
 fn native_schemas_fit_the_diagnostic_profile() {
     let schemas = native_schemas();
     assert!(schemas.len() > 200, "{}", schemas.len());
-    for (action, schema) in schemas {
+    for case in schemas {
+        let action = case.label();
+        let schema = case.action.input_schema;
         let profile = DiagnosticProfile::of(&schema);
         assert_eq!(profile.references, 0, "{action}");
         assert!(
@@ -722,13 +1063,17 @@ fn native_schemas_fit_the_diagnostic_profile() {
 
 #[test]
 fn the_most_expensive_native_schemas_are_still_explained() {
-    let schemas: BTreeMap<String, Value> = native_schemas().into_iter().collect();
+    let schemas: BTreeMap<(String, String), Value> = native_schemas()
+        .into_iter()
+        .filter(|case| case.configuration == "default")
+        .map(|case| ((case.service, case.action.action), case.action.input_schema))
+        .collect();
     let explain_native = |action: &str, inputs: Value| {
         let (service, action) = action.split_once('.').unwrap();
         explain(
             service,
             action,
-            &schemas[&format!("{service}.{action}")],
+            &schemas[&(service.to_string(), action.to_string())],
             &inputs,
             denial(),
         )

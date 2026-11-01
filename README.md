@@ -72,6 +72,10 @@ stable JQL references, such as `cf[12345]`, in the existing issue search action;
 supported operators come from both Jira and Broker's bounded grammar. Project
 view and search have independent grants.
 
+Jira action schemas expose input fields directly. Their field descriptions
+explain locator alternatives and paired content fields, and provider denials
+name the fields that need correction. See [Jira input arguments](docs/providers-jira.md#input-arguments).
+
 Jira issue views include [resolution, dates, components, versions and status
 category](docs/providers-jira.md#standard-context), plus [supported custom-field
 values and Jira display names](docs/providers-jira.md#custom-fields), with typed

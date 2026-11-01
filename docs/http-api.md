@@ -2370,9 +2370,9 @@ inputs against the action's published input schema. If they break it,
 example:
 
 ```text
-jira.comment.list inputs are invalid: inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy, startAt, url
+jira.comment.list inputs are invalid: inputs.readContentFormat is not allowed; allowed: includeBodies, issue, maxResults, orderBy, startAt, url
 confluence.search inputs are invalid: inputs.maxResults must be an integer; inputs.query.value is required
-jira.comment.list inputs are invalid: inputs must include issue or url
+jira.comment.list inputs are invalid: inputs.orderBy must be one of: created, -created, +created
 ```
 
 Paths start at `inputs`, with dotted property names and `[n]` array indexes.
@@ -2388,8 +2388,9 @@ property or `<key>`.
 
 When the inputs satisfy the schema, the provider enforced a rule the schema
 does not express, such as a cross-field requirement left to the provider, and
-its own message is returned unchanged. The provider's message also stands in
-these cases:
+its own message is returned unchanged, for example
+`jira.comment.list requires issue or url`. The provider's message also stands
+in these cases:
 
 - Imported actions (MCP, OpenAPI and Swagger imports) and command-backed
   actions keep their adapter's message. Their schemas come from outside the

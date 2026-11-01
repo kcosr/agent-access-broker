@@ -290,6 +290,19 @@ Keep the description and input schema concise; they are part of initial MCP tool
 discovery. Put grammar, limits and examples in `documentation`, which detailed
 discovery, OpenAPI and the send schema carry but MCP tool definitions omit.
 
+For native actions, use a plain object input schema with `properties` and only
+unconditional fields in `required`. Keep types, enums, bounds and sensitivity
+annotations. Express locator alternatives, paired fields and mode-dependent
+requirements in short descriptions on each involved field, and enforce them
+inside the provider. For example, describe `issue` and `url` with "Give exactly
+one of issue or url." and paired `content`/`contentFormat` fields with "Required
+with contentFormat." and "Required with content." Avoid object combinators that
+hide the fields from schema renderers, including on structured nested inputs.
+Keep opaque document objects and extension fields open. Flattening alternatives
+must not apply one variant's restrictions to values another variant accepts.
+These are authoring conventions; descriptor validation continues to accept
+valid schemas using combinators.
+
 Embedded presentation paths use `presentation::BodyPathSegment::Field` for a
 required object field and `Each` for array elements. `OptionalField` skips a
 path only when that property is absent from an object, as with an unrequested
@@ -505,9 +518,9 @@ async fn resolve_scopes(&self, request: ScopeRequest<'_>) -> Result<ScopeResolut
 ```
 
 The host calls `resolve_scopes` for every ordinary action before it authorizes
-the action. The `ScopeRequest` carries the service and action, inputs validated
-against the schema, the host-selected execution context, the minimal caller
-identity, correlation and, only for `LookupRequirement::ScopeResolution`
+the action. The `ScopeRequest` carries the service and action, caller-supplied
+inputs for the provider to validate, the host-selected execution context, the
+minimal caller identity, correlation and, only for `LookupRequirement::ScopeResolution`
 actions with a viable grant path, the host-selected
 [lookup access](#lookup-access) (`lookup_access()`). It carries no admitted
 authority and no execution credential. A provider must not use another lookup
@@ -1809,13 +1822,18 @@ provider's scope resolution, body admission or invocation denies that way,
 the host checks the request's inputs against the action's input schema and,
 when they break it, replaces the message with field-specific problems built
 from the schema, such as
-`notes.note.view inputs are invalid: inputs.note is required`. Keep input
+`notes.note.view inputs are invalid: inputs.note must be a string`. Keep input
 schemas cheap to evaluate: no `$ref`, a few KiB of `const` and `enum` values
 at most, and small `not`, `if` and `contains` subschemas; the shipped
 providers are tested against that profile.
 The provider's message stands when the inputs satisfy the schema, and when
 explaining is outside the host's budget or discovery hides the action from
 the caller, so give each denial a specific message without supplied values.
+Name the involved fields and the required relationship, such as
+`notes.note.view requires note or url` or
+`notes.note.view accepts note or url, not both`. Preserve the error's reason,
+decision, status, result and audit data when improving a message. Do not expose
+configuration that the caller cannot discover.
 Never make the schema stricter than the parser. A schema may leave a rule,
 such as a cross-field requirement, to the parser, which keeps the provider's
 message for it; a stricter schema could explain a problem the parser accepts.

@@ -9,6 +9,21 @@ guidance are in [providers.md](providers.md); CLI-wide behavior is in
 Service name `jira`. Policy scope type `project`, bound to `jira_project` resources. Every action advertises
 credential modes `[service, per_user]`.
 
+## Input arguments
+
+Jira action input schemas are plain objects. Field descriptions state rules
+such as giving exactly one of `issue` or `url`, or supplying `content` and
+`contentFormat` together. These relationships are enforced by the provider;
+passing schema validation alone does not establish that a request is valid.
+Denials for missing or conflicting locators identify the fields without
+including their supplied values.
+
+Issue writes and enabled comment writes accept string content for `markdown`
+and `plain_text`, or an ADF document object for `adf`. The `comment_formats`
+setting controls comment-write availability; it does not restrict issue-write
+formats. Preserve the field names and nesting published by the action, and
+follow its descriptions for locator and content combinations.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker
