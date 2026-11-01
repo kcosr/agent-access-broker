@@ -169,6 +169,7 @@ async fn largest_jira_documentation_survives_both_real_mcp_transports_at_minimum
         .unwrap();
     let mut document: toml::Value =
         toml::from_str(&fake_document(&directory, &first, &second)).unwrap();
+    document["deployment"]["enable_fake_service"] = toml::Value::from(false);
     document["identity"]["sources"][0]["header"] = toml::Value::from("Authorization");
     document["identity"]["sources"][0]["scheme"] = toml::Value::from("Bearer");
     document["providers"] = toml::from_str(
@@ -213,7 +214,8 @@ read_only = true
     )
     .unwrap();
     for resource in document["policy"]["resources"].as_array_mut().unwrap() {
-        resource["resource_type"] = toml::Value::from("jira-project");
+        resource["resource_type"] =
+            toml::Value::from(agent_access_jira::JIRA_PROJECT_RESOURCE.id().as_str());
     }
     document.as_table_mut().unwrap().insert(
         "mcp".into(),
