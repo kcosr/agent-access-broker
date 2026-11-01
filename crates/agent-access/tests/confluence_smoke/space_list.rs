@@ -1,4 +1,5 @@
 //! Production Confluence transport behind the real broker and CLI; only Confluence is synthetic.
+use super::list_mcp;
 use super::*;
 use agent_access_provider::REQUEST_ID_HEADER;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -7,8 +8,6 @@ use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path, query_param},
 };
-#[path = "../common/list_mcp.rs"]
-mod list_mcp;
 
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const ROUTE: &str = "/ex/confluence/11111111-2222-4333-8444-555555555555/wiki/api/v2/spaces";

@@ -61,8 +61,9 @@ on local stdio, `requestFile` may replace it.
 
 Read field descriptions for relationships the schema does not enforce, including
 exactly-one locators, paired content fields and requirements tied to a mode.
-Jira inputs use plain object schemas; a field being optional in the schema does
-not make a request valid when its required alternative or companion is absent.
+Jira and Confluence inputs use plain object schemas. A field being optional in
+the schema does not make a request valid when its required alternative or
+companion is absent; read content-format rules in the field descriptions.
 
 Presentation options such as `responseFormat` and `readContentFormat` belong
 beside `inputs`, only when advertised. Their enum values and allowed combinations

@@ -11,6 +11,7 @@ use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod personal_spaces;
+mod plain_inputs;
 mod space_aliases;
 mod space_keys;
 
