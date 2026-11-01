@@ -10,3 +10,6 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 
 [profile.ci]
 inherits = "default"
+
+[profile.ci.junit]
+path = "junit.xml"
