@@ -49,6 +49,32 @@ fn invalid() -> ProviderError {
 fn invalid_input(message: &'static str) -> ProviderError {
     ProviderError::deny(ReasonCode::InputInvalid, message)
 }
+fn invalid_project_route(action: &str, engine: &str, has_project: bool) -> ProviderError {
+    // Only publish fixed catalog names, never supplied strings or hidden config.
+    let action: &'static str = match action {
+        "search.issues" => "search.issues",
+        "search.merge_requests" => "search.merge_requests",
+        "search.code" => "search.code",
+        "search.commits" => "search.commits",
+        "search.wiki" => "search.wiki",
+        "search.comments" => "search.comments",
+        _ => return invalid_input("GitLab search engine is not enabled for this action"),
+    };
+    let engine: &'static str = match engine {
+        "basic" => "basic",
+        "advanced" => "advanced",
+        "zoekt" => "zoekt",
+        _ => return invalid_input("GitLab search engine is not enabled for this action"),
+    };
+    ProviderError::deny(
+        ReasonCode::InputInvalid,
+        if has_project {
+            format!("GitLab {action} does not accept project with engine {engine}; omit project")
+        } else {
+            format!("GitLab {action} requires project with engine {engine}")
+        },
+    )
+}
 fn protocol() -> ProviderError {
     ProviderError::error(
         ReasonCode::UpstreamProtocolFailed,
@@ -167,17 +193,11 @@ fn parse_inputs(
     if let Some(engine) = engine.as_deref() {
         let category = action.strip_prefix("search.").ok_or_else(invalid)?;
         if !config.supports(engine, category, project.is_some()) {
-            return Err(invalid_input(
-                if config.supports(engine, category, project.is_none()) {
-                    if project.is_some() {
-                        "GitLab search forbids project for the selected engine; omit project"
-                    } else {
-                        "GitLab search requires project for the selected engine"
-                    }
-                } else {
-                    "GitLab search engine is not enabled for this action"
-                },
-            ));
+            return Err(if config.supports(engine, category, project.is_none()) {
+                invalid_project_route(action, engine, project.is_some())
+            } else {
+                invalid_input("GitLab search engine is not enabled for this action")
+            });
         }
     }
     let regex = boolean("regex", "GitLab search regex must be a boolean")?;

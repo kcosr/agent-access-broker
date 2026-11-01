@@ -313,7 +313,7 @@ async fn gitlab_plain_relationships_preserve_provider_denials_and_audit_after_po
         ),
         (
             "merge_request.review.submit",
-            json!({"project": "sip/service", "iid": 5, "internal": false}),
+            json!({"project": "sip/service", "iid": 5, "internal": false, "reviewerState": "reviewed"}),
             "gitlab merge_request.review.submit internal requires content and contentFormat",
         ),
         (
@@ -329,21 +329,47 @@ async fn gitlab_plain_relationships_preserve_provider_denials_and_audit_after_po
     ];
     for (action, inputs, expected) in cases {
         let action_tool = tool(&tools, action);
+        let sensitive = action == "webhook.update" && inputs.get("token").is_some();
+        let arguments = if sensitive {
+            // Sensitive inline fields are rejected by the local adapter before
+            // dispatch. A private input file lets this case reach the provider.
+            let path = broker
+                .directory()
+                .secret_file(
+                    "webhook-conflict-inputs.json",
+                    serde_json::to_vec(&inputs).unwrap(),
+                )
+                .unwrap();
+            json!({"requestFile": path})
+        } else {
+            json!({"inputs": inputs})
+        };
         let called = mcp
             .request(
                 "tools/call",
-                json!({"name": action_tool["name"], "arguments": {"inputs": inputs}}),
+                json!({"name": action_tool["name"], "arguments": arguments}),
             )
             .await;
         assert_eq!(called["result"]["isError"], true, "{called}");
         let envelope = &called["result"]["structuredContent"];
         assert_denial(envelope, expected);
         let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "gitlab", "action": action, "inputs": inputs});
-        let output = cli(&base)
-            .args(["send", "--request-json", &request.to_string()])
-            .output()
-            .unwrap();
+        let mut command = cli(&base);
+        if sensitive {
+            let path = broker
+                .directory()
+                .secret_file(
+                    "webhook-conflict-send.json",
+                    serde_json::to_vec(&request).unwrap(),
+                )
+                .unwrap();
+            command.args(["send", "--request-file"]).arg(path);
+        } else {
+            command.args(["send", "--request-json", &request.to_string()]);
+        }
+        let output = command.output().unwrap();
         assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
         let sent: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_denial(&sent, expected);
         for response in [envelope, &sent] {

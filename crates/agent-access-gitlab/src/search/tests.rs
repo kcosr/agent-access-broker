@@ -227,7 +227,7 @@ fn search_input_denials_name_fields_without_supplied_values() {
         (
             "search.code",
             json!({"search": "PRIVATE_VALUE", "regex": null}),
-            "GitLab search requires project for the selected engine",
+            "GitLab search.code requires project with engine basic",
         ),
         (
             "project.list",
@@ -262,6 +262,39 @@ fn search_input_denials_name_fields_without_supplied_values() {
     ] {
         let error = parse_inputs(action, &input, &config).err().unwrap();
         assert_invalid_search_outcome(&error, message);
+        assert!(!format!("{error:?}").contains("PRIVATE_VALUE"));
+    }
+}
+
+#[test]
+fn search_route_denials_never_echo_unknown_action_or_engine_names() {
+    for (action, engine) in [
+        ("search.PRIVATE_VALUE", "basic"),
+        ("search.code", "PRIVATE_VALUE"),
+        ("search.code", "zoekt PRIVATE_VALUE"),
+    ] {
+        for has_project in [false, true] {
+            let error = invalid_project_route(action, engine, has_project);
+            assert_invalid_search_outcome(
+                &error,
+                "GitLab search engine is not enabled for this action",
+            );
+            assert!(!format!("{error:?}").contains("PRIVATE_VALUE"));
+        }
+    }
+    let config = GitlabSearchConfig::default();
+    for engine in ["advanced", "zoekt", "PRIVATE_VALUE"] {
+        let error = parse_inputs(
+            "search.issues",
+            &json!({"search": "PRIVATE_VALUE", "engine": engine}),
+            &config,
+        )
+        .err()
+        .unwrap();
+        assert_invalid_search_outcome(
+            &error,
+            "GitLab search engine is not enabled for this action",
+        );
         assert!(!format!("{error:?}").contains("PRIVATE_VALUE"));
     }
 }
@@ -1707,6 +1740,17 @@ fn configured_search_routes_publish_plain_fields_and_preserve_acceptance() {
                                 route_allowed && regex_allowed,
                                 "{action_name} {engine} {project_route}/{instance_route}: {input}"
                             );
+                            if !route_allowed && regex.is_none() {
+                                let message = if with_project {
+                                    format!("GitLab {action_name} does not accept project with engine {engine}; omit project")
+                                } else {
+                                    format!("GitLab {action_name} requires project with engine {engine}")
+                                };
+                                assert_invalid_search_outcome(
+                                    result.as_ref().err().unwrap(),
+                                    &message,
+                                );
+                            }
                             if let Ok(inputs) = result {
                                 assert_eq!(inputs.engine.as_deref(), Some(engine));
                                 assert_eq!(
@@ -1792,27 +1836,27 @@ fn mixed_search_routes_describe_each_engine_and_do_not_fall_back() {
                     None,
                     false,
                     default_engine == "advanced",
-                    "GitLab search requires project for the selected engine",
+                    format!("GitLab {action_name} requires project with engine basic"),
                 ),
                 (
                     None,
                     true,
                     default_engine == "basic",
-                    "GitLab search forbids project for the selected engine; omit project",
+                    format!("GitLab {action_name} does not accept project with engine advanced; omit project"),
                 ),
                 (
                     Some("basic"),
                     false,
                     false,
-                    "GitLab search requires project for the selected engine",
+                    format!("GitLab {action_name} requires project with engine basic"),
                 ),
-                (Some("basic"), true, true, ""),
-                (Some("advanced"), false, true, ""),
+                (Some("basic"), true, true, String::new()),
+                (Some("advanced"), false, true, String::new()),
                 (
                     Some("advanced"),
                     true,
                     false,
-                    "GitLab search forbids project for the selected engine; omit project",
+                    format!("GitLab {action_name} does not accept project with engine advanced; omit project"),
                 ),
             ] {
                 let mut input = json!({"search": "needle"});
@@ -1829,7 +1873,7 @@ fn mixed_search_routes_describe_each_engine_and_do_not_fall_back() {
                     "{action_name} {default_engine}: {input}"
                 );
                 if let Err(error) = result {
-                    assert_invalid_search_outcome(&error, message);
+                    assert_invalid_search_outcome(&error, &message);
                 }
             }
         }
@@ -2021,7 +2065,7 @@ async fn zoekt_sends_explicit_regex_choice_and_never_tries_basic() {
                 .unwrap_err();
             assert_invalid_search_outcome(
                 &error,
-                "GitLab search requires project for the selected engine",
+                "GitLab search.code requires project with engine basic",
             );
             assert!(server.received_requests().await.unwrap().is_empty());
         }

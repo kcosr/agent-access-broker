@@ -160,6 +160,16 @@ async fn gitlab_plain_inputs_project_through_stdio_http_send_and_openapi() {
             &content["application/json"]["schema"]["properties"]["inputs"]
         };
         assert_eq!(openapi_inputs, schema, "OpenAPI {}", action.action);
+        let mut send_inputs = local_schema.clone();
+        if matches!(action.io, ActionIo::MultipartUpload { .. })
+            && send_inputs["required"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        {
+            // JSON send removes an empty required list after generated upload
+            // metadata is stripped; stdio keeps the empty list.
+            send_inputs.as_object_mut().unwrap().remove("required");
+        }
         for pointer in &action.sensitive_input_pointers {
             let field = pointer.strip_prefix("/inputs/").unwrap();
             assert!(
@@ -172,16 +182,6 @@ async fn gitlab_plain_inputs_project_through_stdio_http_send_and_openapi() {
             {
                 required.retain(|v| v != field);
             }
-        }
-        let mut send_inputs = local_schema.clone();
-        if matches!(action.io, ActionIo::MultipartUpload { .. })
-            && send_inputs["required"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
-        {
-            // JSON send removes an empty required list after generated upload
-            // metadata is stripped; stdio keeps the empty list.
-            send_inputs.as_object_mut().unwrap().remove("required");
         }
         assert_eq!(
             &send_variant["properties"]["inputs"], &send_inputs,
@@ -196,7 +196,7 @@ async fn gitlab_plain_inputs_project_through_stdio_http_send_and_openapi() {
                 action.action
             );
         }
-        let has_required_inputs = local_schema["required"]
+        let has_required_inputs = send_inputs["required"]
             .as_array()
             .is_some_and(|fields| !fields.is_empty());
         assert_eq!(
@@ -405,11 +405,11 @@ async fn gitlab_search_route_and_regex_relationships_still_fail_before_upstream(
     for (index, (inputs, expected)) in [
         (
             json!({"search": "handler"}),
-            "GitLab search requires project for the selected engine",
+            "GitLab search.code requires project with engine basic",
         ),
         (
             json!({"search": "handler", "engine": "zoekt", "project": "acme/portal"}),
-            "GitLab search forbids project for the selected engine; omit project",
+            "GitLab search.code does not accept project with engine zoekt; omit project",
         ),
         (
             json!({"search": "handler", "project": "acme/portal", "regex": false}),
