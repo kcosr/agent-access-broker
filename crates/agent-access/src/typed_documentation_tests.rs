@@ -75,9 +75,15 @@ fn published_typed_commands_match_clap_paths_and_usage() {
             let mapping = documentation["typedCommand"]
                 .as_str()
                 .unwrap_or_else(|| panic!("{identity}: missing typedCommand"));
+            let wrapper_marker = "Typed CLI wrapper: ";
+            assert_eq!(
+                mapping.matches(wrapper_marker).count(),
+                1,
+                "{identity}: expected exactly one typed wrapper: {mapping}"
+            );
             let (usage, help) = mapping
-                .strip_prefix("Typed CLI wrapper: ")
-                .and_then(|mapping| mapping.split_once("; run "))
+                .split_once(wrapper_marker)
+                .and_then(|(_, mapping)| mapping.split_once("; run "))
                 .unwrap_or_else(|| panic!("{identity}: missing usage or help command: {mapping}"));
             let help_path = help
                 .strip_suffix(" --help for flags and input alternatives.")
