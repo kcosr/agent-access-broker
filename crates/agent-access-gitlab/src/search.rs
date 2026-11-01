@@ -280,7 +280,7 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
     discovery["properties"]["archived"] = json!({"type":"boolean"});
     let mut actions = vec![common(
         "project.search",
-        "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are absent from resource_access_describe registeredResources.items",
+        "Discover or browse authorized GitLab projects live, including projects covered by namespace grants that are absent from resource-access discovery registeredResources.items",
         discovery,
         json!({"query":"Omit search to browse. A supplied query must contain 1–512 UTF-8 bytes after trimming; GitLab matches name, path, description and optionally ancestor namespaces. * has no special Broker meaning. Current upstream projects, including new namespace descendants, supply the inventory.","ordering":"Ascending project ID with keyset pagination; no snapshot isolation.","pagination":pagination,"previews":"Descriptions are capped at 4096 UTF-8 bytes with previewTruncated. Locators are optional and checked against current identity."}),
     )

@@ -14,7 +14,11 @@ fn configurations() -> Vec<ConfluenceProviderConfig> {
     let mut bounded = all.clone();
     bounded.listing.max_results = 1;
     bounded.search.max_results = 1;
-    vec![default, disabled, text, object, all, bounded]
+    let mut other_tenant = all.clone();
+    other_tenant.tenant_host = "other.atlassian.net".into();
+    other_tenant.allowed_upstream_hosts =
+        vec!["https://other.atlassian.net/wiki/rest/api/**".into()];
+    vec![default, disabled, text, object, all, bounded, other_tenant]
 }
 
 fn provider(config: ConfluenceProviderConfig) -> ConfluenceProvider {
@@ -30,6 +34,23 @@ fn provider(config: ConfluenceProviderConfig) -> ConfluenceProvider {
             },
         }),
     )
+}
+
+fn contains_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text
+            .strip_prefix('<')
+            .and_then(|text| text.strip_suffix('>'))
+            .is_some_and(|text| {
+                !text.is_empty()
+                    && text
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            }),
+        Value::Array(values) => values.iter().any(contains_placeholder),
+        Value::Object(fields) => fields.values().any(contains_placeholder),
+        _ => false,
+    }
 }
 
 fn parse_example(
@@ -203,10 +224,17 @@ fn documentation_examples_and_signed_templates_pass_real_parsers_and_content_pre
                 for example in documentation[key].as_array().into_iter().flatten() {
                     assert!(!example["label"].as_str().unwrap().is_empty());
                     let mut inputs = example["inputs"].clone();
-                    if inputs.get("draftHandle").is_some() {
-                        handles += 1;
+                    if key == "inputTemplates" {
+                        if inputs.get("draftHandle").is_some() {
+                            handles += 1;
+                        }
+                        substitute_draft_handle(&action.action, &mut inputs, &config);
                     }
-                    substitute_draft_handle(&action.action, &mut inputs, &config);
+                    assert!(
+                        !contains_placeholder(&inputs),
+                        "{} {key} contains an unsubstituted placeholder",
+                        action.action
+                    );
                     parse_example(&action.action, &inputs, &config)
                         .unwrap_or_else(|error| panic!("{} {key}: {error:?}", action.action));
                     prepare_content(&provider, &action.action, &inputs).unwrap_or_else(|error| {

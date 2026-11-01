@@ -57,6 +57,7 @@ agent-access-jira = { path = "../agent-access-jira" }
 agent-access-teams = { path = "../agent-access-teams" }
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 filetime.workspace = true
+rmcp.workspace = true
 rusqlite = { workspace = true, features = ["backup", "trace"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

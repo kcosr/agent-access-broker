@@ -1578,6 +1578,9 @@ mod tests {
 
     #[tokio::test]
     async fn small_selected_view_still_obeys_whole_catalog_decode_limit() {
+        // Keep the native-documentation matrix's whole-response bound aligned
+        // with the actual CLI reader, independently of MCP projection limits.
+        assert_eq!(MAX_JSON_BYTES, 16 * 1024 * 1024);
         let server = MockServer::start().await;
         let mut value = catalog(action());
         let mut unrelated = value.services[0].clone();

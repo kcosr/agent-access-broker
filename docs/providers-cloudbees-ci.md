@@ -106,6 +106,13 @@ read options enforced by the provider. Read these descriptions together with the
 field types, bounds, and unconditional requirements: a schema-valid object can
 still have an invalid combination of inputs.
 
+Action documentation separates `inputExamples` from URL `inputTemplates`.
+Examples use synthetic controller aliases, jobs and build numbers; choose real
+targets from resource-access discovery or authorized job/build results. URL
+templates also require replacing the sample controller root with its configured
+`base_url` or `web_base_url`, including the complete context path, and choosing
+the intended Jenkins job/build path. A sample URL is not a configured controller.
+
 For example, `build.log.read` requires `query` when `mode` is `search`, and accepts
 `query` and `maxMatches` only in that mode. A `cursor` requires `head` or `search`
 and a numeric build; it cannot be combined with `buildSelector` or a permalink

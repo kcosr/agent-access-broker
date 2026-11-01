@@ -27,10 +27,12 @@ follow its descriptions for locator and content combinations.
 Each action's detailed `documentation` contains its workflow, scope, result
 guidance and canonical input examples. New `inputExamples` entries pair a
 `label` with an `inputs` object; existing grammar and project `examples` remain
-direct input objects. `uploadLocators` show the target inputs to combine with
+direct input objects. `typedCommand` gives the typed CLI usage template and its
+exact `--help` command. `uploadLocators` show the target inputs to combine with
 the calling interface's multipart file support. Examples reflect advertised
-content formats and page-size bounds. Read this detail through action discovery
-before constructing a request; synthetic IDs do not imply access or existence.
+content formats, page-size bounds and the configured tenant in URL locators.
+Read this detail through action discovery before constructing a request;
+synthetic IDs do not imply access or existence.
 
 ## Operator setup
 

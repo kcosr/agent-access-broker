@@ -13,7 +13,7 @@ fn guidance() -> &'static Map<String, Value> {
     })
 }
 
-pub(super) fn with_guidance(mut action: ActionDescriptor) -> ActionDescriptor {
+pub(super) fn with_guidance(mut action: ActionDescriptor, tenant_host: &str) -> ActionDescriptor {
     let additions = guidance()
         .get(&action.action)
         .and_then(Value::as_object)
@@ -25,7 +25,9 @@ pub(super) fn with_guidance(mut action: ActionDescriptor) -> ActionDescriptor {
                 .as_array()
                 .expect("documentation example array")
                 .iter()
-                .filter_map(|example| configured_example(example, &action.input_schema))
+                .filter_map(|example| {
+                    configured_example(example, &action.input_schema, tenant_host)
+                })
                 .collect::<Vec<_>>();
             if examples.is_empty() {
                 continue;
@@ -53,7 +55,7 @@ pub(super) fn with_guidance(mut action: ActionDescriptor) -> ActionDescriptor {
     action
 }
 
-fn configured_example(example: &Value, schema: &Value) -> Option<Value> {
+fn configured_example(example: &Value, schema: &Value, tenant_host: &str) -> Option<Value> {
     let inputs = example.get("inputs").expect("canonical example inputs");
     if let Some(format) = inputs.get("contentFormat") {
         let formats = schema
@@ -64,6 +66,12 @@ fn configured_example(example: &Value, schema: &Value) -> Option<Value> {
         }
     }
     let mut example = example.clone();
+    if let Some(value) = inputs.get("url").and_then(Value::as_str) {
+        let mut url = url::Url::parse(value).expect("valid bundled example URL");
+        url.set_host(Some(tenant_host))
+            .expect("valid configured tenant host");
+        example["inputs"]["url"] = Value::String(url.to_string());
+    }
     if let (Some(requested), Some(maximum)) = (
         inputs.get("maxResults").and_then(Value::as_u64),
         schema

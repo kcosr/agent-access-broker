@@ -978,7 +978,7 @@ pub(crate) fn cql_input_invalid(message: impl Into<String>) -> ProviderError {
     ProviderError::deny(
         ReasonCode::InputInvalid,
         format!(
-            "{}; call actions_describe for service confluence and action search or blog.search for supported CQL",
+            "{}; request action details for service confluence and action search or blog.search for supported CQL",
             message.into()
         ),
     )

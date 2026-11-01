@@ -143,6 +143,9 @@ mod tests {
     use super::*;
     #[test]
     fn counts_escaped_text_and_structured_copy() {
+        // The core native-documentation matrix includes this framing allowance
+        // when testing every action at the minimum HTTP response setting.
+        assert_eq!(WIRE_RESERVE, 8192);
         let value = json!({"documentation":{"inputExamples":[{
             "label":"DOC_SENTINEL", "inputs":{"body":"\\\"".repeat(2000), "lines":"one\ntwo"}
         }]}});

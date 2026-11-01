@@ -37,9 +37,9 @@ agent-access spec catalog
 ```
 
 `SERVICE` and `ACTION` stand for canonical IDs, not display or MCP tool names.
-Read the selected provider/subcommand's `--help` for exact flags and the action
-documentation for its wrapper mapping. Typed commands do not exist for every
-imported or native action; use canonical `invoke` or schema-guided `send` when needed.
+Action detail's `documentation.typedCommand` gives the typed command template.
+Read that command's `--help` for exact flags and alternatives. Use canonical
+`invoke` or schema-guided `send` for actions without a typed wrapper.
 
 Compact service/action lists contain sorted name arrays and omit schemas;
 empty arrays are valid. Detail and the caller-filtered `agent-access.catalog.v2`

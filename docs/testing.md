@@ -111,9 +111,13 @@ Confluence's separate shape and content-preparation stages, GitLab's
 configuration-dependent search routes, and CloudBees' categorized input errors.
 `native_documentation_preserves_every_spec_and_tool_projection` reuses the same
 configuration enumerator to compare provider documentation with capabilities,
-catalog, OpenAPI and JSON-send projections. It checks service/catalog byte
-bounds and both MCP modes/views, including that documentation growth leaves
-initial tool definitions unchanged. These are descriptor and projection tests;
+catalog, OpenAPI and JSON-send projections. It checks the fixed 16 MiB
+service/catalog read bound separately from the 64 MiB tool-projection budget,
+and both MCP modes/views, including that documentation growth leaves
+initial tool definitions unchanged. For every action/configuration it serializes
+the actual SDK action-detail result, including `mcpTool`, structured content and
+the escaped text copy, and requires it plus HTTP's framing reserve to fit the
+minimum 64 KiB response setting. These are descriptor and projection tests;
 they do not establish live provider access or runtime credential availability.
 Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message

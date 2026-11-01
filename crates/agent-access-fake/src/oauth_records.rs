@@ -183,6 +183,9 @@ fn action_documentation(action: &str) -> Value {
     });
     match action {
         "account.view" => {
+            documentation["typedCommand"] = json!(
+                "Typed CLI wrapper: agent-access oauth-stub account [OPTIONS]; run agent-access oauth-stub account --help for flags and input alternatives."
+            );
             documentation["account"] = json!(
                 "Reads the connected test account identity with empty inputs. It requires its own account.view action grant and has no collection selector; collection access alone does not grant this read."
             );
@@ -194,12 +197,18 @@ fn action_documentation(action: &str) -> Value {
                 "Pass the collection's canonical name, not its Broker policy resource ID. Both list and view require collection: 1–64 lowercase ASCII letters, digits, underscores or hyphens. Authorization uses oauth_collection resources and groups; it is checked for every read and does not follow from possessing a record ID."
             );
             if action == "record.list" {
+                documentation["typedCommand"] = json!(
+                    "Typed CLI wrapper: agent-access oauth-stub record list [OPTIONS] --collection <COLLECTION>; run agent-access oauth-stub record list --help for flags and input alternatives."
+                );
                 documentation["listing"] = json!(
                     "Reads one bounded collection response from the connected test account. The only input is collection; use a returned record ID with separately granted record.view and the same collection."
                 );
                 documentation["inputExamples"] =
                     json!([{"label":"List test records","inputs":{"collection":"alpha"}}]);
             } else {
+                documentation["typedCommand"] = json!(
+                    "Typed CLI wrapper: agent-access oauth-stub record view [OPTIONS] --collection <COLLECTION> <ID>; run agent-access oauth-stub record view --help for flags and input alternatives."
+                );
                 documentation["record"] = json!(
                     "Requires collection and id. The record ID is 1–128 ASCII letters, digits, underscores or hyphens. The upstream request includes the authorized collection as well as the ID, so an ID cannot bypass collection policy."
                 );

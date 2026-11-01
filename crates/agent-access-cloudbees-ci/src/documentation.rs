@@ -108,11 +108,71 @@ mod tests {
         let logs = DETAILS["build.log.read"]["inputExamples"]
             .as_array()
             .unwrap();
-        for locator in [
-            json!({"controller":"team-ci","job":"payments/build-api","buildSelector":"lastFailedBuild","mode":"search","query":"ERROR"}),
-            json!({"url":"https://ci.example.com/team-ci/job/payments/job/build-api/","buildSelector":"lastFailedBuild","mode":"search","query":"ERROR"}),
+        assert!(logs.iter().any(|example| example["inputs"] == json!({"controller":"team-ci","job":"payments/build-api","buildSelector":"lastFailedBuild","mode":"search","query":"ERROR"})));
+        assert!(
+            logs.iter()
+                .all(|example| example["inputs"].get("url").is_none())
+        );
+        let templates = DETAILS["build.log.read"]["inputTemplates"]
+            .as_array()
+            .unwrap();
+        assert!(templates.iter().any(|template| template["inputs"] == json!({"url":"https://ci.example.com/team-ci/job/payments/job/build-api/","buildSelector":"lastFailedBuild","mode":"search","query":"ERROR"})));
+    }
+
+    #[test]
+    fn documented_url_templates_require_configured_controller_roots() {
+        for (base, web) in [
+            ("https://internal-ci.example.test/jenkins/", None),
+            (
+                "https://api-ci.example.test:8443/controller/",
+                Some("https://portal-ci.example.test/context/root/"),
+            ),
+            ("https://ci.example.test/", Some("https://ci.example.test/")),
         ] {
-            assert!(logs.iter().any(|example| example["inputs"] == locator));
+            let mut config = config(50);
+            let controller = config.controllers.get_mut("team-ci").unwrap();
+            controller.base_url = base.into();
+            controller.web_base_url = web.map(str::to_owned);
+            config.allowed_upstream_hosts = std::iter::once(base)
+                .chain(web)
+                .map(|root| format!("{root}**"))
+                .collect();
+            let service = cloudbees_ci_descriptor(&config);
+            let provider =
+                CloudbeesCiProvider::for_tests(config, ProviderLimits::default()).unwrap();
+            for name in ["build.log.read", "build.view"] {
+                let action = service.action(name).unwrap();
+                let documentation = action.documentation.as_ref().unwrap();
+                let schema = jsonschema::validator_for(&action.input_schema).unwrap();
+                for template in documentation["inputTemplates"].as_array().unwrap() {
+                    assert!(!template["label"].as_str().unwrap().is_empty());
+                    assert!(!template["instructions"].as_str().unwrap().is_empty());
+                    let raw = &template["inputs"];
+                    let error = provider.parse(name, raw).unwrap_err();
+                    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+                    assert_eq!(
+                        error.result.as_deref().unwrap()["inputCategory"],
+                        "url_not_configured"
+                    );
+                    for root in std::iter::once(base).chain(web) {
+                        let mut inputs = raw.clone();
+                        inputs["url"] = json!(raw["url"].as_str().unwrap().replacen(
+                            "https://ci.example.com/team-ci/",
+                            root,
+                            1
+                        ));
+                        assert!(schema.is_valid(&inputs), "{name}: {inputs}");
+                        let parsed = provider.parse(name, &inputs).unwrap();
+                        assert_eq!(parsed.controller, "team-ci");
+                        assert_eq!(parsed.job, "payments/build-api");
+                        if name == "build.view" {
+                            assert_eq!(parsed.build_number, Some(42));
+                        } else {
+                            assert_eq!(parsed.build_selector, Some("lastFailedBuild"));
+                        }
+                    }
+                }
+            }
         }
     }
 }

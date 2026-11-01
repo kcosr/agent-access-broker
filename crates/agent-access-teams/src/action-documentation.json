@@ -57,6 +57,7 @@
         }
       }
     ],
-    "validation": "Only type and @type have fixed values in the content schema: message and MessageCard. A denial may explain those constants before a format or conflict rule. With simple, omit both keys. With microsoft, keep the chosen discriminator and omit the competing key, including a null key; changing its value does not resolve the conflict."
+    "validation": "Only type and @type have fixed values in the content schema: message and MessageCard. A denial may explain those constants before a format or conflict rule. With simple, omit both keys. With microsoft, keep the chosen discriminator and omit the competing key, including a null key; changing its value does not resolve the conflict.",
+    "typedCommand": "Typed CLI wrapper: agent-access teams notification send [OPTIONS] <DESTINATION>; run agent-access teams notification send --help for flags and input alternatives."
   }
 }

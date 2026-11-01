@@ -9,7 +9,8 @@
           "pageId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page attach [OPTIONS] <PAGE_ID> <FILES>...; run agent-access confluence page attach --help for flags and input alternatives."
   },
   "attachment.download": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -22,7 +23,8 @@
           "attachmentId": "att123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page attachment download [OPTIONS] --attachment-id <ATTACHMENT_ID> <PAGE_ID>; run agent-access confluence page attachment download --help for flags and input alternatives."
   },
   "attachment.list": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -35,7 +37,8 @@
         }
       }
     ],
-    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page attachment list [OPTIONS] [PAGE_ID]; run agent-access confluence page attachment list --help for flags and input alternatives."
   },
   "blog.attachment.add": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -47,7 +50,8 @@
           "blogId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attach [OPTIONS] <BLOG_ID> <FILES>...; run agent-access confluence blog attach --help for flags and input alternatives."
   },
   "blog.attachment.download": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -60,7 +64,8 @@
           "attachmentId": "att123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attachment download [OPTIONS] --attachment-id <ATTACHMENT_ID> <BLOG_ID>; run agent-access confluence blog attachment download --help for flags and input alternatives."
   },
   "blog.attachment.list": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -73,7 +78,8 @@
         }
       }
     ],
-    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attachment list [OPTIONS] [BLOG_ID]; run agent-access confluence blog attachment list --help for flags and input alternatives."
   },
   "blog.create": {
     "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -89,25 +95,27 @@
           "content": "Follow the approved checklist."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence blog create --help for flags and input alternatives."
   },
   "blog.draft.attachment.add": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use the multipart upload contract; local file descriptors generate attachment metadata.",
     "uploadLocators": [
       {
-        "label": "Target for multipart upload",
+        "label": "Use a returned draft handle for multipart upload",
         "inputs": {
           "blogId": "123456789",
           "draftHandle": "<draftHandle>"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attach [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID> <FILES>...; run agent-access confluence blog draft attach --help for flags and input alternatives."
   },
   "blog.draft.attachment.download": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use a returned attachmentId; the provider proves attachment membership before releasing bounded raw bytes.",
     "inputTemplates": [
       {
@@ -118,11 +126,12 @@
           "attachmentId": "att123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attachment download [OPTIONS] --draft-handle <DRAFT_HANDLE> --attachment-id <ATTACHMENT_ID> <BLOG_ID>; run agent-access confluence blog draft attachment download --help for flags and input alternatives."
   },
   "blog.draft.attachment.list": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Listing is body-free. Use a returned attachmentId with blog.draft.attachment.download.",
     "inputTemplates": [
       {
@@ -133,7 +142,8 @@
         }
       }
     ],
-    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attachment list [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft attachment list --help for flags and input alternatives."
   },
   "blog.draft.create": {
     "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -150,12 +160,13 @@
         }
       }
     ],
-    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
-    "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions."
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence blog draft create --help for flags and input alternatives."
   },
   "blog.draft.discard": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Discard is supported for new drafts only; staged draft discard fails closed. Readback verifies the draft is gone and current content was not created.",
     "inputTemplates": [
       {
@@ -165,11 +176,12 @@
           "draftHandle": "<draftHandle>"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft discard [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft discard --help for flags and input alternatives."
   },
   "blog.draft.publish": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the native representation; it is not a readContentFormat request.",
     "inputTemplates": [
       {
@@ -180,12 +192,13 @@
           "bodyFormat": "storage"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft publish [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <BLOG_ID>; run agent-access confluence blog draft publish --help for flags and input alternatives."
   },
   "blog.draft.stage": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Stages replacement content against an existing current item after checking baseVersion and the absence of a visible draft. A staged draft cannot use discard or draft attachment actions; those paths fail closed.",
     "inputExamples": [
       {
@@ -197,12 +210,13 @@
           "content": "Proposed update."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft stage [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog draft stage --help for flags and input alternatives."
   },
   "blog.draft.update": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Replaces draft content and optionally its title while retaining draft version 1; it does not publish the draft.",
     "inputTemplates": [
       {
@@ -214,11 +228,12 @@
           "content": "Updated draft."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft update [OPTIONS] --draft-handle <DRAFT_HANDLE> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog draft update --help for flags and input alternatives."
   },
   "blog.draft.verify": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch; whole-result Markdown preserves that outcome.",
     "inputTemplates": [
       {
@@ -229,12 +244,13 @@
           "expectTitle": "Draft Runbook"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft verify [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft verify --help for flags and input alternatives."
   },
   "blog.draft.view": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
     "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "bodyFormat selects the provider-native representation and is distinct from readContentFormat. Native body is retained; renderedBody is beside root body. Formatting uses the returned body without another request.",
     "inputTemplates": [
       {
@@ -245,7 +261,8 @@
           "bodyFormat": "storage"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft view [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <BLOG_ID>; run agent-access confluence blog draft view --help for flags and input alternatives."
   },
   "blog.footer_comment.add": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -260,10 +277,12 @@
           "content": "Review completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment add [OPTIONS] --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog footer-comment add --help for flags and input alternatives."
   },
   "blog.footer_comment.delete": {
-    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment delete --help for flags and input alternatives."
   },
   "blog.footer_comment.list": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -276,7 +295,8 @@
           "blogId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment list [OPTIONS] <BLOG_ID>; run agent-access confluence blog footer-comment list --help for flags and input alternatives."
   },
   "blog.footer_comment.reply.add": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -291,7 +311,8 @@
           "content": "Review completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog footer-comment reply --help for flags and input alternatives."
   },
   "blog.footer_comment.reply.list": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -304,7 +325,8 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment replies --help for flags and input alternatives."
   },
   "blog.footer_comment.update": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -321,7 +343,8 @@
           "baseVersion": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog footer-comment update --help for flags and input alternatives."
   },
   "blog.footer_comment.view": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -333,10 +356,12 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment view --help for flags and input alternatives."
   },
   "blog.inline_comment.delete": {
-    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment delete --help for flags and input alternatives."
   },
   "blog.inline_comment.list": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -349,7 +374,8 @@
           "blogId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment list [OPTIONS] <BLOG_ID>; run agent-access confluence blog inline-comment list --help for flags and input alternatives."
   },
   "blog.inline_comment.reply.add": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -364,7 +390,8 @@
           "content": "Review completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog inline-comment reply --help for flags and input alternatives."
   },
   "blog.inline_comment.reply.list": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -377,7 +404,8 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment replies --help for flags and input alternatives."
   },
   "blog.inline_comment.update": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -394,7 +422,8 @@
           "baseVersion": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog inline-comment update --help for flags and input alternatives."
   },
   "blog.inline_comment.view": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -406,7 +435,8 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment view --help for flags and input alternatives."
   },
   "blog.search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; a grant change that changes the composed query rejects continuation. On a rejected continuation, repeat the search without the token. The token also binds execution context, principal, credential mode/method and the service route.",
@@ -438,7 +468,8 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog search [OPTIONS]; run agent-access confluence blog search --help for flags and input alternatives."
   },
   "blog.update": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -454,7 +485,8 @@
           "content": "## Updated content\n\nWork completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog update --help for flags and input alternatives."
   },
   "blog.verify": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -467,7 +499,8 @@
           "expectVersion": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog verify [OPTIONS] <BLOG_ID>; run agent-access confluence blog verify --help for flags and input alternatives."
   },
   "blog.view": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -480,7 +513,8 @@
         }
       }
     ],
-    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them."
+    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog view [OPTIONS] [BLOG_ID]; run agent-access confluence blog view --help for flags and input alternatives."
   },
   "page.create": {
     "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -498,25 +532,27 @@
           "parentPageId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence page create --help for flags and input alternatives."
   },
   "page.draft.attachment.add": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use the multipart upload contract; local file descriptors generate attachment metadata.",
     "uploadLocators": [
       {
-        "label": "Target for multipart upload",
+        "label": "Use a returned draft handle for multipart upload",
         "inputs": {
           "pageId": "123456789",
           "draftHandle": "<draftHandle>"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attach [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID> <FILES>...; run agent-access confluence page draft attach --help for flags and input alternatives."
   },
   "page.draft.attachment.download": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use a returned attachmentId; the provider proves attachment membership before releasing bounded raw bytes.",
     "inputTemplates": [
       {
@@ -527,11 +563,12 @@
           "attachmentId": "att123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attachment download [OPTIONS] --draft-handle <DRAFT_HANDLE> --attachment-id <ATTACHMENT_ID> <PAGE_ID>; run agent-access confluence page draft attachment download --help for flags and input alternatives."
   },
   "page.draft.attachment.list": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Listing is body-free. Use a returned attachmentId with page.draft.attachment.download.",
     "inputTemplates": [
       {
@@ -542,7 +579,8 @@
         }
       }
     ],
-    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attachment list [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft attachment list --help for flags and input alternatives."
   },
   "page.draft.create": {
     "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -560,12 +598,13 @@
         }
       }
     ],
-    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
-    "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions."
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence page draft create --help for flags and input alternatives."
   },
   "page.draft.discard": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Discard is supported for new drafts only; staged draft discard fails closed. Readback verifies the draft is gone and current content was not created.",
     "inputTemplates": [
       {
@@ -575,11 +614,12 @@
           "draftHandle": "<draftHandle>"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft discard [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft discard --help for flags and input alternatives."
   },
   "page.draft.publish": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the native representation; it is not a readContentFormat request.",
     "inputTemplates": [
       {
@@ -590,12 +630,13 @@
           "bodyFormat": "storage"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft publish [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <PAGE_ID>; run agent-access confluence page draft publish --help for flags and input alternatives."
   },
   "page.draft.stage": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. Page drafts have a storage target independent of current-page format configuration. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Stages replacement content against an existing current item after checking baseVersion and the absence of a visible draft. A staged draft cannot use discard or draft attachment actions; those paths fail closed.",
     "inputExamples": [
       {
@@ -607,12 +648,13 @@
           "content": "Proposed update."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft stage [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page draft stage --help for flags and input alternatives."
   },
   "page.draft.update": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. Page drafts have a storage target independent of current-page format configuration. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "Replaces draft content and optionally its title while retaining draft version 1; it does not publish the draft.",
     "inputTemplates": [
       {
@@ -624,11 +666,12 @@
           "content": "Updated draft."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft update [OPTIONS] --draft-handle <DRAFT_HANDLE> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page draft update --help for flags and input alternatives."
   },
   "page.draft.verify": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch; whole-result Markdown preserves that outcome.",
     "inputTemplates": [
       {
@@ -639,12 +682,13 @@
           "expectTitle": "Draft Runbook"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft verify [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft verify --help for flags and input alternatives."
   },
   "page.draft.view": {
     "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
     "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
-    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
     "draftOperation": "bodyFormat selects the provider-native representation and is distinct from readContentFormat. Native body is retained; renderedBody is beside root body. Formatting uses the returned body without another request.",
     "inputTemplates": [
       {
@@ -655,7 +699,8 @@
           "bodyFormat": "storage"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft view [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <PAGE_ID>; run agent-access confluence page draft view --help for flags and input alternatives."
   },
   "page.footer_comment.add": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -670,10 +715,12 @@
           "content": "Review completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment add [OPTIONS] --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page footer-comment add --help for flags and input alternatives."
   },
   "page.footer_comment.delete": {
-    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment delete --help for flags and input alternatives."
   },
   "page.footer_comment.list": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -686,7 +733,8 @@
           "pageId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment list [OPTIONS] <PAGE_ID>; run agent-access confluence page footer-comment list --help for flags and input alternatives."
   },
   "page.footer_comment.reply.add": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -701,7 +749,8 @@
           "content": "Review completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page footer-comment reply --help for flags and input alternatives."
   },
   "page.footer_comment.reply.list": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -714,7 +763,8 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment replies --help for flags and input alternatives."
   },
   "page.footer_comment.update": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -731,7 +781,8 @@
           "baseVersion": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page footer-comment update --help for flags and input alternatives."
   },
   "page.footer_comment.view": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -743,10 +794,12 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment view --help for flags and input alternatives."
   },
   "page.inline_comment.delete": {
-    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment delete --help for flags and input alternatives."
   },
   "page.inline_comment.list": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -759,7 +812,8 @@
           "pageId": "123456789"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment list [OPTIONS] <PAGE_ID>; run agent-access confluence page inline-comment list --help for flags and input alternatives."
   },
   "page.inline_comment.reply.add": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -774,7 +828,8 @@
           "content": "Review completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page inline-comment reply --help for flags and input alternatives."
   },
   "page.inline_comment.reply.list": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -787,7 +842,8 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment replies --help for flags and input alternatives."
   },
   "page.inline_comment.update": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -804,7 +860,8 @@
           "baseVersion": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page inline-comment update --help for flags and input alternatives."
   },
   "page.inline_comment.view": {
     "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -816,7 +873,8 @@
           "commentId": "10042"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment view --help for flags and input alternatives."
   },
   "page.move": {
     "placement": "Give exactly one of pageId/url, position before/after/append, and exactly one of targetPageId/targetUrl. The source and target must be distinct current pages in one authorized space. append makes the target the parent and places the page last; before/after place it beside a sibling target with a page parent. The action verifies effective parent and direct-child ordering by readback. Parent clearing, cross-space moves and non-page targets are unsupported.",
@@ -838,14 +896,15 @@
         }
       },
       {
-        "label": "Move append the target page",
+        "label": "Append as the last child of the target page",
         "inputs": {
           "pageId": "234567890",
           "position": "append",
           "targetPageId": "345678901"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page move [OPTIONS] --position <POSITION> [PAGE_ID]; run agent-access confluence page move --help for flags and input alternatives."
   },
   "page.update": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -861,7 +920,8 @@
           "content": "## Updated content\n\nWork completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page update --help for flags and input alternatives."
   },
   "page.view": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -880,7 +940,8 @@
         }
       }
     ],
-    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them."
+    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page view [OPTIONS] [PAGE_ID]; run agent-access confluence page view --help for flags and input alternatives."
   },
   "search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; a grant change that changes the composed query rejects continuation. On a rejected continuation, repeat the search without the token. The token also binds execution context, principal, credential mode/method and the service route.",
@@ -912,7 +973,8 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page search [OPTIONS]; run agent-access confluence page search --help for flags and input alternatives."
   },
   "space.list": {
     "request": "Omitting maxResults uses the configured maximum advertised by this action (50 in the default configuration, at most 100). Whole-result Markdown is supported. Keep actual space keys, including personal-space tilde and case; a personal-space grant does not imply ownership.",
@@ -923,7 +985,8 @@
           "maxResults": 50
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence space list [OPTIONS]; run agent-access confluence space list --help for flags and input alternatives."
   },
   "verify": {
     "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
@@ -936,6 +999,7 @@
           "expectVersion": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page verify [OPTIONS] <PAGE_ID>; run agent-access confluence page verify --help for flags and input alternatives."
   }
 }

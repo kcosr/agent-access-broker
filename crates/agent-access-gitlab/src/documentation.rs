@@ -14,9 +14,9 @@ pub(super) fn apply(
     mut action: ActionDescriptor,
     config: &GitlabProviderConfig,
 ) -> ActionDescriptor {
-    let Some(additions) = guidance().get(action.action.as_str()) else {
-        return action;
-    };
+    let additions = guidance()
+        .get(action.action.as_str())
+        .expect("documentation for each native GitLab action");
     let mut additions = additions.as_object().unwrap().clone();
     if let Some(examples) = additions.get_mut("inputExamples") {
         for example in examples.as_array_mut().unwrap() {

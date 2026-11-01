@@ -315,12 +315,12 @@ impl CloudbeesCiProvider {
         } else if controller.contains('.') || controller.contains(':') {
             (
                 "controller_not_alias",
-                "controller must be a configured alias, not a host name; use the controller from resource_access_describe registeredResources.items or access coverage inputs, or pass the job url",
+                "controller must be a configured alias, not a host name; use the controller from resource-access discovery registeredResources.items or access coverage inputs, or pass the job url",
             )
         } else {
             (
                 "controller_not_configured",
-                "controller is not a configured CloudBees CI controller alias; use the controller from resource_access_describe registeredResources.items or access coverage inputs, or pass the job url",
+                "controller is not a configured CloudBees CI controller alias; use the controller from resource-access discovery registeredResources.items or access coverage inputs, or pass the job url",
             )
         };
         Err(input_error(category, Some("controller"), message))
@@ -1225,7 +1225,7 @@ mod tests {
                 "build.view",
                 base(json!({"controller":"team"})),
                 ("controller_not_configured", Some("controller")),
-                "resource_access_describe",
+                "resource-access discovery",
             ),
             (
                 "build.view",

@@ -12,7 +12,8 @@
           "artifactPath": "reports/results.zip"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build artifact download [OPTIONS] --artifact-path <ARTIFACT_PATH> [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build artifact download --help for flags and input alternatives."
   },
   "build.artifact.list": {
     "artifacts": "Returns archived artifactPath/fileName entries for this resolved build, up to 1000 artifacts. A larger list fails rather than being silently truncated.",
@@ -26,7 +27,8 @@
           "buildNumber": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build artifact list [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build artifact list --help for flags and input alternatives."
   },
   "build.list": {
     "listing": "Returns recent builds for one job. maxResults is 1–50 and defaults to 20. Use buildSelector lastFailedBuild for the latest failed build instead of inferring it from a truncated recent-build list.",
@@ -40,7 +42,8 @@
           "maxResults": 10
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build list [OPTIONS] [CONTROLLER] [JOB]; run agent-access cloudbees-ci build list --help for flags and input alternatives."
   },
   "build.log.download": {
     "download": "Streams the complete consoleText bytes currently available for one build, subject to the configured download byte limit. It is not an archived artifact and does not follow future output. It does not take artifactPath and is separately authorized from bounded build.log.read.",
@@ -54,7 +57,8 @@
           "buildNumber": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build log-download [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build log-download --help for flags and input alternatives."
   },
   "build.log.read": {
     "modes": "mode is head, tail or search and defaults to tail. Search uses a case-sensitive literal query of 1–256 UTF-8 bytes, not a regular expression. maxMatches is search-only, 1–100, default 20. maxBytes is returned UTF-8 text budget, 1024–65536, default 16384.",
@@ -70,15 +74,6 @@
           "buildNumber": 42,
           "mode": "head",
           "maxBytes": 8192
-        }
-      },
-      {
-        "label": "Search latest failed build",
-        "inputs": {
-          "url": "https://ci.example.com/team-ci/job/payments/job/build-api/",
-          "buildSelector": "lastFailedBuild",
-          "mode": "search",
-          "query": "ERROR"
         }
       },
       {
@@ -99,6 +94,19 @@
           "query": "ERROR"
         }
       }
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build log [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build log --help for flags and input alternatives.",
+    "inputTemplates": [
+      {
+        "label": "Search latest failed build (configured controller URL template)",
+        "inputs": {
+          "url": "https://ci.example.com/team-ci/job/payments/job/build-api/",
+          "buildSelector": "lastFailedBuild",
+          "mode": "search",
+          "query": "ERROR"
+        },
+        "instructions": "Template only: replace https://ci.example.com/team-ci/ with the target controller's configured base_url or web_base_url, including its full context path and trailing slash. Replace the sample Jenkins job segments and any build number with the intended target. The URL must match a configured root by scheme, host, port and context path."
+      }
     ]
   },
   "build.pending-inputs.list": {
@@ -112,7 +120,8 @@
           "buildNumber": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build pending-inputs [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build pending-inputs --help for flags and input alternatives."
   },
   "build.pipeline.node.log.read": {
     "nodeLog": "Requires the Pipeline REST API plugin and a positive decimal nodeId string. Reads bounded step-log JSON with the plugin’s own truncation/completeness indicators; it is not a full-console download. Text above 65536 bytes is refused.",
@@ -127,7 +136,8 @@
           "nodeId": "7"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build pipeline log [OPTIONS] --node-id <NODE_ID> [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build pipeline log --help for flags and input alternatives."
   },
   "build.pipeline.node.view": {
     "node": "Requires the Pipeline REST API plugin and a nodeId from Pipeline results, expressed as a positive decimal string. Reads stage/step details and stageFlowNodes for the same job/build.",
@@ -142,7 +152,8 @@
           "nodeId": "7"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build pipeline node [OPTIONS] --node-id <NODE_ID> [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build pipeline node --help for flags and input alternatives."
   },
   "build.pipeline.view": {
     "pipeline": "Requires the controller’s Pipeline REST API plugin. Reads stages, status and timing for the selected build. Use returned stage/step IDs with separately authorized node reads.",
@@ -156,7 +167,8 @@
           "buildNumber": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build pipeline view [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build pipeline view --help for flags and input alternatives."
   },
   "build.tests.details": {
     "preview": "Returns a bounded detailed preview: FAILED/REGRESSION cases first, then remaining report order. maxResults is 1–100, default 20. report.returnedCount/returnedFailedCount count returned cases/failures, and report.truncated reports omitted cases.",
@@ -172,7 +184,8 @@
           "maxResults": 50
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build tests-details [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build tests-details --help for flags and input alternatives."
   },
   "build.tests.download": {
     "download": "Streams the projected detailed Jenkins test report as JSON, subject to the configured download limit. It is not original JUnit XML or an archive and takes no artifactPath.",
@@ -186,7 +199,8 @@
           "buildNumber": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build tests-download [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build tests-download --help for flags and input alternatives."
   },
   "build.tests.view": {
     "summary": "Reads test counts and duration or reportAvailable false. Fields absent upstream are null, including passCount/duration on aggregate reports; test case names and messages are not included.",
@@ -200,7 +214,8 @@
           "buildNumber": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build tests [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build tests --help for flags and input alternatives."
   },
   "build.trigger": {
     "trigger": "Requests one buildable, non-parameterized job. Build parameters are not supported. This mutation has its own grant; permission to inspect jobs or logs does not authorize a trigger.",
@@ -213,17 +228,12 @@
           "job": "payments/build-api"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build trigger [OPTIONS] [CONTROLLER] [JOB]; run agent-access cloudbees-ci build trigger --help for flags and input alternatives."
   },
   "build.view": {
     "inspection": "Reads the resolved build state and timing with buildNumber. Build parameter values and causes are omitted. A historical build can be read on a disabled job when the controller serves it.",
     "inputExamples": [
-      {
-        "label": "Pasted build link",
-        "inputs": {
-          "url": "https://ci.example.com/team-ci/job/payments/job/build-api/42/"
-        }
-      },
       {
         "label": "Latest failed build",
         "inputs": {
@@ -231,6 +241,16 @@
           "job": "payments/build-api",
           "buildSelector": "lastFailedBuild"
         }
+      }
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci build view [OPTIONS] [CONTROLLER] [JOB] [BUILD_NUMBER]; run agent-access cloudbees-ci build view --help for flags and input alternatives.",
+    "inputTemplates": [
+      {
+        "label": "Pasted build link (configured controller URL template)",
+        "inputs": {
+          "url": "https://ci.example.com/team-ci/job/payments/job/build-api/42/"
+        },
+        "instructions": "Template only: replace https://ci.example.com/team-ci/ with the target controller's configured base_url or web_base_url, including its full context path and trailing slash. Replace the sample Jenkins job segments and any build number with the intended target. The URL must match a configured root by scheme, host, port and context path."
       }
     ]
   },
@@ -246,7 +266,8 @@
           "maxResults": 50
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci job list [OPTIONS] <CONTROLLER>; run agent-access cloudbees-ci job list --help for flags and input alternatives."
   },
   "job.view": {
     "inspection": "Reads job kind, buildability, queue/build pointers and parameter names/types without parameter defaults or child inventory. A folder or multibranch parent may be inspected with its own authority; use separately granted job.list to enumerate children.",
@@ -259,7 +280,8 @@
           "job": "payments/build-api"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci job view [OPTIONS] [CONTROLLER] [JOB]; run agent-access cloudbees-ci job view --help for flags and input alternatives."
   },
   "queue.view": {
     "queue": "Reads a queue item only when its task identifies the authorized job. A missing or mismatched queue item returns scope_unresolved. The queue ID alone is not job authority; retain the job locator alongside it.",
@@ -272,6 +294,7 @@
           "queueId": 51
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access cloudbees-ci queue view [OPTIONS] --queue-id <QUEUE_ID> [CONTROLLER] [JOB]; run agent-access cloudbees-ci queue view --help for flags and input alternatives."
   }
 }

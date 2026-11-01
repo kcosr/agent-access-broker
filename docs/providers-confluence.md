@@ -36,10 +36,13 @@ format matrix.
 Each action's detailed `documentation` contains its workflow, scope and result
 guidance. `inputExamples` entries pair a `label` with canonical `inputs`;
 `inputTemplates` require substituting the exact returned `draftHandle`.
+`typedCommand` gives the typed CLI usage template and its exact `--help` command.
 `uploadLocators` supply target inputs to combine with the calling interface's
-multipart file support. The existing CQL grammar examples remain in `cql`.
-Examples reflect advertised content formats and page-size bounds. Read this
-detail through action discovery before constructing a request; synthetic IDs
+multipart file support; draft upload locators also require replacing
+`<draftHandle>` with the exact returned handle. The existing CQL grammar examples
+remain in `cql`. Examples reflect advertised content formats, page-size bounds
+and the configured tenant in URL locators. Read this detail through action
+discovery before constructing a request; synthetic IDs
 do not imply access or existence.
 
 ## Operator setup

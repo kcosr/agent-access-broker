@@ -453,7 +453,10 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    documentation::with_guidance(action.presentation(presentation))
+                    documentation::with_guidance(
+                        action.presentation(presentation),
+                        &config.tenant_host,
+                    )
                 })
                 .collect(),
         )

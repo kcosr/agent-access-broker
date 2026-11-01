@@ -866,9 +866,13 @@ fn native_schemas() -> Vec<NativeSchemaCase> {
 fn native_documentation_preserves_every_spec_and_tool_projection() {
     use crate::mcp::{McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry};
     use crate::{api_service_spec, empty_catalog, openapi_from_catalog, send_schema_from_catalog};
+    // Separate from the larger pure projection budget: the CLI's JSON reader
+    // bounds the whole response before selecting a service or projecting tools.
+    const STDIO_JSON_READ_BYTES: usize = 16 * 1024 * 1024;
 
     let mut unique = std::collections::BTreeSet::new();
     let mut cases = 0;
+    let mut largest_detail = (0, String::new());
     for (configuration, descriptor) in native_service_descriptors() {
         let capabilities = descriptor.capabilities();
         let service = api_service_spec(&descriptor, true).unwrap();
@@ -877,12 +881,12 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
         let catalog_bytes = serde_json::to_vec(&catalog).unwrap().len();
         let service_bytes = serde_json::to_vec(&capabilities).unwrap().len();
         assert!(
-            catalog_bytes < STDIO_MAX_CATALOG_BYTES,
+            catalog_bytes < STDIO_JSON_READ_BYTES,
             "{configuration}/{} catalog",
             service.service
         );
         assert!(
-            service_bytes < STDIO_MAX_CATALOG_BYTES,
+            service_bytes < STDIO_JSON_READ_BYTES,
             "{configuration}/{} service",
             service.service
         );
@@ -967,9 +971,30 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
                 for action in &service.actions {
                     let detail = registry.action_detail(&service.service, &action.action);
                     assert_eq!(detail.is_some(), crate::mcp::action_eligible(action, mode));
+                    let mut described = serde_json::to_value(action).unwrap();
+                    described.as_object_mut().unwrap().remove("scopedMcpName");
+                    described["service"] = json!(service.service);
                     if let Some(detail) = detail {
                         assert_eq!(detail.as_object().unwrap().len(), 2);
                         assert!(detail.get("documentation").is_none());
+                        described["mcpTool"] = detail;
+                    }
+                    // The host's output::result reserves 8192 bytes for HTTP
+                    // framing. Its exact-boundary test checks that reserve and
+                    // SDK serialization; this matrix guards every native action
+                    // at the minimum supported 64 KiB response setting.
+                    let result = rmcp::model::CallToolResult::structured(described);
+                    let bytes = serde_json::to_vec(&result).unwrap().len() + 8192;
+                    let label = format!(
+                        "{configuration}/{}.{} {mode:?} {view:?}",
+                        service.service, action.action
+                    );
+                    assert!(
+                        bytes <= 65_536,
+                        "{label} action detail needs {bytes} bytes including framing reserve"
+                    );
+                    if bytes > largest_detail.0 {
+                        largest_detail = (bytes, label);
                     }
                 }
                 println!(
@@ -988,6 +1013,10 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
     }
     assert_eq!(cases, native_schemas().len());
     assert_eq!(unique.len(), 227);
+    println!(
+        "largest native MCP action detail including HTTP framing reserve: {} bytes ({})",
+        largest_detail.0, largest_detail.1
+    );
 }
 
 #[test]

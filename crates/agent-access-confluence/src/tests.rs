@@ -10212,7 +10212,9 @@ fn cql_grammar_errors_are_actionable_and_do_not_echo_operands() {
         let error = parse_cql_query(raw).unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert!(error.message.contains(expected), "{}", error.message);
-        assert!(error.message.contains("actions_describe"));
+        assert!(error.message.contains(
+            "request action details for service confluence and action search or blog.search"
+        ));
         assert!(!error.message.contains("sensitive-value"));
         assert!(error.message.len() < 600);
     }

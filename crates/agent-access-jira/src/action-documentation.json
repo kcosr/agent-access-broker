@@ -9,7 +9,8 @@
           "issue": "PROJ-123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue attach [OPTIONS] <ISSUE> <FILES>...; run agent-access jira issue attach --help for flags and input alternatives."
   },
   "attachment.download": {
     "scope": "Authorization is by Jira project. Use the issue key, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -22,7 +23,8 @@
           "attachmentId": "10055"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue attachment download [OPTIONS] <ISSUE> <ATTACHMENT_ID>; run agent-access jira issue attachment download --help for flags and input alternatives."
   },
   "attachment.list": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -35,7 +37,8 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests."
+    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue attachment list [OPTIONS] [ISSUE]; run agent-access jira issue attachment list --help for flags and input alternatives."
   },
   "comment.add": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -51,10 +54,12 @@
           "content": "Work completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment add [OPTIONS]; run agent-access jira issue comment add --help for flags and input alternatives."
   },
   "comment.delete": {
-    "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant."
+    "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment delete [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment delete --help for flags and input alternatives."
   },
   "comment.list": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -84,21 +89,26 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests."
+    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment list [OPTIONS]; run agent-access jira issue comment list --help for flags and input alternatives."
   },
   "comment.property.delete": {
-    "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant."
+    "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment property delete [OPTIONS] <COMMENT_ID> <PROPERTY_KEY>; run agent-access jira issue comment property delete --help for flags and input alternatives."
   },
   "comment.property.get": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "presentation": "Whole-result Markdown renders copyable identifiers and timestamps as code spans, safe URLs as autolinks and arbitrary comment-property JSON, including null, in a fenced block. Metadata controls and newlines are neutralized."
+    "presentation": "Whole-result Markdown renders copyable identifiers and timestamps as code spans, safe URLs as autolinks and arbitrary comment-property JSON, including null, in a fenced block. Metadata controls and newlines are neutralized.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment property get [OPTIONS] <COMMENT_ID> <PROPERTY_KEY>; run agent-access jira issue comment property get --help for flags and input alternatives."
   },
   "comment.property.list": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
-    "presentation": "Whole-result Markdown renders copyable identifiers and timestamps as code spans, safe URLs as autolinks and arbitrary comment-property JSON, including null, in a fenced block. Metadata controls and newlines are neutralized."
+    "presentation": "Whole-result Markdown renders copyable identifiers and timestamps as code spans, safe URLs as autolinks and arbitrary comment-property JSON, including null, in a fenced block. Metadata controls and newlines are neutralized.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment property list [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment property list --help for flags and input alternatives."
   },
   "comment.property.set": {
-    "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant."
+    "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment property set [OPTIONS] --value-file <VALUE_FILE> <COMMENT_ID> <PROPERTY_KEY>; run agent-access jira issue comment property set --help for flags and input alternatives."
   },
   "comment.reply": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -115,7 +125,8 @@
           "content": "Follow-up completed."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment reply [OPTIONS] <PARENT_COMMENT_ID>; run agent-access jira issue comment reply --help for flags and input alternatives."
   },
   "comment.update": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -147,7 +158,8 @@
           "notifyUsers": false
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment update [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment update --help for flags and input alternatives."
   },
   "comment.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -162,7 +174,8 @@
       }
     ],
     "readPresentation": "When advertised, non-native readContentFormat adds a Markdown/text renderedBody to the owning comment while preserving its native ADF. It formats the returned body without an additional provider fetch; write contentFormat remains a separate control.",
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests."
+    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue comment view [OPTIONS] <COMMENT_ID>; run agent-access jira issue comment view --help for flags and input alternatives."
   },
   "issue.child.create": {
     "content": "Supply content with explicit contentFormat for the description. The pair is optional; omit both for no description. When advertised, adf is a JSON document object; markdown and plain_text are strings converted to ADF. Format is never inferred; read this action's contentFormat enum. Do not append your own attribution footer; configured attribution is applied in native ADF when content is written. Oversize content returns body_size_denied/413 and an unsupported format returns body_format_unsupported/415; source and converted content are omitted from audit and diagnostics.",
@@ -177,7 +190,8 @@
           "parentIssue": "PROJ-100"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue child create [OPTIONS] --project <PROJECT> --issue-type-id <ISSUE_TYPE_ID> --summary <SUMMARY>; run agent-access jira issue child create --help for flags and input alternatives."
   },
   "issue.create": {
     "scope": "Authorization is by Jira project. Use the Jira project key, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -203,7 +217,8 @@
           "content": "## Rollout\n\nFollow the approved checklist."
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue create [OPTIONS] --project <PROJECT> --issue-type-id <ISSUE_TYPE_ID> --summary <SUMMARY>; run agent-access jira issue create --help for flags and input alternatives."
   },
   "issue.dependency.add": {
     "workflow": "blockingIssue/blockingUrl names the issue that blocks blockedIssue/blockedUrl. Give exactly one locator per side; the issues must differ and both projects must be authorized. The configured dependency link is verified in that direction by readback. This call is independently authorized and does not roll back earlier Epic/child/parent mutations.",
@@ -215,7 +230,8 @@
           "blockedIssue": "PROJ-124"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue dependency add [OPTIONS]; run agent-access jira issue dependency add --help for flags and input alternatives."
   },
   "issue.parent.set": {
     "workflow": "Assign an existing issue to exactly one parentIssue or parentUrl; select the child with issue or url. The child and parent must be distinct, and both resolved projects must be authorized. Jira decides hierarchy/issue-type compatibility. The action is independently authorized and verifies the parent by readback; it does not roll back other Epic workflow calls or accept arbitrary custom fields.",
@@ -227,7 +243,8 @@
           "parentIssue": "PROJ-123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue parent set [OPTIONS] [ISSUE]; run agent-access jira issue parent set --help for flags and input alternatives."
   },
   "issue.update": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -251,7 +268,8 @@
           "notifyUsers": false
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue update [OPTIONS] [ISSUE]; run agent-access jira issue update --help for flags and input alternatives."
   },
   "issue.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -278,7 +296,8 @@
           "includeComments": true
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue view [OPTIONS] [ISSUE]; run agent-access jira issue view --help for flags and input alternatives."
   },
   "issue_type.list": {
     "inputExamples": [
@@ -297,7 +316,8 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests."
+    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue-type list [OPTIONS] --project <PROJECT>; run agent-access jira issue-type list --help for flags and input alternatives."
   },
   "project.list": {
     "request": "Omitting maxResults uses the configured maximum advertised by this action (50 in the default configuration, at most 100). Results contain items, count, maxResults and scanStatus; count is not an upstream total.",
@@ -309,7 +329,8 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests."
+    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira project list [OPTIONS]; run agent-access jira project list --help for flags and input alternatives."
   },
   "project.view": {
     "searchWorkflow": "Use each returned jqlReference in a separately authorized search, for example cf[12345]. Do not substitute a display name or customfield_12345. Custom-field functions and sorting are unsupported; discovery does not establish creation requirements or field options.",
@@ -322,7 +343,8 @@
           "include": []
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira project view [OPTIONS] <PROJECT>; run agent-access jira project view --help for flags and input alternatives."
   },
   "search": {
     "resultMetadata": "Search results contain issue timestamps, small user summaries, priority and labels when supplied. They omit description bodies, detailed issue context, customFields, parent, subtasks and issueLinks. Whole-result formatting does not fetch those fields; use a separately authorized issue.view when needed.",
@@ -355,7 +377,8 @@
           "maxResults": 10
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue search [OPTIONS]; run agent-access jira issue search --help for flags and input alternatives."
   },
   "verify": {
     "scope": "Authorization is by Jira project. Use the issue key, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
@@ -369,6 +392,7 @@
         }
       }
     ],
-    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests."
+    "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue verify [OPTIONS] <ISSUE>; run agent-access jira issue verify --help for flags and input alternatives."
   }
 }

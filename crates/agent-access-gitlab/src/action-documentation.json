@@ -1,6 +1,7 @@
 {
   "branch.create": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab branch create [OPTIONS] --ref <REF_NAME> <PROJECT> <BRANCH>; run agent-access gitlab branch create --help for flags and input alternatives."
   },
   "branch.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -12,25 +13,32 @@
           "search": "main"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab branch list [OPTIONS] <PROJECT>; run agent-access gitlab branch list --help for flags and input alternatives."
   },
   "branch.view": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab branch view [OPTIONS] <PROJECT> <BRANCH>; run agent-access gitlab branch view --help for flags and input alternatives."
   },
   "commit.create": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab commit create [OPTIONS] --branch <BRANCH> --message <COMMIT_MESSAGE> --actions-file <ACTIONS_FILE> <PROJECT>; run agent-access gitlab commit create --help for flags and input alternatives."
   },
   "commit.list": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab commit list [OPTIONS] <PROJECT>; run agent-access gitlab commit list --help for flags and input alternatives."
   },
   "commit.view": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab commit view [OPTIONS] <PROJECT> <SHA>; run agent-access gitlab commit view --help for flags and input alternatives."
   },
   "file.create": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file create [OPTIONS] --path <PATH> --branch <BRANCH> --content-file <CONTENT_FILE> --message <COMMIT_MESSAGE> <PROJECT>; run agent-access gitlab file create --help for flags and input alternatives."
   },
   "file.delete": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file delete [OPTIONS] --path <PATH> --branch <BRANCH> --message <COMMIT_MESSAGE> <PROJECT>; run agent-access gitlab file delete --help for flags and input alternatives."
   },
   "file.raw.download": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -43,10 +51,12 @@
           "ref": "main"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file raw [OPTIONS] --path <PATH> --ref <REF_NAME> <PROJECT>; run agent-access gitlab file raw --help for flags and input alternatives."
   },
   "file.update": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file update [OPTIONS] --path <PATH> --branch <BRANCH> --content-file <CONTENT_FILE> --message <COMMIT_MESSAGE> <PROJECT>; run agent-access gitlab file update --help for flags and input alternatives."
   },
   "file.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -60,7 +70,8 @@
           "ref": "main"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file view [OPTIONS] --path <PATH> --ref <REF_NAME> <PROJECT>; run agent-access gitlab file view --help for flags and input alternatives."
   },
   "issue.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -82,11 +93,12 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab issue create [OPTIONS] --title <TITLE> <PROJECT>; run agent-access gitlab issue create --help for flags and input alternatives."
   },
   "issue.note.add": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue comment [OPTIONS] <PROJECT> <IID>; run agent-access gitlab issue comment --help for flags and input alternatives.",
     "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
@@ -107,11 +119,11 @@
   },
   "issue.note.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue delete-comment; use its --help for flags."
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue delete-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab issue delete-comment --help for flags and input alternatives."
   },
   "issue.note.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue list-comments; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue list-comments [OPTIONS] <PROJECT> <IID>; run agent-access gitlab issue list-comments --help for flags and input alternatives.",
     "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
     "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
@@ -129,7 +141,7 @@
   },
   "issue.note.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue update-comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue update-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab issue update-comment --help for flags and input alternatives.",
     "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
@@ -150,7 +162,7 @@
   },
   "issue.note.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue view-comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue view-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab issue view-comment --help for flags and input alternatives.",
     "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "lookup": "Read one known positive noteId under project and iid. The Broker proves the parent and note target, then returns the full normalized note; this read is separately grantable from listing.",
     "inputExamples": [
@@ -179,14 +191,15 @@
         }
       },
       {
-        "label": "Issue search",
+        "label": "Browse open issues without search text",
         "inputs": {
           "project": "team/project",
           "state": "opened",
           "maxResults": 10
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab issue search [OPTIONS] <PROJECT>; run agent-access gitlab issue search --help for flags and input alternatives."
   },
   "issue.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -207,7 +220,8 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab issue update [OPTIONS] <PROJECT> <IID>; run agent-access gitlab issue update --help for flags and input alternatives."
   },
   "issue.view": {
     "result": "Returned issues can include createdAt, updatedAt, author, assignees, labels and milestone. User summaries contain only available id, username, name and webUrl fields.",
@@ -226,19 +240,24 @@
           "url": "https://gitlab.example.com/team/project/-/issues/123"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab issue view [OPTIONS] [PROJECT] [IID]; run agent-access gitlab issue view --help for flags and input alternatives."
   },
   "job.cancel": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab job cancel [OPTIONS] <PROJECT> <JOB_ID>; run agent-access gitlab job cancel --help for flags and input alternatives."
   },
   "job.list": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab job list [OPTIONS] <PROJECT>; run agent-access gitlab job list --help for flags and input alternatives."
   },
   "job.play": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab job play [OPTIONS] <PROJECT> <JOB_ID>; run agent-access gitlab job play --help for flags and input alternatives."
   },
   "job.retry": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab job retry [OPTIONS] <PROJECT> <JOB_ID>; run agent-access gitlab job retry --help for flags and input alternatives."
   },
   "job.trace.download": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -250,10 +269,12 @@
           "jobId": 67890
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab job trace [OPTIONS] <PROJECT> <JOB_ID>; run agent-access gitlab job trace --help for flags and input alternatives."
   },
   "job.view": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab job view [OPTIONS] <PROJECT> <JOB_ID>; run agent-access gitlab job view --help for flags and input alternatives."
   },
   "merge_request.approval.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -266,7 +287,8 @@
           "iid": 45
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view-approval [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request view-approval --help for flags and input alternatives."
   },
   "merge_request.approval_rule.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -281,7 +303,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-approval-rules [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-approval-rules --help for flags and input alternatives."
   },
   "merge_request.approval_rule.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -295,7 +318,8 @@
           "approvalRuleId": 7
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view-approval-rule [OPTIONS] <PROJECT> <IID> <APPROVAL_RULE_ID>; run agent-access gitlab merge-request view-approval-rule --help for flags and input alternatives."
   },
   "merge_request.approval_state.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -308,11 +332,12 @@
           "iid": 45
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view-approval-state [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request view-approval-state --help for flags and input alternatives."
   },
   "merge_request.approve": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "approval": "Requires the full current headSha, matching MR/diff refs, a prepared MR, the latest collected diff with non-null patchIdSha, and detailedMergeStatus outside preparing/checking/approvals_syncing. Existing actor approval returns version_conflict before POST; inspect approval.view and stop if that state already holds. An unchanged null patch ID can persist for an empty/legacy diff and is not fixed by polling. Approval-password inputs are not supported.",
+    "approval": "Requires the full current headSha, matching MR/diff refs, a prepared MR, the latest collected diff with non-null patchIdSha, and detailedMergeStatus outside preparing/checking/approvals_syncing. Existing actor approval returns version_conflict before POST; inspect merge_request.approval.view and stop if that state already holds. An unchanged null patch ID can persist for an empty/legacy diff and is not fixed by polling. Approval-password inputs are not supported.",
     "recovery": "Success is verified against the acting user, not aggregate approved. Ambiguous mutation/redirect handling re-reads actor state; an unproven effect uses applied_unverified and retrySafe:false. Inspect a fresh actor-specific approval summary before considering another write.",
     "inputExamples": [
       {
@@ -323,7 +348,8 @@
           "headSha": "1111111111111111111111111111111111111111"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request approve [OPTIONS] --head-sha <HEAD_SHA> <PROJECT> <IID>; run agent-access gitlab merge-request approve --help for flags and input alternatives."
   },
   "merge_request.commit.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -337,7 +363,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-commits [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-commits --help for flags and input alternatives."
   },
   "merge_request.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -345,7 +372,8 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "descriptionInput": "The content pair is optional. Omission leaves the description absent and adds no attribution footer. Explicit empty content stays empty when attribution is disabled and produces a footer-only description when enabled.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request create [OPTIONS] --source-branch <SOURCE_BRANCH> --target-branch <TARGET_BRANCH> --title <TITLE> <PROJECT>; run agent-access gitlab merge-request create --help for flags and input alternatives."
   },
   "merge_request.diff.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -362,11 +390,12 @@
           "unidiff": true
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-diffs [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-diffs --help for flags and input alternatives."
   },
   "merge_request.diff.raw.download": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "download": "Requires GitLab 17.9+. Streams the current raw diff and reports headShaAtPreflight; GitLab exposes no SHA-pinned raw endpoint, so a concurrent push can change the stream. Use diff_version.view for historical snapshots. No embedded or whole-result Markdown applies to raw bytes.",
+    "download": "Requires GitLab 17.9+. Streams the current raw diff and reports headShaAtPreflight; GitLab exposes no SHA-pinned raw endpoint, so a concurrent push can change the stream. Use merge_request.diff_version.view for historical snapshots. No embedded or whole-result Markdown applies to raw bytes.",
     "inputExamples": [
       {
         "label": "Merge request diff raw download",
@@ -375,12 +404,13 @@
           "iid": 45
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request diff-raw [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request diff-raw --help for flags and input alternatives."
   },
   "merge_request.diff_version.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
-    "versions": "Lists historical version IDs, SHA triplets, state, size and patchIdSha. Use diffVersionId with diff_version.view for a version-pinned review; a listed version can lack usable patch data.",
+    "versions": "Lists historical version IDs, SHA triplets, state, size and patchIdSha. Use diffVersionId with merge_request.diff_version.view for a version-pinned review; a listed version can lack usable patch data.",
     "inputExamples": [
       {
         "label": "Merge request diff version list",
@@ -390,7 +420,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-diff-versions [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-diff-versions --help for flags and input alternatives."
   },
   "merge_request.diff_version.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -406,7 +437,8 @@
           "unidiff": true
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view-diff-version [OPTIONS] <PROJECT> <IID> <VERSION_ID>; run agent-access gitlab merge-request view-diff-version --help for flags and input alternatives."
   },
   "merge_request.discussion.add": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -414,7 +446,8 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request discussion [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.inline.add": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -442,7 +475,8 @@
           "contentFormat": "plain_text"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request inline-discussion [OPTIONS] --expected-head-sha <EXPECTED_HEAD_SHA> <--position-file <POSITION_FILE>|--position-type <POSITION_TYPE>> <PROJECT> <IID>; run agent-access gitlab merge-request inline-discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -450,7 +484,7 @@
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
     "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
     "summaryOrder": "Summary retains every nested note in its original order and reports noteCount; it does not truncate the discussion to a representative note.",
-    "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; diff_version.view reads that history.",
+    "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; merge_request.diff_version.view reads that history.",
     "inputExamples": [
       {
         "label": "Merge request discussion list",
@@ -469,7 +503,8 @@
           "projection": "summary"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-discussions [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-discussions --help for flags and input alternatives."
   },
   "merge_request.discussion.note.add": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -491,11 +526,13 @@
           "contentFormat": "plain_text"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request reply-discussion [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID>; run agent-access gitlab merge-request reply-discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.note.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions."
+    "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request delete-discussion-note [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID> <NOTE_ID>; run agent-access gitlab merge-request delete-discussion-note --help for flags and input alternatives."
   },
   "merge_request.discussion.note.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -504,22 +541,25 @@
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "This content update does not append attribution.",
     "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
-    "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions."
+    "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request update-discussion-note [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID> <NOTE_ID>; run agent-access gitlab merge-request update-discussion-note --help for flags and input alternatives."
   },
   "merge_request.discussion.reopen": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
-    "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions."
+    "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request reopen-discussion [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID>; run agent-access gitlab merge-request reopen-discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.resolve": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
-    "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions."
+    "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request resolve-discussion [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID>; run agent-access gitlab merge-request resolve-discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
-    "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; diff_version.view reads that history.",
+    "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; merge_request.diff_version.view reads that history.",
     "inputExamples": [
       {
         "label": "Merge request discussion view",
@@ -529,7 +569,8 @@
           "discussionId": "DISCUSSION_ID"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view-discussion [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID>; run agent-access gitlab merge-request view-discussion --help for flags and input alternatives."
   },
   "merge_request.draft_note.add": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -579,7 +620,8 @@
           "contentFormat": "plain_text"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request add-draft-note [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request add-draft-note --help for flags and input alternatives."
   },
   "merge_request.draft_note.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -595,7 +637,8 @@
           "draftNoteId": 123
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request delete-draft-note [OPTIONS] <PROJECT> <IID> <DRAFT_NOTE_ID>; run agent-access gitlab merge-request delete-draft-note --help for flags and input alternatives."
   },
   "merge_request.draft_note.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -623,7 +666,8 @@
           "projection": "summary"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-draft-notes [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-draft-notes --help for flags and input alternatives."
   },
   "merge_request.draft_note.publish": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -638,7 +682,8 @@
           "draftNoteId": 123
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request publish-draft-note [OPTIONS] <PROJECT> <IID> <DRAFT_NOTE_ID>; run agent-access gitlab merge-request publish-draft-note --help for flags and input alternatives."
   },
   "merge_request.draft_note.publish_all": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -646,7 +691,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
     "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
-    "publication": "Snapshot and publish all drafts owned by the selected actor, then optionally add a general summary. Omit content/contentFormat for no summary; internal is allowed only with the summary. An uncertain publication re-reads the snapshot; only proof of no change permits an ordinary upstream failure, otherwise the result remains applied_unverified.",
+    "publication": "Snapshot and publish all drafts owned by the selected actor, then optionally add a general summary. This action does not change reviewer state; merge_request.review.submit sets reviewed or requestedChanges. Omit content/contentFormat for no summary; internal is allowed only with the summary. An uncertain publication re-reads the snapshot; only proof of no change permits an ordinary upstream failure, otherwise the result remains applied_unverified.",
     "recovery": "Inspect verificationStage and safe draft IDs for bulk_publish_readback, reviewer_state_readback or summary_note_response failures. A summary failure after publication cannot mean not_applied. After an uncertain mutation or redirect, the Broker re-reads drafts/state before deciding whether anything may have changed.",
     "inputExamples": [
       {
@@ -658,7 +703,8 @@
           "contentFormat": "plain_text"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request publish-all [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request publish-all --help for flags and input alternatives."
   },
   "merge_request.draft_note.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -681,7 +727,8 @@
           "contentFormat": "plain_text"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request update-draft-note [OPTIONS] <PROJECT> <IID> <DRAFT_NOTE_ID>; run agent-access gitlab merge-request update-draft-note --help for flags and input alternatives."
   },
   "merge_request.draft_note.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -697,14 +744,16 @@
           "draftNoteId": 123
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view-draft-note [OPTIONS] <PROJECT> <IID> <DRAFT_NOTE_ID>; run agent-access gitlab merge-request view-draft-note --help for flags and input alternatives."
   },
   "merge_request.merge": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request merge [OPTIONS] --sha <SHA> <PROJECT> <IID>; run agent-access gitlab merge-request merge --help for flags and input alternatives."
   },
   "merge_request.note.add": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request comment [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request comment --help for flags and input alternatives.",
     "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
@@ -725,12 +774,12 @@
   },
   "merge_request.note.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request delete-comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request delete-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab merge-request delete-comment --help for flags and input alternatives.",
     "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters."
   },
   "merge_request.note.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request list-comments; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request list-comments [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-comments --help for flags and input alternatives.",
     "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
     "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
@@ -748,7 +797,7 @@
   },
   "merge_request.note.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request update-comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request update-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab merge-request update-comment --help for flags and input alternatives.",
     "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
@@ -758,7 +807,7 @@
   },
   "merge_request.note.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request view-comment; use its --help for flags.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request view-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab merge-request view-comment --help for flags and input alternatives.",
     "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "lookup": "Read one known positive noteId under project and iid. The Broker proves the parent and note target, then returns the full normalized note; this read is separately grantable from listing.",
     "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
@@ -785,7 +834,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-pipelines [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-pipelines --help for flags and input alternatives."
   },
   "merge_request.review.submit": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -793,7 +843,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
     "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
-    "reviewState": "Requires GitLab 19.2+ and an assigned acting reviewer without formal approval. reviewerState is reviewed or requestedChanges; zero drafts are valid. The Broker checks the version before writing, publishes the actor snapshot, verifies reviewer state, then optionally adds a summary. internal requires summary content. Unassigned/already-approved state needs reconciliation, not an automatic retry. requestedChanges neither approves nor unapproves; merge blocking depends on edition and project policy.",
+    "reviewState": "Requires GitLab 19.2+ and an assigned acting reviewer without formal approval. reviewerState is reviewed or requestedChanges; zero drafts are valid. The Broker checks the version before writing, publishes the actor snapshot, verifies reviewer state, then optionally adds a summary. internal requires summary content. An unassigned or already-approved acting reviewer returns version_conflict before publication; refresh assignment or approval state before deciding how to proceed. requestedChanges neither approves nor unapproves; merge blocking depends on edition and project policy.",
     "recovery": "Inspect verificationStage and safe draft IDs for bulk_publish_readback, reviewer_state_readback or summary_note_response failures. A summary failure after publication cannot mean not_applied. After an uncertain mutation or redirect, the Broker re-reads drafts/state before deciding whether anything may have changed.",
     "inputExamples": [
       {
@@ -806,7 +856,8 @@
           "contentFormat": "plain_text"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request submit-review [OPTIONS] --reviewer-state <REVIEWER_STATE> <PROJECT> <IID>; run agent-access gitlab merge-request submit-review --help for flags and input alternatives."
   },
   "merge_request.reviewer.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -820,12 +871,14 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request list-reviewers [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-reviewers --help for flags and input alternatives."
   },
   "merge_request.search": {
     "relatedSearch": "This action lists and filters one required project. The separately granted search.issues/search.merge_requests family performs configured native content search and has a different input and continuation contract.",
     "result": "Returned merge requests can include createdAt, updatedAt, author, assignees, reviewers, labels, milestone and draft state when GitLab supplies them.",
-    "presentation": "Embedded rendering belongs to each returned mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+    "presentation": "Embedded rendering belongs to each returned mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request search [OPTIONS] <PROJECT>; run agent-access gitlab merge-request search --help for flags and input alternatives."
   },
   "merge_request.suggestion.apply": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -844,7 +897,8 @@
           "suggestionId": 456
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request apply-suggestion [OPTIONS] --expected-head-sha <EXPECTED_HEAD_SHA> <PROJECT> <IID> <DISCUSSION_ID> <NOTE_ID> <SUGGESTION_ID>; run agent-access gitlab merge-request apply-suggestion --help for flags and input alternatives."
   },
   "merge_request.suggestion.batch_apply": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -868,11 +922,12 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request apply-suggestions [OPTIONS] --suggestions-file <SUGGESTIONS_FILE> --expected-head-sha <EXPECTED_HEAD_SHA> <PROJECT> <IID>; run agent-access gitlab merge-request apply-suggestions --help for flags and input alternatives."
   },
   "merge_request.unapprove": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "approval": "Removes only the execution actor's formal approval, not reviewer requestedChanges state. No actor approval returns version_conflict before POST; inspect approval.view and stop when the desired state already holds. Approval passwords are not accepted.",
+    "approval": "Removes only the execution actor's formal approval, not reviewer requestedChanges state. No actor approval returns version_conflict before POST; inspect merge_request.approval.view and stop when the desired state already holds. Approval passwords are not accepted.",
     "recovery": "Success is verified against the acting user, not aggregate approved. Ambiguous mutation/redirect handling re-reads actor state; an unproven effect uses applied_unverified and retrySafe:false. Inspect a fresh actor-specific approval summary before considering another write.",
     "inputExamples": [
       {
@@ -882,7 +937,8 @@
           "iid": 45
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request unapprove [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request unapprove --help for flags and input alternatives."
   },
   "merge_request.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -890,7 +946,8 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "descriptionInput": "The content pair is optional. Omission preserves the existing description. Explicit empty content clears it when attribution is disabled and produces a footer-only description when enabled.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request update [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request update --help for flags and input alternatives."
   },
   "merge_request.view": {
     "result": "Returned merge requests can include createdAt, updatedAt, author, assignees, reviewers, labels, milestone and draft state when GitLab supplies them.",
@@ -904,10 +961,12 @@
           "iid": 45
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request view [OPTIONS] [PROJECT] [IID]; run agent-access gitlab merge-request view --help for flags and input alternatives."
   },
   "pipeline.cancel": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab pipeline cancel [OPTIONS] <PROJECT> <PIPELINE_ID>; run agent-access gitlab pipeline cancel --help for flags and input alternatives."
   },
   "pipeline.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -921,45 +980,54 @@
           "maxResults": 10
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab pipeline list [OPTIONS] <PROJECT>; run agent-access gitlab pipeline list --help for flags and input alternatives."
   },
   "pipeline.retry": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab pipeline retry [OPTIONS] <PROJECT> <PIPELINE_ID>; run agent-access gitlab pipeline retry --help for flags and input alternatives."
   },
   "pipeline.run": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab pipeline run [OPTIONS] --ref <REF_NAME> <PROJECT>; run agent-access gitlab pipeline run --help for flags and input alternatives."
   },
   "pipeline.view": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab pipeline view [OPTIONS] <PROJECT> <PIPELINE_ID>; run agent-access gitlab pipeline view --help for flags and input alternatives."
   },
   "project.access_token.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
-    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs."
+    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project access-token create [OPTIONS] --name <NAME> --access-level <ACCESS_LEVEL> --scopes <SCOPES> --expires-at <EXPIRES_AT> <PROJECT>; run agent-access gitlab project access-token create --help for flags and input alternatives."
   },
   "project.access_token.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized.",
-    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding."
+    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project access-token list [OPTIONS] <PROJECT>; run agent-access gitlab project access-token list --help for flags and input alternatives."
   },
   "project.access_token.revoke": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
-    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the token ID and revocation state before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the token ID and revocation state before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project access-token revoke [OPTIONS] <PROJECT> <TOKEN_ID>; run agent-access gitlab project access-token revoke --help for flags and input alternatives."
   },
   "project.access_token.rotate": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
     "rotation": "Preserves the active token's identity/permissions after checking current limits; expiry must be explicit. Revoked/inactive tokens are not rotated. previousTokenId always identifies the old token, while tokenId is present only for a different returned new ID. Inspect/revoke/reconcile an uncertain rotation rather than rotating again.",
-    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs."
+    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project access-token rotate [OPTIONS] --expires-at <EXPIRES_AT> <PROJECT> <TOKEN_ID>; run agent-access gitlab project access-token rotate --help for flags and input alternatives."
   },
   "project.access_token.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
-    "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized."
+    "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project access-token view [OPTIONS] <PROJECT> <TOKEN_ID>; run agent-access gitlab project access-token view --help for flags and input alternatives."
   },
   "project.list": {
     "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
@@ -970,7 +1038,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project list [OPTIONS]; run agent-access gitlab project list --help for flags and input alternatives."
   },
   "project.search": {
     "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
@@ -984,7 +1053,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project search [OPTIONS]; run agent-access gitlab project search --help for flags and input alternatives."
   },
   "project.upload": {
     "upload": "Upload exactly one file using project or the configured-instance project url. Local file adapters generate attachments metadata; direct HTTP uses metadata-first multipart with one attachments entry and its matching file part. JSON alone cannot carry the file. Filename, MIME, size and SHA-256 must match the bytes; the Broker privately spools and removes temporary data without retaining or transforming the file.",
@@ -1006,7 +1076,8 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project upload [OPTIONS] --file <FILE> [PROJECT]; run agent-access gitlab project upload --help for flags and input alternatives."
   },
   "project.view": {
     "result": "Project metadata includes description, last activity and star count when GitLab supplies them.",
@@ -1023,16 +1094,20 @@
           "url": "https://gitlab.example.com/team/project"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project view [OPTIONS] [PROJECT]; run agent-access gitlab project view --help for flags and input alternatives."
   },
   "protected_branch.list": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab protected-branch list [OPTIONS] <PROJECT>; run agent-access gitlab protected-branch list --help for flags and input alternatives."
   },
   "protected_branch.verify": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab protected-branch verify [OPTIONS] <PROJECT>; run agent-access gitlab protected-branch verify --help for flags and input alternatives."
   },
   "protected_branch.view": {
-    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab protected-branch view [OPTIONS] <PROJECT> <BRANCH_OR_WILDCARD_NAME>; run agent-access gitlab protected-branch view --help for flags and input alternatives."
   },
   "search.code": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
@@ -1045,7 +1120,8 @@
           "project": "team/project"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab search code [OPTIONS] --search <SEARCH>; run agent-access gitlab search code --help for flags and input alternatives."
   },
   "search.comments": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
@@ -1057,7 +1133,8 @@
           "search": "release"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab search comments [OPTIONS] --search <SEARCH>; run agent-access gitlab search comments --help for flags and input alternatives."
   },
   "search.commits": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
@@ -1069,7 +1146,8 @@
           "search": "release"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab search commits [OPTIONS] --search <SEARCH>; run agent-access gitlab search commits --help for flags and input alternatives."
   },
   "search.issues": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
@@ -1081,7 +1159,8 @@
           "search": "credential rotation"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab search issues [OPTIONS] --search <SEARCH>; run agent-access gitlab search issues --help for flags and input alternatives."
   },
   "search.merge_requests": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
@@ -1093,7 +1172,8 @@
           "search": "release"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab search merge-requests [OPTIONS] --search <SEARCH>; run agent-access gitlab search merge-requests --help for flags and input alternatives."
   },
   "search.wiki": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
@@ -1105,32 +1185,37 @@
           "search": "release"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab search wiki [OPTIONS] --search <SEARCH>; run agent-access gitlab search wiki --help for flags and input alternatives."
   },
   "service_account.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "workflow": "Create the account, retain result.serviceAccount.id, set membership with service_account.member.set, then issue a token with service_account.token.create. Each step is separately authorized; later failure leaves earlier successful steps in place. Do not recreate the account to retry a later step.",
-    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account create [OPTIONS] --name <NAME> <PROJECT>; run agent-access gitlab service-account create --help for flags and input alternatives."
   },
   "service_account.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
     "deletion": "Uses the project service-account deletion contract. Destructive hard_delete is not exposed.",
-    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account delete [OPTIONS] <PROJECT> <USER_ID>; run agent-access gitlab service-account delete --help for flags and input alternatives."
   },
   "service_account.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
-    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding."
+    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account list [OPTIONS] <PROJECT>; run agent-access gitlab service-account list --help for flags and input alternatives."
   },
   "service_account.member.set": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
     "membership": "Add direct project membership if absent or change the current direct role within the operator cap. Token issuance does not silently perform this step.",
-    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID and current membership before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID and current membership before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account member-set [OPTIONS] --access-level <ACCESS_LEVEL> <PROJECT> <USER_ID>; run agent-access gitlab service-account member-set --help for flags and input alternatives."
   },
   "service_account.token.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1138,20 +1223,23 @@
     "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
     "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs.",
     "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
-    "membership": "Requires existing direct membership within the configured role cap; it does not change membership. Higher-role accounts may still have tokens revoked through the separately granted revoke action."
+    "membership": "Requires existing direct membership within the configured role cap; it does not change membership. Higher-role accounts may still have tokens revoked through the separately granted revoke action.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account token create [OPTIONS] --name <NAME> --scopes <SCOPES> --expires-at <EXPIRES_AT> <PROJECT> <USER_ID>; run agent-access gitlab service-account token create --help for flags and input alternatives."
   },
   "service_account.token.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized.",
     "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding.",
-    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted."
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account token list [OPTIONS] <PROJECT> <USER_ID>; run agent-access gitlab service-account token list --help for flags and input alternatives."
   },
   "service_account.token.revoke": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
     "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
-    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the token ID and revocation state before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the token ID and revocation state before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account token revoke [OPTIONS] <PROJECT> <USER_ID> <TOKEN_ID>; run agent-access gitlab service-account token revoke --help for flags and input alternatives."
   },
   "service_account.token.rotate": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1160,12 +1248,14 @@
     "rotation": "Preserves the active token's identity/permissions after checking current limits; expiry must be explicit. Revoked/inactive tokens are not rotated. previousTokenId always identifies the old token, while tokenId is present only for a different returned new ID. Inspect/revoke/reconcile an uncertain rotation rather than rotating again.",
     "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs.",
     "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
-    "membership": "Requires existing direct membership within the configured role cap; it does not change membership. Higher-role accounts may still have tokens revoked through the separately granted revoke action."
+    "membership": "Requires existing direct membership within the configured role cap; it does not change membership. Higher-role accounts may still have tokens revoked through the separately granted revoke action.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account token rotate [OPTIONS] --expires-at <EXPIRES_AT> <PROJECT> <USER_ID> <TOKEN_ID>; run agent-access gitlab service-account token rotate --help for flags and input alternatives."
   },
   "service_account.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
-    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted."
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab service-account view [OPTIONS] <PROJECT> <USER_ID>; run agent-access gitlab service-account view --help for flags and input alternatives."
   },
   "webhook.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1184,7 +1274,8 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook create [OPTIONS] --destination-url <DESTINATION_URL> <PROJECT>; run agent-access gitlab webhook create --help for flags and input alternatives."
   },
   "webhook.custom_header.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1201,14 +1292,16 @@
           "key": "Authorization"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook custom-header delete [OPTIONS] <PROJECT> <WEBHOOK_ID> <KEY>; run agent-access gitlab webhook custom-header delete --help for flags and input alternatives."
   },
   "webhook.custom_header.set": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
     "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
     "secret": "Create or replace one named header using sensitive value input. Use the interface's local secret-source option; values are forwarded but never returned. Requires GitLab 17.1+.",
-    "recovery": "Observable header-state readback proves the mutation. Ambiguity/readback failure uses applied_unverified with the safe hook ID, never the header key or value."
+    "recovery": "Observable header-state readback proves the mutation. Ambiguity/readback failure uses applied_unverified with the safe hook ID, never the header key or value.",
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook custom-header set [OPTIONS] <PROJECT> <WEBHOOK_ID> <KEY>; run agent-access gitlab webhook custom-header set --help for flags and input alternatives."
   },
   "webhook.delete": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1223,13 +1316,14 @@
           "webhookId": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook delete [OPTIONS] <PROJECT> <WEBHOOK_ID>; run agent-access gitlab webhook delete --help for flags and input alternatives."
   },
   "webhook.event.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
     "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
-    "deliveryData": "Returns bounded recorded request data and receiver responses, potentially without separate issue/MR read grants. Upstream delivery URLs are omitted and sensitive/custom headers are redacted. requestDataTruncated and responseBodyTruncated describe omissions; status filters and maxResults remain bound to nextPageToken/pageToken. There is no separate event.view action.",
+    "deliveryData": "Returns bounded recorded request data and receiver responses, potentially without separate issue/MR read grants. Upstream delivery URLs are omitted and sensitive/custom headers are redacted. requestDataTruncated and responseBodyTruncated describe omissions; status filters and maxResults remain bound to nextPageToken/pageToken. There is no separate action to view one delivery event.",
     "inputExamples": [
       {
         "label": "Webhook event list",
@@ -1239,7 +1333,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook event list [OPTIONS] <PROJECT> <WEBHOOK_ID>; run agent-access gitlab webhook event list --help for flags and input alternatives."
   },
   "webhook.event.resend": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1256,7 +1351,8 @@
           "webhookEventId": 9001
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook event resend [OPTIONS] <PROJECT> <WEBHOOK_ID> <WEBHOOK_EVENT_ID>; run agent-access gitlab webhook event resend --help for flags and input alternatives."
   },
   "webhook.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1270,7 +1366,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook list [OPTIONS] <PROJECT>; run agent-access gitlab webhook list --help for flags and input alternatives."
   },
   "webhook.test": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1287,7 +1384,8 @@
           "event": "merge_requests"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook test [OPTIONS] --event <EVENT> <PROJECT> <WEBHOOK_ID>; run agent-access gitlab webhook test --help for flags and input alternatives."
   },
   "webhook.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1307,7 +1405,8 @@
           ]
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook update [OPTIONS] <PROJECT> <WEBHOOK_ID>; run agent-access gitlab webhook update --help for flags and input alternatives."
   },
   "webhook.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1321,6 +1420,7 @@
           "webhookId": 42
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab webhook view [OPTIONS] <PROJECT> <WEBHOOK_ID>; run agent-access gitlab webhook view --help for flags and input alternatives."
   }
 }

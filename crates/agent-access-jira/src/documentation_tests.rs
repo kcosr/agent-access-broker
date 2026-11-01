@@ -9,7 +9,27 @@ fn configurations() -> Vec<JiraProviderConfig> {
     bounded.comments.max_results = 1;
     bounded.comments.body_max_results = 1;
     bounded.search.max_results = 1;
-    vec![default, enabled, bounded]
+    let mut other_tenant = enabled.clone();
+    other_tenant.tenant_host = "other.atlassian.net".into();
+    other_tenant.allowed_upstream_hosts = vec!["https://other.atlassian.net/rest/api/3/**".into()];
+    vec![default, enabled, bounded, other_tenant]
+}
+
+fn contains_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text
+            .strip_prefix('<')
+            .and_then(|text| text.strip_suffix('>'))
+            .is_some_and(|text| {
+                !text.is_empty()
+                    && text
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            }),
+        Value::Array(values) => values.iter().any(contains_placeholder),
+        Value::Object(fields) => fields.values().any(contains_placeholder),
+        _ => false,
+    }
 }
 
 fn parse_example(
@@ -74,6 +94,11 @@ fn documentation_examples_pass_real_input_and_content_parsers() {
                     parse_example(&action.action, inputs, &config)
                         .unwrap_or_else(|error| panic!("{} {key}: {error:?}", action.action));
                     if key == "inputExamples" {
+                        assert!(
+                            !contains_placeholder(inputs),
+                            "{} contains an example placeholder",
+                            action.action
+                        );
                         if let Some(format) = inputs.get("contentFormat") {
                             assert!(
                                 action.input_schema["properties"]["contentFormat"]["enum"]

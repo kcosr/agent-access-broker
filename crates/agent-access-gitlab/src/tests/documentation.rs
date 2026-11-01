@@ -199,3 +199,147 @@ fn documentation_preserves_existing_structured_search_grammar_and_examples() {
         }
     }
 }
+
+fn all_enabled_documentation_config() -> GitlabProviderConfig {
+    let mut config = config();
+    config.provisioning.enabled = true;
+    let categories: Vec<String> = search::CATEGORIES
+        .iter()
+        .map(|name| (*name).into())
+        .collect();
+    config.search.engines.advanced = GitlabSearchEngineConfig {
+        project_categories: categories.clone(),
+        instance_categories: categories,
+    };
+    config.search.engines.zoekt = GitlabSearchEngineConfig {
+        project_categories: vec!["code".into()],
+        instance_categories: vec!["code".into()],
+    };
+    config
+}
+
+#[test]
+fn documentation_keys_exactly_cover_all_enabled_actions() {
+    let documentation: BTreeMap<String, Value> =
+        serde_json::from_str(include_str!("../action-documentation.json")).unwrap();
+    let descriptor = gitlab_descriptor(&all_enabled_documentation_config());
+    let actions: BTreeSet<_> = descriptor
+        .actions
+        .into_iter()
+        .map(|action| action.action)
+        .collect();
+    assert_eq!(actions.len(), 110);
+    for (action, details) in &documentation {
+        let command = details["typedCommand"].as_str().unwrap();
+        assert!(
+            command.contains("Typed CLI wrapper: agent-access gitlab "),
+            "{action}"
+        );
+        assert!(command.contains(" --help"), "{action}");
+    }
+    assert_eq!(documentation.into_keys().collect::<BTreeSet<_>>(), actions);
+}
+
+#[test]
+fn documentation_example_labels_are_distinct_within_each_action() {
+    let descriptor = gitlab_descriptor(&all_enabled_documentation_config());
+    for action in descriptor.actions {
+        let documentation = action.documentation.as_ref().unwrap();
+        if let Some(examples) = documentation["inputExamples"].as_array() {
+            let labels: BTreeSet<_> = examples
+                .iter()
+                .map(|example| {
+                    let label = example["label"].as_str().unwrap();
+                    assert!(!label.trim().is_empty(), "{}", action.action);
+                    label
+                })
+                .collect();
+            assert_eq!(labels.len(), examples.len(), "{}", action.action);
+        }
+    }
+}
+
+#[test]
+fn documentation_action_references_resolve_to_canonical_actions() {
+    let descriptor = gitlab_descriptor(&all_enabled_documentation_config());
+    // These fields direct the caller to another action. Result paths, version
+    // numbers, file names and unavailable-action statements are not action links.
+    let references: &[(&str, &str, &[&str])] = &[
+        ("file.view", "presentation", &["file.raw.download"]),
+        (
+            "issue.search",
+            "relatedSearch",
+            &["search.issues", "search.merge_requests"],
+        ),
+        (
+            "merge_request.approve",
+            "approval",
+            &["merge_request.approval.view"],
+        ),
+        (
+            "merge_request.diff.raw.download",
+            "download",
+            &["merge_request.diff_version.view"],
+        ),
+        (
+            "merge_request.diff_version.list",
+            "versions",
+            &["merge_request.diff_version.view"],
+        ),
+        (
+            "merge_request.discussion.list",
+            "positions",
+            &["merge_request.diff_version.view"],
+        ),
+        (
+            "merge_request.discussion.view",
+            "positions",
+            &["merge_request.diff_version.view"],
+        ),
+        (
+            "merge_request.draft_note.publish_all",
+            "publication",
+            &["merge_request.review.submit"],
+        ),
+        (
+            "merge_request.search",
+            "relatedSearch",
+            &["search.issues", "search.merge_requests"],
+        ),
+        (
+            "merge_request.unapprove",
+            "approval",
+            &["merge_request.approval.view"],
+        ),
+        ("project.search", "authorization", &["project.list"]),
+        (
+            "service_account.create",
+            "workflow",
+            &["service_account.member.set", "service_account.token.create"],
+        ),
+    ];
+    for &(owner, field, targets) in references {
+        let documentation = descriptor
+            .action(owner)
+            .unwrap()
+            .documentation
+            .as_ref()
+            .unwrap();
+        let words: Vec<_> = documentation[field]
+            .as_str()
+            .unwrap()
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.')))
+            .map(|word| word.trim_matches('.'))
+            .collect();
+        for target in targets {
+            assert!(
+                descriptor.action(target).is_some(),
+                "{owner}.{field}: {target}"
+            );
+            assert!(
+                words.contains(target),
+                "{owner}.{field} must use canonical action {target}"
+            );
+        }
+    }
+}

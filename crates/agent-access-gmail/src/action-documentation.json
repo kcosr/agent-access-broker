@@ -7,7 +7,8 @@
         "label": "Connected account",
         "inputs": {}
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail account [OPTIONS]; run agent-access gmail account --help for flags and input alternatives."
   },
   "label.list": {
     "labels": "Lists labels from the connected mailbox, including their IDs, names, types and visibility metadata. Takes no inputs; use returned label IDs to interpret message and thread results. This action does not edit labels.",
@@ -17,7 +18,8 @@
         "label": "Mailbox labels",
         "inputs": {}
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail labels [OPTIONS]; run agent-access gmail labels --help for flags and input alternatives."
   },
   "message.archive": {
     "effect": "Removes INBOX from the selected mail. It creates no rule for later replies. Only the named message is affected.",
@@ -30,7 +32,8 @@
           "id": "18c0f00d42"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail message archive [OPTIONS] <ID>; run agent-access gmail message archive --help for flags and input alternatives."
   },
   "message.restore": {
     "effect": "Invokes Gmail untrash. It does not promise to restore prior labels or Inbox placement. Only the named message is affected.",
@@ -43,7 +46,8 @@
           "id": "18c0f00d42"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail message restore [OPTIONS] <ID>; run agent-access gmail message restore --help for flags and input alternatives."
   },
   "message.search": {
     "query": "Uses Gmail query syntax. query is optional, at most 2048 UTF-8 bytes, and cannot contain NUL. Omitted query and an explicitly empty query are distinct continuation settings. To discover Trash, use query in:trash with includeSpamTrash true.",
@@ -66,7 +70,8 @@
           "maxResults": 20
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail message search [OPTIONS]; run agent-access gmail message search --help for flags and input alternatives."
   },
   "message.trash": {
     "effect": "Moves the selected mail to Trash. It does not permanently delete it; restore can invoke Gmail untrash. Only the named message is affected.",
@@ -79,7 +84,8 @@
           "id": "18c0f00d42"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail message trash [OPTIONS] <ID>; run agent-access gmail message trash --help for flags and input alternatives."
   },
   "message.view": {
     "target": "Reads one message ID from the currently connected mailbox; use IDs returned by message.search or prior mailbox results. IDs are opaque and are not Broker resource selectors. Discard saved IDs after deliberately changing accounts.",
@@ -92,7 +98,8 @@
           "id": "18c0f00d42"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail message view [OPTIONS] <ID>; run agent-access gmail message view --help for flags and input alternatives."
   },
   "thread.archive": {
     "effect": "Removes INBOX from the selected mail. It creates no rule for later replies. A thread action affects the conversation’s current messages; it does not affect future arrivals.",
@@ -105,7 +112,8 @@
           "id": "18c0f00d99"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail thread archive [OPTIONS] <ID>; run agent-access gmail thread archive --help for flags and input alternatives."
   },
   "thread.restore": {
     "effect": "Invokes Gmail untrash. It does not promise to restore prior labels or Inbox placement. A thread action affects the conversation’s current messages; it does not affect future arrivals.",
@@ -118,7 +126,8 @@
           "id": "18c0f00d99"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail thread restore [OPTIONS] <ID>; run agent-access gmail thread restore --help for flags and input alternatives."
   },
   "thread.trash": {
     "effect": "Moves the selected mail to Trash. It does not permanently delete it; restore can invoke Gmail untrash. A thread action affects the conversation’s current messages; it does not affect future arrivals.",
@@ -131,7 +140,8 @@
           "id": "18c0f00d99"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail thread trash [OPTIONS] <ID>; run agent-access gmail thread trash --help for flags and input alternatives."
   },
   "thread.view": {
     "target": "Reads one thread ID from the currently connected mailbox; use IDs returned by message.search or prior mailbox results. IDs are opaque and are not Broker resource selectors. Discard saved IDs after deliberately changing accounts.",
@@ -144,6 +154,7 @@
           "id": "18c0f00d99"
         }
       }
-    ]
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access gmail thread view [OPTIONS] <ID>; run agent-access gmail thread view --help for flags and input alternatives."
   }
 }
