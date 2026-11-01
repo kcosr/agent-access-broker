@@ -173,8 +173,10 @@ async fn complete(call: Call) -> Value {
         .unwrap()
         .unwrap()
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    response_json(response).await
+    let status = response.status();
+    let envelope = response_json(response).await;
+    assert_eq!(status, StatusCode::OK, "unexpected response: {envelope}");
+    envelope
 }
 
 async fn detail_response(app: &Router, header: &str, token: &str) -> axum::response::Response {
@@ -231,7 +233,10 @@ async fn terminal_audit(fixture: &WaitFixture, request_id: &str) -> Value {
 
 #[tokio::test]
 async fn rest_waits_fifo_across_tokens_without_reading_bodies_or_preparing_providers() {
-    let fixture = fixture("1s", "2s", |_| {}).await;
+    // The accepted tickets project to 2s and 4s, while the next projects to
+    // 6s. A 5s budget leaves real-timer scheduling slack for the second ticket
+    // without admitting the third; exact boundaries use the scheduler clock.
+    let fixture = fixture("2s", "5s", |_| {}).await;
     complete(pending(&fixture.app, "fifo-seed", ALICE).0).await;
     let (first, first_polls) = pending(&fixture.app, "fifo-first", ALICE_OTHER_TOKEN);
     queued(&fixture.app, "Authorization", ALICE, 1).await;
@@ -258,8 +263,10 @@ async fn rest_waits_fifo_across_tokens_without_reading_bodies_or_preparing_provi
         .unwrap()
         .parse()
         .unwrap();
+    // Ignoring the queued reservations would report at most the first 2s
+    // window. The tail must remain beyond that window while both are pending.
     assert!(
-        retry_after >= 2,
+        retry_after >= 4,
         "tail projection must honor existing reservations"
     );
     let rejected = response_json(rejected).await;

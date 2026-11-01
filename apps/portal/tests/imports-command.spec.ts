@@ -242,7 +242,7 @@ test("administrator imports the reference command, grants it, and agents invoke 
     const confirmation = page.getByRole("alertdialog", { name: "Enable ticketing?", exact: true });
     await confirmation.getByRole("button", { name: "Enable service" }).click();
     await expect(confirmation).not.toBeVisible();
-    await expect(page.getByRole("button", { name: "Disable", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Enable", exact: true })).toBeDisabled();
     await expect(page.locator("body")).not.toContainText(SERVICE_TOKEN);
   });
 
