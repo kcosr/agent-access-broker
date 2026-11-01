@@ -1031,8 +1031,8 @@ pub(crate) async fn handle(
     if !native {
         state.reloadable.wait_mcp_discovery_barrier().await;
     }
-    let discovery_deadline =
-        tokio::time::Instant::now() + Duration::from_millis(config.protocol_timeout_ms);
+    let discovery_started = tokio::time::Instant::now();
+    let discovery_deadline = discovery_started + Duration::from_millis(config.protocol_timeout_ms);
     let final_check = tokio::task::spawn_blocking(move || {
         #[cfg(test)]
         owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::Identity);
@@ -1059,18 +1059,18 @@ pub(crate) async fn handle(
     });
     #[cfg(test)]
     let discovery_deadline = {
-        let expiry = state
+        let start = state
             .reloadable
-            .mcp_preprotocol_expiry
+            .mcp_preprotocol_timeout_start
             .lock()
             .unwrap()
             .take();
-        if let Some(expiry) = expiry {
+        if let Some(start) = start {
             // The test keeps the worker blocked until it has selected the
-            // phase, then expires the real Tokio timeout below. Dropping the
+            // phase, then starts the production-computed budget. Dropping the
             // sender also releases this wait if the test fails first.
-            let _ = expiry.await;
-            tokio::time::Instant::now()
+            let _ = start.await;
+            tokio::time::Instant::now() + (discovery_deadline - discovery_started)
         } else {
             discovery_deadline
         }

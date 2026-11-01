@@ -95,7 +95,10 @@ runs the required standalone Rust, crate-boundary, public API, downstream
 consumer, portal build/unit/browser, script, documentation, changelog,
 sample-config, Unix signal, native release-provenance, and notice checks. It
 writes `qualification.json`, per-gate logs, native Rust notices, and the downstream
-consumer evidence in `downstream-consumer/`.
+consumer evidence in `downstream-consumer/`. The Rust test gate preserves its
+JUnit report as `rust-tests.junit.xml` in the output directory and records its
+path and SHA-256 digest in `qualification.json`, including when tests fail after
+producing the report.
 It fails on missing required prerequisites or failed gates; unavailable required
 checks cannot become a passing qualification. Optional OAuth/live-provider
 exclusions and platform applicability are recorded explicitly.

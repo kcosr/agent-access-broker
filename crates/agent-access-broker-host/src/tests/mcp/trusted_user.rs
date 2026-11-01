@@ -1071,11 +1071,12 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
         } else {
             Some(initialize(&fixture, false).await)
         };
+        reload(&fixture, |config| config.mcp.protocol_timeout_ms = 250).await;
         let barrier = Arc::new(crate::state::McpBlockingBarrier::default());
         let _release = ReleaseBlockingOnDrop(barrier.clone());
         *fixture.state.mcp_preprotocol_barrier.lock().unwrap() = Some((phase, barrier.clone()));
-        let (expire, expiry) = tokio::sync::oneshot::channel();
-        *fixture.state.mcp_preprotocol_expiry.lock().unwrap() = Some(expiry);
+        let (start_timeout, timeout_start) = tokio::sync::oneshot::channel();
+        *fixture.state.mcp_preprotocol_timeout_start.lock().unwrap() = Some(timeout_start);
         let message = if method == "initialize" {
             init()
         } else {
@@ -1093,10 +1094,10 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
         tokio::time::timeout(Duration::from_secs(5), barrier.reached.notified())
             .await
             .unwrap();
-        // Select the phase before expiring its deadline: real-time budgets
+        // Select the phase before starting its timeout: real-time budgets
         // can otherwise expire during setup or while the worker is queued.
         assert!(!pending.is_finished());
-        expire.send(()).unwrap();
+        start_timeout.send(()).unwrap();
         let response = tokio::time::timeout(Duration::from_secs(2), pending)
             .await
             .unwrap()

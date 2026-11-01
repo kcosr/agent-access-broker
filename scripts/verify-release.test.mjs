@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,7 +9,8 @@ import test from "node:test";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, assertUnixSignalTestExecuted, parseQualificationArguments, qualificationOutputDirectory,
-  inspectNextestToolchain, MINIMUM_NEXTEST_VERSION, qualificationPlan, runQualification } from "./verify-release.mjs";
+  clearNextestJUnit, inspectNextestToolchain, MINIMUM_NEXTEST_VERSION, preserveNextestJUnit,
+  qualificationPlan, runQualification } from "./verify-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const commit = "a".repeat(40);
@@ -55,6 +57,42 @@ test("the Unix signal gate rejects a successful zero-match run or an ignored par
     "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n",
     `${summary}${summary}`, "",
   ]) assert.throws(() => assertUnixSignalTestExecuted(output), /exactly one passing parent test/);
+});
+
+test("nextest evidence excludes a stale report and preserves a fresh failure report outside target", (t) => {
+  const directory = temporary(t);
+  const checkout = path.join(directory, "checkout");
+  const target = path.join(checkout, "target", "nextest", "ci");
+  const evidence = path.join(directory, "evidence");
+  mkdirSync(target, { recursive: true });
+  mkdirSync(evidence);
+  const source = path.join(target, "junit.xml");
+  writeFileSync(source, "stale report");
+  clearNextestJUnit(checkout);
+  assert.equal(preserveNextestJUnit(checkout, evidence), null, "a build failure need not have a report");
+  assert.throws(() => preserveNextestJUnit(checkout, evidence, { required: true }), /did not produce/);
+
+  const report = '<testsuites tests="1" failures="1"><testsuite name="current-run"/></testsuites>\n';
+  writeFileSync(source, report);
+  const artifact = preserveNextestJUnit(checkout, evidence);
+  assert.equal(artifact.path, "rust-tests.junit.xml");
+  assert.equal(artifact.sha256, createHash("sha256").update(report).digest("hex"));
+  assert.equal(artifact.sizeBytes, Buffer.byteLength(report));
+  rmSync(path.join(checkout, "target"), { recursive: true });
+  assert.equal(readFileSync(path.join(evidence, artifact.path), "utf8"), report);
+});
+
+test("nextest evidence never overwrites a preserved report", (t) => {
+  const directory = temporary(t);
+  const target = path.join(directory, "target", "nextest", "ci");
+  const evidence = path.join(directory, "evidence");
+  mkdirSync(target, { recursive: true });
+  mkdirSync(evidence);
+  writeFileSync(path.join(target, "junit.xml"), "new report");
+  const destination = path.join(evidence, "rust-tests.junit.xml");
+  writeFileSync(destination, "previous evidence");
+  assert.throws(() => preserveNextestJUnit(directory, evidence), /EEXIST/);
+  assert.equal(readFileSync(destination, "utf8"), "previous evidence");
 });
 
 test("publication rejects stale, failed, incomplete, duplicate, and skipped qualification evidence", () => {
@@ -180,4 +218,17 @@ test("qualification detects a changed or dirty source and retains a failed repor
   assert.deepEqual(report.checks, []);
   assert.equal(readFileSync(path.join(checkout, "source.txt"), "utf8"), "uncommitted\n");
   assert.throws(() => validateQualification(report, { commit: revision, version }));
+});
+
+test("qualification forwards compiler overrides to nextest after its subcommand", (t) => {
+  const compilerArgs = ["--config", 'build.rustc="/compiler with spaces/rustc"',
+    "--config", 'build.rustdoc="/compiler with spaces/rustdoc"'];
+  const cargo = "/toolchain/cargo";
+  const plan = qualificationPlan({ root, outputDir: temporary(t), commit,
+    target: nativeTarget, cargo, compilerArgs });
+  const nextest = plan.find((entry) => entry.id === "rust-tests");
+  assert.deepEqual(nextest.command.slice(0, 3 + compilerArgs.length), [cargo, "nextest", "run", ...compilerArgs]);
+  assert.equal(nextest.command[3 + compilerArgs.length], "--locked");
+  const doctests = plan.find((entry) => entry.id === "rust-doctests");
+  assert.deepEqual(doctests.command.slice(0, 2 + compilerArgs.length), [cargo, ...compilerArgs, "test"]);
 });
