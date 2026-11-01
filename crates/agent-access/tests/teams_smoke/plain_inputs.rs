@@ -57,12 +57,18 @@ async fn rpc(fixture: &Fixture, session: &str, id: u64, method: &str, params: Va
 async fn spec(fixture: &Fixture, name: &str) -> Value {
     let response = reqwest::Client::new()
         .get(format!("{}/v1/spec/{name}", fixture.base))
+        .header(
+            "x-agent-access-request-id",
+            format!("teams-plain-spec-{name}"),
+        )
         .bearer_auth(&fixture.agent_token)
         .send()
         .await
         .unwrap();
-    assert!(response.status().is_success());
-    response.json().await.unwrap()
+    let status = response.status();
+    let body: Value = response.json().await.unwrap();
+    assert!(status.is_success(), "spec {name}: {status} {body}");
+    body
 }
 
 fn action(catalog: &Value) -> &Value {
@@ -176,17 +182,18 @@ async fn teams_plain_inputs_project_and_preserve_relationship_denials_across_tra
         let http_called = rpc(&f, &session, 10 + index as u64, "tools/call", json!({"name": name, "arguments": {"inputs": inputs}})).await;
         assert_eq!(http_called["result"]["isError"], true);
         let response = reqwest::Client::new().post(format!("{}/v1/invoke/teams/notification.send", f.base))
+            .header("x-agent-access-request-id", format!("teams-plain-denial-{index}"))
             .bearer_auth(&f.agent_token).json(&json!({"inputs": inputs})).send().await.unwrap();
         assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
         let http_envelope: Value = response.json().await.unwrap();
         let input_file = f.broker.directory().secret_file(format!("invalid-{index}.json"), inputs.to_string()).unwrap();
         let invoked = run(&f.agent_config, &["invoke", "teams.notification.send", "--input-file", input_file.to_str().unwrap()]);
-        assert_eq!(invoked.status.code(), Some(2));
+        assert_eq!(invoked.status.code(), Some(3));
         let invoked: Value = serde_json::from_slice(&invoked.stdout).unwrap();
         let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "teams", "action": "notification.send", "inputs": inputs});
         let request_file = f.broker.directory().secret_file(format!("invalid-send-{index}.json"), request.to_string()).unwrap();
         let sent = run(&f.agent_config, &["send", "--request-file", request_file.to_str().unwrap()]);
-        assert_eq!(sent.status.code(), Some(2));
+        assert_eq!(sent.status.code(), Some(3));
         let sent: Value = serde_json::from_slice(&sent.stdout).unwrap();
         for envelope in [&called["result"]["structuredContent"], &http_called["result"]["structuredContent"], &http_envelope, &invoked, &sent] {
             assert_denial(envelope, expected);
@@ -224,7 +231,7 @@ async fn teams_plain_inputs_project_and_preserve_relationship_denials_across_tra
         }
         assert!(!send_validator.is_valid(&request));
         let output = command.output().unwrap();
-        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.status.code(), Some(3));
         let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(envelope["decision"], "deny");
         assert_eq!(envelope["reasonCode"], "input_invalid");
@@ -328,15 +335,32 @@ async fn teams_plain_content_extensions_execute_and_are_forwarded_unchanged() {
             &f.agent_config,
             &["send", "--request-file", request_file.to_str().unwrap()],
         ));
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/invoke/teams/notification.send", f.base))
+            .header(
+                "x-agent-access-request-id",
+                format!("teams-plain-extension-{index}"),
+            )
+            .bearer_auth(&f.agent_token)
+            .json(&json!({"inputs": inputs}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let envelope: Value = response.json().await.unwrap();
+        assert_eq!(envelope["decision"], "allow");
+        assert_eq!(envelope["result"]["accepted"], true);
+        assert!(!envelope.to_string().contains(CONTENT_MARKER));
+        assert!(!envelope.to_string().contains("SYNTHETIC_SIGNED_SECRET"));
         let calls = f.calls.lock().unwrap();
-        assert_eq!(calls.len(), (index + 1) * 5);
-        for sent in &calls[index * 5..] {
+        assert_eq!(calls.len(), (index + 1) * 6);
+        for sent in &calls[index * 6..] {
             assert_eq!(sent, &content);
         }
     }
     let audit = f.broker.audit().unwrap();
     let records = audit.require_action("teams", "notification.send");
-    assert_eq!(records.len(), 10);
+    assert_eq!(records.len(), 12);
     for record in records {
         assert_eq!(record["decision"], "allow");
         assert_eq!(

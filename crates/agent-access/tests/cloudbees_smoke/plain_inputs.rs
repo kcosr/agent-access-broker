@@ -142,7 +142,7 @@ async fn cloudbees_plain_inputs_keep_stdio_invoke_send_and_categorized_denials()
             ])
             .output()
             .unwrap();
-        assert_eq!(invoke.status.code(), Some(2));
+        assert_eq!(invoke.status.code(), Some(3));
         denial(
             &serde_json::from_slice::<Value>(&invoke.stdout).unwrap(),
             reason,
@@ -154,7 +154,7 @@ async fn cloudbees_plain_inputs_keep_stdio_invoke_send_and_categorized_denials()
             .args(["send", "--request-json", &request.to_string()])
             .output()
             .unwrap();
-        assert_eq!(sent.status.code(), Some(2));
+        assert_eq!(sent.status.code(), Some(3));
         denial(
             &serde_json::from_slice::<Value>(&sent.stdout).unwrap(),
             reason,
@@ -175,7 +175,7 @@ async fn cloudbees_plain_inputs_keep_stdio_invoke_send_and_categorized_denials()
         ],
     ] {
         let output = command(&config).args(args).output().unwrap();
-        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(output.status.code(), Some(3));
         denial(
             &serde_json::from_slice::<Value>(&output.stdout).unwrap(),
             "pass controller and job, or a job or build url",
