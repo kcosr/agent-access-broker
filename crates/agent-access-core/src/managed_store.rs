@@ -691,7 +691,11 @@ impl ManagedStore {
                 matches!(mode, ManagedStoreOpenMode::Startup) && config.auto_migrate,
             )?;
             conn.execute_batch("PRAGMA journal_mode = WAL;")
-                .map_err(sql_unavailable)?;
+                .map_err(|error| {
+                    ManagedStoreError::Unavailable(format!(
+                        "failed to enable managed store WAL mode: {error}"
+                    ))
+                })?;
             applied
         };
         let store = Self {

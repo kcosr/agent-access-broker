@@ -34,6 +34,12 @@ checks. The [testing guide](docs/testing.md) explains the test suites, fixtures,
 and optional live-provider checks. Use the pinned toolchain and locked
 dependencies documented there.
 
+Run the Rust tests with `cargo nextest run --locked --workspace`, then run
+doctests with `cargo test --locked --workspace --doc --no-fail-fast`.
+The [testing guide](docs/testing.md#local-deterministic-suite) documents the
+required nextest version, concurrency controls, and the supported plain-Cargo
+command.
+
 The portal includes a committed shared UI snapshot. Keep that snapshot unchanged
 in a normal Broker pull request; propose shared component fixes through the
 [UI contribution workflow](docs/workbench-vendoring.md). Application changes

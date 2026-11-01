@@ -260,8 +260,14 @@ through `build-cli --env`. A remote service must allowlist all three names.
 
 ## Fast Bootstrap
 
+Install cargo-nextest with `cargo install --locked --version 0.9.150 cargo-nextest`.
+Version 0.9.150 or newer is required. The checked-in configuration runs eight
+tests at a time across binaries without retries or fail-fast; run doctests
+separately because nextest does not execute them. Plain Cargo remains supported:
+`cargo test --locked --workspace --no-fail-fast -- --test-threads=4` covers both.
+
 1. Format: `cargo fmt`
-2. Test: `cargo test --locked`
+2. Test: `cargo nextest run --locked --workspace` and `cargo test --locked --workspace --doc --no-fail-fast`
 3. Build: `cargo build --locked`
 4. Lint: `cargo clippy --locked --all-targets --all-features -- -D warnings`
 5. Validate broker config: `cargo run --locked -p agent-access-broker -- --config agent-access-broker.sample.toml config validate`
@@ -273,7 +279,8 @@ Run these before submitting changes:
 
 ```bash
 cargo fmt --check
-cargo test --locked
+cargo nextest run --locked --workspace
+cargo test --locked --workspace --doc --no-fail-fast
 cargo build --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 node scripts/check-crate-boundaries.mjs
@@ -835,7 +842,8 @@ required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
 requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
 `contentless_delete`, the `nightly-2026-07-13` toolchain and `cargo-public-api`
-0.52.0 for the public API gate, and rejects Cargo target runners, including
+0.52.0 for the public API gate, cargo-nextest 0.9.150 or newer for the Rust
+test gate, and rejects Cargo target runners, including
 through configuration includes. The public API gate checks the candidate
 against its own `api/` inventory; for a release on an existing compatible line,
 also review `git diff <previous-release-tag> -- api/`, where a patch release

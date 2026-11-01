@@ -8,7 +8,7 @@ import test from "node:test";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, assertUnixSignalTestExecuted, parseQualificationArguments, qualificationOutputDirectory,
-  qualificationPlan, runQualification } from "./verify-release.mjs";
+  inspectNextestToolchain, MINIMUM_NEXTEST_VERSION, qualificationPlan, runQualification } from "./verify-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const commit = "a".repeat(40);
@@ -22,6 +22,29 @@ const temporary = (t) => {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 };
+
+test("nextest preflight records a supported version and explains missing or old installations", () => {
+  const env = { PATH: "/fixture/bin" };
+  const inspect = (output) => inspectNextestToolchain(root, {
+    cargo: "/fixture/cargo", env,
+    run(command, args, options) {
+      assert.equal(command, "/fixture/cargo");
+      assert.deepEqual(args, ["nextest", "--version"]);
+      assert.equal(options.cwd, root);
+      assert.equal(options.env, env);
+      if (output instanceof Error) throw output;
+      return output;
+    },
+  });
+  assert.deepEqual(inspect("cargo-nextest 0.9.150 (example 2026-10-26)\nrelease: 0.9.150\n"), {
+    version: "0.9.150", minimumVersion: MINIMUM_NEXTEST_VERSION,
+  });
+  assert.equal(inspect("cargo-nextest 0.9.151\n").version, "0.9.151");
+  for (const output of [new Error("not installed"), "cargo-nextest 0.9.149\n",
+    "cargo-nextest 0.9.150-rc.1\n", "cargo-nextest unrecognized\n", "unrelated 0.9.150\n"]) {
+    assert.throws(() => inspect(output), /cargo-nextest 0\.9\.150 or newer is required; install the tested version with cargo install --locked --version 0\.9\.150 cargo-nextest/);
+  }
+});
 
 test("the Unix signal gate rejects a successful zero-match run or an ignored parent", () => {
   const summary = "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.01s\n";
@@ -87,12 +110,25 @@ test("qualification uses required native/browser gates and fresh paths without p
   const outputDir = temporary(t);
   const plan = qualificationPlan({ root, outputDir, commit, target: nativeTarget, platform: "linux" });
   assert.equal(plan.length, REQUIRED_RELEASE_CHECKS.length);
-  for (const id of ["rust-tests", "rust-build", "rust-clippy", "unix-signals"]) {
+  for (const id of ["rust-tests", "rust-doctests", "rust-build", "rust-clippy", "unix-signals"]) {
     const check = plan.find((entry) => entry.id === id);
     assert.ok(check.command.includes("--locked"));
     assert.equal(check.command[check.command.indexOf("--target") + 1], nativeTarget);
     assert.equal(check.command[check.command.indexOf("--target-dir") + 1], "target");
   }
+  const rust = plan.find((entry) => entry.id === "rust-tests");
+  assert.deepEqual(rust.command.slice(0, 3), ["cargo", "nextest", "run"]);
+  for (const [flag, value] of [["--profile", "ci"], ["--test-threads", "8"], ["--retries", "0"], ["--no-tests", "fail"]]) {
+    assert.equal(rust.command[rust.command.indexOf(flag) + 1], value);
+  }
+  assert.ok(rust.command.includes("--no-fail-fast"));
+  assert.ok(rust.command.includes("--ignore-default-filter"));
+  const doctests = plan.find((entry) => entry.id === "rust-doctests");
+  assert.deepEqual(doctests.command.slice(0, 2), ["cargo", "test"]);
+  for (const flag of ["--workspace", "--doc", "--no-fail-fast"]) assert.ok(doctests.command.includes(flag));
+  const signals = plan.find((entry) => entry.id === "unix-signals");
+  assert.deepEqual(signals.command.slice(-4), ["--", "--ignored", "--exact", "--color=never"]);
+  assert.ok(signals.command.includes("lifecycle::tests::unix_signal_smoke_in_isolated_child_processes"));
   const boundaries = plan.find((entry) => entry.id === "crate-boundaries");
   assert.deepEqual(boundaries.command, [process.execPath, "scripts/check-crate-boundaries.mjs"]);
   assert.equal(boundaries.cargo, true);

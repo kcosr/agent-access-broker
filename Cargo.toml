@@ -77,3 +77,16 @@ tempfile = "3.23"
 wiremock = "0.6"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_SystemInformation"] }
 argon2 = "0.5"
+
+# Keep production password parameters in tests without paying for an
+# unoptimized memory-hard implementation on every fixture login.
+[profile.test.package.argon2]
+opt-level = 3
+
+[profile.test.package.blake2]
+opt-level = 3
+
+# Schema-heavy fixtures use bundled SQLite; optimize its C implementation
+# while retaining debug assertions and normal durability in workspace code.
+[profile.test.package.libsqlite3-sys]
+opt-level = 3

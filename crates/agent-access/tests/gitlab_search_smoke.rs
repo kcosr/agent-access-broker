@@ -137,209 +137,219 @@ async fn mcp_json(response: reqwest::Response) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn project_collections_and_all_six_categories_use_selected_credentials_through_cli_and_http_mcp()
+async fn project_collections_and_all_six_categories_use_service_credentials_through_cli_and_http_mcp()
  {
-    for credentials in [
-        Credentials::Service,
-        Credentials::Personal,
-        Credentials::OAuth,
-    ] {
-        let fixture = Fixture::start(credentials, &ACTIONS).await;
-        for command in ["search", "list"] {
-            let before = fixture.requests().await.len();
-            let discovery =
-                successful_cli(fixture.cli(&["gitlab", "project", command, "--max-results", "4"]));
-            assert_projects(&discovery["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
-            // The nested project has no exact resource entry: the namespace discovers it.
-            assert_eq!(discovery["resourceScopes"]["repository"], json!(["*"]));
-            assert_eq!(discovery["result"]["scanStatus"], "more");
-            let discovery_token = confidential_token(&discovery["result"]).0;
-            let requests = fixture.requests().await;
-            assert_eq!(
-                requests.len() - before,
-                1,
-                "discovery redundantly confirmed project IDs"
-            );
-            assert_eq!(requests[before].url.path(), "/api/v4/projects");
-            let terminal = successful_cli(fixture.cli(&[
-                "gitlab",
-                "project",
-                command,
-                "--max-results",
-                "4",
-                "--page-token",
-                &discovery_token,
-            ]));
-            assert_projects(&terminal["result"], &[]);
-            assert_eq!(terminal["result"]["scanStatus"], "exhausted");
-            assert!(terminal["result"].get("nextPageToken").is_none());
-            assert_eq!(fixture.requests().await.len() - before, 2);
-        }
+    assert_project_collections_and_categories(Credentials::Service).await;
+}
 
-        let listing_markdown = fixture.cli(&[
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_collections_and_all_six_categories_use_personal_credentials_through_cli_and_http_mcp()
+ {
+    assert_project_collections_and_categories(Credentials::Personal).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_collections_and_all_six_categories_use_oauth_credentials_through_cli_and_http_mcp()
+{
+    assert_project_collections_and_categories(Credentials::OAuth).await;
+}
+
+async fn assert_project_collections_and_categories(credentials: Credentials) {
+    let fixture = Fixture::start(credentials, &ACTIONS).await;
+    for command in ["search", "list"] {
+        let before = fixture.requests().await.len();
+        let discovery =
+            successful_cli(fixture.cli(&["gitlab", "project", command, "--max-results", "4"]));
+        assert_projects(&discovery["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+        // The nested project has no exact resource entry: the namespace discovers it.
+        assert_eq!(discovery["resourceScopes"]["repository"], json!(["*"]));
+        assert_eq!(discovery["result"]["scanStatus"], "more");
+        let discovery_token = confidential_token(&discovery["result"]).0;
+        let requests = fixture.requests().await;
+        assert_eq!(
+            requests.len() - before,
+            1,
+            "discovery redundantly confirmed project IDs"
+        );
+        assert_eq!(requests[before].url.path(), "/api/v4/projects");
+        let terminal = successful_cli(fixture.cli(&[
             "gitlab",
             "project",
-            "list",
+            command,
             "--max-results",
             "4",
-            "--output-format",
-            "markdown",
-        ]);
-        assert!(listing_markdown.status.success());
-        let listing_markdown = String::from_utf8(listing_markdown.stdout).unwrap();
-        for marker in [
-            "GitLab projects",
-            "Scan status",
-            "more",
-            "Continuation",
-            FIRST_PROJECT,
-            SECOND_PROJECT,
-        ] {
-            assert!(listing_markdown.contains(marker), "missing {marker}");
-        }
-        assert_private(&listing_markdown);
+            "--page-token",
+            &discovery_token,
+        ]));
+        assert_projects(&terminal["result"], &[]);
+        assert_eq!(terminal["result"]["scanStatus"], "exhausted");
+        assert!(terminal["result"].get("nextPageToken").is_none());
+        assert_eq!(fixture.requests().await.len() - before, 2);
+    }
 
-        for (command, _) in CATEGORIES {
-            let response = successful_cli(fixture.cli(&[
-                "gitlab",
-                "search",
-                command,
-                "--search",
-                QUERY,
-                "--engine",
-                "advanced",
-                "--max-results",
-                "4",
-            ]));
-            assert_projects(&response["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
-            assert_eq!(response["result"]["engine"], "advanced");
-            assert_eq!(response["result"]["scanStatus"], "exhausted");
-            assert!(response["result"].get("nextPageToken").is_none());
-        }
-        let rendered = fixture.cli(&[
+    let listing_markdown = fixture.cli(&[
+        "gitlab",
+        "project",
+        "list",
+        "--max-results",
+        "4",
+        "--output-format",
+        "markdown",
+    ]);
+    assert!(listing_markdown.status.success());
+    let listing_markdown = String::from_utf8(listing_markdown.stdout).unwrap();
+    for marker in [
+        "GitLab projects",
+        "Scan status",
+        "more",
+        "Continuation",
+        FIRST_PROJECT,
+        SECOND_PROJECT,
+    ] {
+        assert!(listing_markdown.contains(marker), "missing {marker}");
+    }
+    assert_private(&listing_markdown);
+
+    for (command, _) in CATEGORIES {
+        let response = successful_cli(fixture.cli(&[
             "gitlab",
             "search",
-            "code",
+            command,
             "--search",
             QUERY,
+            "--engine",
+            "advanced",
             "--max-results",
             "4",
-            "--output-format",
-            "markdown",
-        ]);
-        assert!(rendered.status.success());
-        let rendered = String::from_utf8(rendered.stdout).unwrap();
-        assert_private(&rendered);
-        assert!(rendered.contains(FIRST_PROJECT));
-        assert!(rendered.contains(SECOND_PROJECT));
+        ]));
+        assert_projects(&response["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+        assert_eq!(response["result"]["engine"], "advanced");
+        assert_eq!(response["result"]["scanStatus"], "exhausted");
+        assert!(response["result"].get("nextPageToken").is_none());
+    }
+    let rendered = fixture.cli(&[
+        "gitlab",
+        "search",
+        "code",
+        "--search",
+        QUERY,
+        "--max-results",
+        "4",
+        "--output-format",
+        "markdown",
+    ]);
+    assert!(rendered.status.success());
+    let rendered = String::from_utf8(rendered.stdout).unwrap();
+    assert_private(&rendered);
+    assert!(rendered.contains(FIRST_PROJECT));
+    assert!(rendered.contains(SECOND_PROJECT));
 
-        let initialize = fixture.mcp_request(None,json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+    let initialize = fixture.mcp_request(None,json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
             "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"gitlab-search-smoke","version":"1"}
         }})).await;
-        assert_eq!(initialize.status(), StatusCode::OK);
-        let session = initialize.headers()["mcp-session-id"]
-            .to_str()
-            .unwrap()
-            .to_owned();
-        assert_eq!(
-            mcp_json(initialize).await["result"]["protocolVersion"],
-            "2025-11-25"
-        );
-        let initialized = fixture
+    assert_eq!(initialize.status(), StatusCode::OK);
+    let session = initialize.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        mcp_json(initialize).await["result"]["protocolVersion"],
+        "2025-11-25"
+    );
+    let initialized = fixture
+        .mcp_request(
+            Some(&session),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        )
+        .await;
+    assert_eq!(initialized.status(), StatusCode::ACCEPTED);
+    let before_listing = fixture.requests().await.len();
+    let listing = mcp_json(
+        fixture
             .mcp_request(
                 Some(&session),
-                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
             )
-            .await;
-        assert_eq!(initialized.status(), StatusCode::ACCEPTED);
-        let before_listing = fixture.requests().await.len();
-        let listing = mcp_json(
+            .await,
+    )
+    .await;
+    assert_eq!(
+        fixture.requests().await.len(),
+        before_listing,
+        "MCP discovery contacted GitLab"
+    );
+    let tools = listing["result"]["tools"].as_array().unwrap();
+    for (index, action) in ACTIONS.iter().enumerate() {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["_meta"]["agent-access/action"] == *action)
+            .unwrap_or_else(|| panic!("missing {action}"));
+        let inputs = action_inputs(action);
+        let called = mcp_json(
             fixture
                 .mcp_request(
                     Some(&session),
-                    json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+                    json!({"jsonrpc":"2.0","id":10+index,"method":"tools/call","params":{
+                        "name":tool["name"],"arguments":{"inputs":inputs}
+                    }}),
                 )
                 .await,
         )
         .await;
-        assert_eq!(
-            fixture.requests().await.len(),
-            before_listing,
-            "MCP discovery contacted GitLab"
+        assert_eq!(called["result"]["isError"], false, "{called}");
+        assert_projects(
+            &called["result"]["structuredContent"]["result"],
+            &[FIRST_PROJECT, SECOND_PROJECT],
         );
-        let tools = listing["result"]["tools"].as_array().unwrap();
-        for (index, action) in ACTIONS.iter().enumerate() {
-            let tool = tools
-                .iter()
-                .find(|tool| tool["_meta"]["agent-access/action"] == *action)
-                .unwrap_or_else(|| panic!("missing {action}"));
-            let inputs = action_inputs(action);
-            let called = mcp_json(
-                fixture
-                    .mcp_request(
-                        Some(&session),
-                        json!({"jsonrpc":"2.0","id":10+index,"method":"tools/call","params":{
-                            "name":tool["name"],"arguments":{"inputs":inputs}
-                        }}),
-                    )
-                    .await,
-            )
-            .await;
-            assert_eq!(called["result"]["isError"], false, "{called}");
-            assert_projects(
-                &called["result"]["structuredContent"]["result"],
-                &[FIRST_PROJECT, SECOND_PROJECT],
-            );
-        }
-        assert!(
-            !tools
-                .iter()
-                .any(|tool| tool["_meta"]["agent-access/action"] == "file.view")
-        );
-        fixture.close_mcp(&session).await;
-
-        for request in fixture
-            .requests()
-            .await
-            .iter()
-            .filter(|request| request.url.path().starts_with("/api/v4/"))
-        {
-            assert_eq!(
-                request
-                    .headers
-                    .get("authorization")
-                    .unwrap()
-                    .to_str()
-                    .unwrap(),
-                credentials.authorization()
-            );
-        }
-        let audit = fixture.broker.audit().unwrap();
-        for action in ACTIONS {
-            audit.require_action("gitlab", action);
-        }
-        for record in audit.records() {
-            assert_no_hidden_ids(&record["objectIds"]);
-            assert_no_hidden_ids(&record["providerAudit"]);
-        }
-        assert_private(&audit.text());
-        // The query is a declared audit input of every content search.
-        let recorded_query = json!({"input":"search","label":"Search","value":QUERY});
-        for action in ACTIONS
-            .iter()
-            .filter(|action| action.starts_with("search."))
-        {
-            for record in audit.require_action("gitlab", action) {
-                assert!(
-                    record["auditInputs"]
-                        .as_array()
-                        .is_some_and(|inputs| inputs.contains(&recorded_query)),
-                    "{action} did not record its query: {record}"
-                );
-            }
-        }
-        fixture.stop().await;
     }
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool["_meta"]["agent-access/action"] == "file.view")
+    );
+    fixture.close_mcp(&session).await;
+
+    for request in fixture
+        .requests()
+        .await
+        .iter()
+        .filter(|request| request.url.path().starts_with("/api/v4/"))
+    {
+        assert_eq!(
+            request
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            credentials.authorization()
+        );
+    }
+    let audit = fixture.broker.audit().unwrap();
+    for action in ACTIONS {
+        audit.require_action("gitlab", action);
+    }
+    for record in audit.records() {
+        assert_no_hidden_ids(&record["objectIds"]);
+        assert_no_hidden_ids(&record["providerAudit"]);
+    }
+    assert_private(&audit.text());
+    // The query is a declared audit input of every content search.
+    let recorded_query = json!({"input":"search","label":"Search","value":QUERY});
+    for action in ACTIONS
+        .iter()
+        .filter(|action| action.starts_with("search."))
+    {
+        for record in audit.require_action("gitlab", action) {
+            assert!(
+                record["auditInputs"]
+                    .as_array()
+                    .is_some_and(|inputs| inputs.contains(&recorded_query)),
+                "{action} did not record its query: {record}"
+            );
+        }
+    }
+    fixture.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
