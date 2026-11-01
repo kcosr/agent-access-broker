@@ -1059,6 +1059,9 @@ async fn trusted_user_live_cancellation_and_delete_work_for_each_transport_and_v
 #[tokio::test]
 async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_errors() {
     use crate::mcp::PreProtocolPhase;
+    // Distinguish the configured budget from the default without making
+    // session setup depend on a short real-time deadline.
+    const PROTOCOL_TIMEOUT_MS: u64 = 20_123;
     for (phase, method) in [
         (PreProtocolPhase::Identity, "tools/list"),
         (PreProtocolPhase::View, "initialize"),
@@ -1066,17 +1069,20 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
         (PreProtocolPhase::Discovery, "tools/call"),
     ] {
         let (fixture, _, _) = fixture(2).await;
+        reload(&fixture, |config| {
+            config.mcp.protocol_timeout_ms = PROTOCOL_TIMEOUT_MS;
+        })
+        .await;
         let session = if phase == PreProtocolPhase::View {
             None
         } else {
             Some(initialize(&fixture, false).await)
         };
-        reload(&fixture, |config| config.mcp.protocol_timeout_ms = 250).await;
         let barrier = Arc::new(crate::state::McpBlockingBarrier::default());
         let _release = ReleaseBlockingOnDrop(barrier.clone());
         *fixture.state.mcp_preprotocol_barrier.lock().unwrap() = Some((phase, barrier.clone()));
-        let (start_timeout, timeout_start) = tokio::sync::oneshot::channel();
-        *fixture.state.mcp_preprotocol_timeout_start.lock().unwrap() = Some(timeout_start);
+        let (expire, expiry) = tokio::sync::oneshot::channel();
+        *fixture.state.mcp_preprotocol_expiry.lock().unwrap() = Some(expiry);
         let message = if method == "initialize" {
             init()
         } else {
@@ -1094,10 +1100,12 @@ async fn trusted_user_preprotocol_timeouts_preserve_identity_view_and_discovery_
         tokio::time::timeout(Duration::from_secs(5), barrier.reached.notified())
             .await
             .unwrap();
-        // Select the phase before starting its timeout: real-time budgets
+        // Select the phase before checking and expiring its timeout: budgets
         // can otherwise expire during setup or while the worker is queued.
         assert!(!pending.is_finished());
-        start_timeout.send(()).unwrap();
+        expire
+            .send(Duration::from_millis(PROTOCOL_TIMEOUT_MS))
+            .unwrap();
         let response = tokio::time::timeout(Duration::from_secs(2), pending)
             .await
             .unwrap()

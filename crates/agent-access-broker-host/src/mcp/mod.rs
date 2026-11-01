@@ -1059,18 +1059,21 @@ pub(crate) async fn handle(
     });
     #[cfg(test)]
     let discovery_deadline = {
-        let start = state
+        let expiry = state
             .reloadable
-            .mcp_preprotocol_timeout_start
+            .mcp_preprotocol_expiry
             .lock()
             .unwrap()
             .take();
-        if let Some(start) = start {
+        if let Some(expiry) = expiry {
             // The test keeps the worker blocked until it has selected the
-            // phase, then starts the production-computed budget. Dropping the
-            // sender also releases this wait if the test fails first.
-            let _ = start.await;
-            tokio::time::Instant::now() + (discovery_deadline - discovery_started)
+            // phase. Check the production-computed budget before expiring the
+            // real timeout without a wall-clock wait. A dropped sender skips
+            // the assertion and releases this wait during test cleanup.
+            if let Ok(expected_budget) = expiry.await {
+                assert_eq!(discovery_deadline - discovery_started, expected_budget);
+            }
+            tokio::time::Instant::now()
         } else {
             discovery_deadline
         }

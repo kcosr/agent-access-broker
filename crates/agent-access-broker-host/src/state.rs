@@ -87,10 +87,10 @@ pub(crate) struct ReloadableState {
     #[cfg(test)]
     pub(crate) mcp_preprotocol_barrier:
         Mutex<Option<(crate::mcp::PreProtocolPhase, Arc<McpBlockingBarrier>)>>,
-    /// Starts the computed preprotocol timeout budget after a test has observed
-    /// its blocked worker in the intended phase, independent of scheduling delays.
+    /// Checks and expires the computed preprotocol budget after a test has
+    /// observed its blocked worker in the intended phase.
     #[cfg(test)]
-    pub(crate) mcp_preprotocol_timeout_start: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    pub(crate) mcp_preprotocol_expiry: Mutex<Option<tokio::sync::oneshot::Receiver<Duration>>>,
     #[cfg(test)]
     pub(crate) mcp_prune_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
     #[cfg(test)]
@@ -760,7 +760,7 @@ impl ReloadableState {
             #[cfg(test)]
             mcp_preprotocol_barrier: Mutex::new(None),
             #[cfg(test)]
-            mcp_preprotocol_timeout_start: Mutex::new(None),
+            mcp_preprotocol_expiry: Mutex::new(None),
             #[cfg(test)]
             mcp_prune_barrier: Mutex::new(None),
             #[cfg(test)]
