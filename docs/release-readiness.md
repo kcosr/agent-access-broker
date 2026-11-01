@@ -64,6 +64,13 @@ checks the version and exercises table creation, insertion, and deletion, so
 required audit smoke coverage cannot silently skip on an older or feature-limited
 SQLite build.
 
+The Rust test gate requires cargo-nextest 0.9.150 or newer. Install the tested
+version with `cargo install --locked --version 0.9.150 cargo-nextest`. Preflight
+records its version and fails with installation instructions when it is missing
+or too old. The gate runs sixteen tests concurrently without retries or fail-fast
+and ignores default subset filters; Cargo doctests run in a separate required
+gate. The exact ignored Unix signal parent continues to run with plain Cargo.
+
 The public API gate also requires the `nightly-2026-07-13` Rust toolchain,
 installed with rustup, and `cargo-public-api` 0.52.0 on `PATH`. Set
 `AGENT_ACCESS_PUBLIC_API_RUSTUP_HOME` when the nightly is installed in a
@@ -88,7 +95,10 @@ runs the required standalone Rust, crate-boundary, public API, downstream
 consumer, portal build/unit/browser, script, documentation, changelog,
 sample-config, Unix signal, native release-provenance, and notice checks. It
 writes `qualification.json`, per-gate logs, native Rust notices, and the downstream
-consumer evidence in `downstream-consumer/`.
+consumer evidence in `downstream-consumer/`. The Rust test gate preserves its
+JUnit report as `rust-tests.junit.xml` in the output directory and records its
+path and SHA-256 digest in `qualification.json`, including when tests fail after
+producing the report.
 It fails on missing required prerequisites or failed gates; unavailable required
 checks cannot become a passing qualification. Optional OAuth/live-provider
 exclusions and platform applicability are recorded explicitly.
@@ -110,7 +120,8 @@ artifact paths. Running individual checks does not create the passing
 
 ```bash
 cargo fmt --check
-cargo test --locked
+cargo nextest run --locked --workspace --profile ci --test-threads 16 --retries 0 --no-fail-fast --no-tests fail --ignore-default-filter
+cargo test --locked --workspace --doc --no-fail-fast -- --test-threads=4
 BROKER_BUILD_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --locked --target-dir target --target "$BROKER_BUILD_TARGET"
 cargo clippy --locked --all-targets --all-features -- -D warnings

@@ -320,6 +320,11 @@ or proposals whose fit needs discussion. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for reporting, proposal, and pull-request guidance, and [AGENTS.md](AGENTS.md)
 for development checks.
 
+The Rust suite uses `cargo nextest run --locked --workspace` and a separate
+`cargo test --locked --workspace --doc --no-fail-fast` pass. The
+[testing guide](docs/testing.md#local-deterministic-suite) covers installation,
+bounded concurrency, and running the complete suite with plain Cargo.
+
 The [release procedure](AGENTS.md#release-procedure) separates preparation,
 qualification, and publication: review version and changelog changes first,
 qualify the final clean merged commit, and publish that exact commit. The

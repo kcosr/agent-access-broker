@@ -8,8 +8,8 @@ syntax is documented in `docs/cli.md`; provider behavior is documented in
 
 The repository uses five test categories:
 
-- Deterministic local tests run during ordinary `cargo test` and require no live
-  upstream credentials.
+- Deterministic local tests run with nextest and a separate Cargo doctest pass,
+  or with ordinary `cargo test`, and require no live upstream credentials.
 - The Unix process-signal smoke is deterministic and local but explicitly
   `#[ignore]`-gated because it sends real signals to isolated child processes.
   It is required separately on Unix and not applicable on non-Unix platforms.
@@ -284,9 +284,28 @@ and npm 11.16.0; these pins record reproducible validation, not minimum supporte
 versions. Commands below run locally. An available configured
 [build service](../AGENTS.md#build-service) can wrap the Cargo commands instead.
 
+Install the tested cargo-nextest version before running the Rust suite:
+
+```bash
+cargo install --locked --version 0.9.150 cargo-nextest
+```
+
+The minimum supported nextest version is 0.9.150. The repository's
+[nextest configuration](../.config/nextest.toml) runs up to sixteen tests across
+all test binaries, with no retries and no fail-fast. A test is reported as slow
+after one minute and times out after five minutes; the tests' own assertions
+about deadlines and shutdown still apply. Each test gets its own process;
+fixtures retain private directories, ports, and subprocess cleanup.
+
+The Cargo test profile optimizes the `argon2`, `blake2`, and `libsqlite3-sys`
+dependencies. Password tests still use the production Argon2id parameters of
+64 MiB and three passes. SQLite keeps its normal durability and actual-database
+schema and integrity checks, and workspace crates retain debug assertions.
+
 ```bash
 cargo fmt --check
-cargo test --locked
+cargo nextest run --locked --workspace
+cargo test --locked --workspace --doc --no-fail-fast
 cargo build --locked
 cargo clippy --locked --all-targets --all-features -- -D warnings
 cargo run --locked -p agent-access-broker -- --config agent-access-broker.sample.toml config validate
@@ -307,6 +326,19 @@ python3 crates/agent-access/tests/fixtures/command-imports/ticketing.test.py
 node scripts/check-doc-links.mjs
 node scripts/check-changelog.mjs
 ```
+
+Nextest does not run doctests, so the separate `cargo test --doc` command is
+required. Plain Cargo remains supported and covers both test binaries and
+doctests in one command:
+
+```bash
+cargo test --locked --workspace --no-fail-fast -- --test-threads=4
+```
+
+For a focused nextest run, use a package and test-name filter, for example
+`cargo nextest run --locked -p agent-access --test gitlab_search_smoke`.
+The separately required Unix signal parent fixture below remains a plain-Cargo
+command. Do not include ignored tests broadly in either runner.
 
 Every workspace crate declares one role in its manifest:
 
@@ -440,9 +472,12 @@ restriction, continue independent checks, and retain the exception in release
 evidence. Other failures need investigation; a passing build does not validate a
 skipped test or live upstream compatibility.
 
-On a shared host running other agents' tests, use
-`cargo test -- --test-threads=4` to limit concurrent fixtures. The invocation
-ownership and webhook-policy fixtures allow ten seconds for provider startup
+On a shared host, adjust nextest's global concurrency with
+`cargo nextest run --locked --workspace --test-threads=4` when fewer concurrent
+fixtures are appropriate. With plain Cargo, use `-- --test-threads=4`; this
+limits tests within each binary, while nextest schedules across binaries.
+The invocation ownership and webhook-policy fixtures allow ten seconds for
+provider startup
 or reload setup involving real audit, filesystem, and worker activity. Tests
 of shutdown and timeout behavior retain their explicit budgets.
 
@@ -2033,7 +2068,8 @@ cargo test --locked -p agent-access-broker-host --lib tests::managed_identity
 cargo test --locked -p agent-access-core --lib trusted_caller
 ```
 
-The full `cargo test --locked` suite is the complete Broker-side check; it also
+The full deterministic suite (nextest plus Cargo doctests, or plain
+`cargo test --locked --workspace`) is the complete Broker-side check; it also
 includes MCP caller/session binding, pre-dispatch admission envelopes, ordinary
 principal authentication alongside caller attestation, and forwarded-identity
 fallback rejection tests outside the filters above.

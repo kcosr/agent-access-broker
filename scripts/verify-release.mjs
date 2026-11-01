@@ -1,20 +1,59 @@
 #!/usr/bin/env node
 // Qualify one clean native candidate. This command never tags or publishes.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync,
-  readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+  readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryBinaries } from "./portal-binaries.mjs";
 import { inspectPublicApiToolchain } from "./public-api.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
+import { compareVersions } from "./release-plan.mjs";
 import { inspectLocalToolchain, provenanceBuildPlan } from "./verify-release-provenance.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SCRIPT_PATH), "..");
 const PROVENANCE_VARIABLES = ["AGENT_ACCESS_BUILD_COMMIT", "AGENT_ACCESS_BUILD_PROVENANCE", "AGENT_ACCESS_REQUIRE_BUILD_PROVENANCE"];
 const stamp = () => new Date().toISOString();
+export const MINIMUM_NEXTEST_VERSION = "0.9.150";
+
+export function inspectNextestToolchain(root, { cargo = "cargo", env = process.env, run = execFileSync } = {}) {
+  const required = `cargo-nextest ${MINIMUM_NEXTEST_VERSION} or newer is required; install the tested version with cargo install --locked --version ${MINIMUM_NEXTEST_VERSION} cargo-nextest`;
+  let output;
+  try {
+    output = run(cargo, ["nextest", "--version"], {
+      cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } catch { throw new Error(required); }
+  const version = /^cargo-nextest (\S+)(?:\s|$)/.exec(output)?.[1];
+  let supported = false;
+  try { supported = Boolean(version) && compareVersions(version, MINIMUM_NEXTEST_VERSION) >= 0; }
+  catch { /* An unrecognized version cannot qualify the candidate. */ }
+  if (!supported) throw new Error(required);
+  return { version, minimumVersion: MINIMUM_NEXTEST_VERSION };
+}
+
+function nextestJUnitPath(root) {
+  return join(root, "target", "nextest", "ci", "junit.xml");
+}
+
+export function clearNextestJUnit(root) {
+  rmSync(nextestJUnitPath(root), { force: true });
+}
+
+export function preserveNextestJUnit(root, outputDir, { required = false } = {}) {
+  const source = nextestJUnitPath(root);
+  if (!existsSync(source)) {
+    if (required) throw new Error("nextest did not produce its configured JUnit report");
+    return null;
+  }
+  const contents = readFileSync(source);
+  const path = "rust-tests.junit.xml";
+  writeFileSync(join(outputDir, path), contents, { flag: "wx", mode: 0o600 });
+  return { path, sha256: createHash("sha256").update(contents).digest("hex"), sizeBytes: contents.length };
+}
 
 function npmCommand(platform, ...args) {
   // All npm arguments here are fixed repository commands. Windows .cmd files
@@ -78,7 +117,9 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "public-api", command: [node, "scripts/public-api.mjs", "check"] },
     { id: "portal-unit", command: portal("test:unit") },
     { id: "portal-build", command: portal("build") },
-    { id: "rust-tests", command: cargoCommand("test", ...native, "--workspace", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },
+    { id: "rust-tests", command: [cargo, "nextest", "run", ...compilerArgs, ...native, "--workspace", "--profile", "ci",
+      "--test-threads", "16", "--retries", "0", "--no-fail-fast", "--no-tests", "fail", "--ignore-default-filter"], cargo: true },
+    { id: "rust-doctests", command: cargoCommand("test", ...native, "--workspace", "--doc", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },
     { id: "rust-build", command: cargoCommand("build", ...native, "-p", "agent-access-broker", "-p", "agent-access"), cargo: true },
     { id: "downstream-consumer", command: [node, "scripts/verify-downstream-consumer.mjs", "--commit", commit,
       "--evidence-dir", join(outputDir, "downstream-consumer")] },
@@ -155,6 +196,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
       npm: capture(root, npmVersionCommand[0], npmVersionCommand.slice(1), baseEnv),
       python: capture(root, "python3", ["--version"], baseEnv),
       publicApi: inspectPublicApiToolchain({ env: baseEnv }),
+      nextest: inspectNextestToolchain(root, { cargo: toolchain.cargoPath, env: baseEnv }),
     };
     const provenancePlan = provenanceBuildPlan(report.commit, { root, env: baseEnv, toolchain });
     const cargoEnv = { ...provenancePlan.env };
@@ -188,6 +230,7 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
         Object.assign(checkEnv, { AAB_BROKER_BIN: check.binaries.brokerBinary,
           AAB_CLI_BIN: check.binaries.cliBinary, AAB_PORTAL_DIST: join(root, "apps", "portal", "dist") });
       }
+      if (check.id === "rust-tests") clearNextestJUnit(root);
       const log = openSync(join(directory, result.log), "w", 0o600);
       try {
         const execution = spawnSync(check.command[0], check.command.slice(1), {
@@ -203,6 +246,15 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
         }
       } finally {
         closeSync(log);
+        if (check.id === "rust-tests") {
+          try {
+            const artifact = preserveNextestJUnit(root, directory, { required: result.status === "passed" });
+            if (artifact) result.artifacts = [artifact];
+          } catch (error) {
+            result.status = "failed";
+            result.error = [result.error, error.message].filter(Boolean).join("; ");
+          }
+        }
         result.finishedAt = stamp();
         save();
       }
