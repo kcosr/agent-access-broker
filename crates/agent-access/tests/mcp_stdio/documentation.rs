@@ -79,7 +79,8 @@ async fn nested_documentation_survives_real_stdio_and_stays_out_of_tool_lists() 
     }]});
     let mut descriptor = agent_access_fake::fake_descriptor();
     descriptor.actions[0].documentation = Some(documentation.clone());
-    descriptor.actions[0].sensitive_input_pointers = vec!["/inputs/message".into()];
+    descriptor.actions[0].input_schema["properties"]["message"]["x-agent-access-sensitive"] =
+        json!(true);
     let broker = application
         .config_document(toml::to_string(&document).unwrap())
         .provider_fixture(

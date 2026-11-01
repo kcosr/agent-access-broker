@@ -1265,7 +1265,8 @@ impl agent_access_provider::test_support::DescribedProvider for FileCatalogProvi
             action.action = name.into();
             action.documentation = Some(fixture_documentation());
             if name == "issue.view" {
-                action.sensitive_input_pointers = vec!["/inputs/message".into()];
+                action.input_schema["properties"]["message"]["x-agent-access-sensitive"] =
+                    json!(true);
             }
             action.read_only = matches!(name, "issue.view" | "attachment.download");
             action
