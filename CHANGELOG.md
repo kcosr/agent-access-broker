@@ -217,7 +217,7 @@ All notable changes to this project are documented in this file.
   acceptance, audit fields and content formats are unchanged. See
   [Jira input arguments](docs/providers-jira.md#input-arguments) and
   [Confluence input arguments](docs/providers-confluence.md#input-arguments).
-  ([#87](https://github.com/kcosr/agent-access-broker/pull/87))
+  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88))
 
 - **Release qualification uses nextest for Rust tests.** Install cargo-nextest
   0.9.150 or newer before qualifying a release. The Rust suite runs with sixteen
