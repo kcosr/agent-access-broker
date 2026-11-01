@@ -247,7 +247,7 @@ impl ToolRegistry {
                 );
                 if action.documentation.is_some() {
                     description.push_str(&format!(
-                        " For detailed usage, call actions_describe with service=\"{}\" and action=\"{}\".",
+                        " Detailed usage: request action details for service=\"{}\" and action=\"{}\" through your client's available discovery tools.",
                         service.service, action.action
                     ));
                 }
@@ -897,6 +897,63 @@ mod tests {
             ScopedMcpIssueCode::ProjectionBudget
         );
         assert!(evaluate_scoped_mcp_readiness(&descriptor, STDIO_MAX_CATALOG_BYTES).ready);
+    }
+
+    #[test]
+    fn documentation_growth_preserves_definition_budget_and_canonical_discovery_ids() {
+        let mut descriptor = descriptor();
+        descriptor.actions[0].documentation = Some(json!({"usage":"short"}));
+        let original = catalog(&descriptor, true);
+        descriptor.actions[0].documentation = Some(json!({
+            "inputExamples":[{"label":"DOC_SENTINEL", "inputs":{"quoted":"\\\"".repeat(100_000)}}]
+        }));
+        let expanded = catalog(&descriptor, true);
+        for mode in [ProjectionMode::Stdio, ProjectionMode::Http] {
+            for view in [McpView::Aggregate, McpView::Service("example".into())] {
+                let baseline =
+                    ToolRegistry::build(&original, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                let definitions = baseline.definitions();
+                let exact = serde_json::to_vec(&definitions).unwrap().len();
+                let current = ToolRegistry::build(&expanded, &view, mode, exact).unwrap();
+                assert_eq!(current.definitions(), definitions);
+                assert!(ToolRegistry::build(&expanded, &view, mode, exact - 1).is_err());
+                let tool = current.action_detail("example", "accepted.read").unwrap();
+                let expected_name = if matches!(view, McpView::Aggregate) {
+                    "example_accepted_read"
+                } else {
+                    "Original.Read"
+                };
+                assert_eq!(tool["name"], expected_name);
+                assert_eq!(
+                    current.resolve(expected_name),
+                    Some(&ToolTarget::Action {
+                        service: "example".into(),
+                        action: "accepted.read".into()
+                    })
+                );
+                assert!(
+                    current
+                        .resolve(&format!("client_prefix_{expected_name}"))
+                        .is_none()
+                );
+                let tool = definitions
+                    .iter()
+                    .find(|tool| tool["name"] == expected_name)
+                    .unwrap();
+                assert_eq!(tool["_meta"]["agent-access/service"], "example");
+                assert_eq!(tool["_meta"]["agent-access/action"], "accepted.read");
+                let description = tool["description"].as_str().unwrap();
+                assert!(description.contains("service=\"example\" and action=\"accepted.read\""));
+                assert!(description.contains("your client's available discovery tools"));
+                assert_eq!(description.matches("Detailed usage:").count(), 1);
+                assert!(!description.contains("actions_describe"));
+                assert!(
+                    !serde_json::to_string(&definitions)
+                        .unwrap()
+                        .contains("DOC_SENTINEL")
+                );
+            }
+        }
     }
 
     #[test]

@@ -863,6 +863,163 @@ fn native_schemas() -> Vec<NativeSchemaCase> {
 }
 
 #[test]
+fn native_documentation_preserves_every_spec_and_tool_projection() {
+    use crate::mcp::{McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry};
+    use crate::{api_service_spec, empty_catalog, openapi_from_catalog, send_schema_from_catalog};
+    // Separate from the larger pure projection budget: the CLI's JSON reader
+    // bounds the whole response before selecting a service or projecting tools.
+    const STDIO_JSON_READ_BYTES: usize = 16 * 1024 * 1024;
+
+    let mut unique = std::collections::BTreeSet::new();
+    let mut cases = 0;
+    let mut largest_detail = (0, String::new());
+    for (configuration, descriptor) in native_service_descriptors() {
+        let capabilities = descriptor.capabilities();
+        let service = api_service_spec(&descriptor, true).unwrap();
+        let mut catalog = empty_catalog(json!({"principal":"synthetic-guidance-reader"}));
+        catalog.services.push(service.clone());
+        let catalog_bytes = serde_json::to_vec(&catalog).unwrap().len();
+        let service_bytes = serde_json::to_vec(&capabilities).unwrap().len();
+        assert!(
+            catalog_bytes < STDIO_JSON_READ_BYTES,
+            "{configuration}/{} catalog",
+            service.service
+        );
+        assert!(
+            service_bytes < STDIO_JSON_READ_BYTES,
+            "{configuration}/{} service",
+            service.service
+        );
+        let openapi = openapi_from_catalog(&catalog, crate::RenderAuthMode::Omit, &[], "session");
+        let send = send_schema_from_catalog(&catalog);
+        for action in &service.actions {
+            cases += 1;
+            unique.insert((service.service.clone(), action.action.clone()));
+            let original = descriptor
+                .actions
+                .iter()
+                .find(|candidate| candidate.action == action.action)
+                .unwrap();
+            let capability = capabilities
+                .actions
+                .iter()
+                .find(|candidate| candidate.action == action.action)
+                .unwrap();
+            assert_eq!(action.documentation, original.documentation);
+            assert_eq!(capability.documentation, original.documentation);
+            let operation = &openapi["paths"]
+                [format!("/v1/invoke/{}/{}", service.service, action.action)]["post"];
+            let variant = send["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|variant| {
+                    variant["properties"]["service"]["const"] == service.service
+                        && variant["properties"]["action"]["const"] == action.action
+                })
+                .unwrap();
+            assert_eq!(
+                operation.get("x-agent-access-documentation"),
+                original.documentation.as_ref(),
+                "{configuration}/{}.{} OpenAPI",
+                service.service,
+                action.action
+            );
+            assert_eq!(
+                variant.get("x-agent-access-documentation"),
+                original.documentation.as_ref(),
+                "{configuration}/{}.{} send",
+                service.service,
+                action.action
+            );
+        }
+        let mut changed = catalog.clone();
+        for action in &mut changed.services[0].actions {
+            if action.documentation.is_some() {
+                action.documentation = Some(json!({"usage":"DOC_GROWTH_SENTINEL".repeat(1_000)}));
+            }
+        }
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            for view in [
+                McpView::Aggregate,
+                McpView::Service(service.service.clone()),
+            ] {
+                let registry =
+                    ToolRegistry::build(&catalog, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                let definitions = registry.definitions();
+                let bytes = serde_json::to_vec(&definitions).unwrap();
+                let expanded = ToolRegistry::build(&changed, &view, mode, bytes.len()).unwrap();
+                assert_eq!(
+                    expanded.definitions(),
+                    definitions,
+                    "{configuration}/{} {mode:?} {view:?}",
+                    service.service
+                );
+                assert!(
+                    !String::from_utf8(bytes.clone())
+                        .unwrap()
+                        .contains("DOC_GROWTH_SENTINEL")
+                );
+                assert_eq!(
+                    definitions.len(),
+                    5 + service
+                        .actions
+                        .iter()
+                        .filter(|action| crate::mcp::action_eligible(action, mode))
+                        .count()
+                );
+                for action in &service.actions {
+                    let detail = registry.action_detail(&service.service, &action.action);
+                    assert_eq!(detail.is_some(), crate::mcp::action_eligible(action, mode));
+                    let mut described = serde_json::to_value(action).unwrap();
+                    described.as_object_mut().unwrap().remove("scopedMcpName");
+                    described["service"] = json!(service.service);
+                    if let Some(detail) = detail {
+                        assert_eq!(detail.as_object().unwrap().len(), 2);
+                        assert!(detail.get("documentation").is_none());
+                        described["mcpTool"] = detail;
+                    }
+                    // The host's output::result reserves 8192 bytes for HTTP
+                    // framing. Its exact-boundary test checks that reserve and
+                    // SDK serialization; this matrix guards every native action
+                    // at the minimum supported 64 KiB response setting.
+                    let result = rmcp::model::CallToolResult::structured(described);
+                    let bytes = serde_json::to_vec(&result).unwrap().len() + 8192;
+                    let label = format!(
+                        "{configuration}/{}.{} {mode:?} {view:?}",
+                        service.service, action.action
+                    );
+                    assert!(
+                        bytes <= 65_536,
+                        "{label} action detail needs {bytes} bytes including framing reserve"
+                    );
+                    if bytes > largest_detail.0 {
+                        largest_detail = (bytes, label);
+                    }
+                }
+                println!(
+                    "native projection {configuration}/{} {mode:?} {view:?}: {} bytes",
+                    service.service,
+                    bytes.len()
+                );
+            }
+        }
+        println!(
+            "native specs {configuration}/{}: catalog={catalog_bytes} service={service_bytes} openapi={} send={}",
+            service.service,
+            serde_json::to_vec(&openapi).unwrap().len(),
+            serde_json::to_vec(&send).unwrap().len()
+        );
+    }
+    assert_eq!(cases, native_schemas().len());
+    assert_eq!(unique.len(), 227);
+    println!(
+        "largest native MCP action detail including HTTP framing reserve: {} bytes ({})",
+        largest_detail.0, largest_detail.1
+    );
+}
+
+#[test]
 fn native_schema_cases_cover_optional_actions_and_content_formats() {
     let cases = native_schemas();
     let schema = |configuration, service, action| {

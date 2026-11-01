@@ -121,10 +121,10 @@ fn helper_description<'a>(name: &str, local: &'a str, mode: ProjectionMode) -> &
     }
     match name {
         "services_list" => {
-            "List services visible to the current identity, including display names, access surfaces, canonical action names, and local credential availability. Unavailable services retain a status with empty actions. Resolve setup requirements and refresh discovery. Actions may be restricted to particular resources. Eligible caller-visible invoke actions with JSON I/O have executable provider tools in this HTTP MCP interface. Use actions_describe to check tool availability and local stdio MCP for multipart uploads and raw downloads. Use services_describe for detailed service capabilities."
+            "List visible services, canonical IDs and actions, access surfaces, and local credential availability. Unavailable services retain status details with empty action lists. This endpoint executes listed JSON actions; local stdio MCP supports file actions. Resource grants still constrain each action."
         }
         "actions_describe" => {
-            "Describe one visible action, including extended usage documentation, its input schema, and execution requirements. For an eligible caller-visible JSON invoke action, also return its exact HTTP MCP tool name and complete argument schema. Naming conflicts and overlong names omit mcpTool and report mcpToolUnavailable. Multipart uploads and raw downloads remain describable but require local stdio MCP and omit mcpTool here. Use actions_list to check resource-specific policy. Invoke detail requires current caller-visible runtime catalog eligibility; retry discovery after permission changes."
+            "Describe one caller-visible action: usage documentation, input schema and execution requirements. Executable JSON actions include mcpTool with this connection's wire name and full arguments; naming conflicts and overlong names report mcpToolUnavailable. File actions are described here and execute through local stdio MCP. Use your client's exposed names for calls."
         }
         _ => local,
     }
@@ -335,40 +335,41 @@ pub fn is_helper(name: &str) -> bool {
 }
 
 fn json_output_path_schema() -> Value {
-    json!({"type":"string","minLength":1,"description":"Optional absolute local destination path. Saves the complete successful JSON response and returns a compact file receipt. Atomically replaces the destination. Existing read limits and pagination still apply; this does not fetch additional content."})
+    json!({"type":"string","minLength":1,"description":"Absolute local path for the complete successful JSON response. Atomically replaces the file and returns a compact receipt. Read limits and pagination still apply."})
 }
 
 pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
-    let string = json!({"type":"string","minLength":1});
-    let service = json!({"type":"string","minLength":1,"description":"Canonical configured service ID, not its display name."});
+    let string =
+        |description: &str| json!({"type":"string","minLength":1,"description":description});
+    let service = string("Canonical configured service ID from discovery.");
     let definitions = [
         (
             "services_list",
-            "List services visible to the current identity, including display names, access surfaces, canonical action names, and local credential availability. Unavailable services retain a status with empty actions. Resolve setup requirements and refresh discovery. Actions may be restricted to particular resources. Only services with surface invoke have executable provider tools in this MCP interface. Use services_describe for detailed service capabilities.",
-            json!({"prefix":string}),
+            "List visible services, canonical IDs and actions, access surfaces, and local credential availability. Unavailable services retain status details with empty action lists. Resource grants still constrain each action.",
+            json!({"prefix":string("Filter canonical service IDs by this prefix.")}),
             json!([]),
         ),
         (
             "resource_access_describe",
-            "Describe local single-target access by action and resource type for one visible service. Filter by exact action or resourceType. Coverage includes exact, namespace, and all selectors; restricted:true means some targets are withheld without identifying them. Unscoped actions have scope:unscoped. registeredResources contains configured references, not upstream inventory; inputs address each reference. Optional liveListings names separately authorized enumeration actions. This does not prove upstream access or authorize a complete multi-resource request. Coverage repeats on every page. prefix, limit, and cursor page only registeredResources.items; repeat identical filters with registeredResources.nextCursor. Default limit 50, maximum 100.",
-            json!({"service":service,"action":string,"resourceType":string,"prefix":string,"limit":{"type":"integer","minimum":1,"maximum":100,"default":50},"cursor":string}),
+            "Describe local single-target coverage, configured references and separately authorized live listings. Coverage uses exact, namespace or all selectors; restricted marks withheld targets and unscoped marks actions without resource scopes. References are not upstream inventory. Invocation still checks upstream access and all requested resources. Page only registeredResources.items with registeredResources.nextCursor and identical filters; coverage repeats on each page.",
+            json!({"service":service,"action":string("Canonical action ID to describe exactly; omit to include all available actions."),"resourceType":string("Resource type ID to describe. Omit to include all types and unscoped actions."),"prefix":string("Filter registered reference values by this prefix. Coverage and live-listing hints remain complete for the action/type filters."),"limit":{"type":"integer","minimum":1,"maximum":100,"default":50,"description":"Maximum registered references per page. Does not bound the repeated coverage summary or fetch other pages."},"cursor":string("Use registeredResources.nextCursor with the same service, action, resourceType, prefix and limit. Restart without a cursor after discovery changes.")}),
             json!(["service"]),
         ),
         (
             "actions_list",
-            "List canonical action names for one visible service, optionally filtered to a concrete resource value (project key, space key, or repository path, not a broker resource ID). With a resource on a service that authorizes several resource types, also pass resourceType. A resource filter checks single-target policy and local credentials; invocation still checks upstream access and the complete multi-resource request. Coverage shown by resource_access_describe can permit values absent from its registeredResources.items. Use actions_describe for a selected action's schema.",
-            json!({"service":service,"resource":string,"resourceType":string,"prefix":string}),
+            "List canonical action IDs for one visible service. Optional resource and resourceType filters check local single-target policy and usable credentials. Invocation still checks upstream access and every requested resource.",
+            json!({"service":service,"resource":string("Concrete value for the selected resource type, such as a project key or repository path. Broad grants can permit values without a registered reference; a Broker resource ID is not a target value."),"resourceType":string("Resource type ID. Required with resource when the service authorizes more than one type."),"prefix":string("Filter canonical action IDs by this prefix.")}),
             json!(["service"]),
         ),
         (
             "actions_describe",
-            "Describe one visible action, including extended usage documentation, its input schema, and execution requirements. For an MCP-callable action, also return its exact MCP tool name and complete MCP argument schema. Naming conflicts and overlong names omit mcpTool and report mcpToolUnavailable. Use this when preparing a call; use actions_list to check resource-specific policy. Invoke detail requires authentication and caller-visible runtime catalog eligibility. Anonymous callers receive the catalog's HTTP 401 as a tool error; use services_describe for raw capabilities where anonymous service discovery is allowed. Catalog absence can also reflect changed permissions: retry discovery.",
-            json!({"service":service,"action":{"type":"string","minLength":1,"description":"Canonical action ID within the service, such as search or issue.view. Do not include the service prefix or use a client-renamed MCP tool name. Use the service/action values in the tool description or actions_list."}}),
+            "Describe one caller-visible action: usage documentation, input schema and execution requirements. Executable actions include mcpTool with this connection's wire name and full arguments. Naming conflicts and overlong names report mcpToolUnavailable. Use the exact tool names exposed by your client for calls and canonical service/action IDs for discovery.",
+            json!({"service":service,"action":string("Canonical action ID within the selected service, such as issue.view. Use the service/action IDs supplied by discovery; executable tool names may differ.")}),
             json!(["service", "action"]),
         ),
         (
             "services_describe",
-            "Return detailed capabilities for one visible service, including its surface, resource scope types, and action definitions. This response can be large; prefer actions_describe when you need details for one action. Gateway services use their own execution interfaces.",
+            "Describe one visible service's capabilities, surface, resource types, action definitions and current limits when available. For smaller replies, request details for one action. Gateway services execute through their own interfaces.",
             json!({"service":service}),
             json!(["service"]),
         ),
@@ -395,7 +396,7 @@ pub fn helper_definitions_for_view(mode: ProjectionMode, view: &McpView) -> Vec<
                 .as_str()
                 .expect("static helper description");
             definition["description"] = json!(format!(
-                "{description} This connection exposes only service {service}. Action IDs in discovery are canonical Broker IDs; executable mcpTool names use this connection's provider names."
+                "{description} This connection is limited to service {service}; discovery action IDs remain canonical Broker IDs."
             ));
             if let Some(schema) = definition["inputSchema"]["properties"].get_mut("service") {
                 schema["const"] = json!(service);
@@ -697,6 +698,101 @@ mod tests {
         }
         catalog.services.push(catalog.services[0].clone());
         assert!(project_catalog(&catalog, ProjectionMode::Http).is_err());
+    }
+
+    #[test]
+    fn helper_guidance_preserves_flat_contracts_and_scoped_ids() {
+        fn strip_descriptions(value: &mut Value) {
+            match value {
+                Value::Object(object) => {
+                    object.remove("description");
+                    object.values_mut().for_each(strip_descriptions);
+                }
+                Value::Array(values) => values.iter_mut().for_each(strip_descriptions),
+                _ => {}
+            }
+        }
+        let string = json!({"type":"string","minLength":1});
+        let expected = [
+            ("services_list", json!({"prefix":string}), json!([])),
+            (
+                "resource_access_describe",
+                json!({"service":string,"action":string,"resourceType":string,"prefix":string,"limit":{"type":"integer","minimum":1,"maximum":100,"default":50},"cursor":string}),
+                json!(["service"]),
+            ),
+            (
+                "actions_list",
+                json!({"service":string,"resource":string,"resourceType":string,"prefix":string}),
+                json!(["service"]),
+            ),
+            (
+                "actions_describe",
+                json!({"service":string,"action":string}),
+                json!(["service", "action"]),
+            ),
+            (
+                "services_describe",
+                json!({"service":string}),
+                json!(["service"]),
+            ),
+        ];
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            let definitions = helper_definitions(mode);
+            assert_eq!(definitions.len(), expected.len());
+            for (tool, (name, properties, required)) in definitions.iter().zip(&expected) {
+                let mut expected_properties = properties.clone();
+                if mode == ProjectionMode::Stdio {
+                    expected_properties["outputPath"] = string.clone();
+                }
+                let mut schema = tool["inputSchema"].clone();
+                strip_descriptions(&mut schema);
+                assert_eq!(tool["name"], *name);
+                assert_eq!(
+                    schema,
+                    json!({"type":"object","additionalProperties":false,"properties":expected_properties,"required":required})
+                );
+                let description = tool["description"].as_str().unwrap();
+                for helper in NAMES {
+                    assert!(!description.contains(helper), "{name}: {description}");
+                }
+                for property in tool["inputSchema"]["properties"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                {
+                    assert!(
+                        property["description"]
+                            .as_str()
+                            .is_some_and(|description| !description.is_empty())
+                    );
+                }
+            }
+            for service in ["synthetic-service".to_owned(), "s".repeat(63)] {
+                assert!(agent_access_provider::is_service_name(&service));
+                let scoped = helper_definitions_for_view(mode, &McpView::Service(service.clone()));
+                for (original, selected) in definitions.iter().zip(&scoped) {
+                    assert!(selected["description"].as_str().unwrap().ends_with(&format!("This connection is limited to service {service}; discovery action IDs remain canonical Broker IDs.")));
+                    let mut expected = original.clone();
+                    if let Some(property) = expected["inputSchema"]["properties"].get_mut("service")
+                    {
+                        property["const"] = json!(service);
+                    }
+                    let mut selected = selected.clone();
+                    strip_descriptions(&mut expected);
+                    strip_descriptions(&mut selected);
+                    assert_eq!(selected, expected);
+                }
+                println!(
+                    "helper bytes mode={mode:?} service_bytes={}: {}",
+                    service.len(),
+                    serde_json::to_vec(&scoped).unwrap().len()
+                );
+            }
+            println!(
+                "helper bytes mode={mode:?} aggregate: {}",
+                serde_json::to_vec(&definitions).unwrap().len()
+            );
+        }
     }
 
     #[test]

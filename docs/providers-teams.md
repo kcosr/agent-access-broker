@@ -102,6 +102,11 @@ The open `content` object exposes each known field and its format rules in field
 descriptions. The provider enforces those relationships and returns specific
 `input_invalid` messages naming the fields to correct, without echoing payloads.
 
+Action detail and the runtime catalog include extended `documentation` with
+format, limit and delivery rules plus labeled `inputExamples` for simple,
+MessageCard and Adaptive Card notifications. Initial MCP tool listings keep
+those extended details separate from the concise description and input schema.
+
 For a simple notification, the complete input object is:
 
 ```json

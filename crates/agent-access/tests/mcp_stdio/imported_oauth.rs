@@ -866,13 +866,25 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     {
         let response = connection.request("tools/call", read.clone()).await;
         assert_eq!(response["error"]["code"], -32602, "{response}");
+        let message = response["error"]["message"].as_str().unwrap();
         assert!(
-            response["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("services_describe"),
-            "cached tool failures must point callers to availability: {response}"
+            message.contains("service availability and setup requirements"),
+            "cached tool failures must explain how to inspect availability: {response}"
         );
+        assert!(message.contains("your client's tool list"));
+        assert!(message.contains("available discovery tools"));
+        for helper in [
+            "services_list",
+            "services_describe",
+            "actions_list",
+            "actions_describe",
+            "resource_access_describe",
+        ] {
+            assert!(
+                !message.contains(helper),
+                "availability guidance must use the client's available capabilities: {response}"
+            );
+        }
     }
     // Native name rejection is separate from invocation's credential checks.
     let denied = client

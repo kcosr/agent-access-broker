@@ -32,6 +32,13 @@ helpers. It does
 not expose generic `invoke`/`send` tools, broker management operations, or
 gateway execution. Discovery helpers can describe that separate surface.
 
+Server instructions start with the calling rule: provider action fields belong
+inside `inputs`, with supported options beside it; discovery helpers take flat
+arguments. Local stdio also accepts `requestFile` instead of `inputs`. Find
+available capabilities through your client's tool list or search, then call the
+exact names that client exposes. Broker wire names and canonical service/action
+IDs do not identify aliases added by a client.
+
 Jira `project.list` lists live authorized projects with only `maxResults` and
 `pageToken`. It has independent action permission and supports whole-result
 Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
@@ -70,7 +77,7 @@ settings when passing `nextPageToken` as `pageToken`, continue empty resumable
 pages, and treat `scanStatus=upstream_window` as incomplete coverage. A continuation
 does not guarantee another authorized match. See
 [GitLab search](providers-gitlab-rest.md#repository-discovery-and-content-search)
-and the [MCP search workflow](../skills/agent-access-mcp/SKILL.md#gitlab-repository-discovery-and-content-search).
+and the selected action's usage documentation.
 
 Teams `notification.send` uses the same destination alias and `simple` or
 `microsoft` content modes on both MCP transports. Local stdio `requestFile`
@@ -113,8 +120,8 @@ conflicting names make the entire service connection unavailable. Aggregate
 connections use the separate naming rules below. A client's own prefixes and
 model-tool limits can still affect presentation. Dotted names and names over
 64 characters are supported by this protocol interface, not a promise about
-every client. Use the names returned by discovery and consult the client's
-naming support when configuring it.
+every client. Use your client's exposed names for calls and consult its naming
+support when configuring it.
 
 Arguments and results retain the broker contract, including the provider
 `inputs` wrapper. Original names do not imply raw upstream MCP passthrough.
@@ -126,7 +133,9 @@ local output failure.
 All five helpers remain. `services_list` returns at most the selected service;
 other helpers still require `service`, constrained to the selected ID. The
 `action` argument remains a canonical broker action ID, while
-`actions_describe.mcpTool.name` is the callable name for this connection.
+`actions_describe.mcpTool.name` is the Broker wire name for this connection.
+Clients may expose that tool under another name or hide it. Preserve canonical
+service/action IDs in discovery arguments; do not derive them from client names.
 Cross-service discovery or calls are rejected even when the token can access
 another service elsewhere. Imported search/list tools remain provider actions,
 not broker resource-discovery helpers.
@@ -511,15 +520,23 @@ newly granted tools. Previously discovered tools cannot bypass revoked access.
 ## Discovery helpers
 
 Action tool definitions keep descriptions and parameter guidance concise. Actions
-with extended documentation include an explicit `actions_describe` instruction
-using stable `service` and `action` arguments, for example `service="jira"`,
-`action="search"`. Use those values even when the client prefixes or renames the
-executable tool. The helper returns optional `documentation` with detailed
+with extended documentation include a hint to request action details through
+the client's available discovery tools, with canonical `service` and `action`
+arguments, for example `service="jira"`, `action="search"`. Use those values even
+when the client prefixes or renames the executable tool. The helper returns
+optional `documentation` with detailed
 syntax, limits, and examples. This provider-owned JSON object is separate from
 `inputSchema` and is not included in initial `tools/list` definitions or the
 helper's `mcpTool` argument schema. Both HTTP and stdio MCP expose the same
 usage documentation; fetching it is an ordinary tool call, not an automatic MCP
 protocol operation.
+
+Native action documentation includes provider-specific resource addressing,
+content formats, paging fields, permission requirements and outcome guidance.
+`inputExamples` entries pair a `label` with canonical action `inputs`; partial
+templates and upload locators are labeled separately where present. The same
+documentation is available in the caller catalog and service details, and in
+OpenAPI and JSON-send schemas under `x-agent-access-documentation`.
 
 Jira and Confluence search descriptions explain that `projects`/`spaces` may be
 omitted to use effective broker authorization. An empty or ordering-only query
@@ -527,7 +544,7 @@ can browse that boundary. Jira needs finite project narrowing or a caller filter
 Confluence retains its page/blogpost type restriction even for all-space grants.
 
 
-The following fixed names accept flat JSON arguments, without the provider
+The following fixed Broker wire names accept flat JSON arguments, without the provider
 `inputs`/`requestFile` wrapper. They read broker metadata without changing
 upstream state, and their successful object appears identically in text and
 `structuredContent`. Local stdio helpers also accept optional absolute
@@ -537,6 +554,8 @@ advertise `readOnlyHint: false` and `destructiveHint: true` for their complete
 argument contract. HTTP helpers reject `outputPath` and retain
 `readOnlyHint: true` and `destructiveHint: false`. Both transports advertise
 idempotent helpers.
+Use the client's exact exposed names when calling these capabilities. A client
+can rename, defer or filter helpers independently of the Broker's wire contract.
 
 | Tool | Arguments | Result |
 |---|---|---|

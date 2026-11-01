@@ -1,5 +1,6 @@
 //! Account-bound Gmail actions. All requests use users/me and authority lent
 //! by the broker after policy; there is no caller-selected mailbox or URL.
+mod documentation;
 mod google;
 mod mail;
 #[cfg(test)]
@@ -143,6 +144,9 @@ pub fn descriptor() -> ServiceDescriptor {
                     .audit_input("id", id_label),
             );
         }
+    }
+    for action in &mut actions {
+        action.documentation = Some(documentation::for_action(&action.action));
     }
     ServiceDescriptor::new("gmail", "Gmail").with_actions(actions).with_credentials(CredentialDescriptor::default().delegated(
             "Lets agents read, search, archive, move mail to Trash and restore it. Agent access is limited by your Broker grants. Google’s consent screen describes the broader Gmail permission.",

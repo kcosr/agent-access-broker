@@ -1,5 +1,7 @@
 //! Exercise the published stdio command through a real broker, including its
 //! caller-filtered catalog and resource authorization (not a mock MCP handler).
+#[path = "mcp_stdio/documentation.rs"]
+mod documentation;
 #[path = "mcp_stdio/imported_oauth.rs"]
 mod imported_oauth;
 #[path = "mcp_stdio/imports.rs"]
@@ -138,6 +140,18 @@ impl McpProcess {
             self.service.as_deref().unwrap_or("agent-access")
         );
         assert!(response["result"]["capabilities"].get("tools").is_some());
+        let instructions = response["result"]["instructions"].as_str().unwrap();
+        assert_eq!(
+            instructions.lines().next(),
+            Some(
+                "For provider actions, put action fields in inputs (or supply requestFile instead), with supported options beside it; discovery helpers take their declared top-level arguments."
+            )
+        );
+        assert!(instructions.contains("call each by its exact exposed name"));
+        assert!(instructions.contains("canonical service/action IDs"));
+        if let Some(service) = &self.service {
+            assert!(instructions.contains(&format!("limited to service {service}")));
+        }
         self.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
     }
 

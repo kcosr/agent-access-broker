@@ -10,6 +10,7 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+mod documentation;
 mod personal_spaces;
 mod plain_inputs;
 mod space_aliases;
@@ -10211,7 +10212,9 @@ fn cql_grammar_errors_are_actionable_and_do_not_echo_operands() {
         let error = parse_cql_query(raw).unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert!(error.message.contains(expected), "{}", error.message);
-        assert!(error.message.contains("actions_describe"));
+        assert!(error.message.contains(
+            "request action details for service confluence and action search or blog.search"
+        ));
         assert!(!error.message.contains("sensitive-value"));
         assert!(error.message.len() < 600);
     }
@@ -10252,7 +10255,9 @@ fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
             .iter()
             .find(|action| action.action == name)
             .unwrap();
-        assert_eq!(action.documentation, Some(documentation));
+        for (key, value) in documentation.as_object().unwrap() {
+            assert_eq!(action.documentation.as_ref().unwrap().get(key), Some(value));
+        }
     }
 }
 

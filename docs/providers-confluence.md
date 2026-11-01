@@ -33,6 +33,18 @@ in the schema; content preparation validates their structure and limits. See the
 [rich-content write contract](#normalized-rich-content-write-contract) for the
 format matrix.
 
+Each action's detailed `documentation` contains its workflow, scope and result
+guidance. `inputExamples` entries pair a `label` with canonical `inputs`;
+`inputTemplates` require substituting the exact returned `draftHandle`.
+`typedCommand` gives the typed CLI usage template and its exact `--help` command.
+`uploadLocators` supply target inputs to combine with the calling interface's
+multipart file support; draft upload locators also require replacing
+`<draftHandle>` with the exact returned handle. The existing CQL grammar examples
+remain in `cql`. Examples reflect advertised content formats, page-size bounds
+and the configured tenant in URL locators. Read this detail through action
+discovery before constructing a request; synthetic IDs
+do not imply access or existence.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker
@@ -761,8 +773,10 @@ caller filter. The broker always adds the authorized space constraint when
 needed and `type = page` (`type = blogpost` for `blog.search`). Empty `text`
 queries remain invalid.
 
-`actions_describe` for service `confluence` and action `search` or `blog.search`
-returns a `documentation.cql` block with the accepted fields, aliases,
+Request action details through your client's available discovery tools with
+canonical service `confluence` and action `search` or `blog.search`. Use the tool
+name exposed by your client. The returned `documentation.cql` block contains the
+accepted fields, aliases,
 field-specific operators, sorting, limits, examples, and scope behavior.
 The detailed catalog, OpenAPI and send schema also expose this documentation;
 MCP `tools/list` keeps the short description and a discovery hint.

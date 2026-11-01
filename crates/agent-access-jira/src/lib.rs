@@ -7,6 +7,7 @@ mod backend;
 mod comment_pages;
 mod config;
 mod custom_fields;
+mod documentation;
 mod issue_view_context;
 mod jql;
 #[cfg(test)]
@@ -794,7 +795,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    action.presentation(presentation)
+                    documentation::with_guidance(
+                        action.presentation(presentation),
+                        &config.tenant_host,
+                    )
                 })
                 .collect(),
         )

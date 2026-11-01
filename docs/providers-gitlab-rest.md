@@ -52,6 +52,28 @@ engine is `zoekt`, selected explicitly or by default; other engines refuse even
 capabilities, not live index coverage or health; see
 [repository discovery and content search](#repository-discovery-and-content-search).
 
+Each action's detailed `documentation` contains its workflow, result guidance
+and canonical input examples. `typedCommand` gives the local CLI usage template
+and command-specific `--help`. New `inputExamples` entries pair a `label` with
+an `inputs` object; existing `issue.search` and `merge_request.search`
+`examples` remain direct input objects. Search examples name an enabled engine
+and use its configured project or instance route. Omitting `engine` in a request
+still selects the configured default. Example `maxResults` values
+respect the action's current cap. URL `inputTemplates` include explicit
+substitution instructions: replace the sample root with the configured
+`web_base_url`, including its scheme, host, port and full context path, followed
+by one slash before the project path. Replace synthetic IDs, commit hashes and
+coordinates with current read evidence; examples and templates do not imply
+access or object existence.
+
+For `project.upload`, `uploadExample` supplies the file-part field name and
+literal `bytesUtf8` for the accompanying input metadata. The example's size,
+SHA-256 and MIME type reflect those bytes and the configured limits and MIME
+allowlist. It is a byte-matching multipart fixture; supply an actual file and
+matching metadata for the intended content type. JSON metadata alone does not
+upload a file. Read action details through discovery before constructing a
+request.
+
 ## Operator setup
 
 Configure the REST API root and browser origin for the same GitLab instance:
@@ -216,7 +238,7 @@ separately granted.
 
 ```bash
 agent-access gitlab project list --max-results 20
-agent-access gitlab project search --search dispatch --archived false --max-results 20
+agent-access gitlab project search --search release --archived false --max-results 20
 agent-access gitlab project search --include-namespaces false
 agent-access gitlab search issues --search 'credential rotation' --max-results 20
 agent-access gitlab search merge-requests --search 'credential rotation'
@@ -262,11 +284,11 @@ agent-access invoke gitlab.search.code --input-json '{"search":"verify_token","p
 ```
 
 ```json
-{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"dispatch","maxResults":20}}
+{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"release","maxResults":20}}
 ```
 
-For MCP, call the discovered action tool with `{"inputs":{"search":"dispatch"}}`.
-Use `actions_describe` with canonical `service="gitlab"` and
+For MCP, call the discovered action tool with `{"inputs":{"search":"release"}}`.
+Request action details with canonical `service="gitlab"` and
 `action="search.code"` for current capabilities and extended grammar. No
 additional search endpoint or MCP-only route is used.
 
@@ -862,7 +884,7 @@ selected project; they do not enumerate projects or turn these actions into
 global searches. Project URLs and numeric project IDs are not search locators.
 
 MCP descriptions explain the project boundary and basic filter behavior. For
-extended guidance and examples, call `actions_describe` with `service="gitlab"`
+extended guidance and examples, request action details with `service="gitlab"`
 and `action="issue.search"` or `action="merge_request.search"`. The returned
 `documentation` includes supported state/sort values and pagination rules.
 These stable service/action values also work when a harness renames MCP tools.
@@ -1091,7 +1113,7 @@ old/new lines or line range, and image coordinates where applicable.
 GitLab's native line code and side/type. A missing position means a general
 thread. A position is bound to the diff version on which it was created: after
 a push, an old `headSha` and line remain historical evidence and are not
-silently remapped to current HEAD. Use `diff_version.view` to inspect that
+silently remapped to current HEAD. Use `merge_request.diff_version.view` to inspect that
 historical snapshot. Malformed present association data fails the whole result
 instead of degrading a diff note into a general comment.
 
@@ -1419,7 +1441,7 @@ errors, metrics labels, or object identifiers.
 
 GitLab has no native-format allowlist, so each available covered action
 advertises both values directly in its caller-filtered catalog
-`contentFormat.enum`. Clients, including Dispatch, detect capability from that
+`contentFormat.enum`. Clients detect capability from that
 exact enum rather than a Broker version. OpenAPI and the action-specific send
 schema project the same pair and enum.
 

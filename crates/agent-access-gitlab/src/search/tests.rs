@@ -1,3 +1,5 @@
+mod documentation;
+
 use super::*;
 use agent_access_provider::test_support::{InvocationBuilder, TestHost, bearer_credential};
 use reqwest::header::{HeaderName, HeaderValue};

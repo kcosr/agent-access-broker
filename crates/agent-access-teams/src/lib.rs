@@ -1,5 +1,6 @@
 //! Notifications to exact, managed Microsoft Teams Workflows destinations.
 //! Signed endpoints arrive only through broker-admitted private attributes.
+mod documentation;
 mod payload;
 #[cfg(test)]
 mod tests;
@@ -205,6 +206,7 @@ impl BackendConfig for TeamsConfig {
 
 pub fn descriptor() -> ServiceDescriptor {
     ServiceDescriptor::new("teams", "Microsoft Teams notifications").with_resource_scopes(BTreeMap::from([("destination".into(), ResourceScopeCapabilities::new(TEAMS_DESTINATION_RESOURCE.id().clone(), vec!["exact".into(), "all".into()]))])).with_actions(vec![ActionDescriptor::new(ACTION, "Submit a notification to a configured Teams Workflow; acceptance does not confirm delivery", payload::schema())
+            .documentation(documentation::for_action(ACTION))
             .scope("destination").credential_modes(["service"]).resource_attributes()
             // The managed destination only: the notification content is never recorded.
             .audit_input("destination", "Destination")]).with_credentials(CredentialDescriptor::without_execution_credential())

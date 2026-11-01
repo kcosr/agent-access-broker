@@ -127,6 +127,7 @@ impl Fixture {
         assert!(!session.is_empty());
         let body = rpc_body(response).await;
         assert_eq!(body["result"]["protocolVersion"], VERSION);
+        assert_http_instructions(&body["result"]["instructions"]);
         assert!(body["result"]["capabilities"]["tools"].is_object());
         assert_ne!(body["result"]["capabilities"]["tools"]["listChanged"], true);
         for capability in ["resources", "prompts", "tasks"] {
@@ -178,6 +179,19 @@ impl Fixture {
         )
         .await
     }
+}
+
+pub(super) fn assert_http_instructions(value: &Value) {
+    let instructions = value.as_str().unwrap();
+    assert_eq!(
+        instructions.lines().next(),
+        Some(
+            "For provider actions, put action fields in inputs and supported options beside it; discovery helpers take their declared top-level arguments."
+        )
+    );
+    assert!(instructions.contains("call each by its exact exposed name"));
+    assert!(instructions.contains("canonical service/action IDs"));
+    assert!(!instructions.lines().next().unwrap().contains("requestFile"));
 }
 
 pub(super) fn request(
@@ -687,7 +701,7 @@ async fn resource_access_size_failure_requests_filters_without_truncating_covera
     assert_eq!(result["result"]["isError"], true, "{result}");
     assert_eq!(
         structured(&result)["error"]["message"],
-        "Resource access result exceeds MCP response limit; use action or resourceType filters, or actions_list for known resources"
+        "Resource access result exceeds MCP response limit; narrow action or resourceType filters, or check action availability for a known resource"
     );
     assert!(structured(&result).get("access").is_none());
     assert!(structured(&result).get("registeredResources").is_none());
@@ -1072,6 +1086,8 @@ impl agent_access_provider::test_support::DescribedProvider for CatalogProvider 
         // A valid action whose large description forces response-byte pagination
         // without inventing actions outside the Broker's canonical catalog.
         descriptor.actions[0].description = "x".repeat(55_600);
+        descriptor.actions[0].documentation =
+            Some(json!({"usage":"PAGINATED_DOC_SENTINEL".repeat(5_000)}));
         descriptor.actions[0].input_schema = json!({"type":"object"});
         // The replaced schema no longer has the declared audit input.
         descriptor.actions[0].audit_inputs.clear();
@@ -1103,6 +1119,8 @@ async fn mcp_tools_pagination_is_complete_and_cursor_is_credential_bound_and_aut
     .await;
     let session = fixture.initialize().await;
     let first = fixture.rpc(&session, 50, "tools/list", json!({})).await;
+    assert!(!first.to_string().contains("PAGINATED_DOC_SENTINEL"));
+    assert!(serde_json::to_vec(&first).unwrap().len() < 64 * 1024);
     let first_tools = first["result"]["tools"].as_array().unwrap();
     assert!(!first_tools.is_empty() && first_tools.len() < 6);
     let cursor = first["result"]["nextCursor"].as_str().unwrap();
@@ -1118,6 +1136,8 @@ async fn mcp_tools_pagination_is_complete_and_cursor_is_credential_bound_and_aut
         let page = fixture
             .rpc(&session, id, "tools/list", json!({"cursor":page_cursor}))
             .await;
+        assert!(!page.to_string().contains("PAGINATED_DOC_SENTINEL"));
+        assert!(serde_json::to_vec(&page).unwrap().len() < 64 * 1024);
         for tool in page["result"]["tools"]
             .as_array()
             .unwrap_or_else(|| panic!("{page}"))
@@ -1224,6 +1244,15 @@ async fn mcp_stalled_intake_is_bounded_per_principal_and_drop_releases_capacity(
 }
 
 struct FileCatalogProvider;
+fn fixture_documentation() -> Value {
+    json!({
+        "usage":"DOC_SENTINEL: complete extended fixture usage",
+        "inputExamples":[{"label":"Quoted nested inputs", "inputs":{
+            "project":"TEST", "message":"A \"quote\", C:\\notes\\file and a newline\nsecond line",
+            "nested":{"items":[{"value":"é"}]}
+        }}]
+    })
+}
 impl agent_access_provider::test_support::DescribedProvider for FileCatalogProvider {
     fn descriptor(&self) -> ServiceDescriptor {
         let mut descriptor = agent_access_fake::fake_descriptor();
@@ -1234,7 +1263,11 @@ impl agent_access_provider::test_support::DescribedProvider for FileCatalogProvi
         let action = |name: &str| {
             let mut action = echo.clone();
             action.action = name.into();
-            action.documentation = Some(json!({"examples": ["extended fixture usage"]}));
+            action.documentation = Some(fixture_documentation());
+            if name == "issue.view" {
+                action.input_schema["properties"]["message"]["x-agent-access-sensitive"] =
+                    json!(true);
+            }
             action.read_only = matches!(name, "issue.view" | "attachment.download");
             action
         };
@@ -1265,6 +1298,7 @@ impl Provider for FileCatalogProvider {
 async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
     let fixture = Fixture::with_providers(
         |config| {
+            config.mcp.max_response_bytes = 64 * 1024;
             config.policy.grants[0].service = "jira".into();
             config.policy.grants[0].actions = vec![
                 "issue.view".into(),
@@ -1300,6 +1334,55 @@ async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
         vec![Arc::new(FileCatalogProvider)],
     )
     .await;
+    let mut specifications = Vec::new();
+    for (id, path) in [
+        "/v1/spec/catalog",
+        "/v1/spec/openapi.json",
+        "/v1/spec/send-schema.json",
+        "/v1/services/jira",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let response = spec_get(
+            fixture.app.clone(),
+            path,
+            &format!("docs-{id}"),
+            Some(TOKEN_A),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        specifications.push(response_json(response).await);
+    }
+    let catalog = &specifications[0];
+    let openapi = &specifications[1];
+    let send = &specifications[2];
+    let raw = &specifications[3];
+    let jira = catalog["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|service| service["service"] == "jira")
+        .unwrap();
+    for action in ["issue.view", "attachment.add", "attachment.download"] {
+        for service in [jira, raw] {
+            let definition = service["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|candidate| candidate["action"] == action)
+                .unwrap();
+            assert_eq!(definition["documentation"], fixture_documentation());
+        }
+        assert_eq!(
+            openapi["paths"][format!("/v1/invoke/jira/{action}")]["post"]["x-agent-access-documentation"],
+            fixture_documentation()
+        );
+        assert_eq!(
+            send_action_variant(send, "jira", action)["x-agent-access-documentation"],
+            fixture_documentation()
+        );
+    }
     let session = fixture.initialize().await;
     let listing = fixture.rpc(&session, 70, "tools/list", json!({})).await;
     let tools = listing["result"]["tools"].as_array().unwrap();
@@ -1319,13 +1402,24 @@ async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
         .await;
     assert_eq!(
         structured(&described)["documentation"],
-        json!({"examples":["extended fixture usage"]})
+        fixture_documentation()
     );
     assert!(
         structured(&described)["mcpTool"]
             .get("documentation")
             .is_none()
     );
+    assert!(
+        !structured(&described)["mcpTool"]
+            .to_string()
+            .contains("DOC_SENTINEL")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(described["result"]["content"][0]["text"].as_str().unwrap())
+            .unwrap(),
+        *structured(&described)
+    );
+    assert!(serde_json::to_vec(&described).unwrap().len() < 64 * 1024);
     for (index, action) in ["attachment.add", "attachment.download"]
         .into_iter()
         .enumerate()
@@ -1341,6 +1435,10 @@ async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
             )
             .await;
         assert_eq!(structured(&described)["action"], action);
+        assert_eq!(
+            structured(&described)["documentation"],
+            fixture_documentation()
+        );
         assert!(structured(&described).get("mcpTool").is_none());
         assert!(structured(&described).get("mcpToolUnavailable").is_none());
         let direct = fixture

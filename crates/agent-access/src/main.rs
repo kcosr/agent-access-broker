@@ -8,6 +8,8 @@ mod output;
 #[cfg(test)]
 mod request_timeout_tests;
 #[cfg(test)]
+mod typed_documentation_tests;
+#[cfg(test)]
 use agent_access_core::ExitPolicy;
 use agent_access_core::imports::ImportedCredentialInputPolicy;
 use agent_access_core::{

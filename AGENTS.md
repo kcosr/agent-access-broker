@@ -64,6 +64,17 @@ actions and exposes typed wrappers for supported services.
   Put extended grammar, limits, and examples in action `documentation`; preserve
   its detail/catalog/OpenAPI/send projections and keep it out of `tools/list`.
   MCP describe hints use stable service/action IDs, never client-renamed names.
+- Keep the five access skills focused on their interfaces. Put service recipes,
+  typed-command mappings, paging rules and companion permissions in action
+  documentation. Native providers bundle `src/action-documentation.json` and
+  merge it through `src/documentation.rs`; preserve existing keys and configured
+  values without collisions. New `inputExamples` use `{label, inputs}` and must
+  pass the actual provider parser in the configurations that publish them.
+  Keep placeholders in clearly labeled templates or upload locators, with their
+  required substitutions documented, and test the prepared inputs too.
+  `typedCommand` gives the actual typed CLI Usage template and its `--help`
+  command; keep it aligned with CLI dispatch and help, without deriving flags
+  from provider JSON field names.
 - New or changed native action input schemas use plain object roots with
   `properties`, unconditional `required` fields and the existing object openness.
   State locator alternatives, paired fields and mode-dependent rules in field
@@ -386,6 +397,11 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 
 ## Layout
 
+- Native provider `src/action-documentation.json` files hold service recipes;
+  their private `src/documentation.rs` hooks add effective configuration and
+  preserve existing structured documentation. Provider tests validate published
+  examples and templates. The optional OAuth fixture keeps its small action
+  documentation beside its descriptors in `agent-access-fake/src/oauth_records.rs`.
 - `crates/agent-access-provider`: the backend contract: service descriptors,
   resource types, the `Provider` trait and its invocation/result/error types,
   reason codes and the hook contract the host checks provider failures, late

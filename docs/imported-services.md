@@ -715,8 +715,10 @@ upstream status.
 Use `/mcp/<service>` or `agent-access mcp serve --service <service>` with the
 canonical imported service ID. Both expose raw provider names without broker
 prefixes, while retaining canonical action grants, current bindings, revision
-fences and audit. Helpers stay inside the selected service; `actions_describe`
-accepts the canonical action ID and returns the callable `mcpTool.name`.
+fences and audit. Helpers stay inside the selected service. The action-description
+helper (wire name `actions_describe`) accepts the canonical action ID and returns
+the Broker wire name `mcpTool.name` for that connection. Clients may rename or
+hide tools; call a tool using the name your client exposes.
 Refresh client discovery after accepted definition changes. Raw names can resolve
 to a replacement canonical action only under current grants; retiring the old
 action never transfers its grant. See [connection setup](mcp.md#service-specific-connections)

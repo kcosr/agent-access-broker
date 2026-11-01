@@ -63,13 +63,10 @@ impl ServerHandler for BrokerMcp {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(format!(
-                "{} Tools include five discovery helpers and currently available provider actions. The broker checks \
-                 resource permissions on every call. File paths refer to the machine running this \
-                 local agent-access process. Refresh tools/list to discover changed permissions. \
-                 Cancellation does not guarantee that an upstream mutation was rolled back.",
+                "For provider actions, put action fields in inputs (or supply requestFile instead), with supported options beside it; discovery helpers take their declared top-level arguments.\nUse your client's tool list or search to find its available capabilities and call each by its exact exposed name. Use canonical service/action IDs from discovery for action details.\n{}\nThe Broker rechecks current grants and credentials on every call. Local paths refer to the machine running this agent-access process.\nRefresh discovery after permissions or setup changes. Cancellation or connection loss does not prove rollback; inspect uncertain mutations before retrying.",
                 match self.view.service() {
-                    Some(service) => format!("This connection exposes only service {service}. Provider tools retain their original names. Discovery helpers use canonical action IDs, which may differ from tool names."),
-                    None => "This connection exposes the caller's aggregate broker tools.".into(),
+                    Some(service) => format!("This connection is limited to service {service}. Provider wire names retain the service's original names; discovery action IDs remain canonical."),
+                    None => "This connection exposes the caller's aggregate Broker catalog.".into(),
                 }
             ))
     }
@@ -201,6 +198,36 @@ mod tests {
     use super::*;
     use clap::Parser;
     use serde_json::json;
+
+    #[test]
+    fn instructions_put_the_calling_rule_first_in_every_view() {
+        for service in [None, Some("synthetic-service")] {
+            let server = BrokerMcp {
+                cli: crate::Cli::try_parse_from(["agent-access", "mcp", "serve"]).unwrap(),
+                config: PathBuf::from("unused-initialize-config"),
+                view: service.map_or(McpView::Aggregate, |service| {
+                    McpView::Service(service.into())
+                }),
+            };
+            let info = server.get_info();
+            let instructions = info.instructions.unwrap();
+            assert_eq!(
+                instructions.lines().next(),
+                Some(
+                    "For provider actions, put action fields in inputs (or supply requestFile instead), with supported options beside it; discovery helpers take their declared top-level arguments."
+                )
+            );
+            assert!(instructions.contains("call each by its exact exposed name"));
+            assert!(instructions.contains("canonical service/action IDs"));
+            if let Some(service) = service {
+                assert!(instructions.contains(&format!("limited to service {service}")));
+                assert_eq!(info.server_info.name, service);
+            } else {
+                assert!(instructions.contains("aggregate Broker catalog"));
+                assert_eq!(info.server_info.name, "agent-access");
+            }
+        }
+    }
 
     fn catalog(count: usize) -> Vec<Tool> {
         (0..count)

@@ -319,7 +319,13 @@ Agent-facing instructions are organized by access surface under [skills/](skills
 [canonical invoke](skills/agent-access-cli-invoke/SKILL.md),
 [JSON send](skills/agent-access-cli-send/SKILL.md),
 [HTTP](skills/agent-access-http/SKILL.md), and
-[MCP](skills/agent-access-mcp/SKILL.md).
+[MCP](skills/agent-access-mcp/SKILL.md). Each is a short guide to its interface.
+Service-specific examples, typed CLI usage and help commands, paging rules and
+companion permissions live in each action's extended `documentation`, available
+through action details such as
+`agent-access actions describe --service jira comment.list` or the client's
+action-description helper. Initial MCP tool lists stay concise; helper names
+may carry a client-specific prefix.
 
 ## Contributing
 

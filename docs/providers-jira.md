@@ -24,6 +24,16 @@ setting controls comment-write availability; it does not restrict issue-write
 formats. Preserve the field names and nesting published by the action, and
 follow its descriptions for locator and content combinations.
 
+Each action's detailed `documentation` contains its workflow, scope, result
+guidance and canonical input examples. New `inputExamples` entries pair a
+`label` with an `inputs` object; existing grammar and project `examples` remain
+direct input objects. `typedCommand` gives the typed CLI usage template and its
+exact `--help` command. `uploadLocators` show the target inputs to combine with
+the calling interface's multipart file support. Examples reflect advertised
+content formats, page-size bounds and the configured tenant in URL locators.
+Read this detail through action discovery before constructing a request;
+synthetic IDs do not imply access or existence.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker
@@ -1380,10 +1390,11 @@ including grant exclusions and token restrictions; explicit projects only narrow
 that scope. A project clause in JQL is optional.
 
 MCP tool definitions carry concise input descriptions. For complete grammar,
-examples, pagination, and limits, call `actions_describe` with
-`service="jira"` and `action="search"`. Its `documentation` object includes
+examples, pagination, and limits, request action details through your client's
+available discovery tools with canonical `service="jira"` and `action="search"`.
+The returned `documentation` object includes
 field/operator, function, and sorting tables generated from the parser definitions.
-The stable service/action arguments remain valid if a harness renames MCP tools.
+Use the tool name exposed by your client; the service/action IDs remain stable.
 
 The typed CLI lowers to that shape:
 

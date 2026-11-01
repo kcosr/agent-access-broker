@@ -109,6 +109,20 @@ fields remain open across Microsoft payload variants. Native provider tests
 preserve locator, content-format and null-handling behavior, including
 Confluence's separate shape and content-preparation stages, GitLab's
 configuration-dependent search routes, and CloudBees' categorized input errors.
+`native_documentation_preserves_every_spec_and_tool_projection` reuses the same
+configuration enumerator to compare provider documentation with capabilities,
+catalog, OpenAPI and JSON-send projections. It checks the fixed 16 MiB
+service/catalog read bound separately from the 64 MiB tool-projection budget,
+and both MCP modes/views, including that documentation growth leaves
+initial tool definitions unchanged. For every action/configuration it serializes
+the actual SDK action-detail result, including `mcpTool`, structured content and
+the escaped text copy, and requires it plus HTTP's framing reserve to fit the
+minimum 64 KiB response setting. These are descriptor and projection tests;
+they do not establish live provider access or runtime credential availability.
+The CLI's `published_typed_commands_match_clap_paths_and_usage` test resolves
+every native and OAuth fixture action's documented help path through the actual
+Clap command tree and compares its published Usage template with Clap's output.
+Optional action families are enabled, covering all 230 typed wrappers.
 Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message
 without being validated. Command-authority tests check that imported and
@@ -615,6 +629,18 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   detail fetches and token-class catalog visibility. Core and HTTP tests cover
   exclusions, token/context boundaries, broad grants, stale/foreign cursors,
   managed label revisions, and visibility before query validation.
+  `mcp_stdio::documentation` preserves nested/escaped documentation through a
+  real Broker and stdio subprocess, and checks the largest effective Jira
+  document over both real MCP transports in aggregate and service views with
+  HTTP's minimum 64 KiB response setting. No provider is invoked. Host fixtures
+  also cover JSON, upload and download documentation through raw discovery,
+  catalog, OpenAPI, send and HTTP action details. Initial tool lists and returned
+  `mcpTool` objects exclude extended documentation, including across byte-bound
+  pages. Size tests serialize the actual SDK structured result and its escaped
+  text copy, include the host's framing reserve, and test exact budget boundaries.
+  The synthetic OAuth fixture's three action documents have separate projection
+  and minimum-budget checks. Initialization tests keep the calling rule on the
+  first physical line, including scoped and read-only connections.
   See [local MCP](mcp.md).
 
 They use in-process or stubbed components and require no upstream credentials.
