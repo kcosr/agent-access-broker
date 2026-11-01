@@ -219,7 +219,7 @@ All notable changes to this project are documented in this file.
   [Jira input arguments](docs/providers-jira.md#input-arguments),
   [Confluence input arguments](docs/providers-confluence.md#input-arguments) and
   [GitLab input arguments](docs/providers-gitlab-rest.md#input-arguments).
-  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88))
+  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88), [#89](https://github.com/kcosr/agent-access-broker/pull/89))
 
 - **Release qualification uses nextest for Rust tests.** Install cargo-nextest
   0.9.150 or newer before qualifying a release. The Rust suite runs with sixteen
