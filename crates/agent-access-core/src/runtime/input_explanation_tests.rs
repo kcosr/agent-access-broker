@@ -931,7 +931,7 @@ fn native_schema_cases_cover_optional_actions_and_content_formats() {
 fn native_schemas_have_plain_roots() {
     // These providers retain their existing schemas until their conversions.
     // Keep this list explicit so a newly linked provider is checked by default.
-    const PENDING: &[&str] = &["gitlab", "cloudbees_ci", "teams"];
+    const PENDING: &[&str] = &["cloudbees_ci", "teams"];
     const RELATIONAL: &[&str] = &["oneOf", "anyOf", "allOf", "if", "then", "else", "not"];
 
     let cases = native_schemas();
@@ -968,6 +968,68 @@ fn native_schemas_have_plain_roots() {
             assert!(
                 schema.get(keyword).is_none(),
                 "{} root must not contain {keyword}",
+                case.label()
+            );
+        }
+        if case.service == "gitlab"
+            && matches!(
+                case.action.action.as_str(),
+                "merge_request.discussion.inline.add"
+                    | "merge_request.draft_note.add"
+                    | "merge_request.draft_note.update"
+            )
+        {
+            let position = &properties["position"];
+            let range = &position["properties"]["lineRange"];
+            for (name, object, fields) in [
+                (
+                    "position",
+                    position,
+                    &[
+                        "positionType",
+                        "oldPath",
+                        "newPath",
+                        "oldLine",
+                        "newLine",
+                        "lineRange",
+                        "width",
+                        "height",
+                        "x",
+                        "y",
+                    ][..],
+                ),
+                ("position.lineRange", range, &["start", "end"][..]),
+                (
+                    "position.lineRange.start",
+                    &range["properties"]["start"],
+                    &["oldLine", "newLine"][..],
+                ),
+                (
+                    "position.lineRange.end",
+                    &range["properties"]["end"],
+                    &["oldLine", "newLine"][..],
+                ),
+            ] {
+                assert_eq!(object["type"], "object", "{} {name}", case.label());
+                for field in fields {
+                    assert!(
+                        object["properties"].get(*field).is_some(),
+                        "{} {name}.{field} must remain visible",
+                        case.label()
+                    );
+                }
+                for keyword in RELATIONAL {
+                    assert!(
+                        object.get(*keyword).is_none(),
+                        "{} {name} must not contain {keyword}",
+                        case.label()
+                    );
+                }
+            }
+            assert_eq!(
+                position["properties"]["positionType"]["enum"],
+                json!(["text", "file", "image"]),
+                "{} position types",
                 case.label()
             );
         }
@@ -1087,13 +1149,10 @@ fn the_most_expensive_native_schemas_are_still_explained() {
                 "iid": 7,
                 "content": "x".repeat(16 * 1024),
                 "contentFormat": "markdown",
-                "position": {"positionType": "text", "oldPath": "a.rs", "newPath": "a.rs", "newLine": 4},
-                "extra": true
+                "position": {"positionType": "text", "oldPath": "a.rs", "newPath": "a.rs", "newLine": 0}
             })
         ),
-        "gitlab.merge_request.draft_note.add inputs are invalid: inputs.extra is not allowed; \
-         allowed: content, contentFormat, expectedHeadSha, iid, inReplyToDiscussionId, position, \
-         project, resolveDiscussion; inputs.expectedHeadSha is required"
+        "gitlab.merge_request.draft_note.add inputs are invalid: inputs.position.newLine must be at least 1"
     );
     assert_eq!(
         explain_native(

@@ -1032,20 +1032,21 @@ mod tests {
             ("token", "webhook-secret".to_owned()),
             ("signingToken", format!("whsec_{}=", "A".repeat(43))),
         ] {
-            std::fs::write(&secret_file, secret).unwrap();
+            std::fs::write(&secret_file, &secret).unwrap();
             let request = json!({
                 "inputs":{"project":"team/project","webhookId":7},
                 "secretSources":[{"pointer":format!("/inputs/{field}"),"source":{"type":"file","path":secret_file}}]
             });
             assert!(
-                !original.is_valid(&request["inputs"]),
-                "fixture must require an actual mutation"
+                original.is_valid(&request["inputs"]),
+                "the provider enforces the required mutation after secret injection"
             );
             assert!(
                 projected.is_valid(&request),
                 "secret-only {field} update is valid before injection"
             );
             let inputs = resolve_inputs(&args(request.clone()), &action).unwrap();
+            assert_eq!(inputs[field], secret, "must inject the selected {field}");
             assert!(
                 original.is_valid(&inputs),
                 "injected {field} update satisfies the actual provider schema"
@@ -1068,7 +1069,9 @@ mod tests {
         assert!(!projected.is_valid(
             &json!({"inputs":{"project":"team/project","webhookId":7,"events":["unknown_event"]}})
         ));
-        assert!(!projected.is_valid(&json!({"inputs":{"project":"team/project","webhookId":7,"token":"inline","clearToken":true}})), "negative token/clearToken exclusivity stays intact");
+        // Both relationship rules now belong to the provider. The real CLI
+        // smoke covers mutationless and token/clearToken provider denials.
+        assert!(projected.is_valid(&json!({"inputs":{"project":"team/project","webhookId":7,"token":"inline","clearToken":true}})), "token/clearToken exclusion is enforced by the provider");
     }
 
     #[test]

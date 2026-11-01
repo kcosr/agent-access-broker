@@ -7528,14 +7528,14 @@ fn parse_project_upload_inputs(
     let invalid = || {
         ProviderError::deny(
             ReasonCode::InputInvalid,
-            "GitLab project upload inputs are invalid",
+            "gitlab project.upload attachments must contain one metadata object with field, filename, contentType, size and sha256",
         )
     };
-    let object = inputs.as_object().ok_or_else(invalid)?;
+    let object = input_object(inputs, "gitlab project.upload inputs must be an object")?;
     reject_unknown_keys(
         object,
         &["project", "url", "attachments"],
-        "GitLab project upload inputs are invalid",
+        "gitlab project.upload accepts only project, url and attachments input fields",
     )?;
     let attachments = object
         .get("attachments")
@@ -7546,24 +7546,38 @@ fn parse_project_upload_inputs(
     }
     let metadata: GitlabUploadMetadata =
         serde_json::from_value(attachments[0].clone()).map_err(|_| invalid())?;
-    if metadata.field.trim().is_empty()
-        || metadata.field.chars().any(char::is_control)
-        || metadata.filename.trim().is_empty()
+    if metadata.field.trim().is_empty() || metadata.field.chars().any(char::is_control) {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab project.upload attachments.field must be non-empty and contain no control characters",
+        ));
+    }
+    if metadata.filename.trim().is_empty()
         || metadata.filename == "."
         || metadata.filename == ".."
         || metadata.filename.contains(['/', '\\'])
         || metadata.filename.chars().any(char::is_control)
-        || metadata.sha256.len() != 64
+    {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab project.upload attachments.filename must be a non-empty filename without path separators, dot components or control characters",
+        ));
+    }
+    if metadata.sha256.len() != 64
         || !metadata
             .sha256
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     {
-        return Err(invalid());
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab project.upload attachments.sha256 must contain exactly 64 lowercase hexadecimal characters",
+        ));
     }
     let mut locator = object.clone();
     locator.remove("attachments");
-    let locator = parse_project_locator(&Value::Object(locator), config)?;
+    let locator =
+        parse_project_locator_for_action(&Value::Object(locator), config, "gitlab project.upload")?;
     Ok((
         locator,
         BrokerBodyPartSpec::new(
@@ -7696,29 +7710,25 @@ fn project_upload_from_value(value: Value) -> Result<GitlabProjectUpload, Gitlab
 fn project_locator_schema() -> Value {
     json!({
         "type": "object",
-        "oneOf": [
-            { "required": ["project"] },
-            { "required": ["url"] }
-        ],
         "properties": {
-            "project": { "type": "string" },
-            "url": { "type": "string" }
+            "project": { "type": "string", "description": "Project path including its namespace, such as team/service. Give exactly one of project or url." },
+            "url": { "type": "string", "description": "Project web URL on the configured GitLab instance. Give exactly one of project or url." }
         },
         "additionalProperties": false
     })
 }
 
 fn issue_view_schema() -> Value {
+    numbered_object_view_schema("Issue")
+}
+
+fn numbered_object_view_schema(object_name: &str) -> Value {
     json!({
         "type": "object",
-        "oneOf": [
-            { "required": ["project", "iid"] },
-            { "required": ["url"] }
-        ],
         "properties": {
-            "project": { "type": "string" },
-            "iid": { "type": ["integer", "string"] },
-            "url": { "type": "string" }
+            "project": { "type": "string", "description": "Project path including its namespace, such as team/service. Required with iid. Give exactly one of project with iid or url." },
+            "iid": { "type": ["integer", "string"], "description": format!("{object_name} number within the project. Required with project. Give exactly one of project with iid or url.") },
+            "url": { "type": "string", "description": format!("{object_name} web URL on the configured GitLab instance. Give exactly one of project with iid or url.") }
         },
         "additionalProperties": false
     })
@@ -7759,10 +7769,10 @@ fn issue_mutation_schema(update: bool) -> Value {
     let mut properties = serde_json::Map::from_iter([
         ("project".to_string(), json!({ "type": "string" })),
         ("title".to_string(), json!({ "type": "string" })),
-        ("content".to_string(), json!({ "type": "string" })),
+        ("content".to_string(), optional_gitlab_content_schema()),
         (
             "contentFormat".to_string(),
-            normalized_gitlab_content_format_schema(),
+            optional_gitlab_content_format_schema(),
         ),
         ("labels".to_string(), string_array_schema()),
         ("milestone".to_string(), json!({ "type": "string" })),
@@ -7781,7 +7791,6 @@ fn issue_mutation_schema(update: bool) -> Value {
     json!({
         "type": "object",
         "properties": properties,
-        "allOf": [optional_content_pair_schema()],
         "additionalProperties": false
     })
 }
@@ -7868,76 +7877,36 @@ fn discussion_view_schema() -> Value {
 }
 
 fn position_schema() -> Value {
-    let path = json!({ "type": "string", "minLength": 1 });
-    let positive = json!({ "type": "integer", "minimum": 1 });
     let coordinate = json!({
         "type": "object",
-        "properties": { "oldLine": positive, "newLine": positive },
-        "additionalProperties": false,
-        "anyOf": [
-            { "required": ["oldLine"] },
-            { "required": ["newLine"] }
-        ]
+        "properties": {
+            "oldLine": { "type": "integer", "minimum": 1, "description": "Line number on the old side of the diff. Give at least one of oldLine or newLine." },
+            "newLine": { "type": "integer", "minimum": 1, "description": "Line number on the new side of the diff. Give at least one of oldLine or newLine." }
+        },
+        "additionalProperties": false
     });
     json!({
-        "oneOf": [
-            {
+        "type": "object",
+        "required": ["positionType", "oldPath", "newPath"],
+        "properties": {
+            "positionType": { "type": "string", "enum": ["text", "file", "image"], "description": "Diff position kind. text requires oldLine or newLine, or lineRange without either top-level line; omit width, height, x and y. file accepts no oldLine, newLine, lineRange, width, height, x or y. image requires width, height, x and y; omit oldLine, newLine and lineRange." },
+            "oldPath": { "type": "string", "minLength": 1, "description": "Repository-relative file path on the old side of the diff; required for every positionType." },
+            "newPath": { "type": "string", "minLength": 1, "description": "Repository-relative file path on the new side of the diff; required for every positionType." },
+            "oldLine": { "type": "integer", "minimum": 1, "description": "Line number on the old side of the diff. Only with positionType text. Give at least one of oldLine, newLine or lineRange. Do not combine with lineRange." },
+            "newLine": { "type": "integer", "minimum": 1, "description": "Line number on the new side of the diff. Only with positionType text. Give at least one of oldLine, newLine or lineRange. Do not combine with lineRange." },
+            "lineRange": {
                 "type": "object",
-                "required": ["positionType", "oldPath", "newPath"],
-                "properties": {
-                    "positionType": { "const": "text" },
-                    "oldPath": path,
-                    "newPath": path,
-                    "oldLine": positive,
-                    "newLine": positive
-                },
-                "additionalProperties": false,
-                "anyOf": [
-                    { "required": ["oldLine"] },
-                    { "required": ["newLine"] }
-                ]
-            },
-            {
-                "type": "object",
-                "required": ["positionType", "oldPath", "newPath", "lineRange"],
-                "properties": {
-                    "positionType": { "const": "text" },
-                    "oldPath": path,
-                    "newPath": path,
-                    "lineRange": {
-                        "type": "object",
-                        "required": ["start", "end"],
-                        "properties": { "start": coordinate, "end": coordinate },
-                        "additionalProperties": false
-                    }
-                },
+                "description": "Multiline diff range. Only with positionType text. Give at least one of oldLine, newLine or lineRange. Do not combine with top-level oldLine or newLine. Both start and end are required.",
+                "required": ["start", "end"],
+                "properties": { "start": coordinate, "end": coordinate },
                 "additionalProperties": false
             },
-            {
-                "type": "object",
-                "required": ["positionType", "oldPath", "newPath"],
-                "properties": {
-                    "positionType": { "const": "file" },
-                    "oldPath": path,
-                    "newPath": path
-                },
-                "additionalProperties": false
-            },
-            {
-                "type": "object",
-                "required": ["positionType", "oldPath", "newPath", "width", "height", "x", "y"],
-                "properties": {
-                    "positionType": { "const": "image" },
-                    "oldPath": path,
-                    "newPath": path,
-                    "width": positive,
-                    "height": positive,
-                    "x": { "type": "integer", "minimum": 0 },
-                    "y": { "type": "integer", "minimum": 0 }
-                },
-                "additionalProperties": false
-            }
-        ]
+            "width": { "type": "integer", "minimum": 1, "description": "Image width in pixels. Required when positionType is image; only with positionType image. Required with height, x and y." },
+            "height": { "type": "integer", "minimum": 1, "description": "Image height in pixels. Required when positionType is image; only with positionType image. Required with width, x and y." },
+            "x": { "type": "integer", "minimum": 0, "description": "Horizontal image coordinate in pixels. Required when positionType is image; only with positionType image. Required with width, height and y." },
+            "y": { "type": "integer", "minimum": 0, "description": "Vertical image coordinate in pixels. Required when positionType is image; only with positionType image. Required with width, height and x." }
+        },
+        "additionalProperties": false
     })
 }
 
@@ -8002,48 +7971,41 @@ fn draft_note_object_schema() -> Value {
 }
 
 fn draft_note_add_schema() -> Value {
+    let mut position = position_schema();
+    position["description"] = json!(
+        "Diff position for an inline draft. Required with expectedHeadSha. Do not combine with inReplyToDiscussionId or resolveDiscussion. Omit all four fields for a general draft."
+    );
     json!({
         "type": "object",
         "required": ["project", "iid", "content", "contentFormat"],
         "properties": {
             "project": { "type": "string" },
             "iid": { "type": ["integer", "string"] },
-            "expectedHeadSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+            "expectedHeadSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$", "description": "Expected current merge request head commit. Required with position. Do not combine with inReplyToDiscussionId or resolveDiscussion. Omit all four fields for a general draft." },
             "content": { "type": "string" },
             "contentFormat": normalized_gitlab_content_format_schema(),
-            "position": position_schema(),
-            "inReplyToDiscussionId": { "type": "string", "minLength": 1 },
-            "resolveDiscussion": { "type": "boolean" }
+            "position": position,
+            "inReplyToDiscussionId": { "type": "string", "minLength": 1, "description": "Discussion to reply to. Do not combine with position or expectedHeadSha. Required with resolveDiscussion. Omit these fields and resolveDiscussion for a general draft." },
+            "resolveDiscussion": { "type": "boolean", "description": "Whether to resolve the replied-to discussion. Only with inReplyToDiscussionId, including when false. Do not combine with position or expectedHeadSha. Omit these fields and inReplyToDiscussionId for a general draft." }
         },
-        "oneOf": [
-            {
-                "not": { "anyOf": [
-                    { "required": ["expectedHeadSha"] },
-                    { "required": ["position"] },
-                    { "required": ["inReplyToDiscussionId"] },
-                    { "required": ["resolveDiscussion"] }
-                ] }
-            },
-            {
-                "required": ["expectedHeadSha", "position"],
-                "not": { "anyOf": [
-                    { "required": ["inReplyToDiscussionId"] },
-                    { "required": ["resolveDiscussion"] }
-                ] }
-            },
-            {
-                "required": ["inReplyToDiscussionId"],
-                "not": { "anyOf": [
-                    { "required": ["expectedHeadSha"] },
-                    { "required": ["position"] }
-                ] }
-            }
-        ],
         "additionalProperties": false
     })
 }
 
 fn draft_note_update_schema() -> Value {
+    let choice = "Give at least one complete pair: content with contentFormat or position with expectedHeadSha.";
+    let mut content = optional_gitlab_content_schema();
+    content["description"] = json!(format!(
+        "Body text in markdown or plain_text. Required with contentFormat. {choice}"
+    ));
+    let mut content_format = optional_gitlab_content_format_schema();
+    content_format["description"] = json!(format!(
+        "Format of content: markdown markup or plain_text converted to Markdown. Required with content. {choice}"
+    ));
+    let mut position = position_schema();
+    position["description"] = json!(format!(
+        "Replacement diff position. Required with expectedHeadSha. {choice}"
+    ));
     json!({
         "type": "object",
         "required": ["project", "iid", "draftNoteId"],
@@ -8051,37 +8013,11 @@ fn draft_note_update_schema() -> Value {
             "project": { "type": "string" },
             "iid": { "type": ["integer", "string"] },
             "draftNoteId": { "type": ["integer", "string"] },
-            "expectedHeadSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
-            "content": { "type": "string" },
-            "contentFormat": normalized_gitlab_content_format_schema(),
-            "position": position_schema()
+            "expectedHeadSha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$", "description": format!("Expected current merge request head commit. Required with position. {choice}") },
+            "content": content,
+            "contentFormat": content_format,
+            "position": position
         },
-        "allOf": [
-            {
-                "anyOf": [
-                    { "required": ["content", "contentFormat"] },
-                    { "required": ["expectedHeadSha", "position"] }
-                ]
-            },
-            {
-                "anyOf": [
-                    { "required": ["content", "contentFormat"] },
-                    { "not": { "anyOf": [
-                        { "required": ["content"] },
-                        { "required": ["contentFormat"] }
-                    ] } }
-                ]
-            },
-            {
-                "anyOf": [
-                    { "required": ["expectedHeadSha", "position"] },
-                    { "not": { "anyOf": [
-                        { "required": ["expectedHeadSha"] },
-                        { "required": ["position"] }
-                    ] } }
-                ]
-            }
-        ],
         "additionalProperties": false
     })
 }
@@ -8090,13 +8026,22 @@ fn draft_publication_schema(review_submit: bool) -> Value {
     let mut properties = serde_json::Map::from_iter([
         ("project".to_string(), json!({ "type": "string" })),
         ("iid".to_string(), json!({ "type": ["integer", "string"] })),
-        ("content".to_string(), json!({ "type": "string" })),
+        ("content".to_string(), optional_gitlab_content_schema()),
         (
             "contentFormat".to_string(),
-            normalized_gitlab_content_format_schema(),
+            optional_gitlab_content_format_schema(),
         ),
-        ("internal".to_string(), json!({ "type": "boolean" })),
+        (
+            "internal".to_string(),
+            json!({ "type": "boolean", "description": "Whether the optional summary note is internal. Only with content and contentFormat, including when false." }),
+        ),
     ]);
+    properties["content"]["description"] = json!(
+        "Summary body text in markdown or plain_text. Required with contentFormat. Required with internal, including when internal is false. Omit content, contentFormat and internal to publish without a summary note."
+    );
+    properties["contentFormat"]["description"] = json!(
+        "Format of summary content: markdown markup or plain_text converted to Markdown. Required with content. Required with internal, including when internal is false. Omit content, contentFormat and internal to publish without a summary note."
+    );
     let mut required = vec![json!("project"), json!("iid")];
     if review_submit {
         properties.insert(
@@ -8109,15 +8054,6 @@ fn draft_publication_schema(review_submit: bool) -> Value {
         "type": "object",
         "required": required,
         "properties": properties,
-        "allOf": [
-            optional_content_pair_schema(),
-            {
-                "anyOf": [
-                    { "not": { "required": ["internal"] } },
-                    { "required": ["content", "contentFormat"] }
-                ]
-            }
-        ],
         "additionalProperties": false
     })
 }
@@ -8229,7 +8165,7 @@ fn discussion_state_change_schema() -> Value {
 }
 
 fn merge_request_view_schema() -> Value {
-    issue_view_schema()
+    numbered_object_view_schema("Merge request")
 }
 
 fn merge_request_subresource_schema() -> Value {
@@ -8389,10 +8325,10 @@ fn merge_request_mutation_schema(update: bool) -> Value {
         ("project".to_string(), json!({ "type": "string" })),
         ("targetBranch".to_string(), json!({ "type": "string" })),
         ("title".to_string(), json!({ "type": "string" })),
-        ("content".to_string(), json!({ "type": "string" })),
+        ("content".to_string(), optional_gitlab_content_schema()),
         (
             "contentFormat".to_string(),
-            normalized_gitlab_content_format_schema(),
+            optional_gitlab_content_format_schema(),
         ),
         ("labels".to_string(), string_array_schema()),
         ("assignees".to_string(), integer_array_schema()),
@@ -8418,7 +8354,6 @@ fn merge_request_mutation_schema(update: bool) -> Value {
     json!({
         "type": "object",
         "properties": properties,
-        "allOf": [optional_content_pair_schema()],
         "additionalProperties": false
     })
 }
@@ -8427,20 +8362,19 @@ fn normalized_gitlab_content_format_schema() -> Value {
     json!({ "type": "string", "enum": ["markdown", "plain_text"] })
 }
 
-fn optional_content_pair_schema() -> Value {
+fn optional_gitlab_content_schema() -> Value {
     json!({
-        "anyOf": [
-            { "required": ["content", "contentFormat"] },
-            {
-                "not": {
-                    "anyOf": [
-                        { "required": ["content"] },
-                        { "required": ["contentFormat"] }
-                    ]
-                }
-            }
-        ]
+        "type": "string",
+        "description": "Body text in markdown or plain_text. Required with contentFormat. Omit both content and contentFormat to leave the body unchanged or absent."
     })
+}
+
+fn optional_gitlab_content_format_schema() -> Value {
+    let mut schema = normalized_gitlab_content_format_schema();
+    schema["description"] = json!(
+        "Format of content: markdown markup or plain_text converted to Markdown. Required with content. Omit both content and contentFormat to leave the body unchanged or absent."
+    );
+    schema
 }
 
 /// Discovery guidance for project-local REST collections, not a query-language parser.
@@ -8894,22 +8828,45 @@ fn webhook_update_schema() -> Value {
         "confirmDestinationReset".to_string(),
         json!({ "type": "boolean" }),
     );
+    let choice = "Give at least one of url, events, name, description, enableSslVerification, branchFilterStrategy, pushEventsBranchFilter, customWebhookTemplate, token, signingToken or clearToken: true. confirmDestinationReset does not count.";
+    for (field, meaning) in [
+        ("url", "Webhook destination URL."),
+        ("events", "Complete replacement set of webhook events."),
+        ("name", "Webhook name; null clears it."),
+        ("description", "Webhook description; null clears it."),
+        (
+            "enableSslVerification",
+            "Whether to verify the destination TLS certificate.",
+        ),
+        (
+            "branchFilterStrategy",
+            "Strategy for selecting branches for push events.",
+        ),
+        ("pushEventsBranchFilter", "Branch filter for push events."),
+        (
+            "customWebhookTemplate",
+            "Custom webhook payload template; null clears it.",
+        ),
+        (
+            "token",
+            "Replacement webhook secret token. Do not combine with clearToken: true.",
+        ),
+        ("signingToken", "Replacement webhook signing token."),
+        (
+            "clearToken",
+            "Remove the webhook secret token. When true, do not combine with token.",
+        ),
+        (
+            "confirmDestinationReset",
+            "Confirm resetting destination-sensitive webhook settings when changing url.",
+        ),
+    ] {
+        properties[field]["description"] = json!(format!("{meaning} {choice}"));
+    }
     json!({
         "type": "object",
         "required": ["project", "webhookId"],
         "properties": properties,
-        "allOf": [
-            { "not": { "required": ["token", "clearToken"] } },
-            { "anyOf": [
-                { "required": ["url"] }, { "required": ["events"] },
-                { "required": ["name"] }, { "required": ["description"] },
-                { "required": ["enableSslVerification"] },
-                { "required": ["branchFilterStrategy"] },
-                { "required": ["pushEventsBranchFilter"] },
-                { "required": ["customWebhookTemplate"] }, { "required": ["token"] },
-                { "required": ["signingToken"] }, { "required": ["clearToken"] }
-            ] }
-        ],
         "additionalProperties": false
     })
 }
@@ -9301,12 +9258,29 @@ fn parse_project_locator(
     inputs: &Value,
     config: &GitlabProviderConfig,
 ) -> Result<ProjectLocator, ProviderError> {
-    let object = input_object(inputs, "gitlab project.view inputs are invalid")?;
-    reject_unknown_keys(
-        object,
-        &["project", "url"],
-        "gitlab project.view inputs are invalid",
-    )?;
+    parse_project_locator_for_action(inputs, config, "gitlab project.view")
+}
+
+fn parse_project_locator_for_action(
+    inputs: &Value,
+    config: &GitlabProviderConfig,
+    action: &'static str,
+) -> Result<ProjectLocator, ProviderError> {
+    let object = inputs.as_object().ok_or_else(|| {
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} inputs must be an object"),
+        )
+    })?;
+    if object
+        .keys()
+        .any(|key| !["project", "url"].contains(&key.as_str()))
+    {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} accepts only project or url input fields"),
+        ));
+    }
     match (object.get("project"), object.get("url")) {
         (Some(project), None) => Ok(ProjectLocator {
             project: normalize_project_path(required_input_string(project, "project")?)?,
@@ -9314,9 +9288,13 @@ fn parse_project_locator(
         (None, Some(url)) => Ok(ProjectLocator {
             project: project_path_from_web_url(required_input_string(url, "url")?, config)?,
         }),
-        _ => Err(ProviderError::deny(
+        (None, None) => Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            "gitlab project.view requires exactly one of project or url",
+            format!("{action} requires project or url"),
+        )),
+        (Some(_), Some(_)) => Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} accepts project or url, not both"),
         )),
     }
 }
@@ -9335,12 +9313,7 @@ fn parse_issue_locator(
     inputs: &Value,
     config: &GitlabProviderConfig,
 ) -> Result<(ProjectLocator, u64), ProviderError> {
-    parse_numbered_object_locator(
-        inputs,
-        config,
-        "issues",
-        "gitlab issue.view inputs are invalid",
-    )
+    parse_numbered_object_locator(inputs, config, "issues", "gitlab issue.view")
 }
 
 fn parse_merge_request_locator(
@@ -9351,7 +9324,7 @@ fn parse_merge_request_locator(
         inputs,
         config,
         "merge_requests",
-        "gitlab merge_request.view inputs are invalid",
+        "gitlab merge_request.view",
     )
 }
 
@@ -9359,10 +9332,23 @@ fn parse_numbered_object_locator(
     inputs: &Value,
     config: &GitlabProviderConfig,
     object_path_segment: &str,
-    error_message: &'static str,
+    action: &'static str,
 ) -> Result<(ProjectLocator, u64), ProviderError> {
-    let object = input_object(inputs, error_message)?;
-    reject_unknown_keys(object, &["project", "iid", "url"], error_message)?;
+    let object = inputs.as_object().ok_or_else(|| {
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} inputs must be an object"),
+        )
+    })?;
+    if object
+        .keys()
+        .any(|key| !["project", "iid", "url"].contains(&key.as_str()))
+    {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} accepts only project, iid or url input fields"),
+        ));
+    }
     match (object.get("project"), object.get("iid"), object.get("url")) {
         (Some(project), Some(iid), None) => Ok((
             ProjectLocator {
@@ -9378,9 +9364,17 @@ fn parse_numbered_object_locator(
             )?;
             Ok((ProjectLocator { project }, iid))
         }
+        (None, None, None) => Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} requires project with iid or url"),
+        )),
+        (_, _, Some(_)) => Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} accepts project with iid or url, not both"),
+        )),
         _ => Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            "gitlab object view requires either project+iid or url",
+            format!("{action} requires project and iid together"),
         )),
     }
 }
@@ -10072,11 +10066,23 @@ fn parse_draft_note_add_inputs(
         optional_input_string(object.get("inReplyToDiscussionId"), "inReplyToDiscussionId")?;
     let resolve_discussion =
         optional_input_bool(object.get("resolveDiscussion"), "resolveDiscussion")?;
-    if position.is_some() != expected_head_sha.is_some()
-        || (position.is_some() && in_reply_to_discussion_id.is_some())
-        || (resolve_discussion.is_some() && in_reply_to_discussion_id.is_none())
-    {
-        return Err(ProviderError::deny(ReasonCode::InputInvalid, MESSAGE));
+    if position.is_some() != expected_head_sha.is_some() {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab merge_request.draft_note.add requires position and expectedHeadSha together",
+        ));
+    }
+    if position.is_some() && in_reply_to_discussion_id.is_some() {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab merge_request.draft_note.add accepts position with expectedHeadSha or inReplyToDiscussionId, not both",
+        ));
+    }
+    if resolve_discussion.is_some() && in_reply_to_discussion_id.is_none() {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab merge_request.draft_note.add resolveDiscussion requires inReplyToDiscussionId",
+        ));
     }
     Ok(DraftNoteAddInputs {
         iid: required_object_u64(object, "iid")?,
@@ -10126,8 +10132,17 @@ fn parse_draft_note_update_inputs(
     if let Some(expected_head_sha) = &expected_head_sha {
         validate_full_commit_sha(expected_head_sha, "expectedHeadSha")?;
     }
-    if position.is_some() != expected_head_sha.is_some() || (position.is_none() && body.is_none()) {
-        return Err(ProviderError::deny(ReasonCode::InputInvalid, MESSAGE));
+    if position.is_some() != expected_head_sha.is_some() {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab merge_request.draft_note.update requires position and expectedHeadSha together",
+        ));
+    }
+    if position.is_none() && body.is_none() {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            "gitlab merge_request.draft_note.update requires content with contentFormat or position with expectedHeadSha",
+        ));
     }
     Ok(DraftNoteUpdateInputs {
         iid: required_object_u64(object, "iid")?,
@@ -10162,14 +10177,26 @@ fn parse_draft_publication_inputs(
     )?;
     let internal = optional_input_bool(object.get("internal"), "internal")?;
     if internal.is_some() && summary.is_none() {
-        return Err(ProviderError::deny(ReasonCode::InputInvalid, MESSAGE));
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            if review_submit {
+                "gitlab merge_request.review.submit internal requires content and contentFormat"
+            } else {
+                "gitlab merge_request.draft_note.publish_all internal requires content and contentFormat"
+            },
+        ));
     }
     let reviewer_state = if review_submit {
         let state = required_object_string(object, "reviewerState")?;
         Some(match state.as_str() {
             "reviewed" => "reviewed".to_string(),
             "requestedChanges" => "requested_changes".to_string(),
-            _ => return Err(ProviderError::deny(ReasonCode::InputInvalid, MESSAGE)),
+            _ => {
+                return Err(ProviderError::deny(
+                    ReasonCode::InputInvalid,
+                    "gitlab merge_request.review.submit reviewerState must be reviewed or requestedChanges",
+                ));
+            }
         })
     } else {
         None
@@ -10183,7 +10210,7 @@ fn parse_draft_publication_inputs(
 }
 
 fn parse_position_input(value: Option<&Value>) -> Result<GitlabPositionInput, ProviderError> {
-    const MESSAGE: &str = "gitlab position is invalid";
+    const MESSAGE: &str = "position must be an object containing only positionType, oldPath, newPath, oldLine, newLine, lineRange, width, height, x and y";
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(|| ProviderError::deny(ReasonCode::InputInvalid, MESSAGE))?;
@@ -10234,7 +10261,23 @@ fn parse_position_input(value: Option<&Value>) -> Result<GitlabPositionInput, Pr
                 && old_line.is_none()
                 && new_line.is_none()
                 && line_range.is_none() => {}
-        _ => return Err(ProviderError::deny(ReasonCode::InputInvalid, MESSAGE)),
+        _ => {
+            return Err(ProviderError::deny(
+                ReasonCode::InputInvalid,
+                match position_type.as_str() {
+                    "text" => {
+                        "positionType text requires oldLine or newLine, or lineRange without top-level oldLine or newLine; width, height, x and y are not accepted"
+                    }
+                    "file" => {
+                        "positionType file does not accept oldLine, newLine, lineRange, width, height, x or y"
+                    }
+                    "image" => {
+                        "positionType image requires width, height, x and y and does not accept oldLine, newLine or lineRange"
+                    }
+                    _ => "position.positionType must be text, file or image",
+                },
+            ));
+        }
     }
     Ok(GitlabPositionInput {
         position_type,
@@ -10251,29 +10294,43 @@ fn parse_position_input(value: Option<&Value>) -> Result<GitlabPositionInput, Pr
 }
 
 fn parse_line_range_input(value: &Value) -> Result<GitlabLineRangeInput, ProviderError> {
-    const MESSAGE: &str = "gitlab position lineRange is invalid";
+    const MESSAGE: &str = "position.lineRange must be an object containing only start and end";
     let object = value
         .as_object()
         .ok_or_else(|| ProviderError::deny(ReasonCode::InputInvalid, MESSAGE))?;
     reject_unknown_keys(object, &["start", "end"], MESSAGE)?;
     Ok(GitlabLineRangeInput {
-        start: parse_line_coordinate_input(object.get("start"), MESSAGE)?,
-        end: parse_line_coordinate_input(object.get("end"), MESSAGE)?,
+        start: parse_line_coordinate_input(object.get("start"), "position.lineRange.start")?,
+        end: parse_line_coordinate_input(object.get("end"), "position.lineRange.end")?,
     })
 }
 
 fn parse_line_coordinate_input(
     value: Option<&Value>,
-    message: &'static str,
+    field: &'static str,
 ) -> Result<GitlabLineCoordinateInput, ProviderError> {
-    let object = value
-        .and_then(Value::as_object)
-        .ok_or_else(|| ProviderError::deny(ReasonCode::InputInvalid, message))?;
-    reject_unknown_keys(object, &["oldLine", "newLine"], message)?;
+    let object = value.and_then(Value::as_object).ok_or_else(|| {
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{field} must be an object with oldLine or newLine"),
+        )
+    })?;
+    if object
+        .keys()
+        .any(|key| !["oldLine", "newLine"].contains(&key.as_str()))
+    {
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{field} accepts only oldLine or newLine input fields"),
+        ));
+    }
     let old_line = optional_positive_input_u64(object.get("oldLine"), "oldLine")?;
     let new_line = optional_positive_input_u64(object.get("newLine"), "newLine")?;
     if old_line.is_none() && new_line.is_none() {
-        return Err(ProviderError::deny(ReasonCode::InputInvalid, message));
+        return Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{field} requires oldLine or newLine"),
+        ));
     }
     Ok(GitlabLineCoordinateInput { old_line, new_line })
 }
@@ -11113,7 +11170,11 @@ fn parse_webhook_write_inputs(
     if token.is_some() && clear_token {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            "token and clearToken cannot be combined",
+            if create {
+                "gitlab webhook.create token and clearToken: true cannot be combined"
+            } else {
+                "gitlab webhook.update token and clearToken: true cannot be combined"
+            },
         ));
     }
     if create
@@ -11140,7 +11201,7 @@ fn parse_webhook_write_inputs(
     if !create && mutable_count == 0 {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            "gitlab webhook.update requires at least one mutable field",
+            "gitlab webhook.update requires at least one of url, events, name, description, enableSslVerification, branchFilterStrategy, pushEventsBranchFilter, customWebhookTemplate, token, signingToken or clearToken: true; confirmDestinationReset does not count",
         ));
     }
     Ok(WebhookWriteInputs {

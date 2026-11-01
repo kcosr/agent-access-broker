@@ -1,3 +1,7 @@
+#[path = "common/list_mcp.rs"]
+mod list_mcp;
+#[path = "gitlab_smoke/plain_inputs.rs"]
+mod plain_inputs;
 /// The GitLab provider around `backend`, paired with its configuration's
 /// descriptor.
 fn gitlab_service(

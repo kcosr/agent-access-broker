@@ -14,6 +14,44 @@ This provider is for GitLab REST API access. It does not implement native Git
 fetch/push, clone, checkout, or merge-request checkout flows; those remain the
 job of Git HTTP gateway services.
 
+## Input arguments
+
+GitLab action inputs use plain object schemas. Field descriptions state locator
+alternatives, paired fields and rules tied to a mode or configured search engine.
+The provider enforces those relationships and names missing or conflicting fields
+in `input_invalid` denials. Types, enums, bounds and unconditional requirements
+remain in the published schemas; schema validity alone does not establish that a
+request satisfies the provider's relationships.
+
+For `project.view` and `project.upload`, give exactly one of `project` or `url`.
+For `issue.view` and `merge_request.view`, give `project` and `iid` together, or
+give `url` without either field. Explicit `null` is not an absent locator.
+Upload metadata and file handling keep their separate requirements.
+
+When a write accepts optional `content`, supply `contentFormat` with it. Draft
+note positions require `expectedHeadSha` and `position` together; reply drafts
+use `inReplyToDiscussionId` instead, and `resolveDiscussion` requires that reply
+target. A draft update needs a content pair, a position pair, or both. Publication
+accepts `internal` only with a content pair. `webhook.update` needs at least one
+mutable field; `token` conflicts with `clearToken: true`, while the parser accepts
+`token` with `clearToken: false`.
+
+Nested `position` fields are visible in the same way. `positionType` is `text`,
+`file` or `image`, and every position needs `oldPath` and `newPath`. Text positions
+use `oldLine`, `newLine` or both, or use `lineRange` instead; each range endpoint
+needs at least one line coordinate. Image positions need `width`, `height`, `x`
+and `y`. File positions have no line or image coordinates. The field descriptions
+identify which fields belong to each variant.
+
+Each `search.*` schema reflects its configured engines and routes. `project` is
+required when every enabled engine requires one, and must be omitted when none
+supports project search. With mixed routes, read the per-engine guidance and
+advertised default. `regex` is accepted only for code search when the effective
+engine is `zoekt`, selected explicitly or by default; other engines refuse even
+`regex: false`. Availability describes configured
+capabilities, not live index coverage or health; see
+[repository discovery and content search](#repository-discovery-and-content-search).
+
 ## Operator setup
 
 Configure the REST API root and browser origin for the same GitLab instance:
@@ -242,9 +280,12 @@ The default engine matrix is:
 | `advanced` | Disabled until configured | Disabled until configured |
 | `zoekt` | Code only, disabled until configured | Code only, disabled until configured |
 
-When the selected engine has no instance route for the category, `project` is
-required, including when `engine` is omitted. The live action schema expresses
-this condition. Advanced search requires the deployment's licensed infrastructure;
+When the selected/default engine has no instance route for the category,
+`project` is required; when it has no project route, omit `project`. The schema's
+root `required` contains `project` only when no enabled engine has an instance
+route. Per-engine rules are stated in field descriptions and enforced by the
+provider with `input_invalid`; see [Input arguments](#input-arguments).
+Advanced search requires the deployment's licensed infrastructure;
 Zoekt requires its own infrastructure and scope support. Enabling a tuple in
 configuration does not establish that GitLab can execute or completely index it.
 Discovery is offline and reports configured capability and locally usable

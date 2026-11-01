@@ -153,6 +153,196 @@ fn input_validation_and_capability_matrix_are_closed() {
     );
 }
 
+fn assert_invalid_search_outcome(error: &ProviderError, message: &str) {
+    assert_eq!(error.message, message);
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code().http_status(), 400);
+    assert!(error.result.is_none());
+    assert!(error.audit.is_none());
+    assert!(error.object_ids.is_none());
+    assert!(error.upstream_status.is_none());
+    assert!(error.upstream_duration_ms.is_none());
+}
+
+#[test]
+fn search_input_denials_name_fields_without_supplied_values() {
+    let config = GitlabSearchConfig::default();
+    for (action, input, message) in [
+        (
+            "search.issues",
+            json!(["PRIVATE_VALUE"]),
+            "GitLab search inputs must be an object",
+        ),
+        (
+            "project.list",
+            json!({"PRIVATE_VALUE": true}),
+            "GitLab project.list accepts only maxResults and pageToken",
+        ),
+        (
+            "search.issues",
+            json!({"search": null}),
+            "GitLab search requires search to be a string",
+        ),
+        (
+            "search.issues",
+            json!({}),
+            "GitLab search requires search to contain 1–512 UTF-8 bytes after trimming; omit it only for project discovery",
+        ),
+        (
+            "project.search",
+            json!({"search": "  "}),
+            "GitLab search requires search to contain 1–512 UTF-8 bytes after trimming; omit it only for project discovery",
+        ),
+        (
+            "search.issues",
+            json!({"search": "PRIVATE_VALUE", "project": null}),
+            "GitLab search project must be a string",
+        ),
+        (
+            "search.issues",
+            json!({"search": "PRIVATE_VALUE", "project": "PRIVATE_VALUE"}),
+            "GitLab search project must be a canonical namespace/project path",
+        ),
+        (
+            "search.issues",
+            json!({"search": "PRIVATE_VALUE", "engine": null}),
+            "GitLab search engine must be a string",
+        ),
+        (
+            "search.issues",
+            json!({"search": "PRIVATE_VALUE", "engine": "PRIVATE_VALUE"}),
+            "GitLab search engine is not enabled for this action",
+        ),
+        (
+            "search.code",
+            json!({"search": "PRIVATE_VALUE", "project": "team/repo", "regex": null}),
+            "GitLab search regex must be a boolean",
+        ),
+        (
+            "search.code",
+            json!({"search": "PRIVATE_VALUE", "project": "team/repo", "regex": false}),
+            "GitLab search regex is accepted only with engine zoekt, including regex: false",
+        ),
+        (
+            "search.code",
+            json!({"search": "PRIVATE_VALUE", "regex": null}),
+            "GitLab search.code requires project with engine basic",
+        ),
+        (
+            "project.list",
+            json!({"maxResults": null}),
+            "GitLab search maxResults must be an integer within the published range",
+        ),
+        (
+            "project.search",
+            json!({"maxResults": 0}),
+            "GitLab search maxResults must be an integer within the published range",
+        ),
+        (
+            "project.list",
+            json!({"pageToken": null}),
+            "GitLab search pageToken must be a string",
+        ),
+        (
+            "project.search",
+            json!({"pageToken": "PRIVATE_VALUE_é"}),
+            "GitLab search pageToken must contain 1–512 ASCII bytes",
+        ),
+        (
+            "project.search",
+            json!({"includeNamespaces": null}),
+            "GitLab search includeNamespaces must be a boolean",
+        ),
+        (
+            "project.search",
+            json!({"archived": "PRIVATE_VALUE"}),
+            "GitLab search archived must be a boolean",
+        ),
+    ] {
+        let error = parse_inputs(action, &input, &config).err().unwrap();
+        assert_invalid_search_outcome(&error, message);
+        assert!(!format!("{error:?}").contains("PRIVATE_VALUE"));
+    }
+}
+
+#[test]
+fn search_route_denials_never_echo_unknown_action_or_engine_names() {
+    for (action, engine) in [
+        ("search.PRIVATE_VALUE", "basic"),
+        ("search.code", "PRIVATE_VALUE"),
+        ("search.code", "zoekt PRIVATE_VALUE"),
+    ] {
+        for has_project in [false, true] {
+            let error = invalid_project_route(action, engine, has_project);
+            assert_invalid_search_outcome(
+                &error,
+                "GitLab search engine is not enabled for this action",
+            );
+            assert!(!format!("{error:?}").contains("PRIVATE_VALUE"));
+        }
+    }
+    let config = GitlabSearchConfig::default();
+    for engine in ["advanced", "zoekt", "PRIVATE_VALUE"] {
+        let error = parse_inputs(
+            "search.issues",
+            &json!({"search": "PRIVATE_VALUE", "engine": engine}),
+            &config,
+        )
+        .err()
+        .unwrap();
+        assert_invalid_search_outcome(
+            &error,
+            "GitLab search engine is not enabled for this action",
+        );
+        assert!(!format!("{error:?}").contains("PRIVATE_VALUE"));
+    }
+}
+
+#[test]
+fn search_input_normalization_and_optional_discovery_are_unchanged() {
+    let config = GitlabSearchConfig::default();
+    for action in ["project.list", "project.search"] {
+        let inputs = parse_inputs(action, &json!({}), &config).unwrap();
+        assert!(inputs.search.is_none());
+        assert!(inputs.engine.is_none());
+        assert!(inputs.regex.is_none());
+        assert!(inputs.archived.is_none());
+        assert!(inputs.include_namespaces);
+        assert_eq!(inputs.max_results, 50);
+    }
+    let query = "é".repeat(256);
+    let token = "x".repeat(512);
+    let inputs = parse_inputs(
+        "search.issues",
+        &json!({"search": format!("  {query}  "), "maxResults": 50, "pageToken": token}),
+        &config,
+    )
+    .unwrap();
+    assert_eq!(inputs.search.as_deref(), Some(query.as_str()));
+    assert_eq!(inputs.page_token.as_deref(), Some(token.as_str()));
+    assert_eq!(inputs.max_results, 50);
+    assert_eq!(inputs.engine.as_deref(), Some("basic"));
+    assert!(inputs.regex.is_none());
+    for input in [
+        json!({"search": "é".repeat(257)}),
+        json!({"search": "x", "maxResults": 51}),
+        json!({"search": "x", "pageToken": "x".repeat(513)}),
+        json!({"search": "x", "project": " team/repo "}),
+        json!({"search": "x", "engine": " basic "}),
+    ] {
+        assert!(parse_inputs("search.issues", &input, &config).is_err());
+    }
+    let inputs = parse_inputs(
+        "project.search",
+        &json!({"includeNamespaces": false, "archived": false}),
+        &config,
+    )
+    .unwrap();
+    assert!(!inputs.include_namespaces);
+    assert_eq!(inputs.archived, Some(false));
+}
+
 #[test]
 fn configuration_rejects_unknown_duplicate_impossible_and_unusable_defaults() {
     assert!(
@@ -1328,7 +1518,7 @@ fn projections_validate_owned_locators_preview_boundaries_and_comment_parents() 
 }
 
 #[test]
-fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas() {
+fn descriptors_are_independent_sensitive_reads_with_plain_project_schemas() {
     let config:GitlabProviderConfig=serde_json::from_value(json!({"api_base_url":"https://gitlab.example/api/v4","web_base_url":"https://gitlab.example"})).unwrap();
     let descriptor = gitlab_descriptor(&config);
     descriptor.validate().unwrap();
@@ -1354,7 +1544,8 @@ fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas(
         code.input_schema["properties"]["engine"]["enum"],
         json!(["basic"])
     );
-    assert!(code.input_schema["allOf"].to_string().contains("project"));
+    assert_eq!(code.input_schema["required"], json!(["search", "project"]));
+    assert!(code.input_schema.get("allOf").is_none());
     assert!(code.input_schema["properties"].get("regex").is_none());
     let mut disabled = config;
     disabled.search.engines.basic = GitlabSearchEngineConfig::default();
@@ -1386,6 +1577,318 @@ fn descriptors_are_independent_sensitive_reads_with_conditional_project_schemas(
 }
 
 #[test]
+fn configured_search_routes_publish_plain_fields_and_preserve_acceptance() {
+    for category in CATEGORIES {
+        for engine in ["basic", "advanced", "zoekt"] {
+            if engine == "zoekt" && *category != "code" {
+                continue;
+            }
+            for (project_route, instance_route, project_guidance, action_guidance) in [
+                (
+                    true,
+                    false,
+                    "Required with every configured engine.",
+                    "in one project",
+                ),
+                (
+                    false,
+                    true,
+                    "Not available with the configured search engines; omit.",
+                    "across authorized repositories",
+                ),
+                (
+                    true,
+                    true,
+                    "Omit to search across authorized repositories, or give project to search one.",
+                    "across authorized repositories; give project to search one",
+                ),
+            ] {
+                if engine == "basic"
+                    && instance_route
+                    && !["issues", "merge_requests"].contains(category)
+                {
+                    continue;
+                }
+                let mut config: GitlabProviderConfig = serde_json::from_value(json!({
+                    "api_base_url": "https://gitlab.example/api/v4",
+                    "web_base_url": "https://gitlab.example",
+                    "search": {
+                        "default_engine": engine,
+                        "engines": {"basic": {"project_categories": [], "instance_categories": []}}
+                    }
+                }))
+                .unwrap();
+                let routes = GitlabSearchEngineConfig {
+                    project_categories: if project_route {
+                        vec![(*category).into()]
+                    } else {
+                        vec![]
+                    },
+                    instance_categories: if instance_route {
+                        vec![(*category).into()]
+                    } else {
+                        vec![]
+                    },
+                };
+                match engine {
+                    "basic" => config.search.engines.basic = routes,
+                    "advanced" => config.search.engines.advanced = routes,
+                    "zoekt" => config.search.engines.zoekt = routes,
+                    _ => unreachable!(),
+                }
+                let mut errors = vec![];
+                config.search.validate(&mut errors);
+                assert!(errors.is_empty(), "{errors:?}");
+                let descriptor = gitlab_descriptor(&config);
+                descriptor.validate().unwrap();
+                let action_name = format!("search.{category}");
+                let action = descriptor
+                    .actions
+                    .iter()
+                    .find(|action| action.action == action_name)
+                    .unwrap();
+                let schema = &action.input_schema;
+                for key in ["oneOf", "anyOf", "allOf", "if", "then", "else", "not"] {
+                    assert!(schema.get(key).is_none(), "{action_name}: {key}");
+                }
+                assert_eq!(schema["type"], "object");
+                assert_eq!(schema["additionalProperties"], false);
+                assert_eq!(schema["properties"]["engine"]["enum"], json!([engine]));
+                assert_eq!(schema["properties"]["engine"]["default"], engine);
+                assert_eq!(
+                    schema["required"],
+                    if instance_route {
+                        json!(["search"])
+                    } else {
+                        json!(["search", "project"])
+                    }
+                );
+                assert!(
+                    schema["properties"]["project"]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains(project_guidance)
+                );
+                assert!(
+                    schema["properties"]["engine"]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&format!("Omit engine to use {engine}."))
+                );
+                assert!(action.description.ends_with(action_guidance));
+                assert_eq!(
+                    action
+                        .audit_inputs
+                        .iter()
+                        .map(AuditInput::input)
+                        .collect::<Vec<_>>(),
+                    if engine == "zoekt" {
+                        vec!["project", "search", "regex"]
+                    } else {
+                        vec!["project", "search"]
+                    }
+                );
+                if engine == "zoekt" {
+                    assert_eq!(schema["properties"]["regex"]["type"], "boolean");
+                    assert_eq!(schema["properties"]["regex"]["default"], false);
+                    assert!(
+                        schema["properties"]["regex"]["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains("Only with engine zoekt, including regex: false.")
+                    );
+                    assert!(
+                        schema["properties"]["engine"]["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains(
+                                "regex is accepted only with engine zoekt, including regex: false."
+                            )
+                    );
+                } else {
+                    assert!(schema["properties"].get("regex").is_none());
+                }
+                for explicit_engine in [false, true] {
+                    for with_project in [false, true] {
+                        for regex in [
+                            None,
+                            Some(json!(false)),
+                            Some(json!(true)),
+                            Some(Value::Null),
+                        ] {
+                            let mut input = json!({"search": "needle"});
+                            if explicit_engine {
+                                input["engine"] = json!(engine);
+                            }
+                            if with_project {
+                                input["project"] = json!("team/repo");
+                            }
+                            if let Some(regex) = &regex {
+                                input["regex"] = regex.clone();
+                            }
+                            let route_allowed = if with_project {
+                                project_route
+                            } else {
+                                instance_route
+                            };
+                            let regex_allowed = regex.is_none()
+                                || (engine == "zoekt"
+                                    && regex.as_ref().is_some_and(Value::is_boolean));
+                            let result = parse_inputs(&action_name, &input, &config.search);
+                            assert_eq!(
+                                result.is_ok(),
+                                route_allowed && regex_allowed,
+                                "{action_name} {engine} {project_route}/{instance_route}: {input}"
+                            );
+                            if !route_allowed && regex.is_none() {
+                                let message = if with_project {
+                                    format!(
+                                        "GitLab {action_name} does not accept project with engine {engine}; omit project"
+                                    )
+                                } else {
+                                    format!(
+                                        "GitLab {action_name} requires project with engine {engine}"
+                                    )
+                                };
+                                assert_invalid_search_outcome(
+                                    result.as_ref().err().unwrap(),
+                                    &message,
+                                );
+                            }
+                            if let Ok(inputs) = result {
+                                assert_eq!(inputs.engine.as_deref(), Some(engine));
+                                assert_eq!(
+                                    inputs.regex,
+                                    if engine == "zoekt" {
+                                        Some(
+                                            regex
+                                                .as_ref()
+                                                .and_then(Value::as_bool)
+                                                .unwrap_or(false),
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_search_routes_describe_each_engine_and_do_not_fall_back() {
+    let mut config: GitlabProviderConfig = serde_json::from_value(json!({
+        "api_base_url": "https://gitlab.example/api/v4",
+        "web_base_url": "https://gitlab.example"
+    }))
+    .unwrap();
+    config.search.engines.basic = GitlabSearchEngineConfig {
+        project_categories: CATEGORIES
+            .iter()
+            .map(|category| (*category).into())
+            .collect(),
+        instance_categories: vec![],
+    };
+    config.search.engines.advanced.instance_categories = CATEGORIES
+        .iter()
+        .map(|category| (*category).into())
+        .collect();
+    config.search.engines.zoekt = GitlabSearchEngineConfig {
+        project_categories: vec!["code".into()],
+        instance_categories: vec!["code".into()],
+    };
+    for default_engine in ["basic", "advanced"] {
+        config.search.default_engine = default_engine.into();
+        let mut errors = vec![];
+        config.search.validate(&mut errors);
+        assert!(errors.is_empty(), "{errors:?}");
+        let descriptor = gitlab_descriptor(&config);
+        descriptor.validate().unwrap();
+        for category in CATEGORIES {
+            let action_name = format!("search.{category}");
+            let action = descriptor
+                .actions
+                .iter()
+                .find(|action| action.action == action_name)
+                .unwrap();
+            assert_eq!(action.input_schema["required"], json!(["search"]));
+            for field in ["project", "engine"] {
+                let description = action.input_schema["properties"][field]["description"]
+                    .as_str()
+                    .unwrap();
+                for clause in [
+                    "project is required when engine is basic.",
+                    "Omit project when engine is advanced.",
+                    &format!("Omit engine to use {default_engine}."),
+                ] {
+                    assert!(
+                        description.contains(clause),
+                        "{action_name} {field}: {description}"
+                    );
+                    assert!(action.description.contains(clause));
+                }
+                if *category == "code" {
+                    assert!(description.contains("project is optional when engine is zoekt."));
+                }
+            }
+            for (engine, project, accepted, message) in [
+                (
+                    None,
+                    false,
+                    default_engine == "advanced",
+                    format!("GitLab {action_name} requires project with engine basic"),
+                ),
+                (
+                    None,
+                    true,
+                    default_engine == "basic",
+                    format!(
+                        "GitLab {action_name} does not accept project with engine advanced; omit project"
+                    ),
+                ),
+                (
+                    Some("basic"),
+                    false,
+                    false,
+                    format!("GitLab {action_name} requires project with engine basic"),
+                ),
+                (Some("basic"), true, true, String::new()),
+                (Some("advanced"), false, true, String::new()),
+                (
+                    Some("advanced"),
+                    true,
+                    false,
+                    format!(
+                        "GitLab {action_name} does not accept project with engine advanced; omit project"
+                    ),
+                ),
+            ] {
+                let mut input = json!({"search": "needle"});
+                if let Some(engine) = engine {
+                    input["engine"] = json!(engine);
+                }
+                if project {
+                    input["project"] = json!("team/repo");
+                }
+                let result = parse_inputs(&action_name, &input, &config.search);
+                assert_eq!(
+                    result.is_ok(),
+                    accepted,
+                    "{action_name} {default_engine}: {input}"
+                );
+                if let Err(error) = result {
+                    assert_invalid_search_outcome(&error, &message);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn advertised_search_default_matches_runtime_selection() {
     let mut config: GitlabProviderConfig = serde_json::from_value(json!({
         "api_base_url": "https://gitlab.example/api/v4",
@@ -1400,6 +1903,10 @@ fn advertised_search_default_matches_runtime_selection() {
         .iter()
         .map(|category| (*category).into())
         .collect();
+    config.search.engines.zoekt = GitlabSearchEngineConfig {
+        project_categories: vec!["code".into()],
+        instance_categories: vec!["code".into()],
+    };
 
     for default_engine in ["basic", "advanced"] {
         config.search.default_engine = default_engine.into();
@@ -1530,36 +2037,65 @@ async fn any_unsupported_capability_fails_before_a_request_without_engine_fallba
 
 #[tokio::test]
 async fn zoekt_sends_explicit_regex_choice_and_never_tries_basic() {
-    let server = MockServer::start().await;
-    let mut cfg = config(&server);
-    cfg.search.engines.zoekt.instance_categories = vec!["code".into()];
-    let provider = provider(cfg);
-    Mock::given(path("/api/v4/search"))
-        .and(query_param("scope", "blobs"))
-        .and(query_param("search_type", "zoekt"))
-        .and(query_param("regex", "false"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("X-Search-Type", "zoekt")
-                .insert_header("X-Next-Page", "")
-                .set_body_json(json!([])),
-        )
-        .expect(1)
-        .mount(&server)
-        .await;
-    assert_eq!(
-        provider
-            .invoke(invocation(
-                "search.code",
-                json!({"search":"literal","engine":"zoekt"}),
-                scope()
-            ))
-            .await
-            .unwrap()
-            .result["engine"],
-        "zoekt"
-    );
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    for default_engine in ["basic", "zoekt"] {
+        let server = MockServer::start().await;
+        let mut cfg = config(&server);
+        cfg.search.default_engine = default_engine.into();
+        cfg.search.engines.basic = GitlabSearchEngineConfig {
+            project_categories: vec!["code".into()],
+            instance_categories: vec![],
+        };
+        cfg.search.engines.zoekt.instance_categories = vec!["code".into()];
+        let provider = provider(cfg);
+        for (regex, requests) in [("false", 2), ("true", 1)] {
+            Mock::given(path("/api/v4/search"))
+                .and(query_param("scope", "blobs"))
+                .and(query_param("search_type", "zoekt"))
+                .and(query_param("regex", regex))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("X-Search-Type", "zoekt")
+                        .insert_header("X-Next-Page", "")
+                        .set_body_json(json!([])),
+                )
+                .expect(requests)
+                .mount(&server)
+                .await;
+        }
+        if default_engine == "basic" {
+            let error = provider
+                .invoke(invocation(
+                    "search.code",
+                    json!({"search": "literal"}),
+                    scope(),
+                ))
+                .await
+                .unwrap_err();
+            assert_invalid_search_outcome(
+                &error,
+                "GitLab search.code requires project with engine basic",
+            );
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
+        for regex in [None, Some(false), Some(true)] {
+            let mut input = json!({"search": "literal"});
+            if default_engine == "basic" {
+                input["engine"] = json!("zoekt");
+            }
+            if let Some(regex) = regex {
+                input["regex"] = json!(regex);
+            }
+            assert_eq!(
+                provider
+                    .invoke(invocation("search.code", input, scope()))
+                    .await
+                    .unwrap()
+                    .result["engine"],
+                "zoekt"
+            );
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
 }
 
 #[tokio::test]
