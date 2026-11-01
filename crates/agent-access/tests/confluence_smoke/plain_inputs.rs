@@ -1,9 +1,7 @@
 //! The real CLI and stdio adapter retain provider validation after schema relaxation.
+use super::list_mcp;
 use super::*;
 use serde_json::{Value, json};
-
-#[path = "../common/list_mcp.rs"]
-mod list_mcp;
 
 const PAGE_URL: &str = "https://example.atlassian.net/wiki/spaces/ENG/pages/123456/Runbook";
 
