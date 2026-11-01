@@ -118,7 +118,7 @@ test("qualification uses required native/browser gates and fresh paths without p
   }
   const rust = plan.find((entry) => entry.id === "rust-tests");
   assert.deepEqual(rust.command.slice(0, 3), ["cargo", "nextest", "run"]);
-  for (const [flag, value] of [["--profile", "ci"], ["--test-threads", "8"], ["--retries", "0"], ["--no-tests", "fail"]]) {
+  for (const [flag, value] of [["--profile", "ci"], ["--test-threads", "16"], ["--retries", "0"], ["--no-tests", "fail"]]) {
     assert.equal(rust.command[rust.command.indexOf(flag) + 1], value);
   }
   assert.ok(rust.command.includes("--no-fail-fast"));

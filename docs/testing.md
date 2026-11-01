@@ -291,7 +291,7 @@ cargo install --locked --version 0.9.150 cargo-nextest
 ```
 
 The minimum supported nextest version is 0.9.150. The repository's
-[nextest configuration](../.config/nextest.toml) runs up to eight tests across
+[nextest configuration](../.config/nextest.toml) runs up to sixteen tests across
 all test binaries, with no retries and no fail-fast. A test is reported as slow
 after one minute and times out after five minutes; the tests' own assertions
 about deadlines and shutdown still apply. Each test gets its own process;

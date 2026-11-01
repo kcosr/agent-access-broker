@@ -97,7 +97,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "portal-unit", command: portal("test:unit") },
     { id: "portal-build", command: portal("build") },
     { id: "rust-tests", command: cargoCommand("nextest", "run", ...native, "--workspace", "--profile", "ci",
-      "--test-threads", "8", "--retries", "0", "--no-fail-fast", "--no-tests", "fail", "--ignore-default-filter"), cargo: true },
+      "--test-threads", "16", "--retries", "0", "--no-fail-fast", "--no-tests", "fail", "--ignore-default-filter"), cargo: true },
     { id: "rust-doctests", command: cargoCommand("test", ...native, "--workspace", "--doc", "--no-fail-fast", "--", "--test-threads=4"), cargo: true },
     { id: "rust-build", command: cargoCommand("build", ...native, "-p", "agent-access-broker", "-p", "agent-access"), cargo: true },
     { id: "downstream-consumer", command: [node, "scripts/verify-downstream-consumer.mjs", "--commit", commit,

@@ -261,7 +261,7 @@ through `build-cli --env`. A remote service must allowlist all three names.
 ## Fast Bootstrap
 
 Install cargo-nextest with `cargo install --locked --version 0.9.150 cargo-nextest`.
-Version 0.9.150 or newer is required. The checked-in configuration runs eight
+Version 0.9.150 or newer is required. The checked-in configuration runs sixteen
 tests at a time across binaries without retries or fail-fast; run doctests
 separately because nextest does not execute them. Plain Cargo remains supported:
 `cargo test --locked --workspace --no-fail-fast -- --test-threads=4` covers both.

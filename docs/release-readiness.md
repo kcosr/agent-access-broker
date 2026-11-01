@@ -67,7 +67,7 @@ SQLite build.
 The Rust test gate requires cargo-nextest 0.9.150 or newer. Install the tested
 version with `cargo install --locked --version 0.9.150 cargo-nextest`. Preflight
 records its version and fails with installation instructions when it is missing
-or too old. The gate runs eight tests concurrently without retries or fail-fast
+or too old. The gate runs sixteen tests concurrently without retries or fail-fast
 and ignores default subset filters; Cargo doctests run in a separate required
 gate. The exact ignored Unix signal parent continues to run with plain Cargo.
 
@@ -117,7 +117,7 @@ artifact paths. Running individual checks does not create the passing
 
 ```bash
 cargo fmt --check
-cargo nextest run --locked --workspace --profile ci --test-threads 8 --retries 0 --no-fail-fast --no-tests fail --ignore-default-filter
+cargo nextest run --locked --workspace --profile ci --test-threads 16 --retries 0 --no-fail-fast --no-tests fail --ignore-default-filter
 cargo test --locked --workspace --doc --no-fail-fast -- --test-threads=4
 BROKER_BUILD_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
 cargo build --locked --target-dir target --target "$BROKER_BUILD_TARGET"
