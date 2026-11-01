@@ -1,0 +1,1326 @@
+{
+  "branch.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "branch.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "inputExamples": [
+      {
+        "label": "Branch list",
+        "inputs": {
+          "project": "team/project",
+          "search": "main"
+        }
+      }
+    ]
+  },
+  "branch.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "commit.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "commit.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "commit.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "file.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "file.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "file.raw.download": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "inputExamples": [
+      {
+        "label": "File raw download",
+        "inputs": {
+          "project": "team/project",
+          "path": "README.md",
+          "ref": "main"
+        }
+      }
+    ]
+  },
+  "file.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "file.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Whole-result Markdown preserves contentBase64 without decoding it. Use the separately granted file.raw.download action for raw bytes.",
+    "inputExamples": [
+      {
+        "label": "File view",
+        "inputs": {
+          "project": "team/project",
+          "path": "README.md",
+          "ref": "main"
+        }
+      }
+    ]
+  },
+  "issue.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "descriptionInput": "The content pair is optional. Omission leaves the description absent and adds no attribution footer. Explicit empty content stays empty when attribution is disabled and produces a footer-only description when enabled.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Issue create",
+        "inputs": {
+          "project": "team/project",
+          "title": "Fix release documentation",
+          "content": "Document the release checks.",
+          "contentFormat": "markdown",
+          "labels": [
+            "docs"
+          ]
+        }
+      }
+    ]
+  },
+  "issue.note.add": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue comment; use its --help for flags.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Issue note add",
+        "inputs": {
+          "project": "team/project",
+          "iid": 123,
+          "content": "Looks good.",
+          "contentFormat": "plain_text",
+          "confidential": false
+        }
+      }
+    ]
+  },
+  "issue.note.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue delete-comment; use its --help for flags."
+  },
+  "issue.note.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue list-comments; use its --help for flags.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "inputExamples": [
+      {
+        "label": "Issue note list with summary projection",
+        "inputs": {
+          "project": "team/project",
+          "iid": 123,
+          "projection": "summary",
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "issue.note.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue update-comment; use its --help for flags.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "This content update does not append attribution.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Issue note update",
+        "inputs": {
+          "project": "team/project",
+          "iid": 123,
+          "noteId": 456,
+          "content": "**Updated note.**",
+          "contentFormat": "markdown"
+        }
+      }
+    ]
+  },
+  "issue.note.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue view-comment; use its --help for flags.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "lookup": "Read one known positive noteId under project and iid. The Broker proves the parent and note target, then returns the full normalized note; this read is separately grantable from listing.",
+    "inputExamples": [
+      {
+        "label": "Issue note view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 123,
+          "noteId": 456
+        }
+      }
+    ]
+  },
+  "issue.search": {
+    "relatedSearch": "This action lists and filters one required project. The separately granted search.issues/search.merge_requests family performs configured native content search and has a different input and continuation contract.",
+    "result": "Returned issues can include createdAt, updatedAt, author, assignees, labels and milestone. User summaries contain only available id, username, name and webUrl fields.",
+    "presentation": "Embedded rendering belongs to each returned issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Issue search",
+        "inputs": {
+          "project": "team/project",
+          "state": "opened",
+          "search": "deploy",
+          "maxResults": 10
+        }
+      },
+      {
+        "label": "Issue search",
+        "inputs": {
+          "project": "team/project",
+          "state": "opened",
+          "maxResults": 10
+        }
+      }
+    ]
+  },
+  "issue.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "descriptionInput": "The content pair is optional. Omission preserves the existing description. Explicit empty content clears it when attribution is disabled and produces a footer-only description when enabled.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Issue update",
+        "inputs": {
+          "project": "team/project",
+          "iid": 123,
+          "stateEvent": "close",
+          "addLabels": [
+            "triaged"
+          ]
+        }
+      }
+    ]
+  },
+  "issue.view": {
+    "result": "Returned issues can include createdAt, updatedAt, author, assignees, labels and milestone. User summaries contain only available id, username, name and webUrl fields.",
+    "presentation": "Embedded rendering belongs to issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Issue view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 123
+        }
+      },
+      {
+        "label": "Issue view; replace the example origin with the configured GitLab instance",
+        "inputs": {
+          "url": "https://gitlab.example.com/team/project/-/issues/123"
+        }
+      }
+    ]
+  },
+  "job.cancel": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "job.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "job.play": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "job.retry": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "job.trace.download": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "inputExamples": [
+      {
+        "label": "Job trace download",
+        "inputs": {
+          "project": "team/project",
+          "jobId": 67890
+        }
+      }
+    ]
+  },
+  "job.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "merge_request.approval.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "approvalMeaning": "Available on Free. approvedBy and userHasApproved identify the acting user when returned; userCanApprove is actor-aware too. Aggregate approved is edition-dependent and is not proof that the execution actor approved.",
+    "inputExamples": [
+      {
+        "label": "Merge request approval view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45
+        }
+      }
+    ]
+  },
+  "merge_request.approval_rule.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "approvalMeaning": "Requires GitLab Premium/Ultimate. Returned rule metadata preserves overwrite, satisfaction, code-owner, section and source-rule details when supplied. A tier/permission error is not an empty rule set.",
+    "pagination": "Pass nextPageToken as pageToken with unchanged project, iid and maxResults. Rule reads have their own action grant.",
+    "inputExamples": [
+      {
+        "label": "Merge request approval rule list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "merge_request.approval_rule.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "approvalMeaning": "Requires GitLab Premium/Ultimate. Returned rule metadata preserves overwrite, satisfaction, code-owner, section and source-rule details when supplied. A tier/permission error is not an empty rule set.",
+    "inputExamples": [
+      {
+        "label": "Merge request approval rule view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "approvalRuleId": 7
+        }
+      }
+    ]
+  },
+  "merge_request.approval_state.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "approvalMeaning": "Requires GitLab Premium/Ultimate. Returned rule metadata preserves overwrite, satisfaction, code-owner, section and source-rule details when supplied. A tier/permission error is not an empty rule set.",
+    "inputExamples": [
+      {
+        "label": "Merge request approval state view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45
+        }
+      }
+    ]
+  },
+  "merge_request.approve": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "approval": "Requires the full current headSha, matching MR/diff refs, a prepared MR, the latest collected diff with non-null patchIdSha, and detailedMergeStatus outside preparing/checking/approvals_syncing. Existing actor approval returns version_conflict before POST; inspect approval.view and stop if that state already holds. An unchanged null patch ID can persist for an empty/legacy diff and is not fixed by polling. Approval-password inputs are not supported.",
+    "recovery": "Success is verified against the acting user, not aggregate approved. Ambiguous mutation/redirect handling re-reads actor state; an unproven effect uses applied_unverified and retrySafe:false. Inspect a fresh actor-specific approval summary before considering another write.",
+    "inputExamples": [
+      {
+        "label": "Merge request approve; replace the illustrative SHA and coordinates with current read evidence",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "headSha": "1111111111111111111111111111111111111111"
+        }
+      }
+    ]
+  },
+  "merge_request.commit.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "inputExamples": [
+      {
+        "label": "Merge request commit list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "merge_request.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "descriptionInput": "The content pair is optional. Omission leaves the description absent and adds no attribution footer. Explicit empty content stays empty when attribution is disabled and produces a footer-only description when enabled.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+  },
+  "merge_request.diff.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "reviewUse": "Use the current collected diff to choose coordinates, then supply the fresh current head to a separately granted positioned write. Missing or omitted patches are not complete anchor evidence.",
+    "patches": "Structured diffs preserve patch omission and incomplete/generated/collapsed/tooLarge signals; the Broker does not invent a complete patch. collapsed/tooLarge are available on GitLab 18.4+ and remain absent on older servers.",
+    "inputExamples": [
+      {
+        "label": "Merge request diff list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20,
+          "unidiff": true
+        }
+      }
+    ]
+  },
+  "merge_request.diff.raw.download": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "download": "Requires GitLab 17.9+. Streams the current raw diff and reports headShaAtPreflight; GitLab exposes no SHA-pinned raw endpoint, so a concurrent push can change the stream. Use diff_version.view for historical snapshots. No embedded or whole-result Markdown applies to raw bytes.",
+    "inputExamples": [
+      {
+        "label": "Merge request diff raw download",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45
+        }
+      }
+    ]
+  },
+  "merge_request.diff_version.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "versions": "Lists historical version IDs, SHA triplets, state, size and patchIdSha. Use diffVersionId with diff_version.view for a version-pinned review; a listed version can lack usable patch data.",
+    "inputExamples": [
+      {
+        "label": "Merge request diff version list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "merge_request.diff_version.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "reviewUse": "Use an exact version for historical positions; after a source-changing write fetch the newly prepared version rather than reusing stale coordinates. overflow/without_files and missing/collapsed/too-large patches cannot supply multiline anchors.",
+    "patches": "Structured diffs preserve patch omission and incomplete/generated/collapsed/tooLarge signals; the Broker does not invent a complete patch. collapsed/tooLarge are available on GitLab 18.4+ and remain absent on older servers.",
+    "inputExamples": [
+      {
+        "label": "Merge request diff version view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "diffVersionId": 7,
+          "unidiff": true
+        }
+      }
+    ]
+  },
+  "merge_request.discussion.add": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+  },
+  "merge_request.discussion.inline.add": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "positionPreconditions": "Supplying or replacing position requires a freshly read full expectedHeadSha. The Broker obtains a complete non-null current base/start/head triplet and a prepared, collected diff; callers supply coordinates, not SHAs inside position. Text/file/image shapes are closed; image x/y are nonnegative integers. Stale/unprepared state uses version_conflict; permanent multiline failure uses input_invalid with coordinates_unresolved or patch_unavailable, including overflow/without_files versions. Correct the coordinates or choose another valid action instead of resending unchanged input.",
+    "recovery": "Verify the returned positioned discussion against the freshly prepared head and re-read its exact thread. An ambiguous write or failed proof remains applied_unverified with only proven discussion/note IDs.",
+    "inputExamples": [
+      {
+        "label": "Merge request discussion inline add; replace the illustrative SHA and coordinates with current read evidence",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "expectedHeadSha": "1111111111111111111111111111111111111111",
+          "position": {
+            "positionType": "text",
+            "oldPath": "src/lib.rs",
+            "newPath": "src/lib.rs",
+            "newLine": 42
+          },
+          "content": "Please handle this case.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.discussion.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "summaryOrder": "Summary retains every nested note in its original order and reports noteCount; it does not truncate the discussion to a representative note.",
+    "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; diff_version.view reads that history.",
+    "inputExamples": [
+      {
+        "label": "Merge request discussion list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      },
+      {
+        "label": "Merge request discussion list with summary projection",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20,
+          "projection": "summary"
+        }
+      }
+    ]
+  },
+  "merge_request.discussion.note.add": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "association": "Reply to the proven discussionId, which may identify a general, current or outdated diff thread. Resolving or reopening it requires its own action.",
+    "recovery": "Verify the new reply through the exact discussion and note. Failed response/readback proof remains applied_unverified; only proven discussion/note IDs are safe locators.",
+    "inputExamples": [
+      {
+        "label": "Merge request discussion note add",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "discussionId": "DISCUSSION_ID",
+          "content": "Checked on the updated branch.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.discussion.note.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions."
+  },
+  "merge_request.discussion.note.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "This content update does not append attribution.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions."
+  },
+  "merge_request.discussion.reopen": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions."
+  },
+  "merge_request.discussion.resolve": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions."
+  },
+  "merge_request.discussion.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; diff_version.view reads that history.",
+    "inputExamples": [
+      {
+        "label": "Merge request discussion view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "discussionId": "DISCUSSION_ID"
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.add": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "positionPreconditions": "Supplying or replacing position requires a freshly read full expectedHeadSha. The Broker obtains a complete non-null current base/start/head triplet and a prepared, collected diff; callers supply coordinates, not SHAs inside position. Text/file/image shapes are closed; image x/y are nonnegative integers. Stale/unprepared state uses version_conflict; permanent multiline failure uses input_invalid with coordinates_unresolved or patch_unavailable, including overflow/without_files versions. Correct the coordinates or choose another valid action instead of resending unchanged input.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "draftMode": "Create one general draft, a positioned draft using position plus expectedHeadSha, or a reply draft using inReplyToDiscussionId. Only reply drafts may set resolveDiscussion; reply and independent position are mutually exclusive.",
+    "recovery": "Verify the newly created owner draft by re-reading its body, position and reply association. An uncertain creation must be reconciled from the current owner draft set; do not create another draft to recover a missing response.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note add",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "content": "General pending note.",
+          "contentFormat": "plain_text"
+        }
+      },
+      {
+        "label": "Merge request draft note add; replace the illustrative SHA and coordinates with current read evidence",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "expectedHeadSha": "1111111111111111111111111111111111111111",
+          "position": {
+            "positionType": "text",
+            "oldPath": "src/lib.rs",
+            "newPath": "src/lib.rs",
+            "newLine": 42
+          },
+          "content": "Pending inline note.",
+          "contentFormat": "plain_text"
+        }
+      },
+      {
+        "label": "Merge request draft note add as a discussion reply",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "inReplyToDiscussionId": "DISCUSSION_ID",
+          "resolveDiscussion": true,
+          "content": "Addressed.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "draftMode": "Delete one draft belonging to the current credential owner. The Broker verifies absence after deletion.",
+    "recovery": "Verify that the owner draft is absent. A failed absence readback remains applied_unverified with that draft ID; absence must be checked before another delete.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note delete",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "draftNoteId": 123
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "pagination": "Pass nextPageToken as pageToken with unchanged inputs, including projection. Each request fetches a fresh bounded upstream draft array and applies a signed local offset; concurrent edits can repeat or omit entries. Tokens also bind the proven upstream actor, so a different credential owner invalidates continuation.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "summaryLocators": "Summary retains discussionId for reply drafts and the full position for positioned drafts.",
+    "positions": "Normalized position is the authoritative draft location; top-level lineCode is absent. Native line codes can still appear inside multiline position.lineRange anchors. Preserve returned side/type and SHA association.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      },
+      {
+        "label": "Merge request draft note list with summary projection",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20,
+          "projection": "summary"
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.publish": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "publication": "Verified publication returns draftNoteId, published:true, exact discussionId/noteId, mutationStatus:applied and retrySafe:false. GitLab supplies no created-note body, so bounded before/after readback must find exactly one new actor/body/position match. published_note_readback failure retains only the original draft ID in safeLocators; a later draft_absence_readback failure also retains the proven discussion/note IDs. Reconcile those locators without repeating publication.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note publish",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "draftNoteId": 123
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.publish_all": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "publication": "Snapshot and publish all drafts owned by the selected actor, then optionally add a general summary. Omit content/contentFormat for no summary; internal is allowed only with the summary. An uncertain publication re-reads the snapshot; only proof of no change permits an ordinary upstream failure, otherwise the result remains applied_unverified.",
+    "recovery": "Inspect verificationStage and safe draft IDs for bulk_publish_readback, reviewer_state_readback or summary_note_response failures. A summary failure after publication cannot mean not_applied. After an uncertain mutation or redirect, the Broker re-reads drafts/state before deciding whether anything may have changed.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note publish all",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "content": "Review summary.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "attribution": "Draft updates do not append attribution. This differs from draft creation and optional publish-all/review-submit summaries.",
+    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "positionPreconditions": "Supplying or replacing position requires a freshly read full expectedHeadSha. The Broker obtains a complete non-null current base/start/head triplet and a prepared, collected diff; callers supply coordinates, not SHAs inside position. Text/file/image shapes are closed; image x/y are nonnegative integers. Stale/unprepared state uses version_conflict; permanent multiline failure uses input_invalid with coordinates_unresolved or patch_unavailable, including overflow/without_files versions. Correct the coordinates or choose another valid action instead of resending unchanged input.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "draftMode": "Change content and/or replace the position, preserving omitted data. Replacement position requires expectedHeadSha; a reply cannot acquire an independent position. A body-only update of an existing position lacking a full SHA triplet fails with version_conflict; refresh and supply a current replacement position.",
+    "recovery": "Re-read the same draft ID and verify the effective body/position, including fields preserved from the original. A failed readback remains applied_unverified with that safe draft ID.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note update",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "draftNoteId": 123,
+          "content": "Revised draft.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.draft_note.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "positions": "Normalized position is the authoritative draft location; top-level lineCode is absent. Native line codes can still appear inside multiline position.lineRange anchors. Preserve returned side/type and SHA association.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "inputExamples": [
+      {
+        "label": "Merge request draft note view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "draftNoteId": 123
+        }
+      }
+    ]
+  },
+  "merge_request.merge": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "merge_request.note.add": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request comment; use its --help for flags.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
+    "inputExamples": [
+      {
+        "label": "Merge request note add",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "content": "Review note.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.note.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request delete-comment; use its --help for flags.",
+    "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters."
+  },
+  "merge_request.note.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request list-comments; use its --help for flags.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
+    "inputExamples": [
+      {
+        "label": "Merge request note list with summary projection",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "projection": "summary"
+        }
+      }
+    ]
+  },
+  "merge_request.note.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request update-comment; use its --help for flags.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
+    "attribution": "This content update does not append attribution.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters."
+  },
+  "merge_request.note.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request view-comment; use its --help for flags.",
+    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "lookup": "Read one known positive noteId under project and iid. The Broker proves the parent and note target, then returns the full normalized note; this read is separately grantable from listing.",
+    "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
+    "inputExamples": [
+      {
+        "label": "Merge request note view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "noteId": 501
+        }
+      }
+    ]
+  },
+  "merge_request.pipeline.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "inputExamples": [
+      {
+        "label": "Merge request pipeline list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "merge_request.review.submit": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
+    "reviewState": "Requires GitLab 19.2+ and an assigned acting reviewer without formal approval. reviewerState is reviewed or requestedChanges; zero drafts are valid. The Broker checks the version before writing, publishes the actor snapshot, verifies reviewer state, then optionally adds a summary. internal requires summary content. Unassigned/already-approved state needs reconciliation, not an automatic retry. requestedChanges neither approves nor unapproves; merge blocking depends on edition and project policy.",
+    "recovery": "Inspect verificationStage and safe draft IDs for bulk_publish_readback, reviewer_state_readback or summary_note_response failures. A summary failure after publication cannot mean not_applied. After an uncertain mutation or redirect, the Broker re-reads drafts/state before deciding whether anything may have changed.",
+    "inputExamples": [
+      {
+        "label": "Merge request review submit",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "reviewerState": "requestedChanges",
+          "content": "Please address the pending notes.",
+          "contentFormat": "plain_text"
+        }
+      }
+    ]
+  },
+  "merge_request.reviewer.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
+    "inputExamples": [
+      {
+        "label": "Merge request reviewer list",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "merge_request.search": {
+    "relatedSearch": "This action lists and filters one required project. The separately granted search.issues/search.merge_requests family performs configured native content search and has a different input and continuation contract.",
+    "result": "Returned merge requests can include createdAt, updatedAt, author, assignees, reviewers, labels, milestone and draft state when GitLab supplies them.",
+    "presentation": "Embedded rendering belongs to each returned mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+  },
+  "merge_request.suggestion.apply": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "suggestion": "Require full current expectedHeadSha and exact scoped discussionId/noteId/suggestionId locators. Each suggestion must be unapplied and applicable; its position.headSha must match or input_invalid reports suggestion_outdated. commitMessage is bounded Git commit-template text: GitLab expands %{...}; a custom value replaces the default message and Co-authored-by trailer. The execution actor remains commit author.",
+    "sourceRepository": "A fork write needs one selected Broker grant covering both target and source repositories, plus GitLab push permission on the source branch; separate grants are not combined. The source identity is re-resolved before mutation.",
+    "result": "Immediate applied:false can be stale; success is proved by re-reading each scoped discussion/note and returns verified suggestion IDs without commit metadata. Applying never implicitly resolves the thread. After success refresh MR, diff version, pipelines, discussions and approval state before another head-sensitive write. An uncertain/readback-failed result must be reconciled through the safe suggestion locators, not replayed.",
+    "inputExamples": [
+      {
+        "label": "Merge request suggestion apply; replace the illustrative SHA and coordinates with current read evidence",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "expectedHeadSha": "1111111111111111111111111111111111111111",
+          "discussionId": "DISCUSSION_ID",
+          "noteId": 123,
+          "suggestionId": 456
+        }
+      }
+    ]
+  },
+  "merge_request.suggestion.batch_apply": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "suggestion": "Require full current expectedHeadSha and exact scoped discussionId/noteId/suggestionId locators. Each suggestion must be unapplied and applicable; its position.headSha must match or input_invalid reports suggestion_outdated. commitMessage is bounded Git commit-template text: GitLab expands %{...}; a custom value replaces the default message and Co-authored-by trailer. The execution actor remains commit author.",
+    "batch": "Supply 1–100 unique locator objects from this MR. One invalid, applied, inapplicable or outdated entry prevents the mutation; the Broker validates the complete batch before the global endpoint.",
+    "sourceRepository": "A fork write needs one selected Broker grant covering both target and source repositories, plus GitLab push permission on the source branch; separate grants are not combined. The source identity is re-resolved before mutation.",
+    "result": "Immediate applied:false can be stale; success is proved by re-reading each scoped discussion/note and returns verified suggestion IDs without commit metadata. Applying never implicitly resolves the thread. After success refresh MR, diff version, pipelines, discussions and approval state before another head-sensitive write. An uncertain/readback-failed result must be reconciled through the safe suggestion locators, not replayed.",
+    "inputExamples": [
+      {
+        "label": "Merge request suggestion batch apply; replace the illustrative SHA and coordinates with current read evidence",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45,
+          "expectedHeadSha": "1111111111111111111111111111111111111111",
+          "suggestions": [
+            {
+              "discussionId": "DISCUSSION_ID",
+              "noteId": 123,
+              "suggestionId": 456
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "merge_request.unapprove": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "approval": "Removes only the execution actor's formal approval, not reviewer requestedChanges state. No actor approval returns version_conflict before POST; inspect approval.view and stop when the desired state already holds. Approval passwords are not accepted.",
+    "recovery": "Success is verified against the acting user, not aggregate approved. Ambiguous mutation/redirect handling re-reads actor state; an unproven effect uses applied_unverified and retrySafe:false. Inspect a fresh actor-specific approval summary before considering another write.",
+    "inputExamples": [
+      {
+        "label": "Merge request unapprove",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45
+        }
+      }
+    ]
+  },
+  "merge_request.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
+    "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
+    "descriptionInput": "The content pair is optional. Omission preserves the existing description. Explicit empty content clears it when attribution is disabled and produces a footer-only description when enabled.",
+    "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
+    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages."
+  },
+  "merge_request.view": {
+    "result": "Returned merge requests can include createdAt, updatedAt, author, assignees, reviewers, labels, milestone and draft state when GitLab supplies them.",
+    "reviewReadiness": "Use current diffRefs and detailedMergeStatus for positioned-write/approval preconditions. Read results may have baseSha:null while startSha/headSha remain present; positioned writes separately need a complete non-null triplet. After a source-changing write, refresh this state and wait for the new diff to be prepared.",
+    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "inputExamples": [
+      {
+        "label": "Merge request view",
+        "inputs": {
+          "project": "team/project",
+          "iid": 45
+        }
+      }
+    ]
+  },
+  "pipeline.cancel": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "pipeline.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "inputExamples": [
+      {
+        "label": "Pipeline list",
+        "inputs": {
+          "project": "team/project",
+          "ref": "main",
+          "status": "success",
+          "maxResults": 10
+        }
+      }
+    ]
+  },
+  "pipeline.retry": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "pipeline.run": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "pipeline.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "project.access_token.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
+    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs."
+  },
+  "project.access_token.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized.",
+    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding."
+  },
+  "project.access_token.revoke": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the token ID and revocation state before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+  },
+  "project.access_token.rotate": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
+    "rotation": "Preserves the active token's identity/permissions after checking current limits; expiry must be explicit. Revoked/inactive tokens are not rotated. previousTokenId always identifies the old token, while tokenId is present only for a different returned new ID. Inspect/revoke/reconcile an uncertain rotation rather than rotating again.",
+    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs."
+  },
+  "project.access_token.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized."
+  },
+  "project.list": {
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Project list",
+        "inputs": {
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "project.search": {
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "authorization": "This live project discovery has its own grant. It can find namespace-authorized projects absent from registered resources; finding a project does not grant project.list, an object read, or a content-search action.",
+    "inputExamples": [
+      {
+        "label": "Project search",
+        "inputs": {
+          "search": "release",
+          "archived": false,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "project.upload": {
+    "upload": "Upload exactly one file using project or the configured-instance project url. Local file adapters generate attachments metadata; direct HTTP uses metadata-first multipart with one attachments entry and its matching file part. JSON alone cannot carry the file. Filename, MIME, size and SHA-256 must match the bytes; the Broker privately spools and removes temporary data without retaining or transforming the file.",
+    "limits": "The schema exposes the effective one-file size maximum and any MIME allowlist. Default per-file capacity is 10 MiB; an explicit MIME allowlist must include the chosen type, including text/html for HTML exports. Oversize and disallowed types use attachment_size_denied and attachment_media_type_denied. Global/upstream limits can be lower.",
+    "result": "result.upload contains returned alt, url, fullPath, markdown and optional id. Preserve markdown when linking it in a separately authorized issue/MR/note write. Attachment visibility follows the project even in confidential objects; treat links as sensitive. The Broker does not render or scan uploads, and a lost response can follow a completed upload.",
+    "inputExamples": [
+      {
+        "label": "One-file multipart metadata; file0 carries the bytes in uploadExample",
+        "inputs": {
+          "project": "team/project",
+          "attachments": [
+            {
+              "field": "file0",
+              "filename": "report.txt",
+              "contentType": "text/plain",
+              "size": 5,
+              "sha256": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "project.view": {
+    "result": "Project metadata includes description, last activity and star count when GitLab supplies them.",
+    "inputExamples": [
+      {
+        "label": "Project view",
+        "inputs": {
+          "project": "team/project"
+        }
+      },
+      {
+        "label": "Project view; replace the example origin with the configured GitLab instance",
+        "inputs": {
+          "url": "https://gitlab.example.com/team/project"
+        }
+      }
+    ]
+  },
+  "protected_branch.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "protected_branch.verify": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "protected_branch.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator."
+  },
+  "search.code": {
+    "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Search code",
+        "inputs": {
+          "search": "verify_token",
+          "project": "team/project"
+        }
+      }
+    ]
+  },
+  "search.comments": {
+    "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Native comments search",
+        "inputs": {
+          "search": "release"
+        }
+      }
+    ]
+  },
+  "search.commits": {
+    "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Native commits search",
+        "inputs": {
+          "search": "release"
+        }
+      }
+    ]
+  },
+  "search.issues": {
+    "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Search issues",
+        "inputs": {
+          "search": "credential rotation"
+        }
+      }
+    ]
+  },
+  "search.merge_requests": {
+    "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Native merge requests search",
+        "inputs": {
+          "search": "release"
+        }
+      }
+    ]
+  },
+  "search.wiki": {
+    "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "inputExamples": [
+      {
+        "label": "Native wiki search",
+        "inputs": {
+          "search": "release"
+        }
+      }
+    ]
+  },
+  "service_account.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "workflow": "Create the account, retain result.serviceAccount.id, set membership with service_account.member.set, then issue a token with service_account.token.create. Each step is separately authorized; later failure leaves earlier successful steps in place. Do not recreate the account to retry a later step.",
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+  },
+  "service_account.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "deletion": "Uses the project service-account deletion contract. Destructive hard_delete is not exposed.",
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+  },
+  "service_account.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding."
+  },
+  "service_account.member.set": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "membership": "Add direct project membership if absent or change the current direct role within the operator cap. Token issuance does not silently perform this step.",
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the account ID and current membership before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+  },
+  "service_account.token.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
+    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "membership": "Requires existing direct membership within the configured role cap; it does not change membership. Higher-role accounts may still have tokens revoked through the separately granted revoke action."
+  },
+  "service_account.token.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "result": "Returns access-token metadata only, never token material or the Broker execution credential. Use create/rotate only when deliberate issuance is authorized.",
+    "pagination": "Returns items, count, maxResults, isLast and nextPageToken. Pass the token as pageToken with unchanged action/project/account/page size; continuation is signed, expires, and is reauthorized for the current caller and credential binding.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted."
+  },
+  "service_account.token.revoke": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "recovery": "An uncertain mutation response remains applied_unverified with only established numeric IDs; reconcile the token ID and revocation state before considering another mutation. A proven unsent write is the only not_applied/retrySafe:true case."
+  },
+  "service_account.token.rotate": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "issuedCredential": "Requires explicit future UTC expiresAt within operator limits and an eligible stored token/service credential; delegated OAuth cannot execute these token-only actions. Only the new downstream credential appears in result.issuedToken, alongside accessToken metadata. Broker execution credentials remain private. Sensitivity markers are advisory: use private delivery; later use follows GitLab permissions, not Broker grants.",
+    "rotation": "Preserves the active token's identity/permissions after checking current limits; expiry must be explicit. Revoked/inactive tokens are not rotated. previousTokenId always identifies the old token, while tokenId is present only for a different returned new ID. Inspect/revoke/reconcile an uncertain rotation rather than rotating again.",
+    "recovery": "An uncertain response uses applied_unverified at mutation_response with only safe numeric IDs. Metadata reads cannot recover the secret. Inspect the account/token list and revoke or reconcile a possibly issued credential before retrying; no automatic rollback or replay occurs.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted.",
+    "membership": "Requires existing direct membership within the configured role cap; it does not change membership. Higher-role accounts may still have tokens revoked through the separately granted revoke action."
+  },
+  "service_account.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "provisioning": "Requires operator-enabled provisioning, this exact repository action grant and the selected GitLab actor's upstream permissions. Disabling provisioning also disables metadata reads and revocation through Broker; it does not revoke tokens already issued.",
+    "ownership": "The project service-account endpoint must prove userId belongs to this project. An ordinary user or another project's account cannot be substituted."
+  },
+  "webhook.create": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "configuration": "url and events are required; events is the complete enabled event set. The operator destination allowlist must permit the new URL. Plain HTTP needs an explicit http rule; starting disabled HTTPS verification needs the separate operator setting. token/signingToken are sensitive inputs, never returned values.",
+    "recovery": "The Broker verifies observable hook state after mutation. Any failed readback after acceptance uses applied_unverified with the safe hook ID, including a newly returned create ID; inspect it before deciding on another write.",
+    "inputExamples": [
+      {
+        "label": "Webhook create",
+        "inputs": {
+          "project": "team/project",
+          "url": "https://hooks.example.com/gitlab/events",
+          "events": [
+            "push",
+            "merge_requests"
+          ]
+        }
+      }
+    ]
+  },
+  "webhook.custom_header.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "secret": "Delete one named custom header without supplying its secret value. Requires GitLab 17.1+.",
+    "recovery": "Observable header-state readback proves the mutation. Ambiguity/readback failure uses applied_unverified with the safe hook ID, never the header key or value.",
+    "inputExamples": [
+      {
+        "label": "Webhook custom header delete",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42,
+          "key": "Authorization"
+        }
+      }
+    ]
+  },
+  "webhook.custom_header.set": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "secret": "Create or replace one named header using sensitive value input. Use the interface's local secret-source option; values are forwarded but never returned. Requires GitLab 17.1+.",
+    "recovery": "Observable header-state readback proves the mutation. Ambiguity/readback failure uses applied_unverified with the safe hook ID, never the header key or value."
+  },
+  "webhook.delete": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "recovery": "The Broker verifies observable hook state after mutation. Any failed readback after acceptance uses applied_unverified with the safe hook ID, including a newly returned create ID; inspect it before deciding on another write.",
+    "inputExamples": [
+      {
+        "label": "Webhook delete",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42
+        }
+      }
+    ]
+  },
+  "webhook.event.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "deliveryData": "Returns bounded recorded request data and receiver responses, potentially without separate issue/MR read grants. Upstream delivery URLs are omitted and sensitive/custom headers are redacted. requestDataTruncated and responseBodyTruncated describe omissions; status filters and maxResults remain bound to nextPageToken/pageToken. There is no separate event.view action.",
+    "inputExamples": [
+      {
+        "label": "Webhook event list",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42,
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "webhook.event.resend": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "delivery": "Resends the exact historical webhookEventId, creating another outbound delivery. Requires GitLab 17.4+. Do not repeat an uncertain resend automatically.",
+    "recovery": "An ambiguous delivery uses mutation_verification_failed/applied_unverified and retrySafe:false with bounded hook/event IDs. A request proven unsent can be not_applied; do not infer non-delivery from a timeout.",
+    "inputExamples": [
+      {
+        "label": "Webhook event resend",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42,
+          "webhookEventId": 9001
+        }
+      }
+    ]
+  },
+  "webhook.list": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "inputExamples": [
+      {
+        "label": "Webhook list",
+        "inputs": {
+          "project": "team/project",
+          "maxResults": 20
+        }
+      }
+    ]
+  },
+  "webhook.test": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "delivery": "Sends the selected supported synthetic event; it is a delivery mutation, not a read or a permission probe. Requires GitLab 16.11+. Do not repeat an uncertain delivery automatically.",
+    "recovery": "An ambiguous delivery uses mutation_verification_failed/applied_unverified and retrySafe:false with bounded hook/event IDs. A request proven unsent can be not_applied; do not infer non-delivery from a timeout.",
+    "inputExamples": [
+      {
+        "label": "Webhook test",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42,
+          "event": "merge_requests"
+        }
+      }
+    ]
+  },
+  "webhook.update": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "configuration": "Omitted fields are preserved; a present events array replaces the complete set, and [] clears it. A changed URL requires a replacement token or clearToken:true and must pass destination policy. A canonically unchanged URL preserves the destination.",
+    "destinationReset": "If a URL change would clear custom headers or URL variables, an unconfirmed preflight returns input_invalid with bounded resetConfiguration key names and performs no mutation. Inspect them before repeating with confirmDestinationReset:true. Existing out-of-policy destinations remain operable when URL is unchanged.",
+    "recovery": "The Broker verifies observable hook state after mutation. Any failed readback after acceptance uses applied_unverified with the safe hook ID, including a newly returned create ID; inspect it before deciding on another write.",
+    "inputExamples": [
+      {
+        "label": "Webhook update",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42,
+          "events": [
+            "push",
+            "notes"
+          ]
+        }
+      }
+    ]
+  },
+  "webhook.view": {
+    "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
+    "webhookScope": "Project hooks only. The action needs its own Broker repository grant and the selected GitLab actor's webhook permission; the Broker does not track hook ownership.",
+    "destinationPolicy": "The destination allowlist gates creation and actual URL changes; it does not quarantine an existing hook or grant this action. Use the existing hook ID with the applicable action grant.",
+    "inputExamples": [
+      {
+        "label": "Webhook view",
+        "inputs": {
+          "project": "team/project",
+          "webhookId": 42
+        }
+      }
+    ]
+  }
+}

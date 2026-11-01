@@ -7,6 +7,7 @@ mod backend;
 mod config;
 mod continuation;
 mod cql;
+mod documentation;
 mod present;
 mod space_list;
 #[cfg(test)]
@@ -452,7 +453,7 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    action.presentation(presentation)
+                    documentation::with_guidance(action.presentation(presentation))
                 })
                 .collect(),
         )

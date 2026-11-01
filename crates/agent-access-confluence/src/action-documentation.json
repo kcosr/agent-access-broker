@@ -1,0 +1,941 @@
+{
+  "attachment.add": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "attachments": "Use the current content locator; draft attachments require the separate draft actions. Add, list and download are independently authorized; attachment delete is not exposed. Use the multipart upload contract; local file descriptors generate attachment metadata.",
+    "uploadLocators": [
+      {
+        "label": "Target for multipart upload",
+        "inputs": {
+          "pageId": "123456789"
+        }
+      }
+    ]
+  },
+  "attachment.download": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "attachments": "Use the current content locator; draft attachments require the separate draft actions. Add, list and download are independently authorized; attachment delete is not exposed. Use a returned attachmentId; the provider proves attachment membership before releasing bounded raw bytes.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "pageId": "123456789",
+          "attachmentId": "att123"
+        }
+      }
+    ]
+  },
+  "attachment.list": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "attachments": "Use the current content locator; draft attachments require the separate draft actions. Add, list and download are independently authorized; attachment delete is not exposed. Listing is body-free. Use a returned attachmentId with attachment.download.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "pageId": "123456789"
+        }
+      }
+    ],
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+  },
+  "blog.attachment.add": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "attachments": "Use the current content locator; draft attachments require the separate draft actions. Add, list and download are independently authorized; attachment delete is not exposed. Use the multipart upload contract; local file descriptors generate attachment metadata.",
+    "uploadLocators": [
+      {
+        "label": "Target for multipart upload",
+        "inputs": {
+          "blogId": "123456789"
+        }
+      }
+    ]
+  },
+  "blog.attachment.download": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "attachments": "Use the current content locator; draft attachments require the separate draft actions. Add, list and download are independently authorized; attachment delete is not exposed. Use a returned attachmentId; the provider proves attachment membership before releasing bounded raw bytes.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "blogId": "123456789",
+          "attachmentId": "att123"
+        }
+      }
+    ]
+  },
+  "blog.attachment.list": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "attachments": "Use the current content locator; draft attachments require the separate draft actions. Add, list and download are independently authorized; attachment delete is not exposed. Listing is body-free. Use a returned attachmentId with blog.attachment.download.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "blogId": "123456789"
+        }
+      }
+    ],
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+  },
+  "blog.create": {
+    "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "spaceKeys": "Supply the actual space key with its original case and any leading tilde, such as ~alice. Personal spaces use the same space input and grant type; access does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "space": "ENG",
+          "title": "Runbook",
+          "contentFormat": "plain_text",
+          "content": "Follow the approved checklist."
+        }
+      }
+    ]
+  },
+  "blog.draft.attachment.add": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use the multipart upload contract; local file descriptors generate attachment metadata.",
+    "uploadLocators": [
+      {
+        "label": "Target for multipart upload",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>"
+        }
+      }
+    ]
+  },
+  "blog.draft.attachment.download": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use a returned attachmentId; the provider proves attachment membership before releasing bounded raw bytes.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "attachmentId": "att123"
+        }
+      }
+    ]
+  },
+  "blog.draft.attachment.list": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Listing is body-free. Use a returned attachmentId with blog.draft.attachment.download.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>"
+        }
+      }
+    ],
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+  },
+  "blog.draft.create": {
+    "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "spaceKeys": "Supply the actual space key with its original case and any leading tilde, such as ~alice. Personal spaces use the same space input and grant type; access does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "space": "ENG",
+          "title": "Draft Runbook",
+          "contentFormat": "plain_text",
+          "content": "Follow the approved checklist."
+        }
+      }
+    ],
+    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
+    "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions."
+  },
+  "blog.draft.discard": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Discard is supported for new drafts only; staged draft discard fails closed. Readback verifies the draft is gone and current content was not created.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>"
+        }
+      }
+    ]
+  },
+  "blog.draft.publish": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the native representation; it is not a readContentFormat request.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "bodyFormat": "storage"
+        }
+      }
+    ]
+  },
+  "blog.draft.stage": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
+    "draftOperation": "Stages replacement content against an existing current item after checking baseVersion and the absence of a visible draft. A staged draft cannot use discard or draft attachment actions; those paths fail closed.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "blogId": "123456789",
+          "baseVersion": 7,
+          "contentFormat": "plain_text",
+          "content": "Proposed update."
+        }
+      }
+    ]
+  },
+  "blog.draft.update": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Replaces draft content and optionally its title while retaining draft version 1; it does not publish the draft.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "contentFormat": "plain_text",
+          "content": "Updated draft."
+        }
+      }
+    ]
+  },
+  "blog.draft.verify": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch; whole-result Markdown preserves that outcome.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "expectTitle": "Draft Runbook"
+        }
+      }
+    ]
+  },
+  "blog.draft.view": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "bodyFormat selects the provider-native representation and is distinct from readContentFormat. Native body is retained; renderedBody is beside root body. Formatting uses the returned body without another request.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "blogId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "bodyFormat": "storage"
+        }
+      }
+    ]
+  },
+  "blog.footer_comment.add": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "blogId": "123456789",
+          "contentFormat": "plain_text",
+          "content": "Review completed."
+        }
+      }
+    ]
+  },
+  "blog.footer_comment.delete": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+  },
+  "blog.footer_comment.list": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "blogId": "123456789"
+        }
+      }
+    ]
+  },
+  "blog.footer_comment.reply.add": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed."
+        }
+      }
+    ]
+  },
+  "blog.footer_comment.reply.list": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "blog.footer_comment.update": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed.",
+          "baseVersion": 7
+        }
+      }
+    ]
+  },
+  "blog.footer_comment.view": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "blog.inline_comment.delete": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+  },
+  "blog.inline_comment.list": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "blogId": "123456789"
+        }
+      }
+    ]
+  },
+  "blog.inline_comment.reply.add": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed."
+        }
+      }
+    ]
+  },
+  "blog.inline_comment.reply.list": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "blog.inline_comment.update": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed.",
+          "baseVersion": 7
+        }
+      }
+    ]
+  },
+  "blog.inline_comment.view": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "blog.search": {
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; a grant change that changes the composed query rejects continuation. On a rejected continuation, repeat the search without the token. The token also binds execution context, principal, credential mode/method and the service route.",
+    "results": "Searches current blog posts only and returns metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied. Whole-result formatting does not fetch bodies.",
+    "spaceKeys": "Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Search by text",
+        "inputs": {
+          "query": {
+            "type": "text",
+            "value": "release notes"
+          },
+          "spaces": [
+            "ENG"
+          ],
+          "maxResults": 10
+        }
+      },
+      {
+        "label": "Search with CQL",
+        "inputs": {
+          "query": {
+            "type": "cql",
+            "value": "space = \"~alice\" AND title ~ \"runbook\""
+          },
+          "spaces": [
+            "~alice"
+          ]
+        }
+      }
+    ]
+  },
+  "blog.update": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "update": "Supply baseVersion from the current content with content/contentFormat; title is optional. A stale version returns version_conflict. Successful readback must report baseVersion + 1.",
+    "inputExamples": [
+      {
+        "label": "Write Markdown",
+        "inputs": {
+          "blogId": "123456789",
+          "baseVersion": 7,
+          "contentFormat": "markdown",
+          "content": "## Updated content\n\nWork completed."
+        }
+      }
+    ]
+  },
+  "blog.verify": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId with the current-content locator. Read verification.status to distinguish matched from mismatch. Whole-result Markdown preserves the verification outcome and does not fetch body content.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "blogId": "123456789",
+          "expectVersion": 7
+        }
+      }
+    ]
+  },
+  "blog.view": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "Returns current blog metadata and its configured native body. Non-native readContentFormat retains body.storage text and adds renderedBody beside root body. Whole-result Markdown uses only returned data; page action grants do not authorize this blog action.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "blogId": "123456789"
+        }
+      }
+    ],
+    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them."
+  },
+  "page.create": {
+    "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, atlas_doc_format is a JSON document object; storage, markdown and plain_text are strings. Normalized formats require the action's storage target. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "placement": "Give at most one of parentPageId or parentUrl; the parent must be a page in the requested space. Omit both for placement under the space homepage. Existing-page hierarchy changes use separately authorized page.move.",
+    "spaceKeys": "Supply the actual space key with its original case and any leading tilde, such as ~alice. Personal spaces use the same space input and grant type; access does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "space": "ENG",
+          "title": "Runbook",
+          "contentFormat": "plain_text",
+          "content": "Follow the approved checklist.",
+          "parentPageId": "123456789"
+        }
+      }
+    ]
+  },
+  "page.draft.attachment.add": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use the multipart upload contract; local file descriptors generate attachment metadata.",
+    "uploadLocators": [
+      {
+        "label": "Target for multipart upload",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>"
+        }
+      }
+    ]
+  },
+  "page.draft.attachment.download": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Use a returned attachmentId; the provider proves attachment membership before releasing bounded raw bytes.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "attachmentId": "att123"
+        }
+      }
+    ]
+  },
+  "page.draft.attachment.list": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "attachments": "Only new-draft attachments are supported; staged draft attachments fail closed. Add, list and download are independently authorized; attachment delete is not exposed. Listing is body-free. Use a returned attachmentId with page.draft.attachment.download.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>"
+        }
+      }
+    ],
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor."
+  },
+  "page.draft.create": {
+    "scope": "Authorization is by Confluence space. Use the supplied space key; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. Page drafts have a storage target independent of current-page format configuration. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "placement": "Give at most one of parentPageId or parentUrl; the parent must be a page in the requested space. Omit both for placement under the space homepage. Existing-page hierarchy changes use separately authorized page.move.",
+    "spaceKeys": "Supply the actual space key with its original case and any leading tilde, such as ~alice. Personal spaces use the same space input and grant type; access does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "space": "ENG",
+          "title": "Draft Runbook",
+          "contentFormat": "plain_text",
+          "content": "Follow the approved checklist."
+        }
+      }
+    ],
+    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
+    "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions."
+  },
+  "page.draft.discard": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Discard is supported for new drafts only; staged draft discard fails closed. Readback verifies the draft is gone and current content was not created.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>"
+        }
+      }
+    ]
+  },
+  "page.draft.publish": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the native representation; it is not a readContentFormat request.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "bodyFormat": "storage"
+        }
+      }
+    ]
+  },
+  "page.draft.stage": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. Page drafts have a storage target independent of current-page format configuration. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "draftHandle": "Returns draftHandle for later draft actions. Preserve it exactly; it has no expiry and is bound to the creating execution context, content and credential method. A per-user handle belongs to that user; a service-mode handle can be handed to another principal admitted in service mode under current policy.",
+    "draftOperation": "Stages replacement content against an existing current item after checking baseVersion and the absence of a visible draft. A staged draft cannot use discard or draft attachment actions; those paths fail closed.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "pageId": "123456789",
+          "baseVersion": 7,
+          "contentFormat": "plain_text",
+          "content": "Proposed update."
+        }
+      }
+    ]
+  },
+  "page.draft.update": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. Page drafts have a storage target independent of current-page format configuration. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "Replaces draft content and optionally its title while retaining draft version 1; it does not publish the draft.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "contentFormat": "plain_text",
+          "content": "Updated draft."
+        }
+      }
+    ]
+  },
+  "page.draft.verify": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch; whole-result Markdown preserves that outcome.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "expectTitle": "Draft Runbook"
+        }
+      }
+    ]
+  },
+  "page.draft.view": {
+    "scope": "Authorization is by Confluence space. The verified draft handle determines the content's space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
+    "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry but remains bound to the creating execution context, content and credential method; per-user handles belong to that user, while service-mode handles can be handed to another principal admitted in service mode under current policy. Every action still reauthorizes its space.",
+    "draftOperation": "bodyFormat selects the provider-native representation and is distinct from readContentFormat. Native body is retained; renderedBody is beside root body. Formatting uses the returned body without another request.",
+    "inputTemplates": [
+      {
+        "label": "Use a returned draft handle",
+        "inputs": {
+          "pageId": "123456789",
+          "draftHandle": "<draftHandle>",
+          "bodyFormat": "storage"
+        }
+      }
+    ]
+  },
+  "page.footer_comment.add": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "pageId": "123456789",
+          "contentFormat": "plain_text",
+          "content": "Review completed."
+        }
+      }
+    ]
+  },
+  "page.footer_comment.delete": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+  },
+  "page.footer_comment.list": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "pageId": "123456789"
+        }
+      }
+    ]
+  },
+  "page.footer_comment.reply.add": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed."
+        }
+      }
+    ]
+  },
+  "page.footer_comment.reply.list": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "page.footer_comment.update": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed.",
+          "baseVersion": 7
+        }
+      }
+    ]
+  },
+  "page.footer_comment.view": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "page.inline_comment.delete": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes."
+  },
+  "page.inline_comment.list": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "pageId": "123456789"
+        }
+      }
+    ]
+  },
+  "page.inline_comment.reply.add": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed."
+        }
+      }
+    ]
+  },
+  "page.inline_comment.reply.list": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "page.inline_comment.update": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
+    "inputExamples": [
+      {
+        "label": "Write plain text",
+        "inputs": {
+          "commentId": "10042",
+          "contentFormat": "plain_text",
+          "content": "Review completed.",
+          "baseVersion": 7
+        }
+      }
+    ]
+  },
+  "page.inline_comment.view": {
+    "scope": "Authorization is by Confluence space. The comment's owning page or blog determines its space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "commentId": "10042"
+        }
+      }
+    ]
+  },
+  "page.move": {
+    "placement": "Give exactly one of pageId/url, position before/after/append, and exactly one of targetPageId/targetUrl. The source and target must be distinct current pages in one authorized space. append makes the target the parent and places the page last; before/after place it beside a sibling target with a page parent. The action verifies effective parent and direct-child ordering by readback. Parent clearing, cross-space moves and non-page targets are unsupported.",
+    "inputExamples": [
+      {
+        "label": "Move before the target page",
+        "inputs": {
+          "pageId": "234567890",
+          "position": "before",
+          "targetPageId": "345678901"
+        }
+      },
+      {
+        "label": "Move after the target page",
+        "inputs": {
+          "pageId": "234567890",
+          "position": "after",
+          "targetPageId": "345678901"
+        }
+      },
+      {
+        "label": "Move append the target page",
+        "inputs": {
+          "pageId": "234567890",
+          "position": "append",
+          "targetPageId": "345678901"
+        }
+      }
+    ]
+  },
+  "page.update": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, atlas_doc_format is a JSON document object; storage, markdown and plain_text are strings. Normalized formats require the action's storage target. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
+    "update": "Supply baseVersion from the current content with content/contentFormat; title is optional. A stale version returns version_conflict. Successful readback must report baseVersion + 1. This action does not change page hierarchy; use page.move.",
+    "inputExamples": [
+      {
+        "label": "Write Markdown",
+        "inputs": {
+          "pageId": "123456789",
+          "baseVersion": 7,
+          "contentFormat": "markdown",
+          "content": "## Updated content\n\nWork completed."
+        }
+      }
+    ]
+  },
+  "page.view": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "presentation": "Returns current page metadata and configured native bodies. Non-native readContentFormat preserves the bodies and adds renderedBody beside root body. When both native representations are present, atlas_doc_format is selected before storage; malformed selected ADF fails instead of falling back. Whole-result Markdown uses only returned data.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "pageId": "123456789"
+        }
+      },
+      {
+        "label": "Locate by browser URL",
+        "inputs": {
+          "url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456789"
+        }
+      }
+    ],
+    "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them."
+  },
+  "search": {
+    "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; a grant change that changes the composed query rejects continuation. On a rejected continuation, repeat the search without the token. The token also binds execution context, principal, credential mode/method and the service route.",
+    "results": "Searches current pages only and returns metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied. Whole-result formatting does not fetch bodies.",
+    "spaceKeys": "Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Search by text",
+        "inputs": {
+          "query": {
+            "type": "text",
+            "value": "runbook"
+          },
+          "spaces": [
+            "ENG"
+          ],
+          "maxResults": 10
+        }
+      },
+      {
+        "label": "Search with CQL",
+        "inputs": {
+          "query": {
+            "type": "cql",
+            "value": "space = \"~alice\" AND title ~ \"runbook\""
+          },
+          "spaces": [
+            "~alice"
+          ]
+        }
+      }
+    ]
+  },
+  "space.list": {
+    "request": "Omitting maxResults uses the configured maximum advertised by this action (50 in the default configuration, at most 100). Whole-result Markdown is supported. Keep actual space keys, including personal-space tilde and case; a personal-space grant does not imply ownership.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "maxResults": 50
+        }
+      }
+    ]
+  },
+  "verify": {
+    "scope": "Authorization is by Confluence space. The page or blog locator resolves to its owning space; content and comment IDs are operation locators, not policy resource IDs or separate grant scopes.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId with the current-content locator. Read verification.status to distinguish matched from mismatch. Whole-result Markdown preserves the verification outcome and does not fetch body content.",
+    "inputExamples": [
+      {
+        "label": "Canonical inputs",
+        "inputs": {
+          "pageId": "123456789",
+          "expectVersion": 7
+        }
+      }
+    ]
+  }
+}

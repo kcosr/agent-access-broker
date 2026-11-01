@@ -32,6 +32,15 @@ pub(in crate::tests) async fn initialize(fixture: &Fixture, path: &str, token: &
     );
     assert_eq!(body["result"]["serverInfo"]["version"], version);
     assert_eq!(body["result"]["protocolVersion"], VERSION);
+    assert_http_instructions(&body["result"]["instructions"]);
+    if let Some(service) = path.strip_prefix("/mcp/") {
+        assert!(
+            body["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("limited to service {service}"))
+        );
+    }
     assert_ne!(body["result"]["capabilities"]["tools"]["listChanged"], true);
     assert_eq!(
         fixture

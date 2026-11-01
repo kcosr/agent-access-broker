@@ -76,7 +76,7 @@ struct Arguments {
 pub(super) struct UnknownToolError;
 impl std::fmt::Display for UnknownToolError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("tool is not available to the current caller; refresh tools/list and use services_list or services_describe to check availability and setup requirements")
+        formatter.write_str("tool is not available to the current caller; refresh your client's tool list and inspect service availability and setup requirements through its available discovery tools")
     }
 }
 impl std::error::Error for UnknownToolError {}
@@ -1582,7 +1582,8 @@ mod tests {
         let mut value = catalog(action());
         let mut unrelated = value.services[0].clone();
         unrelated.service = "unrelated".into();
-        unrelated.actions[0].description = "x".repeat(MAX_JSON_BYTES as usize);
+        unrelated.actions[0].documentation =
+            Some(json!({"usage":"x".repeat(MAX_JSON_BYTES as usize)}));
         value.services.push(unrelated);
         Mock::given(method("GET"))
             .and(path("/v1/spec/catalog"))

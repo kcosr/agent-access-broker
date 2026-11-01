@@ -143,14 +143,87 @@ mod tests {
     use super::*;
     #[test]
     fn counts_escaped_text_and_structured_copy() {
-        let value = json!({"body":"\\\"".repeat(2000)});
+        let value = json!({"documentation":{"inputExamples":[{
+            "label":"DOC_SENTINEL", "inputs":{"body":"\\\"".repeat(2000), "lines":"one\ntwo"}
+        }]}});
         let one = serialize(&value, 64 * 1024).unwrap().len();
         assert!(result(value.clone(), false, one + WIRE_RESERVE).is_err());
-        assert!(result(value, false, 64 * 1024).is_ok());
+        let encoded = CallToolResult::structured(value.clone());
+        let exact = serde_json::to_vec(&encoded).unwrap().len() + WIRE_RESERVE;
+        assert!(exact > one + WIRE_RESERVE);
+        assert!(result(value.clone(), false, exact - 1).is_err());
+        let result = result(value.clone(), false, exact).unwrap();
+        assert_eq!(result.structured_content, Some(value.clone()));
+        let wire = serde_json::to_value(result).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(wire["content"][0]["text"].as_str().unwrap()).unwrap(),
+            value
+        );
     }
     #[test]
     fn writer_stops_before_allocating_excess() {
         assert!(serialize(&"x".repeat(100_000), 32).is_err());
+    }
+
+    #[test]
+    fn oauth_fixture_documentation_projects_within_the_minimum_response_budget() {
+        use agent_access_core::mcp::{
+            McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry,
+        };
+        use agent_access_provider::BackendConfig;
+        let descriptor = agent_access_fake::OAuthStubProviderConfig {
+            base_url: "http://127.0.0.1:8099".into(),
+        }
+        .descriptor();
+        let mut catalog = agent_access_core::empty_catalog(json!({"principal":"synthetic-reader"}));
+        catalog
+            .services
+            .push(agent_access_core::api_service_spec(&descriptor, true).unwrap());
+        assert_eq!(catalog.services[0].actions.len(), 3);
+        let openapi = agent_access_core::openapi_from_catalog(
+            &catalog,
+            agent_access_core::RenderAuthMode::Omit,
+            &[],
+            "session",
+        );
+        let send = agent_access_core::send_schema_from_catalog(&catalog);
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            for view in [McpView::Aggregate, McpView::Service("oauth_stub".into())] {
+                let registry =
+                    ToolRegistry::build(&catalog, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                for action in &catalog.services[0].actions {
+                    let documentation = action
+                        .documentation
+                        .as_ref()
+                        .expect("fixture action guidance");
+                    assert_eq!(
+                        openapi["paths"][format!("/v1/invoke/oauth_stub/{}", action.action)]["post"]
+                            ["x-agent-access-documentation"],
+                        *documentation
+                    );
+                    let variant = send["oneOf"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|variant| variant["properties"]["action"]["const"] == action.action)
+                        .unwrap();
+                    assert_eq!(variant["x-agent-access-documentation"], *documentation);
+                    let mut detail = serde_json::to_value(action).unwrap();
+                    detail.as_object_mut().unwrap().remove("scopedMcpName");
+                    detail["service"] = json!("oauth_stub");
+                    detail["mcpTool"] = registry
+                        .action_detail("oauth_stub", &action.action)
+                        .unwrap();
+                    assert!(detail["mcpTool"].get("documentation").is_none());
+                    let response = result(detail.clone(), false, 65_536).unwrap();
+                    assert_eq!(response.structured_content.as_ref(), Some(&detail));
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&text(&response)).unwrap(),
+                        detail
+                    );
+                }
+            }
+        }
     }
 
     // Exercise public owner state through real provider execution rather than

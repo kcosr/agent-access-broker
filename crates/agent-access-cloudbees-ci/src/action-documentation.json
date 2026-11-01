@@ -1,0 +1,277 @@
+{
+  "build.artifact.download": {
+    "artifact": "Use an artifactPath returned by build.artifact.list for the same controller/job/buildNumber. Current list membership is checked before downloading; arbitrary controller URLs are not accepted.",
+    "download": "Streams raw artifact bytes under its own action grant and the configured download size limit. Size metadata can be null when the upstream does not declare a length; complete streamed bytes remain bounded and verified.",
+    "inputExamples": [
+      {
+        "label": "Download a returned artifact",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42,
+          "artifactPath": "reports/results.zip"
+        }
+      }
+    ]
+  },
+  "build.artifact.list": {
+    "artifacts": "Returns archived artifactPath/fileName entries for this resolved build, up to 1000 artifacts. A larger list fails rather than being silently truncated.",
+    "download": "Pass a returned artifactPath with the same controller/job/buildNumber to separately authorized build.artifact.download; listing permission does not authorize downloading.",
+    "inputExamples": [
+      {
+        "label": "List build artifacts",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      }
+    ]
+  },
+  "build.list": {
+    "listing": "Returns recent builds for one job. maxResults is 1–50 and defaults to 20. Use buildSelector lastFailedBuild for the latest failed build instead of inferring it from a truncated recent-build list.",
+    "followUp": "A separately authorized read can help reconcile an uncertain trigger; listing builds grants no trigger, log or artifact authority.",
+    "inputExamples": [
+      {
+        "label": "Recent builds",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "maxResults": 10
+        }
+      }
+    ]
+  },
+  "build.log.download": {
+    "download": "Streams the complete consoleText bytes currently available for one build, subject to the configured download byte limit. It is not an archived artifact and does not follow future output. It does not take artifactPath and is separately authorized from bounded build.log.read.",
+    "content": "The result is raw console text; saving a bounded build.log.read response is not equivalent to this download.",
+    "inputExamples": [
+      {
+        "label": "Download current console bytes",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      }
+    ]
+  },
+  "build.log.read": {
+    "modes": "mode is head, tail or search and defaults to tail. Search uses a case-sensitive literal query of 1–256 UTF-8 bytes, not a regular expression. maxMatches is search-only, 1–100, default 20. maxBytes is returned UTF-8 text budget, 1024–65536, default 16384.",
+    "continuation": "Head/search may return nextCursor; pass it unchanged as cursor with the same mode, query and output limits and the numeric buildNumber. Cursors expire after 15 minutes and revalidate the consumed prefix on each authorized continuation. Appending is supported; rewriting/truncation invalidates the cursor. Tail has no cursor. Never calculate raw offsets.",
+    "coverage": "The operator-configured scan ceiling defaults to 16 MiB and includes replayed prefixes; increasing maxBytes does not raise it. Inspect stopReason, reachedEnd and nextCursor. Scan-limited results are incomplete even with no matches. Tail fails when EOF cannot be reached. A head excerpt, Pipeline step log or separately authorized raw download may be useful.",
+    "pendingText": "reachedEnd describes this response’s EOF, not build completion. pending_text/pendingUtf8Bytes reports trailing incomplete UTF-8 withheld from display; do not automatically loop on it. A bounded read saved to a file remains bounded; build.log.download retrieves the available raw stream.",
+    "inputExamples": [
+      {
+        "label": "Head of one build",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42,
+          "mode": "head",
+          "maxBytes": 8192
+        }
+      },
+      {
+        "label": "Search latest failed build",
+        "inputs": {
+          "url": "https://ci.example.com/team-ci/job/payments/job/build-api/",
+          "buildSelector": "lastFailedBuild",
+          "mode": "search",
+          "query": "ERROR"
+        }
+      },
+      {
+        "label": "Tail with default mode",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      },
+      {
+        "label": "Search latest failed build by controller and job",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildSelector": "lastFailedBuild",
+          "mode": "search",
+          "query": "ERROR"
+        }
+      }
+    ]
+  },
+  "build.pending-inputs.list": {
+    "prompts": "Requires the Pipeline REST API plugin. Lists pending input prompts for the selected build; it does not proceed, approve or abort them. The job/build locator has the same authority requirements as the other build reads.",
+    "inputExamples": [
+      {
+        "label": "Pending Pipeline prompts",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      }
+    ]
+  },
+  "build.pipeline.node.log.read": {
+    "nodeLog": "Requires the Pipeline REST API plugin and a positive decimal nodeId string. Reads bounded step-log JSON with the plugin’s own truncation/completeness indicators; it is not a full-console download. Text above 65536 bytes is refused.",
+    "selection": "Stage/block nodes may have no log. Use build.pipeline.node.view stageFlowNodes to find a step. A matching node with no log returns empty text and completeness indicators; absent text with a nonempty length is unavailable.",
+    "inputExamples": [
+      {
+        "label": "Read one step log",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42,
+          "nodeId": "7"
+        }
+      }
+    ]
+  },
+  "build.pipeline.node.view": {
+    "node": "Requires the Pipeline REST API plugin and a nodeId from Pipeline results, expressed as a positive decimal string. Reads stage/step details and stageFlowNodes for the same job/build.",
+    "logs": "Use a returned step ID for node log reads; a stage/block ID can legitimately have no log of its own.",
+    "inputExamples": [
+      {
+        "label": "Inspect a stage or step",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42,
+          "nodeId": "7"
+        }
+      }
+    ]
+  },
+  "build.pipeline.view": {
+    "pipeline": "Requires the controller’s Pipeline REST API plugin. Reads stages, status and timing for the selected build. Use returned stage/step IDs with separately authorized node reads.",
+    "logs": "A stage/block may have no log of its own. Inspect build.pipeline.node.view stageFlowNodes and select a step for build.pipeline.node.log.read.",
+    "inputExamples": [
+      {
+        "label": "Pipeline stages",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      }
+    ]
+  },
+  "build.tests.details": {
+    "preview": "Returns a bounded detailed preview: FAILED/REGRESSION cases first, then remaining report order. maxResults is 1–100, default 20. report.returnedCount/returnedFailedCount count returned cases/failures, and report.truncated reports omitted cases.",
+    "limits": "maxResults limits returned cases, not the upstream report. The complete upstream report must fit the JSON read cap of at most 1 MiB. Oversize returns attachment_size_denied with result.downloadAction build.tests.download.",
+    "formats": "Requires a JUnit-style report with top-level suites. Missing suites returns response_format_unsupported; malformed suites is upstream_protocol_failed. Use build.tests.view for aggregate summaries; module/matrix child paths are unsupported.",
+    "inputExamples": [
+      {
+        "label": "Detailed test preview",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42,
+          "maxResults": 50
+        }
+      }
+    ]
+  },
+  "build.tests.download": {
+    "download": "Streams the projected detailed Jenkins test report as JSON, subject to the configured download limit. It is not original JUnit XML or an archive and takes no artifactPath.",
+    "formats": "Before opening the stream, the provider checks for JUnit-style top-level suites. Missing suites is response_format_unsupported and malformed suites is upstream_protocol_failed. Use build.tests.view for Maven/matrix aggregate summaries; module/configuration child paths are unsupported.",
+    "inputExamples": [
+      {
+        "label": "Download projected detailed tests",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      }
+    ]
+  },
+  "build.tests.view": {
+    "summary": "Reads test counts and duration or reportAvailable false. Fields absent upstream are null, including passCount/duration on aggregate reports; test case names and messages are not included.",
+    "formats": "Use this summary for Maven module-set or matrix aggregate reports that lack top-level suites. Detailed reads/downloads require JUnit-style suites; child module/configuration paths are unsupported.",
+    "inputExamples": [
+      {
+        "label": "Test summary",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildNumber": 42
+        }
+      }
+    ]
+  },
+  "build.trigger": {
+    "trigger": "Requests one buildable, non-parameterized job. Build parameters are not supported. This mutation has its own grant; permission to inspect jobs or logs does not authorize a trigger.",
+    "followUp": "When a usable queueId is returned, inspect queue.view using that ID with the same job locator. Otherwise inspect job.view or build.list before deciding whether another trigger is needed. Respect the existing receipt retrySafe value; never automatically repeat an uncertain or applied_unverified trigger.",
+    "inputExamples": [
+      {
+        "label": "Trigger one configured job",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api"
+        }
+      }
+    ]
+  },
+  "build.view": {
+    "inspection": "Reads the resolved build state and timing with buildNumber. Build parameter values and causes are omitted. A historical build can be read on a disabled job when the controller serves it.",
+    "inputExamples": [
+      {
+        "label": "Pasted build link",
+        "inputs": {
+          "url": "https://ci.example.com/team-ci/job/payments/job/build-api/42/"
+        }
+      },
+      {
+        "label": "Latest failed build",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "buildSelector": "lastFailedBuild"
+        }
+      }
+    ]
+  },
+  "job.list": {
+    "inputs": "Requires a configured controller; folder is an optional canonical path below it. No job URL or registered job is required. Use returned controller/job values for later independently authorized actions. maxResults must fit the current published configured limit.",
+    "errors": "Input and continuation failures return uncategorized input_invalid. Correct the fields or restart the listing without pageToken.",
+    "inputExamples": [
+      {
+        "label": "List jobs under a folder",
+        "inputs": {
+          "controller": "team-ci",
+          "folder": "payments",
+          "maxResults": 50
+        }
+      }
+    ]
+  },
+  "job.view": {
+    "inspection": "Reads job kind, buildability, queue/build pointers and parameter names/types without parameter defaults or child inventory. A folder or multibranch parent may be inspected with its own authority; use separately granted job.list to enumerate children.",
+    "followUp": "Use current inQueue/lastBuild information when reconciling an uncertain build.trigger outcome; this read does not itself authorize triggering.",
+    "inputExamples": [
+      {
+        "label": "Inspect a job",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api"
+        }
+      }
+    ]
+  },
+  "queue.view": {
+    "queue": "Reads a queue item only when its task identifies the authorized job. A missing or mismatched queue item returns scope_unresolved. The queue ID alone is not job authority; retain the job locator alongside it.",
+    "inputExamples": [
+      {
+        "label": "Inspect the trigger queue item",
+        "inputs": {
+          "controller": "team-ci",
+          "job": "payments/build-api",
+          "queueId": 51
+        }
+      }
+    ]
+  }
+}

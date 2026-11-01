@@ -200,8 +200,12 @@ fn explicit_resource_listing_metadata_flows_to_catalog_openapi_and_send() {
 
 #[test]
 fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
-    let documentation =
-        json!({"language":"example", "fields":["status"], "examples":["status = Open"]});
+    let documentation = json!({
+        "language":"example", "fields":["status"], "examples":["status = Open"],
+        "inputExamples":[{"label":"DOC_SENTINEL: quotes and backslashes", "inputs":{
+            "query":"status = \"Open\" AND path = \"C:\\work\\notes\"", "nested":{"lines":["one\ntwo", "é"]}
+        }}]
+    });
     let descriptor = ActionDescriptor::new(
         "search",
         "Search authorized resources",
@@ -259,16 +263,20 @@ fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
                 .find(|tool| tool["_meta"]["agent-access/action"] == "search")
                 .unwrap();
             assert!(
-                tool["description"]
-                    .as_str()
-                    .unwrap()
-                    .contains("actions_describe with service=\"example\" and action=\"search\"")
+                tool["description"].as_str().unwrap().contains(
+                    "request action details for service=\"example\" and action=\"search\""
+                )
             );
             assert!(tool.get("documentation").is_none());
             assert!(
                 !serde_json::to_string(tool)
                     .unwrap()
                     .contains("status = Open")
+            );
+            assert!(
+                !serde_json::to_string(&definitions)
+                    .unwrap()
+                    .contains("DOC_SENTINEL")
             );
         }
     }

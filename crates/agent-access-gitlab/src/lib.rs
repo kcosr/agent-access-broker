@@ -5,6 +5,7 @@
 mod access;
 mod backend;
 mod config;
+mod documentation;
 mod oauth;
 mod present;
 mod provisioning;
@@ -7433,7 +7434,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    action.presentation(presentation)
+                    documentation::apply(action.presentation(presentation), config)
                 })
                 .collect(),
         )

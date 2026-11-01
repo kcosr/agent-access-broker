@@ -835,6 +835,10 @@ their reviewed runtime catalog.
 | `oauth_stub.record.view` | `agent-access oauth-stub record view alice-alpha-1 --collection alpha` | collection `alpha` |
 | `oauth_stub.account.view` | `agent-access oauth-stub account` | no resource selector; explicit action grant required |
 
+Use these actions only when the caller-filtered catalog advertises `oauth_stub`.
+Read `agent-access actions describe --service oauth_stub ACTION` for canonical
+input examples, collection names, connection requirements and failure recovery.
+
 All actions use `per_user` credential mode. Collection resources have type
 `oauth_collection` with an `exact` selector or `all`; values contain 1–64 lowercase
 ASCII letters, digits, underscores or hyphens. Grants and invocation tokens use

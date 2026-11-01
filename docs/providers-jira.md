@@ -24,6 +24,14 @@ setting controls comment-write availability; it does not restrict issue-write
 formats. Preserve the field names and nesting published by the action, and
 follow its descriptions for locator and content combinations.
 
+Each action's detailed `documentation` contains its workflow, scope, result
+guidance and canonical input examples. New `inputExamples` entries pair a
+`label` with an `inputs` object; existing grammar and project `examples` remain
+direct input objects. `uploadLocators` show the target inputs to combine with
+the calling interface's multipart file support. Examples reflect advertised
+content formats and page-size bounds. Read this detail through action discovery
+before constructing a request; synthetic IDs do not imply access or existence.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker

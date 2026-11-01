@@ -14,6 +14,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 #[path = "comment_page_tests.rs"]
 mod comment_page_tests;
 
+#[path = "documentation_tests.rs"]
+mod documentation_tests;
+
 #[path = "issue_type_tests.rs"]
 mod issue_type_tests;
 

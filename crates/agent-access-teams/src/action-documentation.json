@@ -1,0 +1,62 @@
+{
+  "notification.send": {
+    "destination": "Use a configured destination alias from registeredResources.items[].value, not a channel ID or webhook URL. Only registered, enabled and configured destinations can execute, including under broad grants. The signed Workflow endpoint remains a private resource attribute and is never an action input.",
+    "formats": "contentFormat is explicit: simple accepts nonempty text and optional nonempty title only and creates an Adaptive Card 1.2 envelope; microsoft accepts a full Adaptive Card message envelope or MessageCard. Microsoft objects retain native extension values after structural validation.",
+    "microsoft": "An Adaptive envelope uses type message and nonempty attachments; each attachment needs contentType application/vnd.microsoft.card.adaptive and a card with type AdaptiveCard, a numeric dotted version string, and body array of objects. A MessageCard uses @type MessageCard, @context http://schema.org/extensions or its HTTPS form, and at least one nonempty summary or text string; every supplied summary and text must be nonempty. Supply exactly one of type or @type; a competing key is refused even when null. Microsoft extension values remain unchanged.",
+    "limits": "Full action inputs and serialized outgoing JSON each have a 24 KiB limit and depth 32, also respecting a smaller configured HTTP body limit. Oversized content is refused rather than truncated.",
+    "delivery": "A successful receipt confirms Workflow endpoint acceptance, not Workflow completion or a visible Teams message. The provider does not automatically retry. Inspect uncertain outcomes before another send; saving an acceptance response locally does not change delivery or retry safety.",
+    "inputExamples": [
+      {
+        "label": "Simple notification",
+        "inputs": {
+          "destination": "release-alerts",
+          "contentFormat": "simple",
+          "content": {
+            "title": "Release",
+            "text": "Version 2.3 is available."
+          }
+        }
+      },
+      {
+        "label": "MessageCard notification",
+        "inputs": {
+          "destination": "release-alerts",
+          "contentFormat": "microsoft",
+          "content": {
+            "@type": "MessageCard",
+            "@context": "http://schema.org/extensions",
+            "summary": "Release completed",
+            "text": "Version 2.3 is available."
+          }
+        }
+      },
+      {
+        "label": "Adaptive Card notification",
+        "inputs": {
+          "destination": "release-alerts",
+          "contentFormat": "microsoft",
+          "content": {
+            "type": "message",
+            "attachments": [
+              {
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                  "type": "AdaptiveCard",
+                  "version": "1.2",
+                  "body": [
+                    {
+                      "type": "TextBlock",
+                      "text": "Version 2.3 is available.",
+                      "wrap": true
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "validation": "Only type and @type have fixed values in the content schema: message and MessageCard. A denial may explain those constants before a format or conflict rule. With simple, omit both keys. With microsoft, keep the chosen discriminator and omit the competing key, including a null key; changing its value does not resolve the conflict."
+  }
+}

@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use url::Url;
 
+mod documentation;
 mod input;
 mod listing;
 mod logs;
@@ -634,6 +635,7 @@ fn cloudbees_ci_service_descriptor(config: &CloudbeesCiListingConfig) -> Service
     }
     actions.extend(reads::descriptors());
     actions.push(listing::descriptor(config));
+    documentation::extend(&mut actions, config.max_results);
     ServiceDescriptor::new("cloudbees_ci", "CloudBees CI")
         .with_resource_scopes(BTreeMap::from([(
             "job".into(),

@@ -10,6 +10,7 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+mod documentation;
 mod personal_spaces;
 mod plain_inputs;
 mod space_aliases;
@@ -10252,7 +10253,9 @@ fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
             .iter()
             .find(|action| action.action == name)
             .unwrap();
-        assert_eq!(action.documentation, Some(documentation));
+        for (key, value) in documentation.as_object().unwrap() {
+            assert_eq!(action.documentation.as_ref().unwrap().get(key), Some(value));
+        }
     }
 }
 

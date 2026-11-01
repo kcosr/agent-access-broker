@@ -863,6 +863,134 @@ fn native_schemas() -> Vec<NativeSchemaCase> {
 }
 
 #[test]
+fn native_documentation_preserves_every_spec_and_tool_projection() {
+    use crate::mcp::{McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry};
+    use crate::{api_service_spec, empty_catalog, openapi_from_catalog, send_schema_from_catalog};
+
+    let mut unique = std::collections::BTreeSet::new();
+    let mut cases = 0;
+    for (configuration, descriptor) in native_service_descriptors() {
+        let capabilities = descriptor.capabilities();
+        let service = api_service_spec(&descriptor, true).unwrap();
+        let mut catalog = empty_catalog(json!({"principal":"synthetic-guidance-reader"}));
+        catalog.services.push(service.clone());
+        let catalog_bytes = serde_json::to_vec(&catalog).unwrap().len();
+        let service_bytes = serde_json::to_vec(&capabilities).unwrap().len();
+        assert!(
+            catalog_bytes < STDIO_MAX_CATALOG_BYTES,
+            "{configuration}/{} catalog",
+            service.service
+        );
+        assert!(
+            service_bytes < STDIO_MAX_CATALOG_BYTES,
+            "{configuration}/{} service",
+            service.service
+        );
+        let openapi = openapi_from_catalog(&catalog, crate::RenderAuthMode::Omit, &[], "session");
+        let send = send_schema_from_catalog(&catalog);
+        for action in &service.actions {
+            cases += 1;
+            unique.insert((service.service.clone(), action.action.clone()));
+            let original = descriptor
+                .actions
+                .iter()
+                .find(|candidate| candidate.action == action.action)
+                .unwrap();
+            let capability = capabilities
+                .actions
+                .iter()
+                .find(|candidate| candidate.action == action.action)
+                .unwrap();
+            assert_eq!(action.documentation, original.documentation);
+            assert_eq!(capability.documentation, original.documentation);
+            let operation = &openapi["paths"]
+                [format!("/v1/invoke/{}/{}", service.service, action.action)]["post"];
+            let variant = send["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|variant| {
+                    variant["properties"]["service"]["const"] == service.service
+                        && variant["properties"]["action"]["const"] == action.action
+                })
+                .unwrap();
+            assert_eq!(
+                operation.get("x-agent-access-documentation"),
+                original.documentation.as_ref(),
+                "{configuration}/{}.{} OpenAPI",
+                service.service,
+                action.action
+            );
+            assert_eq!(
+                variant.get("x-agent-access-documentation"),
+                original.documentation.as_ref(),
+                "{configuration}/{}.{} send",
+                service.service,
+                action.action
+            );
+        }
+        let mut changed = catalog.clone();
+        for action in &mut changed.services[0].actions {
+            if action.documentation.is_some() {
+                action.documentation = Some(json!({"usage":"DOC_GROWTH_SENTINEL".repeat(1_000)}));
+            }
+        }
+        for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+            for view in [
+                McpView::Aggregate,
+                McpView::Service(service.service.clone()),
+            ] {
+                let registry =
+                    ToolRegistry::build(&catalog, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                let definitions = registry.definitions();
+                let bytes = serde_json::to_vec(&definitions).unwrap();
+                let expanded = ToolRegistry::build(&changed, &view, mode, bytes.len()).unwrap();
+                assert_eq!(
+                    expanded.definitions(),
+                    definitions,
+                    "{configuration}/{} {mode:?} {view:?}",
+                    service.service
+                );
+                assert!(
+                    !String::from_utf8(bytes.clone())
+                        .unwrap()
+                        .contains("DOC_GROWTH_SENTINEL")
+                );
+                assert_eq!(
+                    definitions.len(),
+                    5 + service
+                        .actions
+                        .iter()
+                        .filter(|action| crate::mcp::action_eligible(action, mode))
+                        .count()
+                );
+                for action in &service.actions {
+                    let detail = registry.action_detail(&service.service, &action.action);
+                    assert_eq!(detail.is_some(), crate::mcp::action_eligible(action, mode));
+                    if let Some(detail) = detail {
+                        assert_eq!(detail.as_object().unwrap().len(), 2);
+                        assert!(detail.get("documentation").is_none());
+                    }
+                }
+                println!(
+                    "native projection {configuration}/{} {mode:?} {view:?}: {} bytes",
+                    service.service,
+                    bytes.len()
+                );
+            }
+        }
+        println!(
+            "native specs {configuration}/{}: catalog={catalog_bytes} service={service_bytes} openapi={} send={}",
+            service.service,
+            serde_json::to_vec(&openapi).unwrap().len(),
+            serde_json::to_vec(&send).unwrap().len()
+        );
+    }
+    assert_eq!(cases, native_schemas().len());
+    assert_eq!(unique.len(), 227);
+}
+
+#[test]
 fn native_schema_cases_cover_optional_actions_and_content_formats() {
     let cases = native_schemas();
     let schema = |configuration, service, action| {

@@ -164,7 +164,7 @@ impl Handler {
                     Ok(PreparedDiscovery::Helper(Ok(match self.helper(request, &catalog, &registry, helper.as_str(), arguments) {
                         Ok(value) => output::result(value, false, limit).unwrap_or_else(|_| output::message(
                             if *helper == mcp::HelperKind::ResourceAccessDescribe {
-                                "Resource access result exceeds MCP response limit; use action or resourceType filters, or actions_list for known resources"
+                                "Resource access result exceeds MCP response limit; narrow action or resourceType filters, or check action availability for a known resource"
                             } else {
                                 "Discovery result exceeds MCP response limit; use narrower discovery"
                             },
@@ -401,12 +401,18 @@ impl ServerHandler for Handler {
         // The assembly names the aggregate server; a scoped server is named
         // after its service. Both report the assembly's version.
         let assembly = &self.endpoint.0.state.build_status;
-        let mut info=ServerConfig::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(Implementation::new(self.view.service().unwrap_or(assembly.assembly_name()).to_owned(),assembly.assembly_version())).with_instructions("Discover Broker services/resource access/actions with the five read-only helpers. Only listed native JSON tools execute through this HTTP endpoint. Use local agent-access mcp serve for requestFile, secretSources, multipart uploads and raw downloads. Discovery is not authorization; every call checks current resource grants. Refresh tools/list or reconnect to discover changes. Cancellation and connection loss do not guarantee rollback; never automatically retry uncertain mutations.");
-        if let Some(service) = self.view.service() {
-            info.instructions = Some(format!(
-                "This connection exposes only service {service}. Provider tools use their original names; discovery action IDs remain canonical Broker action IDs. The five helpers require this service when their schema requests service. Only listed JSON tools execute here; file workflows use local agent-access mcp serve --service {service}. Discovery grants no authority; every call checks current policy and credentials. Refresh tools/list after changes. Never automatically retry uncertain mutations."
+        let view_instructions = match self.view.service() {
+            Some(service) => format!("This connection is limited to service {service}. Provider wire names retain the service's original names; discovery action IDs remain canonical.\nThis HTTP endpoint executes the listed JSON actions. Local file workflows use agent-access mcp serve --service {service}. The Broker rechecks current grants and credentials on every call."),
+            None => "This connection exposes the caller's aggregate Broker catalog.\nThis HTTP endpoint executes the listed JSON actions. Local file workflows require agent-access mcp serve. The Broker rechecks current grants and credentials on every call.".into(),
+        };
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                self.view.service().unwrap_or(assembly.assembly_name()).to_owned(),
+                assembly.assembly_version(),
+            ))
+            .with_instructions(format!(
+                "For provider actions, put action fields in inputs and supported options beside it; discovery helpers take their declared top-level arguments.\nUse your client's tool list or search to find its available capabilities and call each by its exact exposed name. Use canonical service/action IDs from discovery for action details.\n{view_instructions}\nRefresh discovery after permissions or setup changes. Cancellation or connection loss does not prove rollback; inspect uncertain mutations before retrying."
             ));
-        }
         info.protocol_version = ProtocolVersion::V_2025_11_25;
         info
     }
@@ -475,7 +481,7 @@ impl ServerHandler for Handler {
                 let registry = Self::registry(&owned, &catalog)?;
                 let target = registry.resolve(&name).cloned().ok_or_else(|| {
                     ErrorData::invalid_params(
-                        "Unknown or unavailable HTTP MCP tool; refresh tools/list and use services_list or services_describe to check availability and setup requirements",
+                        "Unknown or unavailable HTTP MCP tool; refresh your client's tool list and inspect service availability and setup requirements through its available discovery tools",
                         None,
                     )
                 })?;

@@ -650,6 +650,7 @@ async fn http_mcp_read_only_paths_announce_list_and_call_only_reads() {
             // initialize: the notice is appended to both views' instructions.
             for path in ["/mcp", "/mcp/fake"] {
                 let (session, instructions) = f.initialize(path, via).await;
+                super::mcp::assert_http_instructions(&json!(&instructions));
                 // In-session discovery reports the same instructions.
                 let discovered = f
                     .rpc(

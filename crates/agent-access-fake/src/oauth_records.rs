@@ -138,6 +138,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 "List records in an authorized test collection",
                 schema(json!(["collection"]), json!({"collection": collection()})),
             )
+            .documentation(action_documentation("record.list"))
             .read_only()
             .scope("collection")
             .credential_modes(["per_user"])
@@ -153,6 +154,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                     }),
                 ),
             )
+            .documentation(action_documentation("record.view"))
             .read_only()
             .scope("collection")
             .credential_modes(["per_user"])
@@ -163,6 +165,7 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
                 "Read the connected test account identity",
                 schema(json!([]), json!({})),
             )
+            .documentation(action_documentation("account.view"))
             .read_only()
             .credential_modes(["per_user"]),
         ])
@@ -170,6 +173,42 @@ fn oauth_stub_descriptor() -> ServiceDescriptor {
             CredentialDescriptor::default()
                 .delegated("Lets agents read the test records your account can reach."),
         )
+}
+
+fn action_documentation(action: &str) -> Value {
+    let mut documentation = json!({
+        "fixture":"Optional development fixture only; use these actions when the caller-filtered catalog advertises oauth_stub. The human owner connects the test account in the Broker portal. All actions use per_user delegated OAuth held by the Broker; never obtain upstream tokens or pass them as action inputs.",
+        "recovery":"For oauth_reconnect_required or oauth_refresh_uncertain, ask the account owner to reconnect in the portal; agent invocation tokens cannot complete browser consent. An operator resolves oauth_application_credential or persistent oauth_request_rejected. Do not loop on transient failures: refresh attempts have a persisted cooldown. The provider can recover once after an upstream 401 using the Broker's delegated connection; callers do not substitute credentials.",
+        "limits":"Responses are bounded by the smaller of the configured upstream response limit and 1 MiB. These actions accept no pageToken, cursor, offset or maxResults; do not invent pagination inputs."
+    });
+    match action {
+        "account.view" => {
+            documentation["account"] = json!(
+                "Reads the connected test account identity with empty inputs. It requires its own account.view action grant and has no collection selector; collection access alone does not grant this read."
+            );
+            documentation["inputExamples"] =
+                json!([{"label":"Connected test account","inputs":{}}]);
+        }
+        "record.list" | "record.view" => {
+            documentation["collection"] = json!(
+                "Pass the collection's canonical name, not its Broker policy resource ID. Both list and view require collection: 1–64 lowercase ASCII letters, digits, underscores or hyphens. Authorization uses oauth_collection resources and groups; it is checked for every read and does not follow from possessing a record ID."
+            );
+            if action == "record.list" {
+                documentation["listing"] = json!(
+                    "Reads one bounded collection response from the connected test account. The only input is collection; use a returned record ID with separately granted record.view and the same collection."
+                );
+                documentation["inputExamples"] =
+                    json!([{"label":"List test records","inputs":{"collection":"alpha"}}]);
+            } else {
+                documentation["record"] = json!(
+                    "Requires collection and id. The record ID is 1–128 ASCII letters, digits, underscores or hyphens. The upstream request includes the authorized collection as well as the ID, so an ID cannot bypass collection policy."
+                );
+                documentation["inputExamples"] = json!([{"label":"Read one test record","inputs":{"collection":"alpha","id":"alice-alpha-1"}}]);
+            }
+        }
+        _ => unreachable!("declared OAuth fixture action"),
+    }
+    documentation
 }
 
 /// The records API at the configured base URL. The runtime lends each
@@ -464,6 +503,41 @@ mod tests {
             [("collection", "Collection"), ("id", "Record ID")]
         );
         assert!(audited("account.view").is_empty());
+    }
+
+    #[test]
+    fn documentation_examples_use_the_real_scope_parser_without_pagination() {
+        let host = agent_access_provider::test_support::TestHost::default();
+        let provider = OAuthRecordsProvider::new(
+            &Url::parse("http://127.0.0.1:8099/").unwrap(),
+            &host,
+            &host.limits,
+        )
+        .unwrap();
+        let descriptor = oauth_stub_descriptor();
+        assert_eq!(descriptor.validate(), Ok(()));
+        for action in &descriptor.actions {
+            let examples = action.documentation.as_ref().unwrap()["inputExamples"]
+                .as_array()
+                .unwrap();
+            assert_eq!(examples.len(), 1);
+            let inputs = &examples[0]["inputs"];
+            let scopes = provider.local_scopes(&action.action, inputs).unwrap();
+            if action.action == "account.view" {
+                assert!(scopes.is_empty());
+                assert_eq!(inputs, &json!({}));
+            } else {
+                assert_eq!(
+                    scopes,
+                    BTreeMap::from([("collection".into(), vec!["alpha".into()])])
+                );
+            }
+            for field in ["pageToken", "cursor", "offset", "maxResults"] {
+                let mut invalid = inputs.clone();
+                invalid[field] = json!(1);
+                assert!(provider.local_scopes(&action.action, &invalid).is_err());
+            }
+        }
     }
 
     #[test]

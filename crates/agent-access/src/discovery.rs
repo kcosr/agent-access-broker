@@ -250,7 +250,7 @@ pub(crate) async fn action_describe(
             .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
         let entry = catalog.services.iter().find(|candidate| candidate.service == service && candidate.surface == "invoke")
             .and_then(|service| service.actions.iter().find(|candidate| candidate.action == action))
-            .ok_or_else(|| InputError("action detail is unavailable in the caller-visible catalog; use services describe for the raw definition or retry discovery".into()))?;
+            .ok_or_else(|| InputError("action detail is unavailable in the caller-visible catalog; request service capabilities or refresh discovery".into()))?;
         let common: ActionCapabilities = serde_json::from_value(serde_json::to_value(entry)?)
             .context("invalid catalog action definition")?;
         if common != capability {

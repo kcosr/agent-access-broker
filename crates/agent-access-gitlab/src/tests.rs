@@ -1,3 +1,4 @@
+mod documentation;
 mod plain_inputs;
 
 use super::*;

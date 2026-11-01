@@ -1419,7 +1419,7 @@ errors, metrics labels, or object identifiers.
 
 GitLab has no native-format allowlist, so each available covered action
 advertises both values directly in its caller-filtered catalog
-`contentFormat.enum`. Clients, including Dispatch, detect capability from that
+`contentFormat.enum`. Clients detect capability from that
 exact enum rather than a Broker version. OpenAPI and the action-specific send
 schema project the same pair and enum.
 

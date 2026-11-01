@@ -106,6 +106,11 @@ See [Google's web-client flow](https://developers.google.com/identity/protocols/
 
 ## Actions
 
+Action detail and the runtime catalog include extended `documentation` for
+mailbox identity, query settings, continuation and mutation outcomes, with labeled
+`inputExamples` containing canonical provider inputs. Initial MCP tool listings
+keep only the concise description and input schema.
+
 | Canonical action | Typed CLI |
 |---|---|
 | `gmail.account.view` | `agent-access gmail account` |

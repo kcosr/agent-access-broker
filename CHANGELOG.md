@@ -209,6 +209,14 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Agent guidance is available on demand.** The five access skills now focus
+  on their interfaces; service recipes, paging rules and companion permissions
+  are in action `documentation`, available through action details, the catalog,
+  OpenAPI and JSON send schema. MCP helper descriptions work with client-renamed
+  or selectively exposed tools, and server instructions lead with the argument
+  envelope. Initial MCP tool lists omit extended documentation. See
+  [agent instructions](README.md#documentation-reference) and [MCP](docs/mcp.md).
+
 - **Native action input fields remain visible in schema discovery.**
   Plain object schemas describe locator alternatives, paired fields, content
   formats and mode requirements across Jira, Confluence, GitLab, CloudBees CI

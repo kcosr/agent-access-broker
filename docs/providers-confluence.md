@@ -33,6 +33,15 @@ in the schema; content preparation validates their structure and limits. See the
 [rich-content write contract](#normalized-rich-content-write-contract) for the
 format matrix.
 
+Each action's detailed `documentation` contains its workflow, scope and result
+guidance. `inputExamples` entries pair a `label` with canonical `inputs`;
+`inputTemplates` require substituting the exact returned `draftHandle`.
+`uploadLocators` supply target inputs to combine with the calling interface's
+multipart file support. The existing CQL grammar examples remain in `cql`.
+Examples reflect advertised content formats and page-size bounds. Read this
+detail through action discovery before constructing a request; synthetic IDs
+do not imply access or existence.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker

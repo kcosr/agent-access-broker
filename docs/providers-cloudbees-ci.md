@@ -76,7 +76,7 @@ slash-separated segments. Thus `namespace team-ci/payments` covers
 `team-ci/payments` itself. It has no glob syntax. Broad selectors include
 future jobs. Separately granted `job.list` enumerates the live upstream inventory.
 
-Resource discovery (`resource_access_describe`) shows the action inputs for each
+Resource-access discovery shows the action inputs for each
 selector, so callers need not split resource values themselves:
 
 | Selector | Discovery `inputs` |
@@ -164,7 +164,7 @@ records both. Log cursors bind to the numeric build: continue a
 `controller`, optionally starting at a canonical `folder` path. The starting
 container itself is excluded. It requires its own read-only grant and supports
 service or personal Basic API tokens. Listing grants no job inspection or build
-permission. Local `resource_access_describe` reports access by action and
+permission. Local resource-access discovery reports access by action and
 registered references, and identifies `job.list` when it is available.
 
 ```sh
@@ -497,8 +497,11 @@ agent-access invoke cloudbees_ci.build.log.read --input-json '{"url":"https://ci
 agent-access invoke cloudbees_ci.build.tests.details --input-json '{"controller":"team-ci","job":"payments/build-api","buildSelector":"lastFailedBuild"}'
 ```
 
-Each action's catalog `documentation` repeats the locator, URL, build
-selector, and cursor rules for agents.
+Action detail and the runtime catalog publish extended `documentation` for
+locator, build, pagination, log, report and outcome rules. Labeled
+`inputExamples` contain canonical provider inputs for the selected action;
+`job.list` examples respect its configured `maxResults` limit. These details
+are available when needed and are omitted from the initial MCP tool list.
 
 CloudBees CI reference: [service-account REST access](https://docs.cloudbees.com/docs/cloudbees-ci/latest/secure/service-accounts-rest-api),
 [Jenkins remote API](https://www.jenkins.io/doc/book/using/remote-access-api/),
