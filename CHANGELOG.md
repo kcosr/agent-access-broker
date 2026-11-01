@@ -217,6 +217,7 @@ All notable changes to this project are documented in this file.
   or selectively exposed tools, and server instructions lead with the argument
   envelope. Initial MCP tool lists omit extended documentation. See
   [agent instructions](README.md#documentation-reference) and [MCP](docs/mcp.md).
+  ([#91](https://github.com/kcosr/agent-access-broker/pull/91))
 
 - **Native action input fields remain visible in schema discovery.**
   Plain object schemas describe locator alternatives, paired fields, content
