@@ -102,13 +102,13 @@ schemas (Jira, Confluence, GitLab, CloudBees CI, Gmail and Teams), including
 representative optional-feature and content/search configurations, to the
 diagnostic profile and budget. `native_schema_cases_cover_optional_actions_and_content_formats`
 checks coverage of those configuration classes. `native_schemas_have_plain_roots`
-rejects root combinators and requires upload locators in root properties. Its
-explicit pending-service exceptions must be removed when a provider is converted;
-the guard rejects exceptions that no longer have root combinators. It also checks
-GitLab position and line-range objects for visible fields without object
-combinators. Jira, Confluence and GitLab provider tests preserve locator,
-content-format and null-handling behavior, including Confluence's separate shape
-and content-preparation stages and GitLab's configuration-dependent search routes.
+rejects root combinators for every native provider and requires upload locators
+in root properties. It also checks GitLab position and line-range objects and
+Teams content for visible fields without object combinators. Teams extension
+fields remain open across Microsoft payload variants. Native provider tests
+preserve locator, content-format and null-handling behavior, including
+Confluence's separate shape and content-preparation stages, GitLab's
+configuration-dependent search routes, and CloudBees' categorized input errors.
 Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message
 without being validated. Command-authority tests check that imported and
@@ -122,9 +122,10 @@ unusable. Host
 through HTTP and HTTP MCP to denials in scope resolution and invocation, before
 any upstream request, and checks that responses, service logs and audit records
 carry no supplied value and that a caller without a grant keeps the provider's
-message. Host `tests::jira_plain_schemas`, `tests::confluence_plain_schemas`
-and `tests::gitlab_plain_schemas` check projections through stdio MCP, HTTP MCP, JSON send and OpenAPI, and confirm
-that providers still refuse invalid relationships accepted by published schemas.
+message. Host `tests::jira_plain_schemas`, `tests::confluence_plain_schemas`,
+`tests::gitlab_plain_schemas` and `tests::cloudbees_plain_schemas` check
+projections through stdio MCP, HTTP MCP, JSON send and OpenAPI, and confirm that
+providers still refuse invalid relationships accepted by published schemas.
 The `confluence_smoke::plain_inputs` CLI fixture also drives real stdio MCP,
 generic invocation and JSON send, including omitted inputs, locator alternatives,
 nullable locators and local request files. The `gitlab_smoke::plain_inputs`
@@ -133,6 +134,17 @@ upload metadata, local secret injection and unchanged relationship denials after
 policy. Its successful webhook calls use only the synthetic backend. Host GitLab
 search tests preserve route and regex denials before any upstream request; the
 existing search smoke covers successful requests against a local HTTP fixture.
+The `cloudbees_smoke::plain_inputs` fixture checks stdio MCP, generic invocation
+and JSON send with missing locators, build conflicts, log modes, cursor handling
+and retained scalar constraints. Categorized result fields survive denials;
+invalid relationships make no controller request. Successful URL-based log
+reads use a local HTTP fixture. The `teams_smoke::plain_inputs` fixture checks
+catalog, OpenAPI, send and both MCP projections against managed destinations. It
+exercises format-specific denials and retained schema explanations over HTTP,
+both MCP transports, invoke and send. Cross-variant MessageCard and Adaptive
+Card extension values execute unchanged through the production parser and the
+offline transport. Teams audit remains destination-only; no Microsoft endpoint
+is contacted.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.

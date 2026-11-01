@@ -5,6 +5,8 @@ use wiremock::{
     matchers::{method, path},
 };
 
+mod plain_inputs;
+
 const ORIGIN: &str = "https://synthetic.environment.api.powerplatform.com";
 const ENDPOINT: &str = "https://synthetic.environment.api.powerplatform.com/powerautomate/automations/direct/cu/08/workflows/fixture/triggers/manual/paths/invoke?api-version=1&sp=fixture&sig=SYNTHETIC_SECRET";
 
@@ -272,7 +274,7 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
 }
 
 #[test]
-fn descriptor_and_schema_preserve_mutation_authority_and_content_union() {
+fn descriptor_and_schema_preserve_mutation_authority_and_payloads() {
     let descriptor = descriptor();
     assert_eq!(descriptor.validate(), Ok(()));
     assert!(!descriptor.credentials.execution_required);
@@ -316,10 +318,7 @@ fn descriptor_and_schema_preserve_mutation_authority_and_content_union() {
     }
     for value in [
         json!({"destination":"https://example.com","contentFormat":"simple","content":{"text":"hi"}}),
-        json!({"destination":"release-alerts","contentFormat":"simple","content":{"text":" "}}),
-        json!({"destination":"release-alerts","contentFormat":"simple","content":{"text":"hi","payload":{}}}),
         json!({"destination":"release-alerts","contentFormat":"simple","content":{"text":"hi"},"webhookUrl":ENDPOINT}),
-        json!({"destination":"release-alerts","contentFormat":"microsoft","content":{"text":"hi"}}),
     ] {
         assert!(!schema.is_valid(&value));
         assert!(payload::prepare(&value, MAX_BODY_BYTES).is_err());

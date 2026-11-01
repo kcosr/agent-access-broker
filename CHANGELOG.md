@@ -209,17 +209,21 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- **Jira, Confluence and GitLab input fields remain visible in schema discovery.**
+- **Native action input fields remain visible in schema discovery.**
   Plain object schemas describe locator alternatives, paired fields, content
-  formats and mode requirements, including nested GitLab positions and configured
-  search engines; provider input denials identify missing or conflicting fields. Published
+  formats and mode requirements across Jira, Confluence, GitLab, CloudBees CI
+  and Teams, including nested GitLab positions, configured search engines and
+  Teams content. Provider input denials identify missing or conflicting fields. Published
   schemas no longer enforce these relationships, so validating clients may
   send requests that the Broker continues to refuse. Request
-  acceptance, audit fields and content formats are unchanged. See
+  acceptance, audit fields, content formats, CloudBees error categories and open
+  Teams payload extensions are unchanged. See
   [Jira input arguments](docs/providers-jira.md#input-arguments),
-  [Confluence input arguments](docs/providers-confluence.md#input-arguments) and
-  [GitLab input arguments](docs/providers-gitlab-rest.md#input-arguments).
-  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88), [#89](https://github.com/kcosr/agent-access-broker/pull/89))
+  [Confluence input arguments](docs/providers-confluence.md#input-arguments),
+  [GitLab input arguments](docs/providers-gitlab-rest.md#input-arguments),
+  [CloudBees CI input arguments](docs/providers-cloudbees-ci.md#input-arguments)
+  and [Teams input arguments](docs/providers-teams.md#input-arguments).
+  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88), [#89](https://github.com/kcosr/agent-access-broker/pull/89), [#90](https://github.com/kcosr/agent-access-broker/pull/90))
 
 - **Release qualification uses nextest for Rust tests.** Install cargo-nextest
   0.9.150 or newer before qualifying a release. The Rust suite runs with sixteen

@@ -47,15 +47,16 @@ pub(super) fn fingerprint(config: &CloudbeesCiProviderConfig, limits: &ProviderL
 
 pub(super) fn input_properties() -> serde_json::Map<String, Value> {
     json!({
-        "mode":{"type":"string","enum":["head","tail","search"],"default":"tail"},
+        "mode":{"type":"string","enum":["head","tail","search"],"default":"tail",
+            "description":"Console read mode; defaults to tail. query is required when mode is search; query and maxMatches are only available with mode search. Required with cursor; a cursor is only available with mode head or search."},
         "maxBytes":{"type":"integer","minimum":1024,"maximum":65536,"default":16384,
             "description":"Returned UTF-8 text budget, independent of the provider scan ceiling."},
         "cursor":{"type":"string","minLength":1,"maxLength":CURSOR_MAX_BYTES,
-            "description":"Opaque head/search continuation. Keep mode, query and output settings unchanged; each page rescans its prefix."},
+            "description":"Opaque head/search continuation. Only with mode head or search. Do not combine with buildSelector or a permalink in url. Keep mode, query and output settings unchanged; each page rescans its prefix."},
         "query":{"type":"string","minLength":1,"maxLength":256,
-            "description":"Search only: case-sensitive literal, at most 256 UTF-8 bytes. No regular expressions."},
+            "description":"Case-sensitive literal search text, at most 256 UTF-8 bytes; no regular expressions. Required when mode is search. Only with mode search."},
         "maxMatches":{"type":"integer","minimum":1,"maximum":100,"default":20,
-            "description":"Search only."}
+            "description":"Maximum number of literal search matches. Only with mode search."}
     }).as_object().unwrap().clone()
 }
 

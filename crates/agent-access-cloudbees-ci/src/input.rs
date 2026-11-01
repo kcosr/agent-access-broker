@@ -690,20 +690,36 @@ pub(crate) fn job_action_inputs(
     Some(inputs)
 }
 
-/// The input schema of an action. Locator and build alternatives are
-/// expressed with `oneOf`; extended grammar lives in [`documentation`].
+/// The plain input schema of an action. Field descriptions state the locator,
+/// build and log relationships enforced by parsing; extended grammar lives in
+/// [`documentation`].
 pub(crate) fn schema(action: &str) -> Value {
     let shape = shape(action).expect("declared action");
+    let url_build_guidance = if shape.build {
+        "When url names a build, omit buildNumber and buildSelector; for a job URL, give exactly one of buildNumber or buildSelector."
+    } else {
+        "This action addresses the job; a build in url is ignored."
+    };
+    let mut url_description = format!(
+        "Jenkins job or build URL on a configured controller. Give exactly one of url or controller with job. {url_build_guidance}"
+    );
+    if action == "build.log.read" {
+        url_description.push_str(" With cursor, use a numeric build URL or a job URL with buildNumber; do not use a permalink URL.");
+    }
     let mut properties = json!({
-        "controller": {"type":"string","description":"Configured controller alias: the first segment of a cloudbees_ci_job resource value"},
-        "job": {"type":"string","description":"Jenkins full name below the controller, such as folder/job; not a display name or URL"},
-        "url": {"type":"string","description":"Jenkins job or build URL on a configured controller, instead of controller and job"},
+        "controller": {"type":"string","description":"Configured controller alias: the first segment of a cloudbees_ci_job resource value. Required with job. Give exactly one of controller with job or url."},
+        "job": {"type":"string","description":"Jenkins full name below the controller, such as folder/job; not a display name or URL. Required with controller. Give exactly one of controller with job or url."},
+        "url": {"type":"string","description":url_description},
     });
     let mut required = Vec::new();
     if shape.build {
-        properties["buildNumber"] =
-            json!({"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Build number"});
-        properties["buildSelector"] = json!({"type":"string","enum":BUILD_SELECTORS,"description":"Jenkins permalink, resolved to a build number"});
+        let mut selector_description = "Jenkins permalink resolved to a numeric build after authorization. Give exactly one of buildSelector, buildNumber or a build in url.".to_owned();
+        if action == "build.log.read" {
+            selector_description.push_str(" Do not combine with cursor; continue with the numeric buildNumber returned with nextCursor.");
+        }
+        properties["buildNumber"] = json!({"type":"integer","minimum":1,"maximum":u32::MAX,"description":"Numeric build number supplied as a JSON integer. Give exactly one of buildNumber, buildSelector or a build in url."});
+        properties["buildSelector"] =
+            json!({"type":"string","enum":BUILD_SELECTORS,"description":selector_description});
     }
     for field in shape.extra {
         match *field {
@@ -737,39 +753,13 @@ pub(crate) fn schema(action: &str) -> Value {
             .expect("properties")
             .extend(logs::input_properties());
     }
-    // Each branch excludes the other locator's fields so mixed inputs fail
-    // validation the same way runtime parsing rejects them.
-    let one_of = if shape.build {
-        json!([
-            {"required":["controller","job"],"not":{"required":["url"]},
-                "oneOf":[{"required":["buildNumber"]},{"required":["buildSelector"]}]},
-            {"required":["url"],"not":{"anyOf":[{"required":["controller"]},{"required":["job"]},
-                {"required":["buildNumber","buildSelector"]}]}}
-        ])
-    } else {
-        json!([
-            {"required":["controller","job"],"not":{"required":["url"]}},
-            {"required":["url"],"not":{"anyOf":[{"required":["controller"]},{"required":["job"]}]}}
-        ])
-    };
     let mut schema = json!({
         "type":"object",
         "properties":properties,
-        "oneOf":one_of,
         "additionalProperties":false
     });
     if !required.is_empty() {
         schema["required"] = json!(required);
-    }
-    if action == "build.log.read" {
-        schema["allOf"] = json!([
-            {"if":{"properties":{"mode":{"const":"search"}},"required":["mode"]},
-                "then":{"required":["query"]},
-                "else":{"not":{"anyOf":[{"required":["query"]},{"required":["maxMatches"]}]}}},
-            {"if":{"required":["cursor"]},
-                "then":{"required":["mode"],"properties":{"mode":{"enum":["head","search"]}}}},
-            {"not":{"required":["cursor","buildSelector"]}}
-        ]);
     }
     schema
 }
@@ -1461,7 +1451,7 @@ mod tests {
     }
 
     #[test]
-    fn locator_schemas_reject_the_mixed_inputs_parsing_rejects() {
+    fn plain_locator_schemas_leave_relationships_to_the_parser() {
         let ci = provider();
         let job_url = "https://ci.example.com/team-ci/job/payments/job/build-api/";
         let build_url = "https://ci.example.com/team-ci/job/payments/job/build-api/42/";
@@ -1548,16 +1538,14 @@ mod tests {
                 false,
             ),
         ];
-        for (action, inputs, valid) in cases {
+        for (action, inputs, parser_valid) in cases {
             let validator = jsonschema::validator_for(&schema(action)).unwrap();
-            assert_eq!(
-                validator.is_valid(&inputs),
-                valid,
-                "schema {action} {inputs}"
-            );
+            // These cases all satisfy scalar constraints and unconditional
+            // requirements. Locator/build relationships belong to the parser.
+            assert!(validator.is_valid(&inputs), "schema {action} {inputs}");
             assert_eq!(
                 ci.parse(action, &inputs).is_ok(),
-                valid,
+                parser_valid,
                 "parse {action} {inputs}"
             );
         }
@@ -1599,41 +1587,56 @@ mod tests {
     }
 
     #[test]
-    fn schemas_express_locator_and_build_alternatives() {
-        let validator = |action| jsonschema::validator_for(&schema(action)).unwrap();
-        let build = validator("build.view");
-        for valid in [
-            json!({"controller":"team-ci","job":"a","buildNumber":1}),
-            json!({"controller":"team-ci","job":"a","buildSelector":"lastFailedBuild"}),
-            json!({"url":"https://ci.example.com/team-ci/job/a/1/"}),
-            json!({"url":"https://ci.example.com/team-ci/job/a/","buildNumber":1}),
+    fn schemas_retain_field_types_bounds_and_unconditional_requirements() {
+        for (action, inputs) in [
+            ("build.view", json!({"buildNumber":null})),
+            ("build.view", json!({"buildNumber":"42"})),
+            ("build.view", json!({"buildNumber":0})),
+            ("build.view", json!({"buildNumber":4_294_967_296_u64})),
+            ("build.view", json!({"buildSelector":"latest"})),
+            ("build.view", json!({"buildSelector":null})),
+            ("job.view", json!({"controller":true})),
+            ("job.view", json!({"job":null})),
+            ("job.view", json!({"url":null})),
+            ("job.view", json!({"url":"u","buildNumber":1})),
+            ("queue.view", json!({"url":"u"})),
+            ("queue.view", json!({"queueId":0})),
+            (
+                "queue.view",
+                json!({"queueId":9_223_372_036_854_775_808_u64}),
+            ),
+            ("build.artifact.download", json!({"buildNumber":1})),
+            ("build.artifact.download", json!({"artifactPath":""})),
+            ("build.pipeline.node.view", json!({"buildNumber":1})),
+            ("build.pipeline.node.view", json!({"nodeId":1})),
+            ("build.pipeline.node.log.read", json!({"nodeId":"01"})),
+            (
+                "build.pipeline.node.log.read",
+                json!({"nodeId":"1".repeat(21)}),
+            ),
+            ("build.log.read", json!({"mode":"middle"})),
+            ("build.log.read", json!({"maxBytes":1023})),
+            ("build.log.read", json!({"maxBytes":65537})),
+            ("build.log.read", json!({"maxMatches":0})),
+            ("build.log.read", json!({"maxMatches":101})),
+            ("build.log.read", json!({"query":""})),
+            ("build.log.read", json!({"cursor":""})),
         ] {
-            assert!(build.is_valid(&valid), "{valid}");
+            let validator = jsonschema::validator_for(&schema(action)).unwrap();
+            assert!(!validator.is_valid(&inputs), "{action} {inputs}");
         }
-        for invalid in [
-            json!({"controller":"team-ci","job":"a"}),
-            json!({"controller":"team-ci","job":"a","buildNumber":1,"buildSelector":"lastBuild"}),
-            json!({"url":"u","controller":"team-ci","job":"a","buildNumber":1}),
-            json!({"controller":"team-ci","job":"a","buildSelector":"latest"}),
-        ] {
-            assert!(!build.is_valid(&invalid), "{invalid}");
-        }
-        let job = validator("job.view");
-        assert!(job.is_valid(&json!({"url":"u"})));
-        assert!(!job.is_valid(&json!({"url":"u","buildNumber":1})));
-        assert!(!job.is_valid(&json!({"url":"u","controller":"c","job":"j"})));
-        let log = validator("build.log.read");
         assert!(
-            !log.is_valid(
-                &json!({"url":"u","buildSelector":"lastBuild","mode":"head","cursor":"c"})
-            )
+            jsonschema::validator_for(&schema("queue.view"))
+                .unwrap()
+                .is_valid(&json!({"queueId":1}))
         );
-        let queue = validator("queue.view");
-        assert!(!queue.is_valid(&json!({"url":"u"})));
-        assert!(queue.is_valid(&json!({"url":"u","queueId":1})));
-        let properties = &schema("build.view")["properties"];
-        for field in ["controller", "job", "url", "buildNumber", "buildSelector"] {
-            assert!(properties[field]["description"].is_string(), "{field}");
-        }
+        assert!(
+            jsonschema::validator_for(&schema("build.view"))
+                .unwrap()
+                .is_valid(&json!({"buildNumber":u32::MAX,"buildSelector":"lastBuild"}))
+        );
     }
 }
+
+#[cfg(test)]
+mod plain_tests;

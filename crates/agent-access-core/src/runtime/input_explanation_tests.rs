@@ -929,23 +929,9 @@ fn native_schema_cases_cover_optional_actions_and_content_formats() {
 
 #[test]
 fn native_schemas_have_plain_roots() {
-    // These providers retain their existing schemas until their conversions.
-    // Keep this list explicit so a newly linked provider is checked by default.
-    const PENDING: &[&str] = &["cloudbees_ci", "teams"];
     const RELATIONAL: &[&str] = &["oneOf", "anyOf", "allOf", "if", "then", "else", "not"];
 
     let cases = native_schemas();
-    for pending in PENDING {
-        assert!(
-            cases.iter().any(|case| case.service == *pending
-                && RELATIONAL.iter().any(|keyword| case
-                    .action
-                    .input_schema
-                    .get(*keyword)
-                    .is_some())),
-            "{pending} has no root combinator; remove its pending exception"
-        );
-    }
     for case in cases {
         let schema = &case.action.input_schema;
         let properties = schema["properties"]
@@ -960,9 +946,6 @@ fn native_schemas_have_plain_roots() {
                 );
             }
         }
-        if PENDING.contains(&case.service.as_str()) {
-            continue;
-        }
         assert_eq!(schema["type"], "object", "{} root type", case.label());
         for keyword in RELATIONAL {
             assert!(
@@ -970,6 +953,37 @@ fn native_schemas_have_plain_roots() {
                 "{} root must not contain {keyword}",
                 case.label()
             );
+        }
+        if case.service == "teams" {
+            let content = &properties["content"];
+            assert_eq!(content["type"], "object", "{} content", case.label());
+            assert_ne!(content["additionalProperties"], false);
+            assert!(content.get("required").is_none());
+            for keyword in RELATIONAL {
+                assert!(
+                    content.get(*keyword).is_none(),
+                    "{} content: {keyword}",
+                    case.label()
+                );
+            }
+            let fields = content["properties"].as_object().unwrap();
+            assert_eq!(fields.len(), 7);
+            for name in ["title", "text", "summary", "attachments", "@context"] {
+                let field = fields[name].as_object().unwrap();
+                assert_eq!(
+                    field.len(),
+                    1,
+                    "{} content.{name} must allow extension values",
+                    case.label()
+                );
+                assert!(
+                    field["description"]
+                        .as_str()
+                        .is_some_and(|text| !text.is_empty())
+                );
+            }
+            assert_eq!(fields["type"]["const"], "message");
+            assert_eq!(fields["@type"]["const"], "MessageCard");
         }
         if case.service == "gitlab"
             && matches!(

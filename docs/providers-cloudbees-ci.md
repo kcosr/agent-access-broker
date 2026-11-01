@@ -98,6 +98,20 @@ against the returned `fullName`. Empty or traversal segments, forbidden Jenkins
 name characters, and edge whitespace are rejected. A controller alias uses the
 broker service-name grammar (`^[a-z][a-z0-9_-]{0,62}$`).
 
+## Input arguments
+
+CloudBees action input schemas expose their fields directly as plain objects.
+Field descriptions explain the locator alternatives, build selection, and console
+read options enforced by the provider. Read these descriptions together with the
+field types, bounds, and unconditional requirements: a schema-valid object can
+still have an invalid combination of inputs.
+
+For example, `build.log.read` requires `query` when `mode` is `search`, and accepts
+`query` and `maxMatches` only in that mode. A `cursor` requires `head` or `search`
+and a numeric build; it cannot be combined with `buildSelector` or a permalink
+URL. These relationships retain the field-specific `input_invalid` denials and
+`result.inputCategory`/`result.field` described [below](#errors).
+
 ## Locating jobs and builds
 
 Actions other than `job.list` take exactly one locator: `url`, or `controller` and `job`.
@@ -293,9 +307,9 @@ serves them. Only `build.trigger` requires `buildable:true`.
 
 ### Errors
 
-For actions other than `job.list`, input mistakes are rejected before authorization
-with `input_invalid`. `result.inputCategory` names the problem and `result.field`, when present,
-names the input:
+For actions other than `job.list`, malformed fields and input combinations are
+rejected before authorization with `input_invalid`. `result.inputCategory` names
+the problem and `result.field`, when present, names the input:
 
 | `inputCategory` | Meaning |
 | --- | --- |
@@ -319,6 +333,10 @@ job. Other upstream 404s on those actions keep `resource_not_found`; when `job` 
 it has the `job/a/job/b` shape of a Jenkins URL path, the message suggests the
 full name `a/b` or the `url` input. That shape is not rejected up front because
 a folder can be named `job`.
+
+A log cursor that passes the field checks is verified after authorization and
+before the console request. Invalid, expired, or changed-context log cursors
+return `input_invalid` without a result object; restart without the cursor.
 
 `job.list` returns uncategorized `input_invalid` for malformed inputs, unknown
 controllers, and invalid, expired, or changed-context continuation tokens. It does
