@@ -1742,9 +1742,13 @@ fn configured_search_routes_publish_plain_fields_and_preserve_acceptance() {
                             );
                             if !route_allowed && regex.is_none() {
                                 let message = if with_project {
-                                    format!("GitLab {action_name} does not accept project with engine {engine}; omit project")
+                                    format!(
+                                        "GitLab {action_name} does not accept project with engine {engine}; omit project"
+                                    )
                                 } else {
-                                    format!("GitLab {action_name} requires project with engine {engine}")
+                                    format!(
+                                        "GitLab {action_name} requires project with engine {engine}"
+                                    )
                                 };
                                 assert_invalid_search_outcome(
                                     result.as_ref().err().unwrap(),
@@ -1842,7 +1846,9 @@ fn mixed_search_routes_describe_each_engine_and_do_not_fall_back() {
                     None,
                     true,
                     default_engine == "basic",
-                    format!("GitLab {action_name} does not accept project with engine advanced; omit project"),
+                    format!(
+                        "GitLab {action_name} does not accept project with engine advanced; omit project"
+                    ),
                 ),
                 (
                     Some("basic"),
@@ -1856,7 +1862,9 @@ fn mixed_search_routes_describe_each_engine_and_do_not_fall_back() {
                     Some("advanced"),
                     true,
                     false,
-                    format!("GitLab {action_name} does not accept project with engine advanced; omit project"),
+                    format!(
+                        "GitLab {action_name} does not accept project with engine advanced; omit project"
+                    ),
                 ),
             ] {
                 let mut input = json!({"search": "needle"});
