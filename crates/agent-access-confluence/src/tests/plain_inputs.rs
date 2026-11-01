@@ -175,9 +175,20 @@ fn schemas_expose_plain_fields_and_effective_content_types() {
             let schema = &descriptor.action(action).unwrap().input_schema;
             for field in [id, url] {
                 assert_eq!(schema["properties"][field]["type"], "string");
+                let meaning = match (action, field) {
+                    ("page.move", "pageId") => "ID of the page to move",
+                    ("page.move", "url") => "Web URL of the page to move",
+                    (_, "pageId") => "Page ID",
+                    (_, "blogId") => "Blog post ID",
+                    (_, "url") if id == "blogId" => "Blog post web URL",
+                    (_, "url") => "Page web URL",
+                    (_, "targetPageId") => "Target page ID",
+                    (_, "targetUrl") => "Target page web URL",
+                    _ => panic!("unexpected locator field {field}"),
+                };
                 assert_eq!(
                     schema["properties"][field]["description"],
-                    format!("Give exactly one of {id} or {url}.")
+                    format!("{meaning}. Give exactly one of {id} or {url}.")
                 );
                 assert!(
                     !schema["required"]
@@ -191,11 +202,11 @@ fn schemas_expose_plain_fields_and_effective_content_types() {
                 let properties = &action.input_schema["properties"];
                 assert_eq!(
                     properties["parentPageId"]["description"],
-                    "Do not combine with parentUrl."
+                    "Parent page ID. Do not combine with parentUrl."
                 );
                 assert_eq!(
                     properties["parentUrl"]["description"],
-                    "Do not combine with parentPageId."
+                    "Parent page web URL. Do not combine with parentPageId."
                 );
             }
         }
