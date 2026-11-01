@@ -249,7 +249,8 @@ fn documentation_examples_and_signed_templates_pass_real_parsers_and_content_pre
 
 #[test]
 fn documentation_upload_locators_accept_adapter_metadata_and_body_parts() {
-    let config = confluence_config();
+    let mut config = confluence_config();
+    config.attachments.media_types = vec!["text/plain".into()];
     let descriptor = confluence_descriptor(&config);
     let mut checked = 0;
     for action in &descriptor.actions {

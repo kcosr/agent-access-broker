@@ -215,11 +215,14 @@ read_only = true
     for resource in document["policy"]["resources"].as_array_mut().unwrap() {
         resource["resource_type"] = toml::Value::from("jira-project");
     }
-    document["mcp"] = toml::from_str(&format!(
-        "enabled=true\npublic_url={}\nmax_response_bytes=65536\n",
-        toml_string(format!("{}/mcp", application.public_url()))
-    ))
-    .unwrap();
+    document.as_table_mut().unwrap().insert(
+        "mcp".into(),
+        toml::from_str(&format!(
+            "enabled=true\npublic_url={}\nmax_response_bytes=65536\n",
+            toml_string(format!("{}/mcp", application.public_url()))
+        ))
+        .unwrap(),
+    );
     let broker = application
         .config_document(toml::to_string(&document).unwrap())
         .start()
