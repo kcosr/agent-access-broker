@@ -97,9 +97,16 @@ services.
 Core `runtime::input_explanation` tests cover the message for each JSON Schema
 error kind, alternative forms, path rendering, the three-problem cap, the
 provider-message fallback and secret-like values that must never appear.
-`native_schemas_fit_the_diagnostic_profile` holds every shipped native action
-schema (Jira, Confluence, GitLab, CloudBees CI, Gmail and Teams) to the
-diagnostic profile and budget, and budget tests check that large inputs and
+`native_schemas_fit_the_diagnostic_profile` holds shipped native action
+schemas (Jira, Confluence, GitLab, CloudBees CI, Gmail and Teams), including
+representative optional-feature and content/search configurations, to the
+diagnostic profile and budget. `native_schema_cases_cover_optional_actions_and_content_formats`
+checks coverage of those configuration classes. `native_schemas_have_plain_roots`
+rejects root combinators and requires upload locators in root properties. Its
+explicit pending-service exceptions must be removed when a provider is converted;
+the guard rejects exceptions that no longer have root combinators. Jira provider
+tests preserve locator, paired-content and null-handling behavior.
+Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message
 without being validated. Command-authority tests check that imported and
 command-backed denials keep the adapter's message, including for schemas
@@ -112,7 +119,9 @@ unusable. Host
 through HTTP and HTTP MCP to denials in scope resolution and invocation, before
 any upstream request, and checks that responses, service logs and audit records
 carry no supplied value and that a caller without a grant keeps the provider's
-message.
+message. Host `tests::jira_plain_schemas` checks Jira projections through stdio
+MCP, HTTP MCP, JSON send and OpenAPI, and confirms that the provider still refuses
+invalid relationships accepted by the published schema.
 Core import-limit tests use a real temporary managed store to verify startup,
 reload, unrelated catalog edits, managed-rate changes/removal, retained disabled
 and retired imports, and rejection of unknown configured service names.

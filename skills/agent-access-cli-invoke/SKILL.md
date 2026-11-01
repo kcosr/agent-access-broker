@@ -166,6 +166,11 @@ input schemas. Fetch it through the same base URL used for invocation. If the
 broker returns an execution-context required/invalid/denied reason, report the
 ingress or token-policy mismatch instead of attempting to inject the header.
 
+Read field descriptions for relationships the schema does not enforce, including
+exactly-one locators, paired content fields and requirements tied to a mode.
+Jira inputs use plain object schemas; a field being optional in the schema does
+not make a request valid when its required alternative or companion is absent.
+
 Provider content results expose scan-friendly metadata when upstream returns it:
 Jira issue view/search include timestamps, small user summaries, priority, and
 labels; Confluence page/blog/draft results include created/updated actor and
@@ -840,8 +845,8 @@ request to allowed scope or ask the user for the correct grant.
 
 For built-in services, an `input_invalid` denial whose inputs break the
 action's input schema names up to three problems, for example `jira.comment.list inputs are invalid:
-inputs.readContentFormat is not allowed; allowed: issue, maxResults, orderBy,
-startAt, url`. Fix what it names and keep the other valid inputs; do not drop
+inputs.readContentFormat is not allowed; allowed: includeBodies, issue, maxResults,
+orderBy, startAt, url`. Fix what it names and keep the other valid inputs; do not drop
 options or retry blindly. A message without that detail is the provider's own;
 compare the inputs with the action's schema and documentation before another
 attempt.

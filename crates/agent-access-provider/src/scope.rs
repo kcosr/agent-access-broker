@@ -27,7 +27,7 @@ impl<'a> ScopeRequest<'a> {
         self.action
     }
 
-    /// Inputs already validated against the action's schema.
+    /// Caller-supplied inputs for the provider to validate.
     pub fn inputs(&self) -> &'a Value {
         self.inputs
     }

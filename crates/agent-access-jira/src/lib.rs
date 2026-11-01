@@ -9,6 +9,8 @@ mod config;
 mod custom_fields;
 mod issue_view_context;
 mod jql;
+#[cfg(test)]
+mod plain_input_tests;
 mod present;
 mod project_list;
 mod project_view;
@@ -245,13 +247,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "View Jira issue context, ADF description, custom fields and eligible embedded references",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "includeComments": { "type": "boolean", "default": false, "description": "Include a chronological page of comment bodies when comment reads are authorized." }
                 },
                 "additionalProperties": false
@@ -279,23 +277,6 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             json!({
                 "type": "object",
                 "required": ["project", "issueTypeId", "summary"],
-                "allOf": [
-                    {
-                        "oneOf": [
-                            { "required": ["content", "contentFormat"] },
-                            {
-                                "not": {
-                                    "anyOf": [
-                                        { "required": ["content"] },
-                                        { "required": ["contentFormat"] }
-                                    ]
-                                }
-                            }
-                        ]
-                    },
-                    { "if": { "properties": { "contentFormat": { "const": "adf" } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "object" } } } },
-                    { "if": { "properties": { "contentFormat": { "enum": ["markdown", "plain_text"] } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "string" } } } }
-                ],
                 "properties": {
                     "project": {
                         "type": "string",
@@ -309,8 +290,8 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                         "type": "string",
                         "description": "1-1024 UTF-8 bytes after broker validation; must not contain NUL, CR, or LF"
                     },
-                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"] },
-                    "content": {}
+                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"], "description": "Required with content. Use adf for an ADF document object, or markdown or plain_text for a string." },
+                    "content": { "type": ["string", "object"], "description": "Text for markdown and plain_text; an ADF document object for adf. Required with contentFormat." }
                 },
                 "additionalProperties": false
             }),
@@ -328,10 +309,6 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             json!({
                 "type": "object",
                 "required": ["project", "issueTypeId", "summary"],
-                "oneOf": [
-                    { "required": ["parentIssue"] },
-                    { "required": ["parentUrl"] }
-                ],
                 "properties": {
                     "project": {
                         "type": "string",
@@ -345,21 +322,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                         "type": "string",
                         "description": "1-1024 UTF-8 bytes after broker validation; must not contain NUL, CR, or LF"
                     },
-                    "parentIssue": { "type": "string" },
-                    "parentUrl": { "type": "string" },
-                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"] },
-                    "content": {}
+                    "parentIssue": { "type": "string", "description": "Issue key. Give exactly one of parentIssue or parentUrl." },
+                    "parentUrl": { "type": "string", "description": "Issue web URL. Give exactly one of parentIssue or parentUrl." },
+                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"], "description": "Required with content. Use adf for an ADF document object, or markdown or plain_text for a string." },
+                    "content": { "type": ["string", "object"], "description": "Text for markdown and plain_text; an ADF document object for adf. Required with contentFormat." }
                 },
-                "allOf": [
-                    {
-                        "oneOf": [
-                            { "required": ["content", "contentFormat"] },
-                            { "not": { "anyOf": [{ "required": ["content"] }, { "required": ["contentFormat"] }] } }
-                        ]
-                    },
-                    { "if": { "properties": { "contentFormat": { "const": "adf" } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "object" } } } },
-                    { "if": { "properties": { "contentFormat": { "enum": ["markdown", "plain_text"] } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "string" } } } }
-                ],
                 "additionalProperties": false
             }),
         )
@@ -378,30 +345,15 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Update a Jira issue summary and/or explicitly formatted content after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
-                "anyOf": [{ "required": ["summary"] }, { "required": ["content", "contentFormat"] }],
-                "allOf": [
-                    {
-                        "oneOf": [
-                            { "required": ["content", "contentFormat"] },
-                            { "not": { "anyOf": [{ "required": ["content"] }, { "required": ["contentFormat"] }] } }
-                        ]
-                    },
-                    { "if": { "properties": { "contentFormat": { "const": "adf" } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "object" } } } },
-                    { "if": { "properties": { "contentFormat": { "enum": ["markdown", "plain_text"] } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "string" } } } }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "summary": {
                         "type": "string",
-                        "description": "1-1024 UTF-8 bytes after broker validation; must not contain NUL, CR, or LF"
+                        "description": "1-1024 UTF-8 bytes after broker validation; must not contain NUL, CR, or LF. Give at least one of summary or content."
                     },
-                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"] },
-                    "content": {},
+                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"], "description": "Required with content. Use adf for an ADF document object, or markdown or plain_text for a string." },
+                    "content": { "type": ["string", "object"], "description": "Text for markdown and plain_text; an ADF document object for adf. Required with contentFormat. Give at least one of summary or content." },
                     "notifyUsers": { "type": "boolean" }
                 },
                 "additionalProperties": false
@@ -420,25 +372,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Assign one authorized Jira issue to an authorized parent issue",
             json!({
                 "type": "object",
-                "allOf": [
-                    {
-                        "oneOf": [
-                            { "required": ["issue"] },
-                            { "required": ["url"] }
-                        ]
-                    },
-                    {
-                        "oneOf": [
-                            { "required": ["parentIssue"] },
-                            { "required": ["parentUrl"] }
-                        ]
-                    }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
-                    "parentIssue": { "type": "string" },
-                    "parentUrl": { "type": "string" }
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
+                    "parentIssue": { "type": "string", "description": "Issue key. Give exactly one of parentIssue or parentUrl." },
+                    "parentUrl": { "type": "string", "description": "Issue web URL. Give exactly one of parentIssue or parentUrl." }
                 },
                 "additionalProperties": false
             }),
@@ -453,25 +391,11 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Declare that one authorized Jira issue blocks another authorized Jira issue",
             json!({
                 "type": "object",
-                "allOf": [
-                    {
-                        "oneOf": [
-                            { "required": ["blockingIssue"] },
-                            { "required": ["blockingUrl"] }
-                        ]
-                    },
-                    {
-                        "oneOf": [
-                            { "required": ["blockedIssue"] },
-                            { "required": ["blockedUrl"] }
-                        ]
-                    }
-                ],
                 "properties": {
-                    "blockingIssue": { "type": "string" },
-                    "blockingUrl": { "type": "string" },
-                    "blockedIssue": { "type": "string" },
-                    "blockedUrl": { "type": "string" }
+                    "blockingIssue": { "type": "string", "description": "Issue key. Give exactly one of blockingIssue or blockingUrl." },
+                    "blockingUrl": { "type": "string", "description": "Issue web URL. Give exactly one of blockingIssue or blockingUrl." },
+                    "blockedIssue": { "type": "string", "description": "Issue key. Give exactly one of blockedIssue or blockedUrl." },
+                    "blockedUrl": { "type": "string", "description": "Issue web URL. Give exactly one of blockedIssue or blockedUrl." }
                 },
                 "additionalProperties": false
             }),
@@ -518,13 +442,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "List Jira comment metadata or an authorized page of full comment bodies",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "includeBodies": { "type": "boolean", "default": false },
                     "maxResults": { "type": "integer", "minimum": 1 },
                     "startAt": { "type": "integer", "minimum": 0 },
@@ -548,14 +468,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "View one Jira issue comment body after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId"],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" }
                 },
                 "additionalProperties": false
@@ -570,20 +486,12 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Add an explicitly formatted Jira issue comment after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["contentFormat", "content"],
-                "allOf": [
-                    { "if": { "properties": { "contentFormat": { "const": "adf" } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "object" } } } },
-                    { "if": { "properties": { "contentFormat": { "enum": ["markdown", "plain_text"] } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "string" } } } }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
-                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"] },
-                    "content": {},
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
+                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"], "description": "Required with content. Use adf for an ADF document object, or markdown or plain_text for a string." },
+                    "content": { "type": ["string", "object"], "description": "Text for markdown and plain_text; an ADF document object for adf. Required with contentFormat." },
                     "visibility": {
                         "type": "object",
                         "required": ["type"],
@@ -611,21 +519,13 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Reply to a Jira issue comment after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["parentCommentId", "contentFormat", "content"],
-                "allOf": [
-                    { "if": { "properties": { "contentFormat": { "const": "adf" } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "object" } } } },
-                    { "if": { "properties": { "contentFormat": { "enum": ["markdown", "plain_text"] } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "string" } } } }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "parentCommentId": { "type": "string" },
-                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"] },
-                    "content": {},
+                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"], "description": "Required with content. Use adf for an ADF document object, or markdown or plain_text for a string." },
+                    "content": { "type": ["string", "object"], "description": "Text for markdown and plain_text; an ADF document object for adf. Required with contentFormat." },
                     "visibility": {
                         "type": "object",
                         "required": ["type"],
@@ -654,24 +554,17 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Update an explicitly formatted Jira issue comment after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId", "contentFormat", "content"],
-                "allOf": [
-                    { "if": { "properties": { "contentFormat": { "const": "adf" } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "object" } } } },
-                    { "if": { "properties": { "contentFormat": { "enum": ["markdown", "plain_text"] } }, "required": ["contentFormat"] }, "then": { "properties": { "content": { "type": "string" } } } }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" },
-                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"] },
-                    "content": {},
-                    "visibilityMode": { "type": "string", "enum": ["preserve", "set"] },
+                    "contentFormat": { "type": "string", "enum": ["adf", "markdown", "plain_text"], "description": "Required with content. Use adf for an ADF document object, or markdown or plain_text for a string." },
+                    "content": { "type": ["string", "object"], "description": "Text for markdown and plain_text; an ADF document object for adf. Required with contentFormat." },
+                    "visibilityMode": { "type": "string", "enum": ["preserve", "set"], "description": "Defaults to preserve; set requires visibility." },
                     "visibility": {
                         "type": "object",
+                        "description": "Required when visibilityMode is set. Only with visibilityMode set.",
                         "required": ["type"],
                         "properties": {
                             "type": { "type": "string", "enum": ["role", "group"] },
@@ -699,14 +592,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Delete a Jira issue comment after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId"],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" }
                 },
                 "additionalProperties": false
@@ -721,14 +610,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "List broker-allowed Jira issue comment property keys",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId"],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" }
                 },
                 "additionalProperties": false
@@ -743,14 +628,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Get one broker-allowed Jira issue comment property",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId", "propertyKey"],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" },
                     "propertyKey": { "type": "string" }
                 },
@@ -767,14 +648,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Set one broker-allowed Jira issue comment property",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId", "propertyKey", "value"],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" },
                     "propertyKey": { "type": "string" },
                     "value": {}
@@ -792,14 +669,10 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "Delete one broker-allowed Jira issue comment property",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "required": ["commentId", "propertyKey"],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" },
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." },
                     "commentId": { "type": "string" },
                     "propertyKey": { "type": "string" }
                 },
@@ -864,13 +737,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "List bounded Jira issue attachment metadata after project confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["issue"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "issue": { "type": "string" },
-                    "url": { "type": "string" }
+                    "issue": { "type": "string", "description": "Issue key. Give exactly one of issue or url." },
+                    "url": { "type": "string", "description": "Issue web URL. Give exactly one of issue or url." }
                 },
                 "additionalProperties": false
             }),
@@ -2541,7 +2410,7 @@ impl JiraProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let credential = &self.execution_credential(request.admitted())?;
         let lookup_credential = &self.lookup_credential(request.admitted())?;
-        let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
+        let inputs = parse_comment_view_inputs("comment.view", request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_authorized_issue(
                 &inputs.locator,
@@ -2863,7 +2732,7 @@ impl JiraProvider {
     ) -> Result<ProviderResult, ProviderError> {
         let credential = &self.execution_credential(request.admitted())?;
         let lookup_credential = &self.lookup_credential(request.admitted())?;
-        let inputs = parse_comment_view_inputs(request.inputs(), &self.config)?;
+        let inputs = parse_comment_view_inputs("comment.delete", request.inputs(), &self.config)?;
         let metadata_response = self
             .confirm_authorized_issue(
                 &inputs.locator,
@@ -3823,7 +3692,13 @@ fn parse_issue_view_inputs(
             "jira.issue.view inputs are invalid",
         )
     })?;
-    let locator = issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.issue.view")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.issue.view",
+        ("issue", "url"),
+    )?;
     Ok((locator, parsed.include_comments))
 }
 
@@ -3836,13 +3711,17 @@ fn issue_locator_for_action(
         "issue.view" => parse_issue_view_inputs(inputs, config).map(|(locator, _)| locator),
         "issue.update" => parse_issue_update_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.list" => parse_comment_list_inputs(inputs, config).map(|inputs| inputs.locator),
-        "comment.view" => parse_comment_view_inputs(inputs, config).map(|inputs| inputs.locator),
+        "comment.view" => {
+            parse_comment_view_inputs(action, inputs, config).map(|inputs| inputs.locator)
+        }
         "comment.add" => parse_comment_add_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.reply" => parse_comment_reply_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.update" => {
             parse_comment_update_inputs(inputs, config).map(|inputs| inputs.locator)
         }
-        "comment.delete" => parse_comment_view_inputs(inputs, config).map(|inputs| inputs.locator),
+        "comment.delete" => {
+            parse_comment_view_inputs(action, inputs, config).map(|inputs| inputs.locator)
+        }
         "comment.property.list"
         | "comment.property.get"
         | "comment.property.set"
@@ -4486,8 +4365,13 @@ fn parse_issue_update_inputs(
         )
     })?;
     let _validated_content_fields = (&parsed.content_format, &parsed.content);
-    let locator =
-        issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.issue.update")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.issue.update",
+        ("issue", "url"),
+    )?;
     let prepared_content =
         prepare_optional_jira_content(object, "jira.issue.update", config.content.max_body_bytes)?;
     if parsed.summary.is_none() && prepared_content.is_none() {
@@ -4526,13 +4410,15 @@ fn parse_issue_dependency_add_inputs(
         parsed.blocking_issue,
         parsed.blocking_url,
         config,
-        "jira.issue.dependency.add blocking locator",
+        "jira.issue.dependency.add",
+        ("blockingIssue", "blockingUrl"),
     )?;
     let blocked = issue_locator_from_optional(
         parsed.blocked_issue,
         parsed.blocked_url,
         config,
-        "jira.issue.dependency.add blocked locator",
+        "jira.issue.dependency.add",
+        ("blockedIssue", "blockedUrl"),
     )?;
     if blocking.issue_key == blocked.issue_key {
         return Err(ProviderError::deny(
@@ -4557,13 +4443,15 @@ fn parse_issue_parent_set_inputs(
         parsed.issue,
         parsed.url,
         config,
-        "jira.issue.parent.set issue locator",
+        "jira.issue.parent.set",
+        ("issue", "url"),
     )?;
     let parent = issue_locator_from_optional(
         parsed.parent_issue,
         parsed.parent_url,
         config,
-        "jira.issue.parent.set parent locator",
+        "jira.issue.parent.set",
+        ("parentIssue", "parentUrl"),
     )?;
     if issue.issue_key == parent.issue_key {
         return Err(ProviderError::deny(
@@ -4694,7 +4582,8 @@ fn parse_issue_child_create_scope_inputs(
         parent_issue,
         parent_url,
         config,
-        "jira.issue.child.create parent locator",
+        "jira.issue.child.create",
+        ("parentIssue", "parentUrl"),
     )?;
     Ok(IssueChildCreateScopeInputs {
         project: validate_project_key(project)?,
@@ -4780,7 +4669,8 @@ fn parse_issue_child_create_inputs(
         parsed.parent_issue,
         parsed.parent_url,
         config,
-        "jira.issue.child.create parent locator",
+        "jira.issue.child.create",
+        ("parentIssue", "parentUrl"),
     )?;
     Ok(IssueChildCreateInputs {
         project,
@@ -4913,8 +4803,13 @@ fn parse_comment_list_inputs(
             "jira.comment.list inputs are invalid",
         )
     })?;
-    let locator =
-        issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment.list")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.comment.list",
+        ("issue", "url"),
+    )?;
     let default_results = if parsed.include_bodies {
         config
             .comments
@@ -4955,13 +4850,23 @@ fn parse_comment_list_inputs(
 }
 
 fn parse_comment_view_inputs(
+    action: &str,
     inputs: &Value,
     config: &JiraProviderConfig,
 ) -> Result<CommentViewInputs, ProviderError> {
     let parsed: CommentViewRawInputs = serde_json::from_value(inputs.clone()).map_err(|_| {
-        ProviderError::deny(ReasonCode::InputInvalid, "jira.comment inputs are invalid")
+        ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("jira.{action} inputs are invalid"),
+        )
     })?;
-    let locator = issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        &format!("jira.{action}"),
+        ("issue", "url"),
+    )?;
     validate_numeric_id(&parsed.comment_id, "Jira comment ID")?;
     Ok(CommentViewInputs {
         locator,
@@ -4979,8 +4884,13 @@ fn parse_comment_add_inputs(
             "jira.comment.add inputs are invalid",
         )
     })?;
-    let locator =
-        issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment.add")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.comment.add",
+        ("issue", "url"),
+    )?;
     let (body, content_audit) = prepare_jira_content(
         "jira.comment.add",
         &parsed.content_format,
@@ -5009,8 +4919,13 @@ fn parse_comment_reply_inputs(
             "jira.comment.reply inputs are invalid",
         )
     })?;
-    let locator =
-        issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment.reply")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.comment.reply",
+        ("issue", "url"),
+    )?;
     validate_numeric_id(&parsed.parent_comment_id, "Jira parent comment ID")?;
     let (body, content_audit) = prepare_jira_content(
         "jira.comment.reply",
@@ -5041,8 +4956,13 @@ fn parse_comment_update_inputs(
             "jira.comment.update inputs are invalid",
         )
     })?;
-    let locator =
-        issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment.update")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.comment.update",
+        ("issue", "url"),
+    )?;
     validate_numeric_id(&parsed.comment_id, "Jira comment ID")?;
     let (body, content_audit) = prepare_jira_content(
         "jira.comment.update",
@@ -5099,11 +5019,16 @@ fn parse_comment_property_inputs(
         serde_json::from_value(inputs.clone()).map_err(|_| {
             ProviderError::deny(
                 ReasonCode::InputInvalid,
-                "jira.comment.property inputs are invalid",
+                format!("jira.{action} inputs are invalid"),
             )
         })?;
-    let locator =
-        issue_locator_from_optional(parsed.issue, parsed.url, config, "jira.comment.property")?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        &format!("jira.{action}"),
+        ("issue", "url"),
+    )?;
     validate_numeric_id(&parsed.comment_id, "Jira comment ID")?;
     match action {
         "comment.property.list" => {
@@ -5118,14 +5043,14 @@ fn parse_comment_property_inputs(
             let property_key = parsed.property_key.as_deref().ok_or_else(|| {
                 ProviderError::deny(
                     ReasonCode::InputInvalid,
-                    "jira.comment.property action requires propertyKey",
+                    format!("jira.{action} requires propertyKey"),
                 )
             })?;
             validate_comment_property_key(property_key, config)?;
             if parsed.value.is_some() {
                 return Err(ProviderError::deny(
                     ReasonCode::InputInvalid,
-                    "jira.comment.property get/delete must not include value",
+                    format!("jira.{action} must not include value"),
                 ));
             }
         }
@@ -5165,13 +5090,18 @@ fn issue_locator_from_optional(
     url: Option<String>,
     config: &JiraProviderConfig,
     action: &str,
+    (issue_field, url_field): (&str, &str),
 ) -> Result<IssueLocator, ProviderError> {
     match (issue, url) {
         (Some(issue), None) => issue_locator_from_key(&issue),
         (None, Some(url)) => issue_locator_from_url(&url, config),
-        _ => Err(ProviderError::deny(
+        (None, None) => Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            format!("{action} requires exactly one of issue or url"),
+            format!("{action} requires {issue_field} or {url_field}"),
+        )),
+        (Some(_), Some(_)) => Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} accepts {issue_field} or {url_field}, not both"),
         )),
     }
 }
@@ -5360,17 +5290,16 @@ fn parse_attachment_list_inputs(
     let parsed: AttachmentListRawInputs = serde_json::from_value(inputs.clone()).map_err(|_| {
         ProviderError::deny(
             ReasonCode::InputInvalid,
-            "jira.attachment.list requires exactly one of issue or url",
+            "jira.attachment.list inputs are invalid",
         )
     })?;
-    let locator = match (parsed.issue, parsed.url) {
-        (Some(issue), None) => issue_locator_from_key(&issue),
-        (None, Some(url)) => issue_locator_from_url(&url, config),
-        _ => Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "jira.attachment.list requires exactly one of issue or url",
-        )),
-    }?;
+    let locator = issue_locator_from_optional(
+        parsed.issue,
+        parsed.url,
+        config,
+        "jira.attachment.list",
+        ("issue", "url"),
+    )?;
     Ok(AttachmentListInputs { locator })
 }
 

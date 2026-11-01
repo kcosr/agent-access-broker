@@ -64,6 +64,15 @@ actions and exposes typed wrappers for supported services.
   Put extended grammar, limits, and examples in action `documentation`; preserve
   its detail/catalog/OpenAPI/send projections and keep it out of `tools/list`.
   MCP describe hints use stable service/action IDs, never client-renamed names.
+- New or changed native action input schemas use plain object roots with
+  `properties`, unconditional `required` fields and the existing object openness.
+  State locator alternatives, paired fields and mode-dependent rules in field
+  descriptions; enforce them in the provider with specific, value-free
+  `input_invalid` messages. Preserve parser acceptance, audit declarations,
+  sensitivity metadata and existing error outcomes. Keep useful types and
+  bounds, but do not impose one variant's constraints on another variant's open
+  extension fields. This is native-provider authoring guidance, not a new
+  descriptor-validation restriction or a rule for imported schemas.
 - A native provider's `input_invalid` denial is explained from the action's
   input schema only after the hook fails (`runtime/input_explanation.rs`);
   never validate inputs on success or add a rejection. Build messages from

@@ -73,7 +73,7 @@ async fn fixture() -> Fixture {
 }
 
 /// The HTTP API's denial of `inputs` for `service`/`action`.
-async fn invoke(
+pub(super) async fn invoke(
     fixture: &Fixture,
     request_id: &str,
     service: &str,
@@ -103,6 +103,7 @@ async fn invoke(
     assert_eq!(body["decision"], "deny", "{body}");
     assert_eq!(body["reasonCode"], "input_invalid", "{body}");
     assert_eq!(body["reason"], body["error"]["message"], "{body}");
+    assert!(body.get("result").is_none(), "{body}");
     body
 }
 
@@ -125,14 +126,30 @@ async fn native_input_denials_name_the_problems_on_http_and_mcp() {
                  inputs.readContentFormat and 1 other unexpected property are not allowed; {COMMENT_LIST_ALLOWED}"
             ),
         ),
-        // A missing locator form.
+        // A removed locator rule leaves the provider's specific denial intact.
+        (
+            "jira",
+            "comment.list",
+            comment_list.as_str(),
+            json!({"orderBy": "created", "maxResults": 1}),
+            "jira.comment.list requires issue or url".to_owned(),
+        ),
+        (
+            "jira",
+            "comment.list",
+            comment_list.as_str(),
+            json!({"issue": "PROJ-1", "url": "https://example.atlassian.net/browse/PROJ-1"}),
+            "jira.comment.list accepts issue or url, not both".to_owned(),
+        ),
+        // The retained enum still supplies a schema explanation, even when
+        // the provider first refuses the absent locator.
         (
             "jira",
             "comment.list",
             comment_list.as_str(),
             json!({"orderBy": "newest"}),
             "jira.comment.list inputs are invalid: inputs.orderBy must be one of: \
-             created, -created, +created; inputs must include issue or url"
+             created, -created, +created"
                 .to_owned(),
         ),
         // The invocation of a native search: a missing nested property, a
@@ -171,7 +188,44 @@ async fn native_input_denials_name_the_problems_on_http_and_mcp() {
         assert_eq!(envelope["reasonCode"], "input_invalid", "{envelope}");
         assert_eq!(envelope["decision"], "deny", "{envelope}");
         assert_eq!(envelope["reason"], expected, "{envelope}");
+        assert!(envelope.get("result").is_none(), "{envelope}");
+        assert!(!body.to_string().contains(SECRET), "{body}");
         assert!(!called.to_string().contains(SECRET), "{called}");
+        if service == "jira" {
+            // Both transports preserve the same denial and declared audit
+            // inputs; provider-only content and upstream facts remain absent.
+            for response in [&body, envelope] {
+                let records = require_audit_request(
+                    &fixture.audit_path,
+                    response["agentRequestId"].as_str().unwrap(),
+                    service,
+                    action,
+                );
+                assert_eq!(records.len(), 1);
+                let record = &records[0];
+                assert_eq!(record["decision"], "deny");
+                assert_eq!(record["reasonCode"], "input_invalid");
+                assert!(record.get("upstreamStatus").is_none(), "{record}");
+                assert!(record.get("objectIds").is_none(), "{record}");
+                let provider_audit = record["providerAudit"].as_object().unwrap();
+                assert_eq!(provider_audit.len(), 1, "{record}");
+                assert_eq!(provider_audit["admission"]["outcome"], "admitted");
+                assert_eq!(provider_audit["admission"]["waited"], false);
+                let expected_inputs: Vec<Value> = [("issue", "Issue"), ("url", "URL")]
+                    .into_iter()
+                    .filter_map(|(input, label)| {
+                        inputs
+                            .get(input)
+                            .map(|value| json!({"input": input, "label": label, "value": value}))
+                    })
+                    .collect();
+                let audited = record
+                    .get("auditInputs")
+                    .cloned()
+                    .unwrap_or_else(|| json!([]));
+                assert_eq!(audited, json!(expected_inputs));
+            }
+        }
     }
 }
 

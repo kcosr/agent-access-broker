@@ -86,6 +86,7 @@ mod imports_mcp;
 mod imports_publication;
 mod input_explanations;
 mod invocation_limits;
+mod jira_plain_schemas;
 mod lingering_close;
 mod local_login_methods;
 mod login_lockout;
@@ -18051,7 +18052,15 @@ fn assert_jira_normalized_content_schema(schema: &Value, content_required: bool)
         schema["properties"]["contentFormat"]["enum"],
         json!(["adf", "markdown", "plain_text"])
     );
-    assert!(schema["properties"].get("content").is_some());
+    assert_eq!(
+        schema["properties"]["content"]["type"],
+        json!(["string", "object"])
+    );
+    assert!(
+        schema["properties"]["content"]
+            .get("additionalProperties")
+            .is_none()
+    );
     for removed in ["body", "bodyFormat", "description", "descriptionFormat"] {
         assert!(
             schema["properties"].get(removed).is_none(),
@@ -18059,15 +18068,17 @@ fn assert_jira_normalized_content_schema(schema: &Value, content_required: bool)
         );
     }
 
-    let all_of = schema["allOf"].as_array().expect("content schema allOf");
-    assert!(all_of.iter().any(|branch| {
-        branch["if"]["properties"]["contentFormat"]["const"] == "adf"
-            && branch["then"]["properties"]["content"]["type"] == "object"
-    }));
-    assert!(all_of.iter().any(|branch| {
-        branch["if"]["properties"]["contentFormat"]["enum"] == json!(["markdown", "plain_text"])
-            && branch["then"]["properties"]["content"]["type"] == "string"
-    }));
+    for keyword in ["allOf", "anyOf", "oneOf", "if", "then", "else", "not"] {
+        assert!(schema.get(keyword).is_none(), "unexpected {keyword}");
+    }
+    for (field, companion) in [("content", "contentFormat"), ("contentFormat", "content")] {
+        assert!(
+            schema["properties"][field]["description"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("Required with {companion}."))
+        );
+    }
 
     let required = schema["required"]
         .as_array()
@@ -18079,13 +18090,6 @@ fn assert_jira_normalized_content_schema(schema: &Value, content_required: bool)
     } else {
         assert!(!required.contains(&"content"));
         assert!(!required.contains(&"contentFormat"));
-        assert!(all_of.iter().any(|branch| {
-            branch["oneOf"].as_array().is_some_and(|variants| {
-                variants
-                    .iter()
-                    .any(|variant| variant["required"] == json!(["content", "contentFormat"]))
-            })
-        }));
     }
 }
 
