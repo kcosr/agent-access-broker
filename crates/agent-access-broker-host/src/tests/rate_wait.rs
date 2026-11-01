@@ -263,10 +263,10 @@ async fn rest_waits_fifo_across_tokens_without_reading_bodies_or_preparing_provi
         .unwrap()
         .parse()
         .unwrap();
-    // Ignoring the queued reservations would report at most the first 2s
-    // window. The tail must remain beyond that window while both are pending.
+    // Ignoring either queued reservation projects no later than 4s. The full
+    // 6s tail is refused only within 1s of the seed, so it must report at least 5s.
     assert!(
-        retry_after >= 4,
+        retry_after >= 5,
         "tail projection must honor existing reservations"
     );
     let rejected = response_json(rejected).await;
