@@ -619,11 +619,12 @@ actions that declare sensitive outputs are sent with `Cache-Control: no-store`.
 
 Action `documentation` is a provider-owned JSON object for detailed usage,
 grammar, limits, and examples. Capabilities, runtime catalogs, and detailed MCP
-discovery (`actions_describe` and `services_describe`) expose it; OpenAPI/send
-projections use `x-agent-access-documentation`. It stays outside MCP tool
+discovery (wire names `actions_describe` and `services_describe`) expose it;
+OpenAPI/send projections use `x-agent-access-documentation`. It stays outside MCP tool
 definitions and input schemas. Initial tool descriptions remain concise and
-point to `actions_describe` with canonical service/action arguments, independent
-of tool names assigned by a client or connection view.
+direct callers to request action details through their client's available
+discovery tools using canonical service/action IDs. Callers use the tool names
+exposed by their client or connection view.
 
 Read classification defaults to false and is explicitly opted into by reviewed
 backend descriptors; action names and presentation capabilities do not infer it.

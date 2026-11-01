@@ -210,7 +210,8 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - **Agent guidance is available on demand.** The five access skills now focus
-  on their interfaces; service recipes, paging rules and companion permissions
+  on their interfaces; service recipes, typed CLI usage templates and help
+  commands, paging rules and companion permissions
   are in action `documentation`, available through action details, the catalog,
   OpenAPI and JSON send schema. MCP helper descriptions work with client-renamed
   or selectively exposed tools, and server instructions lead with the argument

@@ -1390,10 +1390,11 @@ including grant exclusions and token restrictions; explicit projects only narrow
 that scope. A project clause in JQL is optional.
 
 MCP tool definitions carry concise input descriptions. For complete grammar,
-examples, pagination, and limits, call `actions_describe` with
-`service="jira"` and `action="search"`. Its `documentation` object includes
+examples, pagination, and limits, request action details through your client's
+available discovery tools with canonical `service="jira"` and `action="search"`.
+The returned `documentation` object includes
 field/operator, function, and sorting tables generated from the parser definitions.
-The stable service/action arguments remain valid if a harness renames MCP tools.
+Use the tool name exposed by your client; the service/action IDs remain stable.
 
 The typed CLI lowers to that shape:
 

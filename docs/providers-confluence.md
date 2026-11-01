@@ -773,8 +773,10 @@ caller filter. The broker always adds the authorized space constraint when
 needed and `type = page` (`type = blogpost` for `blog.search`). Empty `text`
 queries remain invalid.
 
-`actions_describe` for service `confluence` and action `search` or `blog.search`
-returns a `documentation.cql` block with the accepted fields, aliases,
+Request action details through your client's available discovery tools with
+canonical service `confluence` and action `search` or `blog.search`. Use the tool
+name exposed by your client. The returned `documentation.cql` block contains the
+accepted fields, aliases,
 field-specific operators, sorting, limits, examples, and scope behavior.
 The detailed catalog, OpenAPI and send schema also expose this documentation;
 MCP `tools/list` keeps the short description and a discovery hint.

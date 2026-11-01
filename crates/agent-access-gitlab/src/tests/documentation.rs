@@ -110,7 +110,7 @@ fn parse_documented_input(
 }
 
 #[test]
-fn documentation_examples_pass_real_parsers_with_configured_limits_and_url_templates() {
+fn documentation_examples_pass_real_parsers_with_configured_limits() {
     for (maximum, media_types, base) in [
         (50, vec![], "https://gitlab.example.com"),
         (
@@ -144,19 +144,19 @@ fn documentation_examples_pass_real_parsers_with_configured_limits_and_url_templ
             };
             for example in examples {
                 assert!(!example["label"].as_str().unwrap().is_empty());
-                let mut inputs = example["inputs"].clone();
-                if matches!(action.action.as_str(), "project.view" | "issue.view")
-                    && let Some(url) = inputs.get("url").and_then(Value::as_str)
-                {
-                    // These are explicitly labeled instance-origin templates.
-                    inputs["url"] = json!(url.replacen("https://gitlab.example.com", base, 1));
+                let inputs = &example["inputs"];
+                if matches!(action.action.as_str(), "project.view" | "issue.view") {
+                    assert!(
+                        inputs.get("url").is_none(),
+                        "instance URLs belong in inputTemplates"
+                    );
                 }
-                parse_documented_input(&action.action, &inputs, &config).unwrap_or_else(|error| {
+                parse_documented_input(&action.action, inputs, &config).unwrap_or_else(|error| {
                     panic!("{} / {}: {error:?}", action.action, example["label"])
                 });
                 if action.action == "project.upload" {
                     let (_, metadata) =
-                        parse_admitted_project_upload_inputs(&inputs, &config).unwrap();
+                        parse_admitted_project_upload_inputs(inputs, &config).unwrap();
                     let part = BrokerBodyPart::in_memory(
                         metadata.name.clone(),
                         Some(metadata.file_name.clone()),
@@ -173,9 +173,61 @@ fn documentation_examples_pass_real_parsers_with_configured_limits_and_url_templ
             }
         }
         assert_eq!(
-            parsed, 62,
+            parsed, 60,
             "every non-search example must exercise its parser"
         );
+    }
+}
+
+#[test]
+fn documentation_url_templates_use_the_configured_instance_and_context_path() {
+    for base in [
+        "https://code.example.test",
+        "https://code.example.test/gitlab",
+        "https://gitlab.example.com/context/root/",
+        "https://code.example.test:8443/context/root/",
+    ] {
+        let mut config = config();
+        config.web_base_url = base.into();
+        let descriptor = gitlab_descriptor(&config);
+        let mut prepared = 0;
+        for action in ["issue.view", "project.view"] {
+            let documentation = descriptor
+                .action(action)
+                .unwrap()
+                .documentation
+                .as_ref()
+                .unwrap();
+            for template in documentation["inputTemplates"].as_array().unwrap() {
+                assert!(!template["label"].as_str().unwrap().is_empty());
+                assert!(!template["instructions"].as_str().unwrap().is_empty());
+                let raw = &template["inputs"];
+                assert_eq!(
+                    parse_documented_input(action, raw, &config)
+                        .unwrap_err()
+                        .reason_code(),
+                    ReasonCode::LocatorInvalid,
+                );
+                let path = raw["url"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("https://gitlab.example.com/")
+                    .unwrap();
+                let inputs = json!({"url":format!("{}/{path}", base.trim_end_matches('/'))});
+                parse_documented_input(action, &inputs, &config).unwrap();
+                assert_eq!(
+                    project_locator_for_action(action, &inputs, &config)
+                        .unwrap()
+                        .project,
+                    "team/project"
+                );
+                if action == "issue.view" {
+                    assert_eq!(parse_issue_view_inputs(&inputs, &config).unwrap().iid, 123);
+                }
+                prepared += 1;
+            }
+        }
+        assert_eq!(prepared, 2);
     }
 }
 
@@ -245,8 +297,13 @@ fn documentation_example_labels_are_distinct_within_each_action() {
     let descriptor = gitlab_descriptor(&all_enabled_documentation_config());
     for action in descriptor.actions {
         let documentation = action.documentation.as_ref().unwrap();
-        if let Some(examples) = documentation["inputExamples"].as_array() {
-            let labels: BTreeSet<_> = examples
+        let entries: Vec<_> = ["inputExamples", "inputTemplates"]
+            .into_iter()
+            .filter_map(|field| documentation[field].as_array())
+            .flatten()
+            .collect();
+        if !entries.is_empty() {
+            let labels: BTreeSet<_> = entries
                 .iter()
                 .map(|example| {
                     let label = example["label"].as_str().unwrap();
@@ -254,7 +311,7 @@ fn documentation_example_labels_are_distinct_within_each_action() {
                     label
                 })
                 .collect();
-            assert_eq!(labels.len(), examples.len(), "{}", action.action);
+            assert_eq!(labels.len(), entries.len(), "{}", action.action);
         }
     }
 }

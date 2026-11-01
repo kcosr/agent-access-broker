@@ -233,15 +233,18 @@
           "project": "team/project",
           "iid": 123
         }
-      },
-      {
-        "label": "Issue view; replace the example origin with the configured GitLab instance",
-        "inputs": {
-          "url": "https://gitlab.example.com/team/project/-/issues/123"
-        }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access gitlab issue view [OPTIONS] [PROJECT] [IID]; run agent-access gitlab issue view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab issue view [OPTIONS] [PROJECT] [IID]; run agent-access gitlab issue view --help for flags and input alternatives.",
+    "inputTemplates": [
+      {
+        "label": "Issue view by URL (configured GitLab instance template)",
+        "inputs": {
+          "url": "https://gitlab.example.com/team/project/-/issues/123"
+        },
+        "instructions": "Template only: replace https://gitlab.example.com/ with the configured web_base_url plus one trailing slash, including its scheme, host, port and full context path. Replace the sample project path and issue IID with the intended authorized target. The URL must belong to that configured instance."
+      }
+    ]
   },
   "job.cancel": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -1087,15 +1090,18 @@
         "inputs": {
           "project": "team/project"
         }
-      },
-      {
-        "label": "Project view; replace the example origin with the configured GitLab instance",
-        "inputs": {
-          "url": "https://gitlab.example.com/team/project"
-        }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access gitlab project view [OPTIONS] [PROJECT]; run agent-access gitlab project view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab project view [OPTIONS] [PROJECT]; run agent-access gitlab project view --help for flags and input alternatives.",
+    "inputTemplates": [
+      {
+        "label": "Project view by URL (configured GitLab instance template)",
+        "inputs": {
+          "url": "https://gitlab.example.com/team/project"
+        },
+        "instructions": "Template only: replace https://gitlab.example.com/ with the configured web_base_url plus one trailing slash, including its scheme, host, port and full context path. Replace the sample project path with the intended authorized target. The URL must belong to that configured instance."
+      }
+    ]
   },
   "protected_branch.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",

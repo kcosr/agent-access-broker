@@ -59,10 +59,12 @@ an `inputs` object; existing `issue.search` and `merge_request.search`
 `examples` remain direct input objects. Search examples name an enabled engine
 and use its configured project or instance route. Omitting `engine` in a request
 still selects the configured default. Example `maxResults` values
-respect the action's current cap. URL examples are labeled templates: replace
-the example origin with the configured GitLab instance, including its context
-path. Replace synthetic IDs, commit hashes and coordinates with current read
-evidence; examples do not imply access or object existence.
+respect the action's current cap. URL `inputTemplates` include explicit
+substitution instructions: replace the sample root with the configured
+`web_base_url`, including its scheme, host, port and full context path, followed
+by one slash before the project path. Replace synthetic IDs, commit hashes and
+coordinates with current read evidence; examples and templates do not imply
+access or object existence.
 
 For `project.upload`, `uploadExample` supplies the file-part field name and
 literal `bytesUtf8` for the accompanying input metadata. The example's size,
