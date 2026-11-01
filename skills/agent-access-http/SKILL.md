@@ -638,10 +638,12 @@ Use the same invoke route and envelope as any action: POST
 `{"inputs":{"search":"verify_token","project":"team/project"}}`.
 Omit discovery `search` to browse; `includeNamespaces` defaults true. Content
 requires native `search`, with optional `project`, `engine`, `maxResults`, and
-`pageToken`. Omit `engine` to use the service's configured default. Follow the
-schema: a project is required when the selected/default engine cannot search
-that category instance-wide, including basic code/commits/
-wiki/comments. Advanced and Zoekt require configured tuples; `regex` is code-only
+`pageToken`. Omit `engine` to use the service's configured default. Read the
+`project` and `engine` field descriptions: give `project` when the selected/default
+engine has no instance route, and omit it when that engine has no project route.
+Root `required` names `project` only when every configured engine needs it. Basic
+code/commits/wiki/comments need a project. Advanced and Zoekt require configured
+tuples; `regex` is code-only
 with Zoekt. Queries are 1–512 trimmed UTF-8 bytes. No engine fallback, branch
 selection, raw upstream query parameters, or automatic project crawl is accepted.
 

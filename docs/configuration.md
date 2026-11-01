@@ -1628,8 +1628,13 @@ allow_disable_ssl_verification = false
   route on the default engine; a category available only on another engine is
   invalid. Empty lists on every engine disable content search while leaving
   `project.list` and `project.search` independently available.
-- Category schemas expose configured engines and require `project` when the
-  selected/default engine has no instance route. Discovery does not probe GitLab
+- Category schemas expose configured engines. Root `required` contains `project`
+  only when no enabled engine has an instance route. The selected/default
+  engine's rules are in the `project` and `engine` field descriptions: give
+  `project` when it has no instance route, and omit it when it has no project
+  route. The provider enforces these rules with `input_invalid`; see
+  [GitLab input arguments](providers-gitlab-rest.md#input-arguments).
+  Discovery does not probe GitLab
   or indexing state. Qualify each tuple against the deployed GitLab version and
   proxies: Search API responses must preserve the matching `X-Search-Type`.
   The Broker never silently switches engines or crawls projects to emulate a

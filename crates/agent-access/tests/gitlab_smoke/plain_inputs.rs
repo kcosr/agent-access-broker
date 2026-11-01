@@ -7,14 +7,23 @@ const PROJECT_URL: &str = "https://gitlab.example.com/sip/service";
 const SECRET: &str = "private-gitlab-plain-input-content";
 
 fn cli(base: &str) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
+    let mut command = gitlab_cli(base);
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("AGENT_ACCESS_") {
             command.env_remove(key);
         }
     }
-    command.args(["--url", base, "--no-token"]);
     command
+}
+
+fn document() -> GitlabDocument {
+    // Runtime catalog reads require an authenticated caller. Keep execution on
+    // the service credential so these tests isolate argument handling.
+    let mut document = gitlab_per_user_document();
+    for grant in &mut document.grants {
+        grant.credential_mode = "service".into();
+    }
+    document
 }
 
 async fn mcp(base: &str) -> list_mcp::StdioMcp {
@@ -39,7 +48,7 @@ async fn tools(mcp: &mut list_mcp::StdioMcp) -> Vec<Value> {
         tools.extend(
             listing["result"]["tools"]
                 .as_array()
-                .unwrap()
+                .unwrap_or_else(|| panic!("stdio MCP listing failed: {listing}"))
                 .iter()
                 .cloned(),
         );
@@ -71,7 +80,7 @@ fn assert_denial(envelope: &Value, reason: &str) {
 async fn gitlab_plain_inputs_preserve_stdio_invoke_and_send_contracts() {
     let backend = stub_backend();
     let broker = start_broker(
-        &gitlab_document(),
+        &document(),
         gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
     .await;
@@ -264,7 +273,7 @@ async fn gitlab_plain_inputs_preserve_stdio_invoke_and_send_contracts() {
 async fn gitlab_plain_relationships_preserve_provider_denials_and_audit_after_policy() {
     let backend = stub_backend();
     let broker = start_broker(
-        &gitlab_document(),
+        &document(),
         gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
     .await;
@@ -365,7 +374,7 @@ async fn gitlab_plain_relationships_preserve_provider_denials_and_audit_after_po
 async fn gitlab_plain_webhook_schema_keeps_local_secret_injection_and_false_clear_token() {
     let backend = stub_backend();
     let broker = start_broker(
-        &gitlab_document(),
+        &document(),
         gitlab_service(gitlab_provider_config(2), backend.clone()),
     )
     .await;

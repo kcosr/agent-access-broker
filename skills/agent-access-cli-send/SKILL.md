@@ -752,8 +752,11 @@ use the authorized repository set or an explicit `project`. `issue.search` and
 Omit discovery `search` to browse; `includeNamespaces` defaults true and optional
 `archived` is Boolean. Content requires native `search` and accepts `project`,
 `engine`, `maxResults`, and `pageToken`. Omit `engine` to use the service's
-configured default. Follow the live schema's conditional project requirement:
-basic code/commits/wiki/comments need a project. Advanced/Zoekt need configured tuples;
+configured default. Read the `project` and `engine` field descriptions: give
+`project` when the selected/default engine has no instance route, and omit it
+when that engine has no project route. Root `required` names `project` only when
+every configured engine needs it. Basic code/commits/wiki/comments need a
+project. Advanced/Zoekt need configured tuples;
 `regex` is accepted only by code with Zoekt. Queries are 1–512 UTF-8 bytes after
 trimming. Do not add upstream scopes, endpoints, branch selectors, or fallbacks.
 

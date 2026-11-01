@@ -387,9 +387,11 @@ query grammar, then invoke the exact discovered tool name:
 ```
 
 Content requires `search` and accepts `project`, `engine`, `maxResults`, and
-`pageToken`. Omit `engine` to use the service's configured default. The schema
-requires `project` when that engine/category has no instance route; basic code,
-commits, wiki, and comments require it. Advanced/Zoekt availability is operator configured,
+`pageToken`. Omit `engine` to use the service's configured default. Read the
+`project` and `engine` field descriptions: give `project` when the selected/default
+engine has no instance route, and omit it when that engine has no project route.
+Root `required` names `project` only when every configured engine needs it. Basic
+code, commits, wiki, and comments require it. Advanced/Zoekt availability is operator configured,
 not a health or indexing-completeness check. Code alone accepts `regex` with
 Zoekt. Preserve native query syntax; never substitute another engine or crawl
 projects automatically. Each category and subsequent object read needs its own

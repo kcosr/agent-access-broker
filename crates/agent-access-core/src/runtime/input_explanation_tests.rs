@@ -1149,13 +1149,10 @@ fn the_most_expensive_native_schemas_are_still_explained() {
                 "iid": 7,
                 "content": "x".repeat(16 * 1024),
                 "contentFormat": "markdown",
-                "position": {"positionType": "text", "oldPath": "a.rs", "newPath": "a.rs", "newLine": 4},
-                "extra": true
+                "position": {"positionType": "text", "oldPath": "a.rs", "newPath": "a.rs", "newLine": 0}
             })
         ),
-        "gitlab.merge_request.draft_note.add inputs are invalid: inputs.extra is not allowed; \
-         allowed: content, contentFormat, expectedHeadSha, iid, inReplyToDiscussionId, position, \
-         project, resolveDiscussion; inputs.expectedHeadSha is required"
+        "gitlab.merge_request.draft_note.add inputs are invalid: inputs.position.newLine must be at least 1"
     );
     assert_eq!(
         explain_native(

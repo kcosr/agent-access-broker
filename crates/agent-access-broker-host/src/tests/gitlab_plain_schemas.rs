@@ -173,8 +173,18 @@ async fn gitlab_plain_inputs_project_through_stdio_http_send_and_openapi() {
                 required.retain(|v| v != field);
             }
         }
+        let mut send_inputs = local_schema.clone();
+        if matches!(action.io, ActionIo::MultipartUpload { .. })
+            && send_inputs["required"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        {
+            // JSON send removes an empty required list after generated upload
+            // metadata is stripped; stdio keeps the empty list.
+            send_inputs.as_object_mut().unwrap().remove("required");
+        }
         assert_eq!(
-            &send_variant["properties"]["inputs"], &local_schema,
+            &send_variant["properties"]["inputs"], &send_inputs,
             "send {}",
             action.action
         );

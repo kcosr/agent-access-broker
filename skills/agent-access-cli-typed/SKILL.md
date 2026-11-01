@@ -601,8 +601,10 @@ and accepts `--include-namespaces true|false` (default true) and optional
 `--archived true|false`. The six `gitlab search` commands map to `search.*`
 (`merge-requests` maps to `search.merge_requests`). They require `--search` and
 accept `--project` and `--engine basic|advanced|zoekt`. Omit `--engine` to use the
-service's configured default. Inspect the current action schema: project is
-required whenever the selected/default engine lacks instance support. Basic
+service's configured default. Read the action's `project` and `engine` field
+descriptions: give `--project` when the selected/default engine has no instance
+route, and omit it when that engine has no project route. Root `required` names
+`project` only when every configured engine needs it. Basic
 code, commits, wiki, and comments require it. Code alone accepts `--regex`,
 requiring Zoekt.
 Engine availability is operator configured, not a live indexing check; no

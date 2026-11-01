@@ -562,8 +562,11 @@ Omit discovery `search` to browse; optional `includeNamespaces` defaults true.
 Content search requires native `search` and accepts `project`, `engine`,
 `maxResults`, and `pageToken`. Query text is 1–512 UTF-8 bytes after trimming.
 Engine is `basic`, `advanced`, or `zoekt` within configured choices. Omit `engine`
-to use the service's configured default. The schema requires `project` when that
-engine/category has no instance route (basic code/commits/wiki/comments).
+to use the service's configured default. Read the `project` and `engine` field
+descriptions: give `project` when the selected/default engine has no instance
+route, and omit it when that engine has no project route. Root `required` names
+`project` only when every configured engine needs it. Basic code, commits, wiki,
+and comments need a project.
 `regex` belongs only to `search.code` with Zoekt. Never invent an engine fallback or a project crawl.
 
 All eight return `items`, `count`, `maxResults`, and `scanStatus`; content also

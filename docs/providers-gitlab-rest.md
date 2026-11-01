@@ -280,9 +280,12 @@ The default engine matrix is:
 | `advanced` | Disabled until configured | Disabled until configured |
 | `zoekt` | Code only, disabled until configured | Code only, disabled until configured |
 
-When the selected engine has no instance route for the category, `project` is
-required, including when `engine` is omitted. The live action schema expresses
-this condition. Advanced search requires the deployment's licensed infrastructure;
+When the selected/default engine has no instance route for the category,
+`project` is required; when it has no project route, omit `project`. The schema's
+root `required` contains `project` only when no enabled engine has an instance
+route. Per-engine rules are stated in field descriptions and enforced by the
+provider with `input_invalid`; see [Input arguments](#input-arguments).
+Advanced search requires the deployment's licensed infrastructure;
 Zoekt requires its own infrastructure and scope support. Enabling a tuple in
 configuration does not establish that GitLab can execute or completely index it.
 Discovery is offline and reports configured capability and locally usable
