@@ -223,7 +223,7 @@ All notable changes to this project are documented in this file.
   [GitLab input arguments](docs/providers-gitlab-rest.md#input-arguments),
   [CloudBees CI input arguments](docs/providers-cloudbees-ci.md#input-arguments)
   and [Teams input arguments](docs/providers-teams.md#input-arguments).
-  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88), [#89](https://github.com/kcosr/agent-access-broker/pull/89))
+  ([#87](https://github.com/kcosr/agent-access-broker/pull/87), [#88](https://github.com/kcosr/agent-access-broker/pull/88), [#89](https://github.com/kcosr/agent-access-broker/pull/89), [#90](https://github.com/kcosr/agent-access-broker/pull/90))
 
 - **Release qualification uses nextest for Rust tests.** Install cargo-nextest
   0.9.150 or newer before qualifying a release. The Rust suite runs with sixteen
