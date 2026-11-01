@@ -119,6 +119,10 @@ the actual SDK action-detail result, including `mcpTool`, structured content and
 the escaped text copy, and requires it plus HTTP's framing reserve to fit the
 minimum 64 KiB response setting. These are descriptor and projection tests;
 they do not establish live provider access or runtime credential availability.
+The CLI's `published_typed_commands_match_clap_paths_and_usage` test resolves
+every native and OAuth fixture action's documented help path through the actual
+Clap command tree and compares its published Usage template with Clap's output.
+Optional action families are enabled, covering all 230 typed wrappers.
 Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message
 without being validated. Command-authority tests check that imported and
