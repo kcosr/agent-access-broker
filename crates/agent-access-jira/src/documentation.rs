@@ -1,5 +1,5 @@
 //! Detailed action guidance, separate from initial tool descriptions and schemas.
-use agent_access_provider::ActionDescriptor;
+use agent_access_provider::{ActionDescriptor, validate_tenant_host};
 use serde_json::{Map, Value};
 use std::sync::OnceLock;
 
@@ -67,9 +67,15 @@ fn configured_example(example: &Value, schema: &Value, tenant_host: &str) -> Opt
     }
     let mut example = example.clone();
     if let Some(value) = inputs.get("url").and_then(Value::as_str) {
+        // Descriptors are built before configuration validation. Invalid hosts
+        // cannot produce a usable URL example; validation reports them later.
+        let mut errors = Vec::new();
+        validate_tenant_host("tenant_host", tenant_host, &mut errors);
+        if !errors.is_empty() {
+            return None;
+        }
         let mut url = url::Url::parse(value).expect("valid bundled example URL");
-        url.set_host(Some(tenant_host))
-            .expect("valid configured tenant host");
+        url.set_host(Some(tenant_host)).ok()?;
         example["inputs"]["url"] = Value::String(url.to_string());
     }
     if let (Some(requested), Some(maximum)) = (

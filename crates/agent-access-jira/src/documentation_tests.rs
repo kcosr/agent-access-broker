@@ -32,6 +32,56 @@ fn contains_placeholder(value: &Value) -> bool {
     }
 }
 
+#[test]
+fn documentation_omits_invalid_tenant_urls_before_config_validation() {
+    let limits = ProviderLimits::default();
+    let context = ValidationContext::new(
+        "development",
+        "managed",
+        &limits,
+        ServiceCredentialKinds::default()
+            .with_service(Some(CredentialSource::static_kind("basic_api_token"))),
+    );
+    for tenant in [
+        "",
+        "invalid host",
+        "https://example.atlassian.net",
+        "example.atlassian.net:443",
+        "Example.atlassian.net",
+        "example.atlassian.net/path",
+        " example.atlassian.net",
+    ] {
+        let mut config = jira_config();
+        config.tenant_host = tenant.into();
+        let descriptor = config.descriptor();
+        let examples = descriptor
+            .action("issue.view")
+            .unwrap()
+            .documentation
+            .as_ref()
+            .unwrap()["inputExamples"]
+            .as_array()
+            .unwrap();
+        assert!(
+            examples
+                .iter()
+                .all(|example| example["inputs"].get("url").is_none())
+        );
+        assert!(
+            examples
+                .iter()
+                .any(|example| example["inputs"]["issue"] == "PROJ-123")
+        );
+        let mut errors = Vec::new();
+        config.validate(&context, &mut errors);
+        assert!(
+            errors.iter().any(|error| error
+                == "providers.jira.tenant_host must be a lowercase, normalized bare host name"),
+            "{errors:?}"
+        );
+    }
+}
+
 fn parse_example(
     action: &str,
     inputs: &Value,
