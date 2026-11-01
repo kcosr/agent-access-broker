@@ -216,6 +216,7 @@ All notable changes to this project are documented in this file.
   send requests that the Broker continues to refuse. Request
   acceptance, audit fields and content formats are unchanged. See
   [Jira input arguments](docs/providers-jira.md#input-arguments).
+  ([#87](https://github.com/kcosr/agent-access-broker/pull/87))
 
 - **Release qualification uses nextest for Rust tests.** Install cargo-nextest
   0.9.150 or newer before qualifying a release. The Rust suite runs with sixteen
