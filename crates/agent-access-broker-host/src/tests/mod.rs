@@ -76,6 +76,7 @@ mod discovery;
 mod discovery_limits;
 mod domain_reasons;
 mod gitlab_moved_projects;
+mod gitlab_plain_schemas;
 mod gitlab_uploads;
 mod gitlab_webhooks;
 mod gmail;
@@ -18281,6 +18282,9 @@ fn assert_gitlab_normalized_content_schema(schema: &Value, content_required: boo
         json!(["markdown", "plain_text"])
     );
     assert_eq!(schema["properties"]["content"]["type"], "string");
+    for keyword in ["oneOf", "anyOf", "allOf", "if", "then", "else", "not"] {
+        assert!(schema.get(keyword).is_none(), "unexpected {keyword}");
+    }
     for removed in ["body", "bodyFormat", "description", "descriptionFormat"] {
         assert!(
             schema["properties"].get(removed).is_none(),
@@ -18298,17 +18302,14 @@ fn assert_gitlab_normalized_content_schema(schema: &Value, content_required: boo
     } else {
         assert!(!required.contains(&"content"));
         assert!(!required.contains(&"contentFormat"));
-        let all_of = schema["allOf"].as_array().expect("content schema allOf");
-        assert!(all_of.iter().any(|branch| {
-            branch["oneOf"]
-                .as_array()
-                .or_else(|| branch["anyOf"].as_array())
-                .is_some_and(|variants| {
-                    variants
-                        .iter()
-                        .any(|variant| variant["required"] == json!(["content", "contentFormat"]))
-                })
-        }));
+        for (field, companion) in [("content", "contentFormat"), ("contentFormat", "content")] {
+            assert!(
+                schema["properties"][field]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("Required with {companion}."))
+            );
+        }
     }
 }
 

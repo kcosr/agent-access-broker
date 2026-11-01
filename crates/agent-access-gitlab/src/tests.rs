@@ -1,3 +1,5 @@
+mod plain_inputs;
+
 use super::*;
 use crate::{
     ActionIo, GitlabContentConfig, GitlabSearchConfig, GitlabWebhooksConfig, raw_download_io,
@@ -6871,14 +6873,12 @@ fn draft_page_token_and_integer_image_schemas_are_bounded_and_numeric() {
     );
     assert_eq!(draft_schema["properties"]["pageToken"]["minLength"], 1);
     let position = position_schema();
-    let image = position["oneOf"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|variant| variant["properties"]["positionType"]["const"] == "image")
-        .unwrap();
-    assert_eq!(image["properties"]["x"]["type"], "integer");
-    assert_eq!(image["properties"]["y"]["type"], "integer");
+    assert_eq!(
+        position["properties"]["positionType"]["enum"],
+        json!(["text", "file", "image"])
+    );
+    assert_eq!(position["properties"]["x"]["type"], "integer");
+    assert_eq!(position["properties"]["y"]["type"], "integer");
     let input = parse_position_input(Some(&json!({
         "positionType": "image",
         "oldPath": "diagram.png",

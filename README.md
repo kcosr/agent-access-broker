@@ -72,11 +72,12 @@ stable JQL references, such as `cf[12345]`, in the existing issue search action;
 supported operators come from both Jira and Broker's bounded grammar. Project
 view and search have independent grants.
 
-Jira and Confluence action schemas expose input fields directly. Their field
-descriptions explain locator alternatives, paired content fields and content
-formats, and provider denials name the fields that need correction. See
-[Jira input arguments](docs/providers-jira.md#input-arguments) and
-[Confluence input arguments](docs/providers-confluence.md#input-arguments).
+Jira, Confluence and GitLab action schemas expose input fields directly. Their
+field descriptions explain locator alternatives, paired content fields, content
+formats and mode requirements, and provider denials name the fields that need
+correction. See [Jira input arguments](docs/providers-jira.md#input-arguments),
+[Confluence input arguments](docs/providers-confluence.md#input-arguments) and
+[GitLab input arguments](docs/providers-gitlab-rest.md#input-arguments).
 
 Jira issue views include [resolution, dates, components, versions and status
 category](docs/providers-jira.md#standard-context), plus [supported custom-field

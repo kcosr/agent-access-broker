@@ -46,6 +46,9 @@ fn invalid() -> ProviderError {
         "GitLab search inputs are invalid or unsupported",
     )
 }
+fn invalid_input(message: &'static str) -> ProviderError {
+    ProviderError::deny(ReasonCode::InputInvalid, message)
+}
 fn protocol() -> ProviderError {
     ProviderError::error(
         ReasonCode::UpstreamProtocolFailed,
@@ -77,7 +80,9 @@ fn parse_inputs(
     value: &Value,
     config: &GitlabSearchConfig,
 ) -> Result<SearchInputs, ProviderError> {
-    let object = value.as_object().ok_or_else(invalid)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid_input("GitLab search inputs must be an object"))?;
     let discovery = is_project_collection(action);
     let allowed: &[&str] = if action == "project.list" {
         &["maxResults", "pageToken"]
@@ -102,75 +107,122 @@ fn parse_inputs(
         &["search", "project", "engine", "maxResults", "pageToken"]
     };
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(invalid());
+        return Err(invalid_input(match action {
+            "project.list" => "GitLab project.list accepts only maxResults and pageToken",
+            "project.search" => {
+                "GitLab project.search accepts only search, includeNamespaces, archived, maxResults and pageToken"
+            }
+            "search.code" => {
+                "GitLab search.code accepts only search, project, engine, regex, maxResults and pageToken"
+            }
+            _ => {
+                "GitLab content search accepts only search, project, engine, maxResults and pageToken"
+            }
+        }));
     }
-    let string = |key: &str| -> Result<Option<String>, ProviderError> {
+    let string = |key: &str, message: &'static str| -> Result<Option<String>, ProviderError> {
         object
             .get(key)
-            .map(|v| v.as_str().map(str::to_string).ok_or_else(invalid))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| invalid_input(message))
+            })
             .transpose()
     };
-    let boolean = |key: &str| -> Result<Option<bool>, ProviderError> {
+    let boolean = |key: &str, message: &'static str| -> Result<Option<bool>, ProviderError> {
         object
             .get(key)
-            .map(|v| v.as_bool().ok_or_else(invalid))
+            .map(|v| v.as_bool().ok_or_else(|| invalid_input(message)))
             .transpose()
     };
-    let search = string("search")?.map(|v| v.trim().to_string());
+    let search = string("search", "GitLab search requires search to be a string")?
+        .map(|v| v.trim().to_string());
     if search
         .as_ref()
         .is_some_and(|v| v.is_empty() || v.len() > 512)
         || (!discovery && search.is_none())
     {
-        return Err(invalid());
+        return Err(invalid_input(
+            "GitLab search requires search to contain 1–512 UTF-8 bytes after trimming; omit it only for project discovery",
+        ));
     }
-    let project = string("project")?;
+    let project = string("project", "GitLab search project must be a string")?;
     if project
         .as_ref()
         .is_some_and(|v| !is_canonical_repository_path(v))
     {
-        return Err(invalid());
+        return Err(invalid_input(
+            "GitLab search project must be a canonical namespace/project path",
+        ));
     }
     let engine = if discovery {
         None
     } else {
-        Some(string("engine")?.unwrap_or_else(|| config.default_engine.clone()))
+        Some(
+            string("engine", "GitLab search engine must be a string")?
+                .unwrap_or_else(|| config.default_engine.clone()),
+        )
     };
     if let Some(engine) = engine.as_deref() {
         let category = action.strip_prefix("search.").ok_or_else(invalid)?;
         if !config.supports(engine, category, project.is_some()) {
-            return Err(invalid());
+            return Err(invalid_input(
+                if config.supports(engine, category, project.is_none()) {
+                    if project.is_some() {
+                        "GitLab search forbids project for the selected engine; omit project"
+                    } else {
+                        "GitLab search requires project for the selected engine"
+                    }
+                } else {
+                    "GitLab search engine is not enabled for this action"
+                },
+            ));
         }
     }
-    let regex = boolean("regex")?;
+    let regex = boolean("regex", "GitLab search regex must be a boolean")?;
     if regex.is_some() && (action != "search.code" || engine.as_deref() != Some("zoekt")) {
-        return Err(invalid());
+        return Err(invalid_input(
+            "GitLab search regex is accepted only with engine zoekt, including regex: false",
+        ));
     }
     let regex = (engine.as_deref() == Some("zoekt")).then_some(regex.unwrap_or(false));
     let max_results = match object.get("maxResults") {
         Some(v) => v
             .as_u64()
             .filter(|v| *v > 0 && *v <= u64::from(config.max_results.min(100)))
-            .ok_or_else(invalid)? as u32,
+            .ok_or_else(|| {
+                invalid_input(
+                    "GitLab search maxResults must be an integer within the published range",
+                )
+            })? as u32,
         None => config.max_results.min(100),
     };
     if max_results == 0 {
-        return Err(invalid());
+        return Err(invalid_input(
+            "GitLab search maxResults must be an integer within the published range",
+        ));
     }
-    let page_token = string("pageToken")?;
+    let page_token = string("pageToken", "GitLab search pageToken must be a string")?;
     if page_token
         .as_ref()
         .is_some_and(|v| v.is_empty() || v.len() > 512 || !v.is_ascii())
     {
-        return Err(invalid());
+        return Err(invalid_input(
+            "GitLab search pageToken must contain 1–512 ASCII bytes",
+        ));
     }
     Ok(SearchInputs {
         search,
         project,
         engine,
         regex,
-        include_namespaces: boolean("includeNamespaces")?.unwrap_or(true),
-        archived: boolean("archived")?,
+        include_namespaces: boolean(
+            "includeNamespaces",
+            "GitLab search includeNamespaces must be a boolean",
+        )?
+        .unwrap_or(true),
+        archived: boolean("archived", "GitLab search archived must be a boolean")?,
         max_results,
         page_token,
     })
@@ -237,37 +289,71 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
         }
         let action = format!("search.{category}");
         let mut schema = base();
-        schema["required"] = json!(["search"]);
-        schema["properties"]["project"] = json!({"type":"string","minLength":3});
+        let project_only = engines
+            .iter()
+            .all(|engine| !search.supports(engine, category, false));
+        let instance_only = engines
+            .iter()
+            .all(|engine| !search.supports(engine, category, true));
+        let both_routes = engines.iter().all(|engine| {
+            search.supports(engine, category, true) && search.supports(engine, category, false)
+        });
+        let route_guidance = if project_only {
+            "project is required with every configured engine.".to_string()
+        } else if instance_only {
+            "Omit project with every configured engine.".to_string()
+        } else if both_routes {
+            "Omit project to search across authorized repositories, or give project to search one."
+                .to_string()
+        } else {
+            engines
+                .iter()
+                .map(|engine| {
+                    if !search.supports(engine, category, false) {
+                        format!("project is required when engine is {engine}.")
+                    } else if !search.supports(engine, category, true) {
+                        format!("Omit project when engine is {engine}.")
+                    } else {
+                        format!("project is optional when engine is {engine}.")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let default_guidance = format!("Omit engine to use {}.", search.default_engine);
+        let project_guidance = if project_only {
+            "Required with every configured engine."
+        } else if instance_only {
+            "Not available with the configured search engines; omit."
+        } else if both_routes {
+            "Omit to search across authorized repositories, or give project to search one."
+        } else {
+            &route_guidance
+        };
+        schema["required"] = if project_only {
+            json!(["search", "project"])
+        } else {
+            json!(["search"])
+        };
+        schema["properties"]["project"] = json!({
+            "type":"string","minLength":3,
+            "description":format!("Canonical namespace/project path. {project_guidance} {default_guidance}")
+        });
+        let regex_available = *category == "code" && engines.contains(&"zoekt");
+        let regex_guidance = if regex_available {
+            " regex is accepted only with engine zoekt, including regex: false."
+        } else {
+            ""
+        };
         schema["properties"]["engine"] = json!({
             "type":"string","enum":engines,"default":search.default_engine,
-            "description":"Omit engine to use the service's configured default."
+            "description":format!("Search engine. {default_guidance} {route_guidance}{regex_guidance}")
         });
-        let mut conditions = Vec::new();
-        for engine in &engines {
-            let selected = if *engine == search.default_engine {
-                json!({"anyOf":[{"properties":{"engine":{"const":engine}},"required":["engine"]},{"not":{"required":["engine"]}}]})
-            } else {
-                json!({"properties":{"engine":{"const":engine}},"required":["engine"]})
-            };
-            if !search.supports(engine, category, false) {
-                conditions.push(json!({"if":selected,"then":{"required":["project"]}}));
-            }
-            if !search.supports(engine, category, true) {
-                conditions.push(json!({"if":selected,"then":{"not":{"required":["project"]}}}));
-            }
-        }
-        if *category == "code" && engines.contains(&"zoekt") {
-            schema["properties"]["regex"] = json!({"type":"boolean","default":false});
-            let regex_engine = if search.default_engine == "zoekt" {
-                json!({"properties":{"engine":{"const":"zoekt"}}})
-            } else {
-                json!({"properties":{"engine":{"const":"zoekt"}},"required":["engine"]})
-            };
-            conditions.push(json!({"if":{"required":["regex"]},"then":regex_engine}));
-        }
-        if !conditions.is_empty() {
-            schema["allOf"] = json!(conditions);
+        if regex_available {
+            schema["properties"]["regex"] = json!({
+                "type":"boolean","default":false,
+                "description":format!("Use native code regular expressions. Only with engine zoekt, including regex: false. Omitted defaults to false with zoekt. {default_guidance}")
+            });
         }
         let routes: Value = engines.iter().map(|engine| ((*engine).to_string(), json!({"project":search.supports(engine,category,true),"instance":search.supports(engine,category,false)}))).collect();
         let mut documentation = json!({"engines":routes,"defaultEngine":search.default_engine,
@@ -288,17 +374,27 @@ pub(crate) fn descriptors(config: &GitlabProviderConfig) -> Vec<ActionDescriptor
                 "Returns bounded snippets supplied by GitLab, not full wiki pages. A snippet may omit the matching passage. A returned GitLab URL can be used to locate the page. Full wiki-page reading is not currently supported by the Broker; file.view reads source-repository files and cannot read wiki pages."
             );
         }
-        let regex = schema["properties"].get("regex").is_some();
+        let action_routes = if project_only {
+            "in one project".to_string()
+        } else if instance_only {
+            "across authorized repositories".to_string()
+        } else if both_routes {
+            "across authorized repositories; give project to search one".to_string()
+        } else {
+            format!(
+                "across authorized repositories or one project. {route_guidance} {default_guidance}"
+            )
+        };
         let descriptor = common(
             &action,
-            &format!("Native full-text search of GitLab {category} across authorized repositories or one explicit project"),
+            &format!("Native full-text search of GitLab {category} {action_routes}"),
             schema,
             documentation,
         )
         .audit_input("project", "Project")
         .audit_input("search", "Search");
         // Zoekt's regex flag changes how the recorded search is read.
-        actions.push(if regex {
+        actions.push(if regex_available {
             descriptor.audit_input("regex", "Regex")
         } else {
             descriptor
