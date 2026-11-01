@@ -350,8 +350,11 @@ async fn jira_schema_accepts_relations_that_the_provider_still_refuses() {
             .await;
         assert_eq!(result["result"]["isError"], true);
         assert_eq!(
-            result["result"]["content"][0]["text"],
-            "inputs is required and must be a JSON object"
+            structured(&result),
+            &json!({"error": {
+                "code": "mcp_tool_error",
+                "message": "inputs is required and must be a JSON object"
+            }})
         );
     }
 }
