@@ -93,7 +93,16 @@ is write-capable. Its acceptance response can be saved with CLI `--output` or
 local MCP `outputPath`. A local save failure does not imply delivery failed and
 must not trigger another notification.
 
-The exact input contract is:
+## Input arguments
+
+The action publishes a plain input object with `destination`, `contentFormat`
+and `content`. All three are required, and other root fields are refused.
+`destination` is the configured alias, never a channel ID or signed URL.
+The open `content` object exposes each known field and its format rules in field
+descriptions. The provider enforces those relationships and returns specific
+`input_invalid` messages naming the fields to correct, without echoing payloads.
+
+For a simple notification, the complete input object is:
 
 ```json
 {
@@ -106,9 +115,11 @@ The exact input contract is:
 }
 ```
 
-`simple` accepts nonempty `text` and optional nonempty `title`, with no additional
-fields. It creates an Adaptive Card 1.2 message envelope with wrapping text blocks.
-It adds no attribution footer or interactive actions.
+`simple` accepts a nonempty `text` string and an optional nonempty `title` string,
+with no additional fields, even when an extra field is `null`. Whitespace-only
+strings are empty; surrounding whitespace on accepted strings is preserved.
+It creates an Adaptive Card 1.2 message envelope with wrapping text blocks and
+adds no attribution footer or interactive actions.
 
 `microsoft` accepts one full native JSON object, preserving native fields after
 structural validation:
@@ -118,7 +129,42 @@ structural validation:
   "application/vnd.microsoft.card.adaptive"` and `content` card with `type:
   "AdaptiveCard"`, numeric dotted `version` string and a `body` array of objects.
 - A MessageCard with `@type: "MessageCard"`, `@context:
-  "http://schema.org/extensions"` (or HTTPS), and nonempty `summary` or `text`.
+  "http://schema.org/extensions"` (or HTTPS), and at least one of `summary` or
+  `text`. Every supplied `summary` and `text` must be a nonempty string; a null
+  or whitespace-only value is refused even when the other field is valid.
+
+Supply exactly one native discriminator: `type` or `@type`. A competing key is
+refused by its presence, including when its value is `null`. Microsoft envelopes,
+attachments, cards and body objects remain open to extension fields. Known fields
+`title`, `text`, `summary`, `attachments` and `@context` deliberately have no
+global type constraint in the schema: a field validated in one variant may be an
+arbitrary extension in another. For example, MessageCard extensions are not
+subject to Adaptive attachment validation. The provider preserves accepted
+Microsoft objects, including their extensions, without changing their values.
+
+A complete Adaptive notification input can be:
+
+```json
+{
+  "destination": "release-alerts",
+  "contentFormat": "microsoft",
+  "content": {
+    "type": "message",
+    "attachments": [{
+      "contentType": "application/vnd.microsoft.card.adaptive",
+      "content": {
+        "type": "AdaptiveCard",
+        "version": "1.2",
+        "body": [{"type": "TextBlock", "text": "Release completed", "wrap": true}]
+      }
+    }]
+  }
+}
+```
+
+An Adaptive `version` is two nonempty ASCII digit runs separated by one dot.
+This is the Broker's structural rule, not a list of versions Teams can render.
+The `body` array may be empty, and its entries must be objects.
 
 For example, the native body in `card.json` can be:
 

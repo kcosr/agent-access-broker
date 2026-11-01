@@ -1,5 +1,7 @@
 #[path = "cloudbees_smoke/job_list.rs"]
 mod job_list;
+#[path = "cloudbees_smoke/plain_inputs.rs"]
+mod plain_inputs;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE;

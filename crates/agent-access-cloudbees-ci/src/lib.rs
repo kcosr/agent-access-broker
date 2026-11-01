@@ -3086,7 +3086,32 @@ mod tests {
             }
             let schema = &action.input_schema;
             assert!(schema["properties"]["url"].is_object(), "{}", action.action);
-            assert!(schema["oneOf"].is_array(), "{}", action.action);
+            assert_eq!(schema["type"], "object");
+            assert_eq!(schema["additionalProperties"], false);
+            for operator in ["oneOf", "anyOf", "allOf", "if", "then", "else", "not"] {
+                assert!(
+                    schema.get(operator).is_none(),
+                    "{} {operator}",
+                    action.action
+                );
+            }
+            let required = match action.action.as_str() {
+                "build.artifact.download" => json!(["artifactPath"]),
+                "queue.view" => json!(["queueId"]),
+                "build.pipeline.node.view" | "build.pipeline.node.log.read" => json!(["nodeId"]),
+                _ => Value::Null,
+            };
+            assert_eq!(schema["required"], required, "{}", action.action);
+            for field in ["controller", "job", "url"] {
+                assert!(
+                    schema["properties"][field]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("exactly one"),
+                    "{} {field}",
+                    action.action
+                );
+            }
             assert_eq!(
                 schema["properties"].get("buildSelector").is_some(),
                 action.action.starts_with("build.")

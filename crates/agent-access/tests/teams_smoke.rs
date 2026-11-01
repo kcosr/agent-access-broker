@@ -1,4 +1,7 @@
 //! Managed endpoint, real CLI and stdio MCP against an offline Teams transport.
+#[path = "teams_smoke/plain_inputs.rs"]
+mod plain_inputs;
+
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };

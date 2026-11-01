@@ -3,34 +3,24 @@ use super::*;
 const MAX_DEPTH: usize = 32;
 
 pub(crate) fn schema() -> Value {
-    let native = json!({"oneOf":[
-        {"type":"object","required":["type","attachments"],"not":{"required":["@type"]},"properties":{
-            "type":{"const":"message"},"attachments":{"type":"array","minItems":1,"items":{
-                "type":"object","required":["contentType","content"],"properties":{
-                    "contentType":{"const":"application/vnd.microsoft.card.adaptive"},
-                    "content":{"type":"object","required":["type","version","body"],"properties":{
-                        "type":{"const":"AdaptiveCard"},"version":{"type":"string","pattern":"^[0-9]+\\.[0-9]+$"},
-                        "body":{"type":"array","items":{"type":"object"}}
-                    }}
-                }
-            }}
-        }},
-        {"type":"object","required":["@type","@context"],"not":{"required":["type"]},"properties":{
-            "@type":{"const":"MessageCard"},"@context":{"enum":["http://schema.org/extensions","https://schema.org/extensions"]},
-            "summary":{"type":"string","minLength":1,"pattern":"\\S"},"text":{"type":"string","minLength":1,"pattern":"\\S"}
-        },"anyOf":[{"required":["summary"]},{"required":["text"]}]}
-    ]});
     json!({"type":"object","additionalProperties":false,"required":["destination","contentFormat","content"],"properties":{
-        "destination":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"},
-        "contentFormat":{"enum":["simple","microsoft"]},"content":{"type":"object"}
-    },"oneOf":[
-        {"properties":{"contentFormat":{"const":"simple"},"content":{
-            "type":"object","additionalProperties":false,"required":["text"],"properties":{
-                "text":{"type":"string","minLength":1,"pattern":"\\S"},"title":{"type":"string","minLength":1,"pattern":"\\S"}
+        "destination":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+            "description":"Configured Teams destination alias. Do not provide a channel ID or signed Workflow URL."},
+        "contentFormat":{"enum":["simple","microsoft"],
+            "description":"Content format. simple requires content.text and allows optional content.title only. microsoft requires an Adaptive Card message envelope or MessageCard in content."},
+        "content":{"type":"object",
+            "description":"Notification object selected by contentFormat. For simple, give text and optional title only. For microsoft, give exactly one of type or @type and the fields described below.",
+            "properties":{
+                "title":{"description":"With contentFormat simple, optional nonempty string. Microsoft payloads may carry any extension value."},
+                "text":{"description":"Required when contentFormat is simple: a nonempty string. With @type MessageCard, give at least one of text or summary; every supplied text must be a nonempty string. Adaptive envelopes may carry any extension value."},
+                "summary":{"description":"Only with contentFormat microsoft. With @type MessageCard, give at least one of summary or text; every supplied summary must be a nonempty string. Adaptive envelopes may carry any extension value."},
+                "attachments":{"description":"Only with contentFormat microsoft. Required with type message: a nonempty array of attachments with contentType application/vnd.microsoft.card.adaptive and content containing type AdaptiveCard, a numeric dotted version string, and body array of objects. MessageCard may carry any extension value."},
+                "@context":{"description":"Only with contentFormat microsoft. Required with @type MessageCard: http://schema.org/extensions or https://schema.org/extensions. Adaptive envelopes may carry any extension value."},
+                "type":{"const":"message","description":"Only with contentFormat microsoft. For an Adaptive Card envelope use message and supply attachments. Give exactly one of type or @type; do not combine with @type."},
+                "@type":{"const":"MessageCard","description":"Only with contentFormat microsoft. For a MessageCard use MessageCard. Give exactly one of @type or type. Requires @context and at least one of summary or text; do not combine with type."}
             }
-        }}},
-        {"properties":{"contentFormat":{"const":"microsoft"},"content":native}}
-    ]})
+        }
+    }})
 }
 
 fn invalid(message: &'static str) -> ProviderError {
@@ -54,48 +44,94 @@ fn nonempty(value: Option<&Value>) -> bool {
         .is_some_and(|s| !s.trim().is_empty())
 }
 
-fn native_valid(value: &Value) -> bool {
+fn validate_native(value: &Value) -> Result<(), ProviderError> {
     if value.get("type").is_some() && value.get("@type").is_some() {
-        return false;
+        return Err(invalid(
+            "teams.notification.send content accepts type or @type, not both",
+        ));
     }
     if value.get("type").and_then(Value::as_str) == Some("message") {
-        return value
-            .get("attachments")
-            .and_then(Value::as_array)
-            .is_some_and(|attachments| {
-                !attachments.is_empty()
-                    && attachments.iter().all(|attachment| {
-                        attachment.get("contentType").and_then(Value::as_str)
-                            == Some("application/vnd.microsoft.card.adaptive")
-                            && attachment.get("content").is_some_and(|card| {
-                                card.get("type").and_then(Value::as_str) == Some("AdaptiveCard")
-                                    && card.get("version").and_then(Value::as_str).is_some_and(
-                                        |version| {
-                                            version.split_once('.').is_some_and(|(major, minor)| {
-                                                !major.is_empty()
-                                                    && !minor.is_empty()
-                                                    && major.bytes().all(|b| b.is_ascii_digit())
-                                                    && minor.bytes().all(|b| b.is_ascii_digit())
-                                            })
-                                        },
-                                    )
-                                    && card
-                                        .get("body")
-                                        .and_then(Value::as_array)
-                                        .is_some_and(|body| body.iter().all(Value::is_object))
-                            })
+        let attachments = value.get("attachments").and_then(Value::as_array)
+            .filter(|attachments| !attachments.is_empty())
+            .ok_or_else(|| invalid("teams.notification.send content.attachments must be a nonempty array with type message"))?;
+        for attachment in attachments {
+            if attachment.get("contentType").and_then(Value::as_str)
+                != Some("application/vnd.microsoft.card.adaptive")
+            {
+                return Err(invalid(
+                    "teams.notification.send content.attachments[].contentType must be application/vnd.microsoft.card.adaptive",
+                ));
+            }
+            let card = attachment.get("content").filter(|card| card.is_object())
+                .ok_or_else(|| invalid("teams.notification.send content.attachments[].content must be an Adaptive Card object"))?;
+            if card.get("type").and_then(Value::as_str) != Some("AdaptiveCard") {
+                return Err(invalid(
+                    "teams.notification.send content.attachments[].content.type must be AdaptiveCard",
+                ));
+            }
+            if !card
+                .get("version")
+                .and_then(Value::as_str)
+                .is_some_and(|version| {
+                    version.split_once('.').is_some_and(|(major, minor)| {
+                        !major.is_empty()
+                            && !minor.is_empty()
+                            && major.bytes().all(|b| b.is_ascii_digit())
+                            && minor.bytes().all(|b| b.is_ascii_digit())
                     })
-            });
+                })
+            {
+                return Err(invalid(
+                    "teams.notification.send content.attachments[].content.version must contain ASCII digits, a dot, and ASCII digits",
+                ));
+            }
+            if !card
+                .get("body")
+                .and_then(Value::as_array)
+                .is_some_and(|body| body.iter().all(Value::is_object))
+            {
+                return Err(invalid(
+                    "teams.notification.send content.attachments[].content.body must be an array of objects",
+                ));
+            }
+        }
+        return Ok(());
     }
-    value.get("@type").and_then(Value::as_str) == Some("MessageCard")
-        && matches!(
-            value.get("@context").and_then(Value::as_str),
-            Some("http://schema.org/extensions" | "https://schema.org/extensions")
-        )
-        && ["summary", "text"]
-            .into_iter()
-            .all(|key| value.get(key).is_none() || nonempty(value.get(key)))
-        && (nonempty(value.get("summary")) || nonempty(value.get("text")))
+    if value.get("@type").and_then(Value::as_str) != Some("MessageCard") {
+        return Err(invalid(
+            "teams.notification.send content with contentFormat microsoft requires type message or @type MessageCard",
+        ));
+    }
+    if !matches!(
+        value.get("@context").and_then(Value::as_str),
+        Some("http://schema.org/extensions" | "https://schema.org/extensions")
+    ) {
+        return Err(invalid(
+            "teams.notification.send content.@context must be http://schema.org/extensions or https://schema.org/extensions for MessageCard",
+        ));
+    }
+    if value
+        .get("summary")
+        .is_some_and(|value| !nonempty(Some(value)))
+    {
+        return Err(invalid(
+            "teams.notification.send content.summary must be a nonempty string when supplied for MessageCard",
+        ));
+    }
+    if value
+        .get("text")
+        .is_some_and(|value| !nonempty(Some(value)))
+    {
+        return Err(invalid(
+            "teams.notification.send content.text must be a nonempty string when supplied for MessageCard",
+        ));
+    }
+    if !nonempty(value.get("summary")) && !nonempty(value.get("text")) {
+        return Err(invalid(
+            "teams.notification.send MessageCard requires content.summary or content.text",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn prepare(inputs: &Value, max_bytes: u64) -> Result<(String, Vec<u8>), ProviderError> {
@@ -129,16 +165,27 @@ pub(crate) fn prepare(inputs: &Value, max_bytes: u64) -> Result<(String, Vec<u8>
         .ok_or_else(|| invalid("Teams content must be an object"))?;
     let outgoing = match inputs.get("contentFormat").and_then(Value::as_str) {
         Some("simple") => {
-            if !nonempty(content.get("text"))
-                || content.get("title").is_some_and(|v| !nonempty(Some(v)))
-                || content
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .any(|key| !matches!(key.as_str(), "title" | "text"))
+            if !nonempty(content.get("text")) {
+                return Err(invalid(
+                    "teams.notification.send content.text must be a nonempty string with contentFormat simple",
+                ));
+            }
+            if content
+                .get("title")
+                .is_some_and(|value| !nonempty(Some(value)))
             {
                 return Err(invalid(
-                    "Simple Teams content requires nonempty text and an optional nonempty title",
+                    "teams.notification.send content.title must be a nonempty string when supplied with contentFormat simple",
+                ));
+            }
+            if content
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|key| !matches!(key.as_str(), "title" | "text"))
+            {
+                return Err(invalid(
+                    "teams.notification.send content with contentFormat simple accepts only title and text",
                 ));
             }
             let mut blocks = Vec::new();
@@ -149,11 +196,9 @@ pub(crate) fn prepare(inputs: &Value, max_bytes: u64) -> Result<(String, Vec<u8>
             json!({"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,
                 "content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":blocks}}]})
         }
-        Some("microsoft") if native_valid(content) => content.clone(),
         Some("microsoft") => {
-            return Err(invalid(
-                "Microsoft content requires an Adaptive Card message envelope or MessageCard",
-            ));
+            validate_native(content)?;
+            content.clone()
         }
         _ => return Err(invalid("Teams contentFormat must be simple or microsoft")),
     };

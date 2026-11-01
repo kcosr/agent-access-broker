@@ -64,6 +64,7 @@ mod atlassian_connections;
 mod audit_query;
 mod body_admission;
 mod broker;
+mod cloudbees_plain_schemas;
 mod config_render;
 pub(crate) use broker::{ConfigDoc, TestBroker, TestProvider, with_provider_instances};
 mod confluence_plain_schemas;
