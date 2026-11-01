@@ -77,7 +77,7 @@ Teams `notification.send` uses the same destination alias and `simple` or
 contains the complete action input object; HTTP MCP takes inline inputs. The
 encrypted Workflow URL never appears in the tool schema, arguments, or result,
 and admin reveal remains outside MCP. The mutation returns endpoint acceptance,
-not confirmation of Teams delivery. See [Teams payloads](providers-teams.md#action-and-clients).
+not confirmation of Teams delivery. See [Teams payloads](providers-teams.md#input-arguments).
 
 ## Service-specific connections
 

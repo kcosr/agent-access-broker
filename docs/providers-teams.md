@@ -142,6 +142,12 @@ arbitrary extension in another. For example, MessageCard extensions are not
 subject to Adaptive attachment validation. The provider preserves accepted
 Microsoft objects, including their extensions, without changing their values.
 
+Only `type` and `@type` carry fixed values in the `content` schema: `message` and
+`MessageCard`, respectively. On refusal, a native schema explanation may name one
+of these constants before a format or conflict rule. For `simple`, omit both
+keys. For `microsoft`, keep the chosen discriminator and omit the competing key;
+changing its value does not resolve the conflict.
+
 A complete Adaptive notification input can be:
 
 ```json

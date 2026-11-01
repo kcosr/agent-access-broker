@@ -127,6 +127,16 @@ fn retained_root_and_discriminator_constraints_still_refuse_invalid_inputs() {
             json!({"destination":"release-alerts","contentFormat":null,"content":{"text":"hello"}}),
             "Teams contentFormat must be simple or microsoft",
         ),
+        // Retained constants reject these shapes in the schema; the provider's
+        // correction for simple content is to omit either discriminator.
+        (
+            input("simple", json!({"text":"hi","type":"wrong"})),
+            SIMPLE_EXTRA,
+        ),
+        (
+            input("simple", json!({"text":"hi","@type":"wrong"})),
+            SIMPLE_EXTRA,
+        ),
         (input("microsoft", json!({"type":null})), NATIVE_KIND),
         (input("microsoft", json!({"@type":PRIVATE})), NATIVE_KIND),
         (

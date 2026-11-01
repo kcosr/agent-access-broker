@@ -170,6 +170,10 @@ async fn teams_plain_inputs_project_and_preserve_relationship_denials_across_tra
     for (index, (format, content, expected, schema_valid)) in [
         ("simple", json!({"text": CONTENT_MARKER, "extra": true}), "teams.notification.send content with contentFormat simple accepts only title and text", true),
         ("simple", json!({"text": " ", "title": CONTENT_MARKER}), "teams.notification.send content.text must be a nonempty string with contentFormat simple", true),
+        // Retained discriminator constants explain these rejected simple
+        // payloads before the provider's extra-field relationship message.
+        ("simple", json!({"text": CONTENT_MARKER, "type": "wrong"}), "teams.notification.send inputs are invalid: inputs.content.type must be message", false),
+        ("simple", json!({"text": CONTENT_MARKER, "@type": "wrong"}), "teams.notification.send inputs are invalid: inputs.content.@type must be MessageCard", false),
         ("microsoft", json!({"type": "message", "@type": "MessageCard", "text": CONTENT_MARKER}), "teams.notification.send content accepts type or @type, not both", true),
         ("microsoft", json!({"type": "message", "text": CONTENT_MARKER}), "teams.notification.send content.attachments must be a nonempty array with type message", true),
         ("microsoft", json!({"@type": "MessageCard", "@context": "http://schema.org/extensions", "title": CONTENT_MARKER}), "teams.notification.send MessageCard requires content.summary or content.text", true),
