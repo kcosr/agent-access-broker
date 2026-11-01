@@ -209,13 +209,14 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- **Jira input fields remain visible in schema discovery.** Plain object
-  schemas describe locator alternatives and paired content fields directly;
+- **Jira and Confluence input fields remain visible in schema discovery.** Plain
+  object schemas describe locator alternatives, paired fields and content formats;
   provider input denials identify missing or conflicting fields. Published
   schemas no longer enforce these relationships, so validating clients may
   send requests that the Broker continues to refuse. Request
   acceptance, audit fields and content formats are unchanged. See
-  [Jira input arguments](docs/providers-jira.md#input-arguments).
+  [Jira input arguments](docs/providers-jira.md#input-arguments) and
+  [Confluence input arguments](docs/providers-confluence.md#input-arguments).
   ([#87](https://github.com/kcosr/agent-access-broker/pull/87))
 
 - **Release qualification uses nextest for Rust tests.** Install cargo-nextest

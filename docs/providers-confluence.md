@@ -8,6 +8,29 @@ attribution notes. Shared provider concepts and runtime discovery guidance are i
 Service name `confluence`. Policy scope type `space`, bound to `confluence_space` resources. Every action advertises
 credential modes `[service, per_user]`.
 
+## Input arguments
+
+Confluence action input schemas expose plain object properties, unconditional
+required fields, types, enums and bounds. Field descriptions state locator
+alternatives, optional parent exclusions and which content type each format
+accepts. The provider enforces those relationships and returns field-specific
+messages when they fail. A request passing the published schema can still be
+refused by provider validation.
+
+Give exactly one of `pageId` or `url` for page locators, or `blogId` or `url` for
+blog locators. `page.move` independently requires exactly one of `targetPageId`
+or `targetUrl`. For `page.create` and `page.draft.create`, parent placement is
+optional; do not combine `parentPageId` with `parentUrl`. Optional locator
+fields retain their existing null-as-absent behavior.
+
+Content schemas reflect each action's effective formats: strings for text-only
+formats, objects for `atlas_doc_format` alone, and strings or objects when both
+are enabled. Both `content` and `contentFormat` remain required on content-writing
+actions, and content must match the selected format. Document objects remain open in the
+schema; content preparation validates their structure and limits. See the
+[rich-content write contract](#normalized-rich-content-write-contract) for the
+format matrix.
+
 ## Operator setup
 
 This integration targets Atlassian Cloud. Add the following fragment to a Broker

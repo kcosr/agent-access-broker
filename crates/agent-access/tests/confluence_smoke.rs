@@ -1,3 +1,5 @@
+#[path = "confluence_smoke/plain_inputs.rs"]
+mod plain_inputs;
 #[path = "confluence_smoke/space_list.rs"]
 mod space_listing;
 use agent_access_broker_host::test_support::{

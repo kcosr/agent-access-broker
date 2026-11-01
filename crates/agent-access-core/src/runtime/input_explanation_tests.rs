@@ -931,7 +931,7 @@ fn native_schema_cases_cover_optional_actions_and_content_formats() {
 fn native_schemas_have_plain_roots() {
     // These providers retain their existing schemas until their conversions.
     // Keep this list explicit so a newly linked provider is checked by default.
-    const PENDING: &[&str] = &["confluence", "gitlab", "cloudbees_ci", "teams"];
+    const PENDING: &[&str] = &["gitlab", "cloudbees_ci", "teams"];
     const RELATIONAL: &[&str] = &["oneOf", "anyOf", "allOf", "if", "then", "else", "not"];
 
     let cases = native_schemas();

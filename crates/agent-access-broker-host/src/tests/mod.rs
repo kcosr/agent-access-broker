@@ -66,6 +66,7 @@ mod body_admission;
 mod broker;
 mod config_render;
 pub(crate) use broker::{ConfigDoc, TestBroker, TestProvider, with_provider_instances};
+mod confluence_plain_schemas;
 mod confluence_read_presentation;
 mod conformance;
 pub(crate) mod conformance_import;
@@ -949,10 +950,17 @@ async fn spec_openapi_and_send_schema_endpoints_are_hosted_and_filtered() {
             assert_eq!(action["lookupRequired"], true);
             assert_eq!(schema["properties"]["parentPageId"]["type"], "string");
             assert_eq!(schema["properties"]["parentUrl"]["type"], "string");
-            assert_eq!(
-                schema["not"]["required"],
-                json!(["parentPageId", "parentUrl"])
-            );
+            assert!(schema.get("not").is_none());
+            for (field, alternative) in
+                [("parentPageId", "parentUrl"), ("parentUrl", "parentPageId")]
+            {
+                assert!(
+                    schema["properties"][field]["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&format!("Do not combine with {alternative}."))
+                );
+            }
         }
     }
     for excluded_action in [
@@ -985,13 +993,15 @@ async fn spec_openapi_and_send_schema_endpoints_are_hosted_and_filtered() {
     let page_move = catalog_action(&catalog_body, "confluence", "page.move");
     assert_eq!(page_move["lookupRequired"], true);
     assert_eq!(page_move["inputSchema"]["additionalProperties"], false);
-    assert_eq!(
-        page_move["inputSchema"]["allOf"][1]["oneOf"],
-        json!([
-            { "required": ["targetPageId"] },
-            { "required": ["targetUrl"] }
-        ])
-    );
+    assert!(page_move["inputSchema"].get("allOf").is_none());
+    for field in ["targetPageId", "targetUrl"] {
+        assert!(
+            page_move["inputSchema"]["properties"][field]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Give exactly one of targetPageId or targetUrl.")
+        );
+    }
     assert_eq!(
         page_move["inputSchema"]["properties"]["position"]["enum"],
         json!(["before", "after", "append"])
@@ -18154,18 +18164,38 @@ fn assert_confluence_normalized_content_schema(schema: &Value, action: &str) {
         "contentFormat optional on {action}"
     );
 
-    let all_of = schema["allOf"].as_array().expect("content schema allOf");
-    for format in expected_formats.as_array().unwrap() {
-        let format = format.as_str().unwrap();
-        let expected_type = if format == "atlas_doc_format" {
-            "object"
-        } else {
-            "string"
-        };
-        assert!(all_of.iter().any(|branch| {
-            branch["if"]["properties"]["contentFormat"]["const"] == format
-                && branch["then"]["properties"]["content"]["type"] == expected_type
-        }));
+    let expected_type = if matches!(action, "page.create" | "page.update") {
+        json!(["string", "object"])
+    } else {
+        json!("string")
+    };
+    assert_eq!(schema["properties"]["content"]["type"], expected_type);
+    assert!(
+        schema["properties"]["content"]
+            .get("additionalProperties")
+            .is_none()
+    );
+    for keyword in ["allOf", "anyOf", "oneOf", "if", "then", "else", "not"] {
+        assert!(
+            schema.get(keyword).is_none(),
+            "unexpected {keyword} on {action}"
+        );
+    }
+    for field in ["content", "contentFormat"] {
+        assert!(
+            schema["properties"][field]["description"]
+                .as_str()
+                .unwrap()
+                .contains("Text for storage, markdown, plain_text")
+        );
+        if matches!(action, "page.create" | "page.update") {
+            assert!(
+                schema["properties"][field]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("an Atlassian document object for atlas_doc_format")
+            );
+        }
     }
 }
 

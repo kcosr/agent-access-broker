@@ -537,13 +537,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             "View a Confluence page after page-to-space confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["pageId"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "pageId": { "type": "string" },
-                    "url": { "type": "string" }
+                    "pageId": { "type": "string", "description": "Give exactly one of pageId or url." },
+                    "url": { "type": "string", "description": "Give exactly one of pageId or url." }
                 },
                 "additionalProperties": false
             }),
@@ -592,11 +588,10 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                     "properties": {
                         "space": { "type": "string" },
                         "title": { "type": "string" },
-                        "parentPageId": { "type": "string" },
-                        "parentUrl": { "type": "string" }
+                        "parentPageId": { "type": "string", "description": "Do not combine with parentUrl." },
+                        "parentUrl": { "type": "string", "description": "Do not combine with parentPageId." }
                     },
-                    "additionalProperties": false,
-                    "not": { "required": ["parentPageId", "parentUrl"] }
+                    "additionalProperties": false
                 }),
                 &page_write_formats,
             ),
@@ -612,29 +607,15 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             json!({
                 "type": "object",
                 "required": ["position"],
-                "allOf": [
-                    {
-                        "oneOf": [
-                            { "required": ["pageId"] },
-                            { "required": ["url"] }
-                        ]
-                    },
-                    {
-                        "oneOf": [
-                            { "required": ["targetPageId"] },
-                            { "required": ["targetUrl"] }
-                        ]
-                    }
-                ],
                 "properties": {
-                    "pageId": { "type": "string" },
-                    "url": { "type": "string" },
+                    "pageId": { "type": "string", "description": "Give exactly one of pageId or url." },
+                    "url": { "type": "string", "description": "Give exactly one of pageId or url." },
                     "position": {
                         "type": "string",
                         "enum": ["before", "after", "append"]
                     },
-                    "targetPageId": { "type": "string" },
-                    "targetUrl": { "type": "string" }
+                    "targetPageId": { "type": "string", "description": "Give exactly one of targetPageId or targetUrl." },
+                    "targetUrl": { "type": "string", "description": "Give exactly one of targetPageId or targetUrl." }
                 },
                 "additionalProperties": false
             }),
@@ -714,13 +695,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             "List bounded Confluence page attachment metadata after page-to-space confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["pageId"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "pageId": { "type": "string" },
-                    "url": { "type": "string" },
+                    "pageId": { "type": "string", "description": "Give exactly one of pageId or url." },
+                    "url": { "type": "string", "description": "Give exactly one of pageId or url." },
                     "maxResults": { "type": "integer", "minimum": 1 },
                     "nextPageToken": { "type": "string" }
                 },
@@ -751,13 +728,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             "View a current Confluence blog post after blog-to-space confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["blogId"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "blogId": { "type": "string" },
-                    "url": { "type": "string" }
+                    "blogId": { "type": "string", "description": "Give exactly one of blogId or url." },
+                    "url": { "type": "string", "description": "Give exactly one of blogId or url." }
                 },
                 "additionalProperties": false
             }),
@@ -886,13 +859,9 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
             "List bounded Confluence blog attachment metadata after blog-to-space confirmation",
             json!({
                 "type": "object",
-                "oneOf": [
-                    { "required": ["blogId"] },
-                    { "required": ["url"] }
-                ],
                 "properties": {
-                    "blogId": { "type": "string" },
-                    "url": { "type": "string" },
+                    "blogId": { "type": "string", "description": "Give exactly one of blogId or url." },
+                    "url": { "type": "string", "description": "Give exactly one of blogId or url." },
                     "maxResults": { "type": "integer", "minimum": 1 },
                     "nextPageToken": { "type": "string" }
                 },
@@ -958,10 +927,16 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
             ("title".to_string(), json!({ "type": "string" })),
         ]);
         if prefix == "page" {
-            create_properties.insert("parentPageId".to_string(), json!({ "type": "string" }));
-            create_properties.insert("parentUrl".to_string(), json!({ "type": "string" }));
+            create_properties.insert(
+                "parentPageId".to_string(),
+                json!({ "type": "string", "description": "Do not combine with parentUrl." }),
+            );
+            create_properties.insert(
+                "parentUrl".to_string(),
+                json!({ "type": "string", "description": "Do not combine with parentPageId." }),
+            );
         }
-        let mut create_schema = required_confluence_content_schema(
+        let create_schema = required_confluence_content_schema(
             json!({
                 "type": "object",
                 "required": ["space", "title"],
@@ -970,11 +945,6 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
             }),
             &write_formats,
         );
-        if prefix == "page" {
-            create_schema["not"] = json!({
-                "required": ["parentPageId", "parentUrl"]
-            });
-        }
         if !write_formats.is_empty() {
             let create = confluence_action(
                 format!("{prefix}.draft.create"),
@@ -9038,7 +9008,7 @@ fn parse_page_create_inputs(
         parsed.parent_page_id,
         parsed.parent_url,
         config,
-        "confluence.page.create parent",
+        "confluence.page.create",
     )?;
     Ok(PageCreateInputs {
         space: parsed.space,
@@ -9083,14 +9053,16 @@ fn parse_page_move_inputs(
         parsed.page_id,
         parsed.url,
         config,
-        "confluence.page.move page",
+        "confluence.page.move",
+        ("pageId", "url"),
     )?;
     let position = ConfluencePageMovePosition::try_from(parsed.position.as_str())?;
     let target = required_page_locator(
         parsed.target_page_id,
         parsed.target_url,
         config,
-        "confluence.page.move target",
+        "confluence.page.move",
+        ("targetPageId", "targetUrl"),
     )?;
     if page.page_id == target.page_id {
         return Err(ProviderError::deny(
@@ -9156,10 +9128,16 @@ fn parse_attachment_list_inputs(
             }
         }
         (None, Some(url)) => page_locator_from_url(&url, config)?,
-        _ => {
+        (None, None) => {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
-                "confluence.attachment.list requires exactly one of pageId or url",
+                "confluence.attachment.list requires pageId or url",
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(ProviderError::deny(
+                ReasonCode::InputInvalid,
+                "confluence.attachment.list accepts pageId or url, not both",
             ));
         }
     };
@@ -9215,10 +9193,16 @@ fn parse_blog_view_inputs(
             url_space: None,
         },
         (None, Some(url)) => blog_locator_from_url(&url, config)?,
-        _ => {
+        (None, None) => {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
-                "confluence.blog.view requires exactly one of blogId or url",
+                "confluence.blog.view requires blogId or url",
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(ProviderError::deny(
+                ReasonCode::InputInvalid,
+                "confluence.blog.view accepts blogId or url, not both",
             ));
         }
     };
@@ -9308,10 +9292,16 @@ fn parse_blog_attachment_list_inputs(
             url_space: None,
         },
         (None, Some(url)) => blog_locator_from_url(&url, config)?,
-        _ => {
+        (None, None) => {
             return Err(ProviderError::deny(
                 ReasonCode::InputInvalid,
-                "confluence.blog.attachment.list requires exactly one of blogId or url",
+                "confluence.blog.attachment.list requires blogId or url",
+            ));
+        }
+        (Some(_), Some(_)) => {
+            return Err(ProviderError::deny(
+                ReasonCode::InputInvalid,
+                "confluence.blog.attachment.list accepts blogId or url, not both",
             ));
         }
     };
@@ -9368,7 +9358,7 @@ fn parse_page_draft_create_inputs(
         parsed.parent_page_id,
         parsed.parent_url,
         config,
-        "confluence.page.draft.create parent",
+        "confluence.page.draft.create",
     )?;
     Ok(PageDraftCreateInputs {
         space: parsed.space,
@@ -9894,14 +9884,21 @@ fn page_locator_from_inputs(
             "confluence.page.view inputs are invalid",
         )
     })?;
-    required_page_locator(inputs.page_id, inputs.url, config, "confluence.page.view")
+    required_page_locator(
+        inputs.page_id,
+        inputs.url,
+        config,
+        "confluence.page.view",
+        ("pageId", "url"),
+    )
 }
 
 fn required_page_locator(
     page_id: Option<String>,
     url: Option<String>,
     config: &ConfluenceProviderConfig,
-    context: &str,
+    action: &str,
+    (id_field, url_field): (&str, &str),
 ) -> Result<PageLocator, ProviderError> {
     match (page_id, url) {
         (Some(page_id), None) => {
@@ -9912,9 +9909,13 @@ fn required_page_locator(
             })
         }
         (None, Some(url)) => page_locator_from_url(&url, config),
-        _ => Err(ProviderError::deny(
+        (None, None) => Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            format!("{context} requires exactly one page ID or URL locator"),
+            format!("{action} requires {id_field} or {url_field}"),
+        )),
+        (Some(_), Some(_)) => Err(ProviderError::deny(
+            ReasonCode::InputInvalid,
+            format!("{action} accepts {id_field} or {url_field}, not both"),
         )),
     }
 }
@@ -9929,9 +9930,10 @@ fn optional_page_locator(
         (None, None) => Ok(None),
         (Some(_), Some(_)) => Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            format!("{context} accepts only one page ID or URL locator"),
+            format!("{context} accepts parentPageId or parentUrl, not both"),
         )),
-        _ => required_page_locator(page_id, url, config, context).map(Some),
+        _ => required_page_locator(page_id, url, config, context, ("parentPageId", "parentUrl"))
+            .map(Some),
     }
 }
 
@@ -10248,32 +10250,40 @@ fn required_confluence_content_schema(mut schema: Value, formats: &[String]) -> 
         .get_mut("properties")
         .and_then(Value::as_object_mut)
         .expect("Confluence write schema has properties");
+    let object_content = formats.iter().any(|format| format == "atlas_doc_format");
+    let text_formats = formats
+        .iter()
+        .filter(|format| format.as_str() != "atlas_doc_format")
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let (content_type, description) = match (object_content, text_formats.is_empty()) {
+        (true, false) => (
+            json!(["string", "object"]),
+            format!(
+                "Text for {}; an Atlassian document object for atlas_doc_format.",
+                text_formats.join(", ")
+            ),
+        ),
+        (true, true) => (
+            json!("object"),
+            "An Atlassian document object for atlas_doc_format.".to_string(),
+        ),
+        (false, _) => (
+            json!("string"),
+            format!("Text for {}.", text_formats.join(", ")),
+        ),
+    };
     properties.insert(
         "contentFormat".to_string(),
-        json!({ "type": "string", "enum": formats }),
+        json!({
+            "type": "string", "enum": formats,
+            "description": format!("Format of content. {description}")
+        }),
     );
-    properties.insert("content".to_string(), json!({}));
-    let conditions = formats
-        .iter()
-        .map(|format| {
-            json!({
-                "if": {
-                    "properties": { "contentFormat": { "const": format } },
-                    "required": ["contentFormat"]
-                },
-                "then": {
-                    "properties": {
-                        "content": if format == "atlas_doc_format" {
-                            json!({ "type": "object" })
-                        } else {
-                            json!({ "type": "string" })
-                        }
-                    }
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    object.insert("allOf".to_string(), Value::Array(conditions));
+    properties.insert(
+        "content".to_string(),
+        json!({ "type": content_type, "description": description }),
+    );
     schema
 }
 
