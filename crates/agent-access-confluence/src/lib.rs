@@ -10256,28 +10256,45 @@ fn required_confluence_content_schema(mut schema: Value, formats: &[String]) -> 
         .filter(|format| format.as_str() != "atlas_doc_format")
         .map(String::as_str)
         .collect::<Vec<_>>();
-    let (content_type, description) = match (object_content, text_formats.is_empty()) {
-        (true, false) => (
-            json!(["string", "object"]),
-            format!(
-                "Text for {}; an Atlassian document object for atlas_doc_format.",
-                text_formats.join(", ")
-            ),
-        ),
-        (true, true) => (
-            json!("object"),
-            "An Atlassian document object for atlas_doc_format.".to_string(),
-        ),
-        (false, _) => (
-            json!("string"),
-            format!("Text for {}.", text_formats.join(", ")),
-        ),
+    let format_list = |conjunction: &str| match text_formats.split_last() {
+        Some((last, [])) => (*last).to_string(),
+        Some((last, preceding)) => format!("{} {conjunction} {last}", preceding.join(", ")),
+        None => String::new(),
     };
+    let (content_type, description, format_description) =
+        match (object_content, text_formats.is_empty()) {
+            (true, false) => (
+                json!(["string", "object"]),
+                format!(
+                    "Text for {}; an Atlassian document object for atlas_doc_format.",
+                    format_list("and")
+                ),
+                format!(
+                    "Use atlas_doc_format for an Atlassian document object, or {} for a string.",
+                    format_list("or")
+                ),
+            ),
+            (true, true) => (
+                json!("object"),
+                "An Atlassian document object for atlas_doc_format.".to_string(),
+                "Use atlas_doc_format for an Atlassian document object.".to_string(),
+            ),
+            (false, false) => (
+                json!("string"),
+                format!("Text for {}.", format_list("and")),
+                format!("Use {} for a string.", format_list("or")),
+            ),
+            (false, true) => (
+                json!("string"),
+                "Text content.".to_string(),
+                "No content formats are enabled.".to_string(),
+            ),
+        };
     properties.insert(
         "contentFormat".to_string(),
         json!({
             "type": "string", "enum": formats,
-            "description": format!("Format of content. {description}")
+            "description": format_description
         }),
     );
     properties.insert(

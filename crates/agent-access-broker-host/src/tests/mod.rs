@@ -18181,22 +18181,28 @@ fn assert_confluence_normalized_content_schema(schema: &Value, action: &str) {
             "unexpected {keyword} on {action}"
         );
     }
-    for field in ["content", "contentFormat"] {
-        assert!(
-            schema["properties"][field]["description"]
-                .as_str()
-                .unwrap()
-                .contains("Text for storage, markdown, plain_text")
-        );
-        if matches!(action, "page.create" | "page.update") {
-            assert!(
-                schema["properties"][field]["description"]
-                    .as_str()
-                    .unwrap()
-                    .contains("an Atlassian document object for atlas_doc_format")
-            );
-        }
-    }
+    let (content_description, format_description) = if matches!(
+        action,
+        "page.create" | "page.update"
+    ) {
+        (
+            "Text for storage, markdown and plain_text; an Atlassian document object for atlas_doc_format.",
+            "Use atlas_doc_format for an Atlassian document object, or storage, markdown or plain_text for a string.",
+        )
+    } else {
+        (
+            "Text for storage, markdown and plain_text.",
+            "Use storage, markdown or plain_text for a string.",
+        )
+    };
+    assert_eq!(
+        schema["properties"]["content"]["description"], content_description,
+        "wrong content guidance for {action}"
+    );
+    assert_eq!(
+        schema["properties"]["contentFormat"]["description"], format_description,
+        "wrong format guidance for {action}"
+    );
 }
 
 const GITLAB_NORMALIZED_WRITE_ACTIONS: &[&str] = &[

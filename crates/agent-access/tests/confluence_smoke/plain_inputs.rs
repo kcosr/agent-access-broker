@@ -214,17 +214,22 @@ async fn confluence_plain_inputs_preserve_stdio_and_send_validation() {
 
     // Generic invocation and JSON send keep their own omitted-input default;
     // the relaxed published schema lets the provider explain the missing locator.
-    let invoked = cli(&base)
-        .args(["invoke", "confluence.page.view"])
-        .output()
-        .unwrap();
-    assert!(!invoked.status.success());
-    let invoked: Value = serde_json::from_slice(&invoked.stdout).unwrap();
-    assert_eq!(invoked["reasonCode"], "input_invalid");
-    assert_eq!(
-        invoked["reason"],
-        "confluence.page.view requires pageId or url"
-    );
+    for inputs in [None, Some("{}")] {
+        let mut command = cli(&base);
+        command.args(["invoke", "confluence.page.view"]);
+        if let Some(inputs) = inputs {
+            command.args(["--input-json", inputs]);
+        }
+        let invoked = command.output().unwrap();
+        assert!(!invoked.status.success());
+        let invoked: Value = serde_json::from_slice(&invoked.stdout).unwrap();
+        assert_eq!(invoked["decision"], "deny");
+        assert_eq!(invoked["reasonCode"], "input_invalid");
+        assert_eq!(
+            invoked["reason"],
+            "confluence.page.view requires pageId or url"
+        );
+    }
     for inputs in [None, Some(json!({})), Some(json!({"url": PAGE_URL}))] {
         let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "confluence", "action": "page.view"});
         if let Some(inputs) = inputs {
