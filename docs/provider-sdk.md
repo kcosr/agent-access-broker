@@ -1829,9 +1829,9 @@ providers are tested against that profile.
 The provider's message stands when the inputs satisfy the schema, and when
 explaining is outside the host's budget or discovery hides the action from
 the caller, so give each denial a specific message without supplied values.
-Name the involved fields and the required relationship, such as
-`notes.note.view requires note or url` or
-`notes.note.view accepts note or url, not both`. Preserve the error's reason,
+Name the involved fields and the required relationship. For a hypothetical
+action that accepts a key or a URL, use `<service>.<action> requires key or url`
+or `<service>.<action> accepts key or url, not both`. Preserve the error's reason,
 decision, status, result and audit data when improving a message. Do not expose
 configuration that the caller cannot discover.
 Never make the schema stricter than the parser. A schema may leave a rule,

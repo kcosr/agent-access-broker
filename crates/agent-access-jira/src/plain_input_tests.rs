@@ -575,6 +575,37 @@ fn nullable_comment_options_and_property_values_keep_their_meaning() {
     assert_eq!(update.visibility_mode, CommentVisibilityMode::Preserve);
     assert!(update.visibility.is_none());
     assert!(!update.notify_users);
+
+    let visibility = json!({"type": "role", "value": "caller-secret"});
+    let mut visibility_config = config.clone();
+    visibility_config.comments.allowed_visibility =
+        vec![serde_json::from_value(visibility.clone()).unwrap()];
+    let mut update = inputs("comment.update");
+    update["visibilityMode"] = json!("set");
+    assert_denial(
+        parse_comment_update_inputs(&update, &visibility_config).unwrap_err(),
+        ReasonCode::InputInvalid,
+        Some("jira.comment.update set mode requires visibility"),
+    );
+    update["visibility"] = visibility;
+    let parsed = parse_comment_update_inputs(&update, &visibility_config).unwrap();
+    assert_eq!(parsed.visibility_mode, CommentVisibilityMode::Set);
+    let parsed_visibility = parsed.visibility.unwrap();
+    assert_eq!(parsed_visibility.visibility_type, "role");
+    assert_eq!(parsed_visibility.value.as_deref(), Some("caller-secret"));
+    for explicit_mode in [true, false] {
+        if explicit_mode {
+            update["visibilityMode"] = json!("preserve");
+        } else {
+            update.as_object_mut().unwrap().remove("visibilityMode");
+        }
+        assert_denial(
+            parse_comment_update_inputs(&update, &visibility_config).unwrap_err(),
+            ReasonCode::InputInvalid,
+            Some("jira.comment.update preserve mode must not include visibility"),
+        );
+    }
+
     for action in [
         "comment.property.list",
         "comment.property.get",

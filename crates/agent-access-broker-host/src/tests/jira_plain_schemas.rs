@@ -333,6 +333,7 @@ async fn jira_schema_accepts_relations_that_the_provider_still_refuses() {
                 ))
                 .header(AUTHORIZATION, format!("Bearer {TOKEN_A}"))
                 .header(CONTENT_TYPE, "application/json")
+                .header(REQUEST_ID_HEADER, "jira-plain-omitted-inputs")
                 .body(Body::from("{}"))
                 .unwrap(),
         )
