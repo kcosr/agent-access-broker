@@ -123,9 +123,10 @@ pub(crate) fn admit_schema<E: From<SqliteAdmissionError>>(
                 // A concurrent initializer commits one migration per write
                 // transaction; keep waiting only while its ledger advances.
                 if busy_at_applied_len == Some(applied_len) {
-                    return Err(SqliteAdmissionError::Unavailable(
-                        "database is locked".to_string(),
-                    )
+                    return Err(SqliteAdmissionError::Unavailable(format!(
+                        "failed to begin {} migration {}: database is locked (ledger remained at {applied_len} applied migrations)",
+                        label.name, migrations[applied_len].version,
+                    ))
                     .into());
                 }
                 busy_at_applied_len = Some(applied_len);
@@ -140,15 +141,37 @@ pub(crate) fn read_validated_ledger<E: From<SqliteAdmissionError>>(
     label: SqliteStoreLabel,
 ) -> Result<ValidatedLedger, E> {
     if !conn.is_autocommit() {
-        return Ok(read_validated_ledger_snapshot(conn, migrations, label)?);
+        return Ok(read_validated_ledger_snapshot(conn, migrations, label)
+            .map_err(|error| ledger_read_error(error, label))?);
     }
     // Classify against one snapshot: another initializer may publish the complete
     // baseline between the ledger-presence and user-object queries.
-    let tx = conn.unchecked_transaction().map_err(sql_unavailable)?;
-    let result = read_validated_ledger_snapshot(&tx, migrations, label)?;
-    tx.commit().map_err(sql_unavailable)?;
+    let tx = conn.unchecked_transaction().map_err(|error| {
+        SqliteAdmissionError::Unavailable(format!(
+            "failed to begin {} migration ledger snapshot: {error}",
+            label.name
+        ))
+    })?;
+    let result = read_validated_ledger_snapshot(&tx, migrations, label)
+        .map_err(|error| ledger_read_error(error, label))?;
+    tx.commit().map_err(|error| {
+        SqliteAdmissionError::Unavailable(format!(
+            "failed to finish {} migration ledger snapshot: {error}",
+            label.name
+        ))
+    })?;
     // End the read transaction before admission starts an immediate write transaction.
     Ok(result)
+}
+
+fn ledger_read_error(error: SqliteAdmissionError, label: SqliteStoreLabel) -> SqliteAdmissionError {
+    match error {
+        SqliteAdmissionError::Unavailable(message) => SqliteAdmissionError::Unavailable(format!(
+            "failed to read {} migration ledger: {message}",
+            label.name
+        )),
+        other => other,
+    }
 }
 
 fn read_validated_ledger_snapshot<E>(
@@ -201,7 +224,11 @@ fn apply_next_migration<E: From<SqliteAdmissionError>>(
         if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy) {
             return Ok(MigrationApplyResult::Busy);
         }
-        return Err(sql_unavailable(error).into());
+        return Err(SqliteAdmissionError::Unavailable(format!(
+            "failed to begin {} migration transaction: {error}",
+            label.name
+        ))
+        .into());
     }
     let result = (|| -> Result<MigrationApplyResult, E> {
         let actual_applied_len = match read_validated_ledger(conn, migrations, label)? {
@@ -242,12 +269,22 @@ fn apply_next_migration<E: From<SqliteAdmissionError>>(
                 chrono::Utc::now().to_rfc3339()
             ],
         )
-        .map_err(sql_unavailable)?;
+        .map_err(|error| {
+            SqliteAdmissionError::Unavailable(format!(
+                "failed to record {} migration {}: {error}",
+                label.name, migration.version
+            ))
+        })?;
         Ok(MigrationApplyResult::Applied(migration.version.to_string()))
     })();
     match result {
         Ok(MigrationApplyResult::Applied(version)) => {
-            conn.execute_batch("COMMIT").map_err(sql_unavailable)?;
+            conn.execute_batch("COMMIT").map_err(|error| {
+                SqliteAdmissionError::Unavailable(format!(
+                    "failed to commit {} migration {version}: {error}",
+                    label.name
+                ))
+            })?;
             Ok(MigrationApplyResult::Applied(version))
         }
         Ok(outcome @ (MigrationApplyResult::Reclassify | MigrationApplyResult::Busy)) => {
@@ -739,6 +776,141 @@ pub(crate) fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
     let mut shm = path.as_os_str().to_os_string();
     shm.push("-shm");
     [PathBuf::from(wal), PathBuf::from(shm)]
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    // A deadlock watchdog, not an assertion about migration execution speed.
+    const WATCHDOG: Duration = Duration::from_secs(30);
+    type Gate = (Sender<()>, Receiver<()>);
+    thread_local! {
+        // SQLite's callbacks cannot capture state. Per-thread gates keep the
+        // interleaving independent of other tests and elapsed wall time.
+        static SEED_GATE: RefCell<Option<Gate>> = const { RefCell::new(None) };
+        static WRITE_LOCK_GATE: RefCell<Option<Gate>> = const { RefCell::new(None) };
+    }
+
+    const LABEL: SqliteStoreLabel = SqliteStoreLabel {
+        name: "test database",
+        incompatible_message: "test database is incompatible",
+    };
+    const SCHEMA: &str = "
+        CREATE TABLE schema_migrations (
+            version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL
+        );
+        CREATE TABLE seeded_items (id INTEGER PRIMARY KEY);
+    ";
+    const MIGRATIONS: &[SqliteMigration<SqliteAdmissionError>] = &[SqliteMigration {
+        version: "001_seeded_items",
+        checksum: "test-checksum",
+        sql: SCHEMA,
+        seed: Some(seed_and_wait),
+        structural_validation: validate_structure,
+    }];
+
+    fn seed_and_wait(conn: &Connection) -> Result<(), SqliteAdmissionError> {
+        conn.execute("INSERT INTO seeded_items(id) VALUES (1)", [])
+            .map_err(sql_unavailable)?;
+        SEED_GATE.with(|slot| {
+            let (entered, released) = slot
+                .borrow_mut()
+                .take()
+                .expect("only the first initializer may run the seed");
+            entered.send(()).unwrap();
+            released
+                .recv_timeout(WATCHDOG)
+                .expect("migration seed was not released");
+        });
+        Ok(())
+    }
+
+    fn validate_structure(conn: &Connection) -> Result<(), SqliteAdmissionError> {
+        let expected = Connection::open_in_memory().map_err(sql_unavailable)?;
+        expected.execute_batch(SCHEMA).map_err(sql_unavailable)?;
+        compare_schema(conn, &expected, LABEL)
+    }
+
+    #[test]
+    fn concurrent_admission_rechecks_ledger_after_waiting_for_writer() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("store.sqlite");
+        let writer = Connection::open(&path).unwrap();
+        // Isolate migration admission from the separate journal-mode transition.
+        writer.execute_batch("PRAGMA journal_mode = WAL").unwrap();
+        let waiter = Connection::open(&path).unwrap();
+        let (seed_entered, seed_ready) = channel();
+        // These release senders stay in the test: unwinding drops them and
+        // releases any worker still waiting at a gate.
+        let (release_seed, seed_released) = channel();
+        let (first_finished, first_done) = channel();
+        let first = std::thread::spawn(move || {
+            SEED_GATE.with(|slot| *slot.borrow_mut() = Some((seed_entered, seed_released)));
+            let result = admit_schema(&writer, MIGRATIONS, LABEL, true);
+            drop(writer);
+            let _ = first_finished.send(());
+            result
+        });
+        seed_ready
+            .recv_timeout(WATCHDOG)
+            .expect("first initializer did not enter its migration seed");
+
+        let (write_blocked, write_ready) = channel();
+        let (release_write, write_released) = channel();
+        let (second_finished, second_done) = channel();
+        let second = std::thread::spawn(move || {
+            WRITE_LOCK_GATE.with(|slot| {
+                *slot.borrow_mut() = Some((write_blocked, write_released));
+            });
+            waiter
+                .busy_handler(Some(|_| {
+                    WRITE_LOCK_GATE.with(|slot| {
+                        let Some((blocked, released)) = slot.borrow_mut().take() else {
+                            return false;
+                        };
+                        blocked.send(()).is_ok() && released.recv_timeout(WATCHDOG).is_ok()
+                    })
+                }))
+                .unwrap();
+            let result = admit_schema(&waiter, MIGRATIONS, LABEL, true);
+            drop(waiter);
+            let _ = second_finished.send(());
+            result
+        });
+        // The second initializer has classified the uncommitted schema as empty
+        // and reached BEGIN IMMEDIATE. Publish the first migration before its
+        // write-lock attempt resumes, forcing reclassification under that lock.
+        write_ready
+            .recv_timeout(WATCHDOG)
+            .expect("second initializer did not wait for the migration write lock");
+        release_seed.send(()).unwrap();
+        first_done
+            .recv_timeout(WATCHDOG)
+            .expect("first initializer did not finish and close its connection");
+        let first_applied = first.join().unwrap().unwrap();
+        release_write.send(()).unwrap();
+        second_done
+            .recv_timeout(WATCHDOG)
+            .expect("second initializer did not finish and close its connection");
+        let second_applied = second.join().unwrap().unwrap();
+        assert_eq!(
+            first_applied,
+            BTreeSet::from([MIGRATIONS[0].version.to_string()])
+        );
+        assert!(second_applied.is_empty());
+
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(read_migration_rows(&conn, LABEL).unwrap().len(), 1);
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM seeded_items", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
 }
 
 #[cfg(all(test, unix))]

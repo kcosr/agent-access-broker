@@ -1031,37 +1031,54 @@ pub(crate) async fn handle(
     if !native {
         state.reloadable.wait_mcp_discovery_barrier().await;
     }
-    let discovery_deadline =
-        tokio::time::Instant::now() + Duration::from_millis(config.protocol_timeout_ms);
-    let final_check = tokio::time::timeout_at(
-        discovery_deadline,
-        tokio::task::spawn_blocking(move || {
+    let discovery_started = tokio::time::Instant::now();
+    let discovery_deadline = discovery_started + Duration::from_millis(config.protocol_timeout_ms);
+    let final_check = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::Identity);
+        owned.identity = owned
+            .identity_pin
+            .revalidate_sync(&owner, &owned.snapshot, &owned.headers)
+            .map_err(PreProtocolFailure::Identity)?;
+        if initialize && owned.view.service().is_some() {
+            worker_phase.store(PreProtocolPhase::View as u8, Ordering::Release);
             #[cfg(test)]
-            owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::Identity);
-            owned.identity = owned
-                .identity_pin
-                .revalidate_sync(&owner, &owned.snapshot, &owned.headers)
-                .map_err(PreProtocolFailure::Identity)?;
-            if initialize && owned.view.service().is_some() {
-                worker_phase.store(PreProtocolPhase::View as u8, Ordering::Release);
-                #[cfg(test)]
-                owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::View);
-                handler::Handler::validate_view(&owned).map_err(|_| PreProtocolFailure::View)?;
+            owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::View);
+            handler::Handler::validate_view(&owned).map_err(|_| PreProtocolFailure::View)?;
+        }
+        // Prepare discovery inside this same admitted worker. The SDK may
+        // queue its callback, but no identity-sensitive discovery is deferred
+        // past this boundary and every proof failure keeps its HTTP status.
+        worker_phase.store(PreProtocolPhase::Discovery as u8, Ordering::Release);
+        #[cfg(test)]
+        owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::Discovery);
+        owned.prepared_discovery = handler::Handler::new(discovery_endpoint, owned.view.clone())
+            .prepare_discovery(&owned, &discovery_message)
+            .map(Arc::new);
+        Ok::<_, PreProtocolFailure>((owned.identity, owned.prepared_discovery))
+    });
+    #[cfg(test)]
+    let discovery_deadline = {
+        let expiry = state
+            .reloadable
+            .mcp_preprotocol_expiry
+            .lock()
+            .unwrap()
+            .take();
+        if let Some(expiry) = expiry {
+            // The test keeps the worker blocked until it has selected the
+            // phase. Check the production-computed budget before expiring the
+            // real timeout without a wall-clock wait. A dropped sender skips
+            // the assertion and releases this wait during test cleanup.
+            if let Ok(expected_budget) = expiry.await {
+                assert_eq!(discovery_deadline - discovery_started, expected_budget);
             }
-            // Prepare discovery inside this same admitted worker. The SDK may
-            // queue its callback, but no identity-sensitive discovery is deferred
-            // past this boundary and every proof failure keeps its HTTP status.
-            worker_phase.store(PreProtocolPhase::Discovery as u8, Ordering::Release);
-            #[cfg(test)]
-            owner.wait_mcp_preprotocol_barrier(PreProtocolPhase::Discovery);
-            owned.prepared_discovery =
-                handler::Handler::new(discovery_endpoint, owned.view.clone())
-                    .prepare_discovery(&owned, &discovery_message)
-                    .map(Arc::new);
-            Ok::<_, PreProtocolFailure>((owned.identity, owned.prepared_discovery))
-        }),
-    )
-    .await;
+            tokio::time::Instant::now()
+        } else {
+            discovery_deadline
+        }
+    };
+    let final_check = tokio::time::timeout_at(discovery_deadline, final_check).await;
     match final_check {
         Ok(Ok(Ok((identity, discovery)))) => {
             admitted.identity = identity;

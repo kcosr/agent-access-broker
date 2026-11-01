@@ -217,6 +217,12 @@ All notable changes to this project are documented in this file.
   acceptance, audit fields and content formats are unchanged. See
   [Jira input arguments](docs/providers-jira.md#input-arguments).
 
+- **Release qualification uses nextest for Rust tests.** Install cargo-nextest
+  0.9.150 or newer before qualifying a release. The Rust suite runs with sixteen
+  workers and no retries; Cargo doctests remain a separate required gate.
+  See [release qualification](docs/release-readiness.md#qualify-the-candidate).
+  ([#86](https://github.com/kcosr/agent-access-broker/pull/86))
+
 - **Jira comment pagination is explicit.** Metadata and body pages send an
   explicit chronological order by default and return the effective ordering,
   completion status and next offset. Byte-limited body pages return fewer whole
