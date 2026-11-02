@@ -13,6 +13,9 @@ const REQUIRED_COVERAGE: &[&str] = &[
     "type-page",
     "title-contains",
     "text-contains",
+    "title-not-contains",
+    "text-not-contains",
+    "text-negation-leading-group",
     "label-eq",
     "label-neq",
     "label-in",
@@ -61,7 +64,7 @@ const REQUIRED_COVERAGE: &[&str] = &[
 ];
 
 #[test]
-fn example_manifest_covers_exclusions_without_expected_failures() {
+fn example_manifest_covers_exclusions_and_text_negation_without_expected_failures() {
     let manifest: Manifest = serde_json::from_str(include_str!(
         "fixtures/confluence-cql-conformance.example.json"
     ))
@@ -79,13 +82,16 @@ fn example_manifest_covers_exclusions_without_expected_failures() {
                     | "content-id-not-in"
                     | "negative-leading-clause"
                     | "negative-leading-group"
+                    | "title-not-contains"
+                    | "text-not-contains"
+                    | "text-negation-leading-group"
             )
         }) {
             assert!(
                 case.expect
                     .as_ref()
                     .is_none_or(|expect| expect.expected_upstream_failure.is_none()),
-                "new exclusion case {} must expect upstream acceptance",
+                "exclusion and text negation case {} must expect upstream acceptance",
                 case.id
             );
         }

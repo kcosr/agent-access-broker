@@ -696,3 +696,94 @@ async fn resource_exclusion_continuations_bind_filters_context_and_current_autho
         }
     }
 }
+
+#[tokio::test]
+async fn text_negation_continuations_bind_polarity_operands_and_effective_scope() {
+    let inputs = |query: &str| json!({"query":{"type":"jql","value":query}});
+    for field in ["summary", "description", "cf[12345]"] {
+        for operator in ["~", "!~"] {
+            for scope in [
+                finite(&["PROJ", "OTHER"]),
+                all_except(&[]),
+                all_except(&["PRIVATE"]),
+            ] {
+                let harness = Harness::new();
+                let query = format!("updated >= -7d AND {field} {operator} 'privateTextTerm'");
+                let token = harness
+                    .first_page(search(inputs(&query), scope.clone(), None).build())
+                    .await;
+                let equivalent = format!(
+                    "UPDATED >= -7d AND {} {operator} \"privateTextTerm\"",
+                    field.to_ascii_uppercase()
+                );
+                harness
+                    .provider
+                    .invoke(search(inputs(&equivalent), scope.clone(), Some(&token)).build())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    harness.last_search().next_page_token.as_deref(),
+                    Some(UPSTREAM)
+                );
+                let searches = harness.upstream_searches();
+                let reversed = if operator == "~" { "!~" } else { "~" };
+                for changed in [
+                    format!("updated >= -7d AND {field} {reversed} 'privateTextTerm'"),
+                    format!("updated >= -7d AND {field} {operator} 'changedTextTerm'"),
+                ] {
+                    let error = harness
+                        .provider
+                        .invoke(search(inputs(&changed), scope.clone(), Some(&token)).build())
+                        .await
+                        .unwrap_err();
+                    assert_rejected_token(error);
+                }
+                assert_eq!(harness.upstream_searches(), searches);
+                let narrowed = scope.intersection(&finite(&["PROJ"]));
+                let error = harness
+                    .provider
+                    .invoke(search(inputs(&query), narrowed, Some(&token)).build())
+                    .await
+                    .unwrap_err();
+                assert_scope_changed(error);
+                assert_eq!(harness.upstream_searches(), searches);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn text_negation_continuation_rechecks_authority_without_invalidating_unchanged_query() {
+    let harness = Harness::new();
+    let inputs = json!({
+        "query":{"type":"jql","value":"summary !~ 'obsolete'"},
+        "projects":["PROJ"]
+    });
+    let token = harness
+        .first_page(search(inputs.clone(), finite(&["PROJ", "OTHER"]), None).build())
+        .await;
+    // Explicit projects already narrowed the composed query to PROJ. Losing
+    // other authority does not invalidate this continuation by itself.
+    harness
+        .provider
+        .invoke(search(inputs.clone(), finite(&["PROJ"]), Some(&token)).build())
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.last_search().jql,
+        "(summary !~ \"obsolete\") AND project IN (PROJ)"
+    );
+    let mut moved = page_with_upstream_token(UPSTREAM);
+    moved.issues[0].project = "OTHER".into();
+    moved.issues[0].key = "OTHER-1".into();
+    moved.issues[0].summary = Some("privateMovedIssue".into());
+    *harness.backend.search_page.lock().unwrap() = Some(moved);
+    let error = harness
+        .provider
+        .invoke(search(inputs, finite(&["PROJ"]), Some(&token)).build())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert!(error.result.is_none());
+    assert!(!format!("{error:?}").contains("privateMovedIssue"));
+}

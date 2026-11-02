@@ -54,6 +54,24 @@
       "covers": ["negative-leading-group"]
     },
     {
+      "id": "title-text-negation",
+      "description": "Checks title text negation after the broker's positive type and authorized-space predicates.",
+      "cql": "title !~ \"obsolete\"",
+      "covers": ["title-not-contains"]
+    },
+    {
+      "id": "full-text-negation",
+      "description": "Checks aggregate text negation with a quoted phrase using Confluence's text-index semantics.",
+      "cql": "text !~ \"\\\"deprecated procedure\\\"\"",
+      "covers": ["text-not-contains"]
+    },
+    {
+      "id": "text-negation-leading-group",
+      "description": "Checks grouped negative title and text clauses remain after the broker's fixed positive type and authorized-space predicates.",
+      "cql": "(title !~ \"obsolete\" AND text !~ \"deprecated\") OR (title !~ \"archived\" AND text !~ \"superseded\")",
+      "covers": ["text-negation-leading-group"]
+    },
+    {
       "id": "title-text-and-escaping",
       "description": "Proves Confluence accepts title and text contains clauses with escaped string literal content.",
       "cql": "title ~ \"runbook (draft)\" AND text ~ \"deploy \\\"quoted\\\" steps\"",

@@ -29,6 +29,9 @@ mod jql_custom_field_tests;
 #[path = "jql_exclusion_tests.rs"]
 mod jql_exclusion_tests;
 
+#[path = "jql_text_negation_tests.rs"]
+mod jql_text_negation_tests;
+
 #[path = "underscore_key_tests.rs"]
 mod underscore_key_tests;
 
@@ -115,7 +118,7 @@ fn rejects_unsafe_jql_shapes() {
         "filter = 12345",
         "key = proj-124",
         "issueFunction in linkedIssuesOf(\"project = PROJ\")",
-        "description !~ \"secret\"",
+        "text !~ \"secret\"",
         "NOT project = PROJ",
         "updated WAS \"2024-01-01\"",
         "cf[0] = value",

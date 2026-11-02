@@ -18,6 +18,7 @@ fn custom_field_operators_render_canonical_jql_and_preserve_quoted_text() {
         ("cf[12345] is empty", "cf[12345] IS EMPTY"),
         ("cf[12345] is not empty", "cf[12345] IS NOT EMPTY"),
         ("cf[12345] ~ 'EXT-4812'", "cf[12345] ~ \"EXT-4812\""),
+        ("CF[12345] !~ 'EXT-4812'", "cf[12345] !~ \"EXT-4812\""),
         ("cf[12345] = 'OR'", "cf[12345] = \"OR\""),
         (
             "cf[18446744073709551615] = value",
@@ -34,7 +35,7 @@ fn custom_field_operators_render_canonical_jql_and_preserve_quoted_text() {
     // Jira reserves more words than Broker's structural keyword set. Preserve
     // the caller's quotes for every custom-field string, including list values.
     for value in ["No", "True", "False", "Default", "user", "date"] {
-        for operator in ["=", "!=", "<", "<=", ">", ">=", "~"] {
+        for operator in ["=", "!=", "<", "<=", ">", ">=", "~", "!~"] {
             let input = format!("cf[12345] {operator} '{value}'");
             let expected = format!("cf[12345] {operator} \"{value}\"");
             assert_eq!(canonical_jql(&input), expected);
@@ -67,7 +68,8 @@ fn custom_field_discovery_capabilities_match_the_parser_and_documentation() {
             "NOT IN",
             "IS EMPTY",
             "IS NOT EMPTY",
-            "~"
+            "~",
+            "!~"
         ]
     );
     assert_eq!(
@@ -78,7 +80,7 @@ fn custom_field_discovery_capabilities_match_the_parser_and_documentation() {
         let operand = match *operator {
             "IN" | "NOT IN" => "(value)",
             "IS EMPTY" | "IS NOT EMPTY" => "",
-            "~" => "\"value\"",
+            "~" | "!~" => "\"value\"",
             _ => "value",
         };
         assert!(
@@ -147,7 +149,7 @@ fn custom_field_references_are_strict_bounded_tokens() {
     }
     for query in [
         "cf[12345] ~ privateValue",
-        "cf[12345] !~ 'privateValue'",
+        "cf[12345] !~ privateValue",
         "cf[12345] WAS privateValue",
         "cf[12345] CHANGED",
         "NOT cf[12345] = privateValue",

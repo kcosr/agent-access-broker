@@ -476,6 +476,15 @@
             "value": "space != ARCHIVE AND content.id NOT IN (12345, 67890)"
           }
         }
+      },
+      {
+        "label": "Exclude title and full-text matches within authorized access",
+        "inputs": {
+          "query": {
+            "type": "cql",
+            "value": "title !~ \"obsolete\" AND text !~ \"deprecated\""
+          }
+        }
       }
     ],
     "typedCommand": "Typed CLI wrapper: agent-access confluence blog search [OPTIONS]; run agent-access confluence blog search --help for flags and input alternatives."
@@ -988,6 +997,15 @@
           "query": {
             "type": "cql",
             "value": "space NOT IN (ARCHIVE, SANDBOX) AND id != 12345"
+          }
+        }
+      },
+      {
+        "label": "Exclude title and full-text matches within authorized access",
+        "inputs": {
+          "query": {
+            "type": "cql",
+            "value": "title !~ \"obsolete\" AND text !~ \"deprecated\""
           }
         }
       }

@@ -17,6 +17,7 @@ mod plain_inputs;
 mod search_exclusions;
 mod space_aliases;
 mod space_keys;
+mod text_negation;
 
 #[test]
 fn descriptor_declares_storage_body_attribution_for_exact_action_set() {
@@ -2447,7 +2448,7 @@ fn raw_cql_rejects_unsupported_fields_operators_and_functions() {
         "space ~ \"OPS\"",
         "ancestor != 123456",
         "parent NOT IN (123456)",
-        "title !~ \"x\"",
+        "label !~ \"x\"",
         "currentUser()",
         "filter = 123",
         "created >= 2024-01-01T12:30:00Z",

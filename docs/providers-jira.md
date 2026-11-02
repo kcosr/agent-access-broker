@@ -448,13 +448,17 @@ keeps the intersection of Jira and Broker capabilities, so unsupported upstream
 operators are not added merely because Broker parses them.
 
 Use `jqlReference` rather than the display name or REST `id` when constructing
-JQL. A text field might advertise `~`, while a select field might advertise `=`
-or `IN`. Text `~` uses Jira's text-search semantics, not strict whole-value
-equality. Discovery describes search capabilities visible to this credential;
+JQL. A text field might advertise `~` and `!~`, while a select field might
+advertise `=` or `IN`. Both text operators use Jira's indexed text-search
+semantics, including word forms and phrase matching. Discovery describes search
+capabilities visible to this credential;
 it is not a complete configuration inventory for every issue type and does not
 enumerate custom-field options. Jira still validates each query against the
-field's current type, searcher, permissions and configuration. Search preserves
-the existing [project containment and continuation rules](#search-and-jql).
+field's current type, searcher, permissions and configuration. Search does not
+require a preceding discovery call or a `project.view` grant. A field whose
+configured searcher rejects the query returns the existing `upstream_failed`
+search error. Search preserves the existing
+[project containment and continuation rules](#search-and-jql).
 
 Project identity comes from `GET /rest/api/3/project/{project}`. After validating
 that identity, field discovery calls `POST /rest/api/3/jql/autocompletedata`
@@ -1458,13 +1462,14 @@ Supported JQL is intentionally bounded:
 - `reporter` and `creator` accept `=`, `!=`, `IN`, and `NOT IN`.
 - Date fields (`created`, `updated`, `resolutiondate`, `duedate`) accept `=`,
   `!=`, `<`, `<=`, `>`, and `>=`, with date literals or date functions.
-- Text fields (`summary`, `description`, `text`) accept only `~` with a quoted
-  string.
+- `summary` and `description` accept `~` and `!~` with a quoted string.
+- The aggregate `text` field accepts only `~` with a quoted string; `text !~`
+  is unsupported.
 - Custom fields accept `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`,
-  `IS EMPTY`, `IS NOT EMPTY`, and `~`. Use only operators advertised for the
-  selected field; Jira validates type compatibility. `~` requires a quoted
-  string. Custom-field values use the existing scalar/list literal grammar
-  and limits; functions and custom-field sorting are not supported.
+  `IS EMPTY`, `IS NOT EMPTY`, `~`, and `!~`. Use operators advertised for the
+  selected field; Jira validates type and searcher compatibility. `~` and `!~`
+  require a quoted string. Custom-field values use the existing scalar/list
+  literal grammar and limits; functions and custom-field sorting are not supported.
   Quoted custom-field values remain quoted, including option names such as
   `"No"` or `"Default"` that Jira reserves as unquoted keywords.
 
@@ -1474,6 +1479,15 @@ prefix is case-insensitive and canonicalizes to lowercase. Display names and
 REST IDs such as `customfield_12345` are not query aliases. The parser's literal
 handling and project predicates apply to custom fields exactly as to other
 filters; a custom field cannot supply or widen project authority.
+
+Text matching and negation use Jira's text index, including its word, phrase,
+stemming, and wildcard rules. For example, `summary !~ "obsolete"` excludes
+matching text within the authorized project boundary. The broker preserves
+Jira's handling of missing and empty fields; it does not add an implicit
+empty-value branch or calculate a local complement. `description IS EMPTY` is
+not supported, so that branch cannot be added for description searches.
+Custom-field `IS EMPTY` remains available where Jira supports it. Quoted empty
+text is accepted by the parser and remains subject to Jira's validation.
 
 Supported date functions are `now()`, `startOfDay()`, `endOfDay()`,
 `startOfWeek()`, `endOfWeek()`, `startOfMonth()`, `endOfMonth()`,
@@ -1505,15 +1519,17 @@ Scope composition:
   returned when that project is authorized and rejected otherwise.
 - Empty or ordering-only JQL with **all** or **all except** scope returns
   `input_invalid`: supply explicit authorized `projects` or a filter such as
-  `updated >= -7d`. The same rule applies to filters containing only project
-  and/or issue-key `!=` or `NOT IN` clauses, including nested `AND`/`OR` groups.
-  For example, `project != ARCHIVE AND key NOT IN (PROJ-123)` requires a finite
-  effective project scope or an additional filter. Narrowing broad authority
+  `updated >= -7d`. The same rule applies when every clause is a project or
+  issue-key `!=` or `NOT IN` exclusion, or a `!~` text negation, including nested
+  `AND`/`OR` groups and mixtures of those clauses. For example,
+  `project != ARCHIVE AND summary !~ "obsolete"` requires a finite effective
+  project scope or an additional filter. Narrowing broad authority
   with explicit authorized `projects` supplies that finite scope, even if the
-  caller then excludes every selected project. Jira's enhanced search endpoint
-  requires a bounded query; this local check does not implement all of its
-  rules. Other nonempty filters retain existing behavior and Jira remains
-  responsible for evaluating its endpoint-specific query bounds.
+  caller then excludes every selected project. This is Broker's narrow local
+  guard for Jira's bounded-query endpoint, not a complete implementation of
+  Jira's rules. Other nonempty filters, including `status != Done`, retain
+  existing behavior and Jira remains responsible for evaluating its
+  endpoint-specific query bounds.
 - Caller project and issue-key exclusions are query filters, never sources of
   authority. They may name keys outside the caller's access without granting
   it, and do not cause resource lookups. Jira evaluates those operands, including
@@ -1538,12 +1554,14 @@ Examples with a finite project scope of `PROJ`:
 | `--text 'deploy checklist'` | `(text ~ "deploy checklist") AND project IN (PROJ)` |
 | `--jql 'status = "Done"'` | `(status = Done) AND project IN (PROJ)` |
 | `--jql 'project != ARCHIVE AND text ~ "deploy"'` | `(project != ARCHIVE AND text ~ "deploy") AND project IN (PROJ)` |
+| `--jql 'summary !~ "obsolete" AND description !~ "deprecated"'` | `(summary !~ "obsolete" AND description !~ "deprecated") AND project IN (PROJ)` |
 | `--jql 'project NOT IN (ARCHIVE, SANDBOX)'` | `(project NOT IN (ARCHIVE, SANDBOX)) AND project IN (PROJ)` |
 | `--jql 'issuekey NOT IN (PROJ-123, PROJ-456)'` | `(key NOT IN (PROJ-123, PROJ-456)) AND project IN (PROJ)` |
 | `--jql 'status = "In Progress" AND (priority = High OR priority = Highest)'` | `(status = "In Progress" AND (priority = High OR priority = Highest)) AND project IN (PROJ)` |
 | `--jql 'labels NOT IN (security, "needs triage")'` | `(labels NOT IN (security, "needs triage")) AND project IN (PROJ)` |
 | `--jql 'resolution IS NOT EMPTY'` | `(resolution IS NOT EMPTY) AND project IN (PROJ)` |
 | `--jql 'cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"'` | `(cf[12345] ~ "EXT-4812" AND fixVersion = 2.4) AND project IN (PROJ)` |
+| `--jql 'cf[12345] !~ "obsolete"'` | `(cf[12345] !~ "obsolete") AND project IN (PROJ)` |
 | `--jql 'updated >= startOfDay(-7d) ORDER BY updated DESC, key'` | `(updated >= startOfDay(-7d)) AND project IN (PROJ) ORDER BY updated DESC, key ASC` |
 
 Examples accepted only in `per_user` credential mode:
@@ -1555,12 +1573,16 @@ agent-access --url http://127.0.0.1:8787 jira issue search \
 ```
 
 Examples rejected by the broker include mixed `AND`/`OR` without parentheses,
-prefix `NOT`, text negation (`!~`), history predicates such as
+prefix `NOT`, `text !~ "obsolete"`, `summary != "obsolete"`,
+`description IS EMPTY`, history predicates such as
 `status CHANGED FROM Open`, arbitrary fields/functions, unsupported sort fields,
 and Jira Assets/AQL clauses such as object schema or object type predicates.
 Query grammar and cap failures return `input_invalid`, with safe token locations
 and supported alternatives where applicable. Diagnostics do not echo query
 literals. `scope_unresolved` covers returned-result identity/containment failures.
+Jira's own search rejection, such as HTTP 400 for an incompatible custom-field
+searcher or an unbounded query not covered by the local guard, returns
+`upstream_failed` with the generic message `Jira returned non-success`.
 
 ### Search pagination
 

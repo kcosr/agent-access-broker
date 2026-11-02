@@ -25,7 +25,7 @@ pub(crate) const MAX_CONFLUENCE_QUERY_TOKENS: usize = 512;
 pub(crate) const MAX_CONFLUENCE_IN_LIST_VALUES: usize = 100;
 pub(crate) const MAX_CONFLUENCE_STRING_LITERAL_BYTES: usize = 512;
 pub(crate) const MAX_CONFLUENCE_ORDER_TERMS: usize = 5;
-pub(crate) const CONFLUENCE_QUERY_AST_VERSION: u32 = 2;
+pub(crate) const CONFLUENCE_QUERY_AST_VERSION: u32 = 3;
 
 fn cql_operator_names(field: CqlField) -> Vec<&'static str> {
     CqlOperator::ALL
@@ -75,7 +75,8 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
             "grouping": "Parentheses are supported and required when mixing AND and OR at the same level. Prefix NOT is unsupported.",
             "functions": [],
             "literals": "Bare identifiers use ASCII letters, digits, underscore, hyphen and dot; quote other values. Single or double quotes delimit strings. Supported escapes are backslash, double quote, n, r and t. Control characters other than newline, carriage return and tab are rejected; punctuation outside supported grammar is rejected.",
-            "unsupported": ["IS EMPTY", "IS NOT EMPTY", "!~", "prefix NOT"],
+            "unsupported": ["IS EMPTY", "IS NOT EMPTY", "prefix NOT"],
+            "textMatching": "Title and text accept ~ and !~ with a quoted string. Matching uses Confluence's text index, including phrase and wildcard semantics, not literal substring comparison. Empty and absent values retain upstream semantics; the broker does not add an empty-value alternative.",
             "orderBy": {"fields": cql_sort_names(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_CONFLUENCE_ORDER_TERMS},
             "emptyFilter": "Empty or whitespace-only CQL and ORDER BY alone search the effective authorized spaces; the broker always adds the action content type.",
             "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it; wildcard space keys are unsupported. Space and content-ID exclusions are filters and never grant access. The broker emits the fixed content type, authorized space inclusion/exclusion, then the grouped caller filter. Returned content is checked against authorized space keys, not named spaces: Confluence may resolve a space URL alias to its key.",
@@ -94,6 +95,7 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
                 {"query": {"type": "cql", "value": "ORDER BY lastModified DESC"}},
                 {"query": {"type": "cql", "value": ""}},
                 {"query": {"type": "cql", "value": "title ~ \"runbook\" ORDER BY created DESC"}, "spaces": ["ENG"]},
+                {"query": {"type": "cql", "value": "title !~ \"obsolete\" AND text !~ \"deprecated\""}, "spaces": ["ENG"]},
                 {"query": {"type": "cql", "value": "space NOT IN (ARCHIVE, SANDBOX) AND content.id != 12345"}},
                 {"query": {"type": "text", "value": "runbook"}}
             ]
@@ -638,7 +640,12 @@ impl CqlClause {
     }
 
     pub(crate) fn collect_text_operand_hashes(&self, hashes: &mut Vec<String>) {
-        if !self.field.is_text() || self.operator != CqlOperator::Contains {
+        if !self.field.is_text()
+            || !matches!(
+                self.operator,
+                CqlOperator::Contains | CqlOperator::NotContains
+            )
+        {
             return;
         }
         if let CqlOperand::Single(CqlValue::String(value)) = &self.operand {
@@ -743,7 +750,9 @@ impl CqlField {
             Self::Ancestor | Self::Parent => {
                 matches!(operator, CqlOperator::Eq | CqlOperator::In)
             }
-            Self::Title | Self::Text => operator == CqlOperator::Contains,
+            Self::Title | Self::Text => {
+                matches!(operator, CqlOperator::Contains | CqlOperator::NotContains)
+            }
             Self::Label => matches!(
                 operator,
                 CqlOperator::Eq | CqlOperator::NotEq | CqlOperator::In | CqlOperator::NotIn
@@ -775,12 +784,13 @@ pub(crate) enum CqlOperator {
     Gt,
     Gte,
     Contains,
+    NotContains,
     In,
     NotIn,
 }
 
 impl CqlOperator {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Eq,
         Self::NotEq,
         Self::Lt,
@@ -788,6 +798,7 @@ impl CqlOperator {
         Self::Gt,
         Self::Gte,
         Self::Contains,
+        Self::NotContains,
         Self::In,
         Self::NotIn,
     ];
@@ -801,6 +812,7 @@ impl CqlOperator {
             Self::Gt => ">",
             Self::Gte => ">=",
             Self::Contains => "~",
+            Self::NotContains => "!~",
             Self::In => "IN",
             Self::NotIn => "NOT IN",
         }
@@ -1109,11 +1121,10 @@ impl CqlParser {
                 CqlOperand::Single(self.next_text_value()?),
             )
         } else if self.consume(&CqlToken::NotTilde) {
-            return Err(cql_input_invalid(format!(
-                "CQL text negation is unsupported for field {}; supported operators: {}",
-                field.canonical(),
-                cql_operator_names(field).join(", ")
-            )));
+            (
+                CqlOperator::NotContains,
+                CqlOperand::Single(self.next_text_value()?),
+            )
         } else {
             let Some(operator) = self.next_word() else {
                 return Err(cql_input_invalid("CQL clause is missing an operator"));
@@ -1307,7 +1318,8 @@ impl CqlParser {
                 | CqlOperator::Lte
                 | CqlOperator::Gt
                 | CqlOperator::Gte
-                | CqlOperator::Contains,
+                | CqlOperator::Contains
+                | CqlOperator::NotContains,
                 CqlOperand::Single(_),
             )
             | (CqlOperator::In | CqlOperator::NotIn, CqlOperand::List(_)) => {}

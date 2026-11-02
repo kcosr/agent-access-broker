@@ -408,7 +408,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         .audit_input("blockedUrl", "Blocked URL"),
         jira_read_action(
             "search",
-            "Search Jira issues using authorized projects; omit projects to use effective access. Empty JQL, ordering alone or filters with only project/issue-key exclusions require a finite project scope.",
+            "Search Jira issues using authorized projects; omit projects to use effective access. Empty JQL, ordering alone or filters with only project/issue-key exclusions or text negation require a finite project scope.",
             json!({
                 "type": "object",
                 "required": ["query"],
@@ -418,7 +418,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                         "required": ["type", "value"],
                         "properties": {
                             "type": { "type": "string", "enum": ["jql", "text"] },
-                            "value": { "type": "string", "description": "JQL subset or nonempty plain text. Example JQL: status = Done ORDER BY updated DESC. Empty JQL, ordering alone or filters with only project/issue-key exclusions require a finite authorized project set." }
+                            "value": { "type": "string", "description": "JQL subset or nonempty plain text. Example JQL: status = Done ORDER BY updated DESC. Empty JQL, ordering alone or filters with only project/issue-key exclusions or text negation require a finite authorized project set." }
                         },
                         "additionalProperties": false
                     },
