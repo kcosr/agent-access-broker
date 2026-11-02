@@ -3,15 +3,15 @@
 The portal includes a committed source snapshot of
 [`kcosr/workbench-ui`](https://github.com/kcosr/workbench-ui) in
 [`apps/portal/src/workbench`](../apps/portal/src/workbench). The upstream
-repository is currently private. Ordinary installs, builds and tests use the
-committed snapshot and public npm dependencies; they need no sibling checkout,
-private registry or upstream access. Broker does not depend on an npm package
+repository is public. Ordinary installs, builds and tests use the committed
+snapshot and public npm dependencies; they need no sibling checkout or access
+to the upstream repository. Broker does not depend on an npm package
 named `workbench-ui` or `workbench-ui-kit`.
 
 [`VENDORED.md`](../apps/portal/src/workbench/VENDORED.md) records the upstream
 commit, and [`VENDORED.json`](../apps/portal/src/workbench/VENDORED.json) records
 the copied file hashes. The current pin is
-`8518a257617f81eab4a974105a5cc42153763c69`. The copied components, helpers and
+`f6e0735a25a29ac2bfeb48ef9cf9604724f5ec6c`. The copied components, helpers and
 styles originated in `kcosr/gh-dash` and were extracted into the shared kit.
 The snapshot also includes the kit's MIT `LICENSE`, local fonts and a portable
 verifier.
@@ -21,9 +21,10 @@ verifier.
 The kit-authored source in this Broker distribution is covered by the root
 [MIT license](../LICENSE). The root [NOTICE](../NOTICE) records the source pin
 and preserves the MIT copyright and permission notice for the gh-dash-derived
-portions. Inter and JetBrains Mono keep their separate SIL Open Font License
-notices in the snapshot's `fonts` directory. This describes the rights and
-notices for the Broker distribution; upstream repository access is separate.
+portions. Inter, JetBrains Mono, IBM Plex Sans and IBM Plex Mono keep their
+separate SIL Open Font License notices in the snapshot's `fonts` directory.
+Lucide icons retain their ISC and Feather-derived MIT notices in
+`LICENSE-Lucide.txt`.
 
 Every portal production build includes these notices and the bundled JavaScript
 and Tailwind CSS dependency notices in `dist/licenses`. Preserve the whole
@@ -75,7 +76,7 @@ rollback on failure. Preserve and investigate reported drift before proceeding.
 Do not edit generated provenance or checksum entries to bypass a refusal.
 
 Review the complete copied diff, keep `.gitattributes`, the kit `LICENSE` and
-both font notices, and update the source pin in this document and the root
+all font and icon notices, and update the source pin in this document and the root
 `NOTICE`. Run the portal unit, build and browser checks from the
 [testing guide](testing.md). Commit the whole snapshot update with the Broker
 integration changes. Upstream access is needed only for this maintainer

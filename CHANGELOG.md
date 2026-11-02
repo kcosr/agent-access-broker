@@ -305,6 +305,11 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Import-review fields use compact labels and responsive rows so long operation
+  names do not overlap adjacent controls. Portal primary actions and information
+  badges retain readable text contrast with the updated shared UI components.
+  ([#92](https://github.com/kcosr/agent-access-broker/pull/92))
+
 - **Local stdio MCP action tools show their arguments in more clients.** Their
   input schemas no longer use a top-level `oneOf` for the `inputs` or
   `requestFile` choice, which MCP clients that render tool input schemas as

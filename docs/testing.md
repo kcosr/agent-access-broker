@@ -501,7 +501,7 @@ Broker, CLI, and portal; earlier passing results do not validate a newer revisio
 Follow [release readiness](release-readiness.md) for distribution notice checks.
 
 Portal builds generate and check `dist/licenses/THIRD-PARTY-NOTICES.txt` and its
-manifest from emitted JavaScript dependencies, alongside the Broker and font
+manifest from emitted JavaScript dependencies, alongside the Broker, font and icon
 licenses. Check the actual copied portal directory before distributing it:
 
 ```bash

@@ -24,6 +24,66 @@ export function Sidebar({
   );
 }
 
+export type SidebarNavProps = {
+  children: ReactNode;
+  className?: string | undefined;
+} & (
+  | {
+      /** Landmark name ("Main") when the group has no visible title. */
+      label: string;
+      title?: undefined;
+    }
+  | {
+      /** Visible group title ("Administration"); it names the landmark. */
+      title: ReactNode;
+      label?: undefined;
+    }
+);
+
+/**
+ * A navigation landmark in the sidebar: SidebarItem links (`current` on the
+ * page's own, `nested` for sub-items), under an optional title. Several in
+ * a row make groups.
+ */
+export function SidebarNav({
+  label,
+  title,
+  children,
+  className,
+}: SidebarNavProps) {
+  const titleId = `wb-side-nav-${useId()}`;
+  return (
+    <nav
+      className={cx("wb-side-nav", className)}
+      aria-label={title === undefined ? label : undefined}
+      aria-labelledby={title === undefined ? undefined : titleId}
+    >
+      {title === undefined ? null : (
+        <div className="wb-side-h">
+          <span className="wb-side-h-title" id={titleId}>
+            {title}
+          </span>
+        </div>
+      )}
+      {children}
+    </nav>
+  );
+}
+
+/**
+ * The bottom of a navigation sidebar (the signed-in user, theme, sign out,
+ * service health), pinned to the bottom edge.
+ */
+export function SidebarFoot({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string | undefined;
+}) {
+  return <div className={cx("wb-side-foot", className)}>{children}</div>;
+}
+
 /** Top block: filter input, Seg, quick links. */
 export function SidebarTop({ children }: { children: ReactNode }) {
   return <div className="wb-side-top">{children}</div>;
@@ -160,8 +220,12 @@ export interface SidebarItemProps {
   /** Colours the icon (e.g. decision facets: success / danger). */
   iconTone?: Tone | undefined;
   count?: number | string | undefined;
+  /** Colours the count with a status tone ("3 running", "1" failed). */
+  countTone?: Tone | undefined;
   /** Selected (aria-current: "page" for links, "true" for buttons). */
   current?: boolean | undefined;
+  /** A sub-item, indented under the item before it. */
+  nested?: boolean | undefined;
   href?: string | undefined;
   onClick?: (() => void) | undefined;
   title?: string | undefined;
@@ -179,7 +243,9 @@ export function SidebarItem({
   icon,
   iconTone,
   count,
+  countTone,
   current = false,
+  nested = false,
   href,
   onClick,
   title,
@@ -197,11 +263,13 @@ export function SidebarItem({
       {trailing}
       {count !== undefined ? " " : null}
       {count !== undefined ? (
-        <span className="wb-side-item-count">{count}</span>
+        <span className={cx("wb-side-item-count", toneClass(countTone))}>
+          {count}
+        </span>
       ) : null}
     </>
   );
-  const cls = cx("wb-side-item", className);
+  const cls = cx("wb-side-item", nested && "wb-side-item--nested", className);
   const item =
     href !== undefined ? (
       <Link

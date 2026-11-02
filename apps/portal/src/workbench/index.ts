@@ -27,14 +27,17 @@ export {
   Sidebar,
   SidebarCheck,
   SidebarEmpty,
+  SidebarFoot,
   SidebarItem,
   SidebarMore,
+  SidebarNav,
   SidebarQuick,
   SidebarSection,
   SidebarTop,
 } from "./components/Sidebar";
 export type {
   SidebarItemProps,
+  SidebarNavProps,
   SidebarSectionAction,
   SidebarSectionProps,
 } from "./components/Sidebar";
@@ -83,8 +86,8 @@ export type {
   SortDir,
   SortState,
 } from "./components/Table";
-export { ListPager } from "./components/Pager";
-export type { ListPagerProps } from "./components/Pager";
+export { ListPager, PagePager } from "./components/Pager";
+export type { ListPagerProps, PagePagerProps } from "./components/Pager";
 export { Sparkline } from "./components/Sparkline";
 export type { SparklineProps } from "./components/Sparkline";
 export { QualifiedName, TruncateStart } from "./components/Text";
@@ -152,6 +155,10 @@ export type {
   SwitchProps,
   TextareaProps,
 } from "./components/Form";
+export { RangeSlider } from "./components/RangeSlider";
+export { ExpandableTextarea } from "./components/ExpandableTextarea";
+export type { ExpandableTextareaProps } from "./components/ExpandableTextarea";
+export type { RangeSliderProps } from "./components/RangeSlider";
 export { FilterInput } from "./components/FilterInput";
 export type { FilterInputProps } from "./components/FilterInput";
 export { Combobox } from "./components/Combobox";
@@ -217,6 +224,16 @@ export type {
   ErrorStateProps,
   MeterProps,
 } from "./components/States";
+export { HistoryStrip, Status, StatusGlyph, Steps } from "./components/Status";
+export type {
+  HistoryItem,
+  HistoryStripProps,
+  StatusProps,
+  StatusTone,
+  StepItem,
+  StepState,
+  StepsProps,
+} from "./components/Status";
 
 // pages
 export {
@@ -269,6 +286,8 @@ export {
   useTheme,
 } from "./lib/theme";
 export type { Theme, ThemeMode, ThemeState } from "./lib/theme";
+export { appliedStyle, applyStyle, STYLE_ATTRIBUTE } from "./lib/style";
+export type { StyleName } from "./lib/style";
 export {
   formatDate,
   formatDateTime,

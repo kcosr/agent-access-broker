@@ -5,7 +5,9 @@
  *   --wb-muted    #6a6964 light, #97958f dark: small muted text on every
  *                 pane background;
  *   --wb-success  #1a7f37 light, #238636 dark,
- *   --wb-danger   #cf222e light, #da3633 dark and
+ *   --wb-danger   #cf222e light, #da3633 dark;
+ *   --wb-accent-solid #2469bd both themes: white text on primary controls
+ *     reaches 5.5:1, including 5.0:1 at the 1.06 brightness hover state.
  *   --wb-warning  #9a6700 light, #9e6a03 dark: white text on the solid fill
  *                 (brighter fills, such as the chart ambers #c98500 and
  *                 #eda100, are too light for it).
@@ -119,6 +121,7 @@
        surface-2 and accent-weak (tests/tokens.test.ts). */
     --wb-muted: #6a6964;
     --wb-accent: #2a78d6;
+    --wb-accent-solid: #2469bd;
     --wb-accent-weak: rgba(42, 120, 214, 0.09);
     --wb-accent-text: #1c5cab;
     --wb-on-accent: #fff;
@@ -186,6 +189,7 @@
     /* Light enough for AA on surface-2, surface-3 and accent-weak. */
     --wb-muted: #97958f;
     --wb-accent: #3987e5;
+    --wb-accent-solid: #2469bd;
     --wb-accent-weak: rgba(57, 135, 229, 0.15);
     --wb-accent-text: #86b6ef;
     --wb-on-accent: #fff;

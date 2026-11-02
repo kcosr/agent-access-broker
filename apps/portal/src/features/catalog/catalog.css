@@ -163,6 +163,7 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  overflow-wrap: anywhere;
   padding: 10px 12px;
   border: 1px solid var(--wb-border);
   border-radius: var(--wb-radius-md);
@@ -179,7 +180,7 @@
 }
 .pt-catalog-review-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 8px 10px;
 }
 .pt-catalog-review-fields > .wb-field {

@@ -201,7 +201,8 @@ services in the portal. Users review their access and manage their own credentia
 and agent tokens. A dedicated token creation page reuses the grant builder’s
 read-only and write-capable action columns, with a live access preview and
 copy-ready HTTP MCP client setup after issuance. Auditors investigate recorded
-activity.
+activity. Import review uses compact field labels and responsive rows so long
+operation names remain readable.
 
 <table>
   <tr>

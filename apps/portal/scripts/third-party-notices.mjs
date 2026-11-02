@@ -8,6 +8,13 @@ const require = createRequire(import.meta.url);
 const portalRoot = fileURLToPath(new URL("../", import.meta.url));
 const noticesFile = "licenses/THIRD-PARTY-NOTICES.txt";
 const manifestFile = "licenses/THIRD-PARTY-MANIFEST.json";
+const kitNotices = [
+  "fonts/LICENSE-Inter.txt",
+  "fonts/LICENSE-JetBrainsMono.txt",
+  "fonts/LICENSE-IBMPlexSans.txt",
+  "fonts/LICENSE-IBMPlexMono.txt",
+  "LICENSE-Lucide.txt"
+];
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const read = (file) => readFileSync(file, "utf8");
 
@@ -99,8 +106,8 @@ export function thirdPartyNotices() {
           + "Preserve this file with the portal assets.\n"
           + packages.map((pkg) => `\n--- ${pkg.name}@${pkg.version} (${pkg.license}) ---\n`
             + pkg.files.map((file) => `\n[${file.name}]\n${file.text.trim()}\n`).join("")).join("")]]);
-        for (const name of ["Inter", "JetBrainsMono"]) {
-          assets.set(`licenses/LICENSE-${name}.txt`, read(path.join(portalRoot, `src/workbench/fonts/LICENSE-${name}.txt`)));
+        for (const file of kitNotices) {
+          assets.set(`licenses/${path.basename(file)}`, read(path.join(portalRoot, "src/workbench", file)));
         }
         assets.set("licenses/LICENSE-Agent-Access-Broker.txt", read(path.join(portalRoot, "../../LICENSE")));
         assets.set("licenses/NOTICE-Agent-Access-Broker.txt", read(path.join(portalRoot, "../../NOTICE")));
@@ -122,7 +129,7 @@ export function thirdPartyNotices() {
 
 export function checkNotices(dist) {
   const manifest = JSON.parse(read(path.join(dist, manifestFile)));
-  const required = [noticesFile, "licenses/LICENSE-Inter.txt", "licenses/LICENSE-JetBrainsMono.txt",
+  const required = [noticesFile, ...kitNotices.map((file) => `licenses/${path.basename(file)}`),
     "licenses/LICENSE-Agent-Access-Broker.txt", "licenses/NOTICE-Agent-Access-Broker.txt"];
   if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.packages) || !manifest.packages.length
       || !manifest.files || !manifest.code || !Object.keys(manifest.code).length

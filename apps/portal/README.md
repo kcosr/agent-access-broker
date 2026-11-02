@@ -65,7 +65,8 @@ module. The generator targets the locked
 Vite 8/Rolldown interface; review its hooks and notice coverage when upgrading
 the bundler. Build-only dependencies that contribute no shipped code are omitted.
 
-The same directory includes the Inter and JetBrains Mono font notices,
+The same directory includes the Inter, JetBrains Mono, IBM Plex Sans and
+IBM Plex Mono font notices, the Lucide icon notice,
 `LICENSE-Agent-Access-Broker.txt`, `NOTICE-Agent-Access-Broker.txt`, and
 `THIRD-PARTY-MANIFEST.json` recording package versions and file digests.
 The normal build validates these files. Validate a copied deployment directory

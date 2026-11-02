@@ -17,8 +17,11 @@ import { usePaneResize } from "../lib/panes";
 import { IconButton } from "./Button";
 
 export interface AppShellProps {
-  /** <TopBar>. */
-  topBar: ReactNode;
+  /**
+   * <TopBar>. Omit it when the sidebar carries the navigation (brand,
+   * SidebarNav, SidebarFoot): the sidebar then runs the full height.
+   */
+  topBar?: ReactNode;
   /** <Sidebar>; omit on settings-style pages. */
   sidebar?: ReactNode;
   /**
@@ -173,7 +176,7 @@ function cssPx(el: Element, name: string): number {
 }
 
 /**
- * The app frame: top bar across, then sidebar | main | drawer. The document
+ * The app frame: top bar across (optional), then sidebar | main | drawer. The document
  * never scrolls; only panes do. The sidebar is resizable (drag, or arrow keys
  * on the separator; double-click resets), collapsible (SidebarToggle or the
  * rail), and both are persisted. With a drawer open the layout keeps the main
@@ -223,6 +226,7 @@ export function AppShell({
   );
   const [forceExpanded, setForceExpanded] = useState(false);
   const [geo, setGeo] = useState({ frame: 0, drawer: 0 });
+  const hasTopBar = topBar !== undefined && topBar !== null && topBar !== false;
   const hasSidebar =
     sidebar !== undefined && sidebar !== null && sidebar !== false;
   const hasDrawer = drawer !== undefined && drawer !== null && drawer !== false;
@@ -459,6 +463,7 @@ export function AppShell({
         ref={frame}
         className={cx(
           "wb-app",
+          !hasTopBar && "wb-app--no-topbar",
           (sidebarResize.dragging || drawerResize.dragging) && "is-resizing",
           className,
         )}
@@ -467,7 +472,7 @@ export function AppShell({
         {skipLink === false ? null : (
           <SkipLink targetId={mainId}>{skipLink}</SkipLink>
         )}
-        {topBar}
+        {hasTopBar ? topBar : null}
         {hasSidebar && collapsed ? (
           <div className="wb-sidebar-rail" ref={rail}>
             <IconButton
