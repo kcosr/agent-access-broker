@@ -16363,7 +16363,10 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             egress_proxy: None,
             allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
             attachments: agent_access_provider::AttachmentLimitsConfig {
-                media_types: vec!["text/plain".to_string()],
+                download_media_types: agent_access_provider::MediaTypePolicyConfig {
+                    allow: vec!["text/plain".to_string()],
+                    deny: vec![],
+                },
                 ..agent_access_provider::AttachmentLimitsConfig::default()
             },
             content: agent_access_jira::JiraContentConfig {

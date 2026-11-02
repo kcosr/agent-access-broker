@@ -608,6 +608,8 @@ impl JiraAttachmentUpload {
 pub struct JiraAttachmentContent {
     pub filename: String,
     pub content_type: String,
+    /// Classification of the original response declaration, including malformed headers.
+    pub media_type_declaration: MediaTypeDeclaration,
     pub size: Option<u64>,
     pub sha256: Option<String>,
     pub stream: ProviderResultStream,
@@ -625,6 +627,7 @@ impl JiraAttachmentContent {
         Self {
             filename: filename.into(),
             content_type: content_type.clone(),
+            media_type_declaration: MediaTypeDeclaration::parse(&content_type),
             size: Some(size),
             sha256: Some(sha256),
             stream: ProviderResultStream::from_bytes(content_type, bytes),
@@ -1837,6 +1840,7 @@ impl JiraBackend for HttpJiraBackend {
         let started = Instant::now();
         let mut response = self.attachment_content_response(url, credential).await?;
         let status = response.status().as_u16();
+        let media_type_declaration = MediaTypeDeclaration::from_headers(response.headers());
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -1865,6 +1869,7 @@ impl JiraBackend for HttpJiraBackend {
             value: JiraAttachmentContent {
                 filename: String::new(),
                 content_type,
+                media_type_declaration,
                 size: content_length,
                 sha256: None,
                 stream,

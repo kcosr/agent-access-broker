@@ -2550,6 +2550,15 @@ terminal audit record is `failed` with `decision = error`, the reason, and the
 delivered byte count and digest. The CLI and stdio MCP report such a download as
 failed and leave an existing destination unchanged.
 
+Jira and Confluence use the SDK's shared download media policy independently of
+their exact upload lists. Downloads allow all declared types by default;
+configured allow/deny patterns apply first to concrete or malformed attachment
+metadata after containment checks, then to metadata and response declarations
+together before stream delivery. Every concrete type must pass, without requiring
+metadata/response equality; generic declarations are ignored beside a concrete
+type. Malformed declarations pass only a universal policy. These are declared-type
+controls, without content inspection. See [attachment media policy](configuration.md#jira-and-confluence-attachment-media-policy).
+
 Accepted command actions with `download: true` use the same raw transport after
 the adapter validates a complete base64 JSON response and decodes it in memory.
 An explicit per-command `max_download_bytes` enables this capability and bounds
@@ -2563,6 +2572,9 @@ The common host path caps the complete encoded metadata header at 16,384 bytes,
 returns JSON on refusal and cancels the unused stream. These transport rules also
 apply to native downloads. See [command download bounds](command-imports.md#download-bounds)
 and [HTTP negotiation](http-api.md#raw-download-negotiation).
+Every successful raw response carries `Content-Disposition: attachment` without
+a filename and `X-Content-Type-Options: nosniff`, while preserving the stream's
+declared `Content-Type` and result metadata.
 
 All numeric limits must be non-zero; invocation limits accept 1 to 1,000,000
 requests and windows from `1s` to `1d`.

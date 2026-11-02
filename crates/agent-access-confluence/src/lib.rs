@@ -456,6 +456,7 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                     documentation::with_guidance(
                         action.presentation(presentation),
                         &config.tenant_host,
+                        &config.attachments.download_media_types,
                     )
                 })
                 .collect(),
@@ -10584,7 +10585,7 @@ fn validate_attachment_input(
             "attachment exceeded the configured byte cap",
         ));
     }
-    if !config.media_types.contains(&input.content_type) {
+    if !config.upload_media_types.contains(&input.content_type) {
         return Err(ProviderError::deny(
             ReasonCode::AttachmentMediaTypeDenied,
             "attachment content type is not allowed",
@@ -10599,6 +10600,13 @@ fn validate_attachment_input(
     Ok(())
 }
 
+fn attachment_media_type_declaration(attachment: &ConfluenceAttachment) -> MediaTypeDeclaration {
+    attachment
+        .media_type_declaration
+        .clone()
+        .unwrap_or_else(|| MediaTypeDeclaration::parse(&attachment.content_type))
+}
+
 fn validate_download_attachment(
     attachment: &ConfluenceAttachment,
     config: &ConfluenceProviderConfig,
@@ -10609,13 +10617,10 @@ fn validate_download_attachment(
             "Confluence attachment exceeds the configured download cap",
         ));
     }
-    if !media_type_allowed(&attachment.content_type, &config.attachments.media_types) {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Confluence attachment content type is not allowed",
-        ));
-    }
-    Ok(())
+    config
+        .attachments
+        .download_media_types
+        .check_metadata(&attachment_media_type_declaration(attachment))
 }
 
 fn validate_download_content(
@@ -10632,39 +10637,16 @@ fn validate_download_content(
             "Confluence attachment download exceeded the configured byte cap",
         ));
     }
-    let Some(content_type) = media_type_essence(&content.content_type) else {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Confluence attachment response content type is not allowed",
-        ));
-    };
-    let Some(metadata_type) = media_type_essence(&attachment.content_type) else {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Confluence attachment metadata content type is invalid",
-        ));
-    };
     if content.size.is_some_and(|size| size != attachment.size) {
         return Err(ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Confluence attachment response size did not match metadata",
         ));
     }
-    if content_type == "application/octet-stream"
-        && media_type_allowed("application/octet-stream", &config.attachments.media_types)
-        && media_type_allowed(&metadata_type, &config.attachments.media_types)
-    {
-        return Ok(());
-    }
-    if content_type != metadata_type
-        || !media_type_allowed(&content_type, &config.attachments.media_types)
-    {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Confluence attachment response content type did not match metadata",
-        ));
-    }
-    Ok(())
+    config.attachments.download_media_types.check_download(
+        &attachment_media_type_declaration(attachment),
+        &content.media_type_declaration,
+    )
 }
 
 fn ensure_authorized_space(scopes: &ResourceScopes, space: &str) -> Result<(), ProviderError> {
@@ -12863,16 +12845,6 @@ fn sanitized_backend_reason(error: &ConfluenceBackendError) -> &'static str {
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn media_type_allowed(value: &str, allowed: &[String]) -> bool {
-    let Some(value) = media_type_essence(value) else {
-        return false;
-    };
-    allowed
-        .iter()
-        .filter_map(|allowed| media_type_essence(allowed))
-        .any(|allowed| allowed == value)
 }
 
 fn media_type_essence(value: &str) -> Option<String> {

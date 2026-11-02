@@ -1273,6 +1273,10 @@ content, receiver headers, and custom-header keys from ambiguous failures.
 For Jira and Confluence page attachments, confirm both typed upload/download
 and representative generated `send` variants. Add the corresponding blog or
 draft attachment actions when the grant under test includes those surfaces.
+The upload example requires `text/plain` in the provider's exact
+`attachments.upload_media_types` list. Downloads default to all media types and
+use the independent `attachments.download_media_types` policy; see
+[attachment media policy](configuration.md#jira-and-confluence-attachment-media-policy).
 
 ```bash
 "$AAB_BIN" --config "$AGENT_CONFIG" \

@@ -740,6 +740,10 @@ pub struct ConfluenceAttachment {
     pub filename: String,
     pub size: u64,
     pub content_type: String,
+    /// Original upstream declaration when the display value used a fallback.
+    /// Deserialized seam values classify their content_type directly.
+    #[serde(skip)]
+    pub media_type_declaration: Option<MediaTypeDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -776,6 +780,8 @@ impl ConfluenceAttachmentUpload {
 pub struct ConfluenceAttachmentContent {
     pub filename: String,
     pub content_type: String,
+    /// Classifies all response Content-Type fields before fallback for delivery.
+    pub media_type_declaration: MediaTypeDeclaration,
     pub size: Option<u64>,
     pub sha256: Option<String>,
     pub stream: ProviderResultStream,
@@ -793,6 +799,7 @@ impl ConfluenceAttachmentContent {
         Self {
             filename: filename.into(),
             content_type: content_type.clone(),
+            media_type_declaration: MediaTypeDeclaration::parse(&content_type),
             size: Some(size),
             sha256: Some(sha256),
             stream: ProviderResultStream::from_bytes(content_type, bytes),
@@ -2726,6 +2733,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let started = Instant::now();
         let mut response = self.attachment_content_response(url, credential).await?;
         let status = response.status().as_u16();
+        let media_type_declaration = MediaTypeDeclaration::from_headers(response.headers());
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -2757,6 +2765,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             value: ConfluenceAttachmentContent {
                 filename: String::new(),
                 content_type,
+                media_type_declaration,
                 size: content_length,
                 sha256: None,
                 stream,
@@ -3046,6 +3055,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let started = Instant::now();
         let mut response = self.attachment_content_response(url, credential).await?;
         let status = response.status().as_u16();
+        let media_type_declaration = MediaTypeDeclaration::from_headers(response.headers());
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -3077,6 +3087,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             value: ConfluenceAttachmentContent {
                 filename: String::new(),
                 content_type,
+                media_type_declaration,
                 size: content_length,
                 sha256: None,
                 stream,
@@ -3133,6 +3144,7 @@ impl HttpConfluenceBackend {
         let started = Instant::now();
         let mut response = self.attachment_content_response(url, credential).await?;
         let status = response.status().as_u16();
+        let media_type_declaration = MediaTypeDeclaration::from_headers(response.headers());
         let content_type = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -3164,6 +3176,7 @@ impl HttpConfluenceBackend {
             value: ConfluenceAttachmentContent {
                 filename: String::new(),
                 content_type,
+                media_type_declaration,
                 size: content_length,
                 sha256: None,
                 stream,
@@ -5157,9 +5170,17 @@ pub(crate) fn attachment_from_value(
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| ConfluenceBackendError::Protocol("attachment filename missing".to_string()))?
         .to_string();
-    let content_type = value
+    let raw_content_type = value
         .pointer("/metadata/mediaType")
-        .or_else(|| value.get("mediaType"))
+        .or_else(|| value.get("mediaType"));
+    let media_type_declaration = match raw_content_type {
+        None | Some(Value::Null) => MediaTypeDeclaration::unspecified(),
+        Some(Value::String(value)) => MediaTypeDeclaration::parse(value),
+        Some(_) => MediaTypeDeclaration::malformed(),
+    };
+    // Keep the established list/receipt representation; policy uses the original
+    // declaration above rather than treating every fallback as unspecified.
+    let content_type = raw_content_type
         .and_then(Value::as_str)
         .filter(|value| media_type_essence(value).is_some())
         .unwrap_or("application/octet-stream")
@@ -5184,6 +5205,7 @@ pub(crate) fn attachment_from_value(
         filename,
         size,
         content_type,
+        media_type_declaration: Some(media_type_declaration),
     })
 }
 

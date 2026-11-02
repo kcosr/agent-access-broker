@@ -1,6 +1,6 @@
 //! Detailed action guidance, separate from initial tool descriptions and schemas.
-use agent_access_provider::{ActionDescriptor, validate_tenant_host};
-use serde_json::{Map, Value};
+use agent_access_provider::{ActionDescriptor, MediaTypePolicyConfig, validate_tenant_host};
+use serde_json::{Map, Value, json};
 use std::sync::OnceLock;
 
 const EXAMPLE_KEYS: [&str; 3] = ["inputExamples", "inputTemplates", "uploadLocators"];
@@ -13,7 +13,11 @@ fn guidance() -> &'static Map<String, Value> {
     })
 }
 
-pub(super) fn with_guidance(mut action: ActionDescriptor, tenant_host: &str) -> ActionDescriptor {
+pub(super) fn with_guidance(
+    mut action: ActionDescriptor,
+    tenant_host: &str,
+    download_media_types: &MediaTypePolicyConfig,
+) -> ActionDescriptor {
     let additions = guidance()
         .get(&action.action)
         .and_then(Value::as_object)
@@ -37,6 +41,22 @@ pub(super) fn with_guidance(mut action: ActionDescriptor, tenant_host: &str) -> 
             value.clone()
         };
         fields.insert(key.clone(), value);
+    }
+    if matches!(
+        action.action.as_str(),
+        "attachment.download"
+            | "blog.attachment.download"
+            | "page.draft.attachment.download"
+            | "blog.draft.attachment.download"
+    ) {
+        fields.insert(
+            "downloadMediaTypes".into(),
+            json!({
+                "allow": download_media_types.allow,
+                "deny": download_media_types.deny,
+                "matching": "Every concrete metadata and response media type must match allow and no deny. Generic declarations are ignored alongside a concrete type; wholly unspecified types use application/octet-stream. Malformed declarations are accepted only when allow contains */* and deny is empty. Patterns are exact type/subtype, type/* or */*, case-insensitive; parameters on declarations are ignored."
+            }),
+        );
     }
     let documentation = action
         .documentation

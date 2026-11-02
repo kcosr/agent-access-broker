@@ -193,6 +193,7 @@ pub mod host;
 mod identifiers;
 mod invocation;
 mod lookup;
+mod media_type;
 mod module;
 mod mutation_receipt;
 mod oauth_dialect;
@@ -274,6 +275,7 @@ pub use invocation::{
     BrokerBodyPart, BrokerBodyPartFile, BrokerBodyPartSpec, InvocationIdentity, SearchAuthorization,
 };
 pub use lookup::LookupAccess;
+pub use media_type::{MediaTypeDeclaration, MediaTypePolicyConfig};
 pub use module::{ModuleMetadata, SDK_PACKAGE};
 pub use mutation_receipt::{MutationReceipt, MutationStatus};
 pub use oauth_dialect::{

@@ -30,7 +30,9 @@ use agent_access_jira::{
     JiraCommentVisibilityConfig, JiraCommentsConfig, JiraContentConfig, JiraIssueLinksConfig,
     JiraProviderConfig,
 };
-use agent_access_provider::{AttachmentLimitsConfig, EgressProxyConfig, SearchLimitsConfig};
+use agent_access_provider::{
+    AttachmentLimitsConfig, EgressProxyConfig, MediaTypePolicyConfig, SearchLimitsConfig,
+};
 use agent_access_teams::TeamsConfig;
 use std::collections::BTreeMap;
 use toml::{Table, Value};
@@ -1032,13 +1034,22 @@ fn attachments_value(attachments: &AttachmentLimitsConfig) -> Value {
         max_bytes,
         max_total_bytes,
         max_download_bytes,
-        media_types,
+        upload_media_types,
+        download_media_types,
     } = attachments;
+    let MediaTypePolicyConfig { allow, deny } = download_media_types;
     Fields::default()
         .int("max_bytes", *max_bytes)
         .int("max_total_bytes", *max_total_bytes)
         .int("max_download_bytes", *max_download_bytes)
-        .put("media_types", strings(media_types))
+        .put("upload_media_types", strings(upload_media_types))
+        .put(
+            "download_media_types",
+            Fields::default()
+                .put("allow", strings(allow))
+                .put("deny", strings(deny))
+                .value(),
+        )
         .value()
 }
 

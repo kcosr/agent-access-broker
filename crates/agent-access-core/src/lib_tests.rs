@@ -5725,6 +5725,139 @@ fn rejects_invalid_limits() {
     assert_contains(&errors, "attachments.max_bytes must not exceed");
 }
 
+fn parse_atlassian_attachment_settings(
+    provider: &str,
+    settings: &str,
+) -> Result<BrokerConfig, ConfigError> {
+    let raw =
+        std::fs::read_to_string(workspace_root().join("agent-access-broker.sample.toml")).unwrap();
+    let mut document: toml::Value = toml::from_str(&raw).unwrap();
+    document["providers"][provider]["attachments"] = toml::from_str(settings).unwrap();
+    parse_test_config(&toml::to_string(&document).unwrap())
+}
+
+fn atlassian_attachment_settings<'a>(
+    config: &'a BrokerConfig,
+    provider: &str,
+) -> &'a agent_access_provider::AttachmentLimitsConfig {
+    match provider {
+        "jira" => {
+            &config
+                .providers
+                .get::<agent_access_jira::JiraProviderConfig>()
+                .unwrap()
+                .attachments
+        }
+        "confluence" => {
+            &config
+                .providers
+                .get::<agent_access_confluence::ConfluenceProviderConfig>()
+                .unwrap()
+                .attachments
+        }
+        _ => unreachable!("known Atlassian provider"),
+    }
+}
+
+#[test]
+fn atlassian_attachment_media_defaults_and_directional_settings_are_independent() {
+    for provider in ["jira", "confluence"] {
+        for (settings, uploads, allow, deny) in [
+            ("", vec![], vec!["*/*"], vec![]),
+            (
+                "upload_media_types = ['application/pdf']",
+                vec!["application/pdf"],
+                vec!["*/*"],
+                vec![],
+            ),
+            ("[download_media_types]\nallow = []", vec![], vec![], vec![]),
+            (
+                "[download_media_types]\ndeny = ['application/x-msdownload']",
+                vec![],
+                vec!["*/*"],
+                vec!["application/x-msdownload"],
+            ),
+            (
+                "upload_media_types = ['application/pdf']\n\
+                 [download_media_types]\nallow = ['IMAGE/*', 'application/json']\n\
+                 deny = ['image/svg+xml']",
+                vec!["application/pdf"],
+                vec!["IMAGE/*", "application/json"],
+                vec!["image/svg+xml"],
+            ),
+        ] {
+            let parsed = parse_atlassian_attachment_settings(provider, settings).unwrap();
+            let attachments = atlassian_attachment_settings(&parsed, provider);
+            assert_eq!(attachments.upload_media_types, uploads, "{provider}");
+            assert_eq!(attachments.download_media_types.allow, allow, "{provider}");
+            assert_eq!(attachments.download_media_types.deny, deny, "{provider}");
+            let mut config = sample_broker();
+            config.providers = parsed.providers;
+            validate_broker_config(&config)
+                .unwrap_or_else(|error| panic!("{provider} settings {settings}: {error}"));
+        }
+    }
+}
+
+#[test]
+fn atlassian_attachment_media_rejects_the_removed_shared_key() {
+    for provider in ["jira", "confluence"] {
+        for settings in [
+            "media_types = []",
+            "media_types = ['text/plain']\nupload_media_types = ['text/plain']",
+        ] {
+            let error = parse_atlassian_attachment_settings(provider, settings).unwrap_err();
+            assert!(
+                error.to_string().contains("unknown field `media_types`"),
+                "{provider}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn atlassian_attachment_media_validates_download_patterns_and_exact_upload_types() {
+    for provider in ["jira", "confluence"] {
+        for field in ["allow", "deny"] {
+            for pattern in [
+                "*",
+                "*/json",
+                "application/*+json",
+                "text/pl*ain",
+                "text/plain; charset=utf-8",
+                " text/plain",
+            ] {
+                let parsed = parse_atlassian_attachment_settings(
+                    provider,
+                    &format!("[download_media_types]\n{field} = ['{pattern}']"),
+                )
+                .unwrap();
+                let mut config = sample_broker();
+                config.providers = parsed.providers;
+                let errors = validation_errors(validate_broker_config(&config));
+                assert_contains(
+                    &errors,
+                    &format!("providers.{provider}.attachments.download_media_types.{field}"),
+                );
+            }
+        }
+        for pattern in ["*/*", "image/*", "image/p*g", "invalid"] {
+            let parsed = parse_atlassian_attachment_settings(
+                provider,
+                &format!("upload_media_types = ['{pattern}']"),
+            )
+            .unwrap();
+            let mut config = sample_broker();
+            config.providers = parsed.providers;
+            let errors = validation_errors(validate_broker_config(&config));
+            assert_contains(
+                &errors,
+                &format!("providers.{provider}.attachments.upload_media_types"),
+            );
+        }
+    }
+}
+
 #[test]
 fn validates_gitlab_attachment_limits() {
     for (field, value, expected) in [

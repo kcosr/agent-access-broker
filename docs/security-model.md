@@ -774,6 +774,13 @@ Agent Access Broker applies these controls in the request path:
   without raw move passthrough; upload sizes, media types, checksums, and
   download limits are enforced before or during provider calls, and the Broker
   itself stops any raw download that would pass `limits.max_download_bytes`.
+  Jira and Confluence download media policies default to all types and are
+  independent of their exact upload allowlists. Optional allow/deny patterns
+  filter declared metadata and response types, without content inspection or
+  malware scanning; authorization, membership, size and credential boundaries
+  continue to apply. Every successful raw download carries
+  `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
+  See [attachment media policy](configuration.md#jira-and-confluence-attachment-media-policy).
 - **Bounded validation feedback**: broker-local malformed-body and unsupported
   body-format failures remain actionable through lookup-backed flows. Only
   after an authorized Jira, Confluence, or GitLab REST mutation may the broker

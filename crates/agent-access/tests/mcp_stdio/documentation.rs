@@ -180,7 +180,10 @@ allowed_upstream_hosts = ["https://example.atlassian.net/**"]
 [jira.content]
 comment_formats = ["adf"]
 [jira.attachments]
-media_types = ["text/plain", "application/json"]
+upload_media_types = ["text/plain", "application/json"]
+[jira.attachments.download_media_types]
+allow = ["*/*"]
+deny = ["application/x-msdownload"]
 [jira.comments]
 allowed_visibility = [{ type = "role", value = "Developers" }]
 "#,
@@ -246,29 +249,50 @@ read_only = true
         .filter(|action| action.get("documentation").is_some())
         .max_by_key(|action| serde_json::to_vec(&action["documentation"]).unwrap().len())
         .unwrap();
-    let action = longest["action"].as_str().unwrap();
-    let documentation = &longest["documentation"];
+    let download = jira["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["action"] == "attachment.download")
+        .unwrap();
     assert_eq!(
-        descriptor
-            .actions
-            .iter()
-            .find(|candidate| candidate.action == action)
-            .unwrap()
-            .documentation
-            .as_ref(),
-        Some(documentation)
+        download["documentation"]["downloadMediaTypes"]["allow"],
+        json!(["*/*"])
     );
+    assert_eq!(
+        download["documentation"]["downloadMediaTypes"]["deny"],
+        json!(["application/x-msdownload"])
+    );
+    let details = [longest, download];
+    for detail in details {
+        assert_eq!(
+            descriptor
+                .actions
+                .iter()
+                .find(|candidate| candidate.action == detail["action"].as_str().unwrap())
+                .unwrap()
+                .documentation
+                .as_ref(),
+            Some(&detail["documentation"])
+        );
+    }
     let config = client_config(&directory, &base, &first);
     for service in [None, Some("jira")] {
         let mut process = McpProcess::start_view(&config, service);
         process.initialize().await;
-        let described = process
-            .request(
-                "tools/call",
-                json!({"name":"actions_describe","arguments":{"service":"jira","action":action}}),
-            )
-            .await;
-        assert_detail(&described, documentation);
+        let listed = process.request("tools/list", json!({})).await;
+        assert!(listed.get("error").is_none(), "{listed}");
+        assert!(listed["result"]["tools"].is_array(), "{listed}");
+        assert!(!listed.to_string().contains("downloadMediaTypes"));
+        for detail in details {
+            let described = process
+                .request(
+                    "tools/call",
+                    json!({"name":"actions_describe","arguments":{"service":"jira","action":detail["action"]}}),
+                )
+                .await;
+            assert_detail(&described, &detail["documentation"]);
+        }
         process.finish().await;
     }
     for path in ["/mcp", "/mcp/jira"] {
@@ -295,9 +319,23 @@ read_only = true
             .await
             .unwrap();
         assert!(notification.status().is_success());
-        let described = rpc_response(request(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"actions_describe","arguments":{"service":"jira","action":action}}})).header("mcp-session-id", &session).header("mcp-protocol-version", "2025-11-25").send().await.unwrap()).await;
-        assert_detail(&described, documentation);
-        assert!(serde_json::to_vec(&described).unwrap().len() < 65_536);
+        let listed = rpc_response(
+            request(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}))
+                .header("mcp-session-id", &session)
+                .header("mcp-protocol-version", "2025-11-25")
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(listed.get("error").is_none(), "{listed}");
+        assert!(listed["result"]["tools"].is_array(), "{listed}");
+        assert!(!listed.to_string().contains("downloadMediaTypes"));
+        for (index, detail) in details.into_iter().enumerate() {
+            let described = rpc_response(request(json!({"jsonrpc":"2.0","id":index + 3,"method":"tools/call","params":{"name":"actions_describe","arguments":{"service":"jira","action":detail["action"]}}})).header("mcp-session-id", &session).header("mcp-protocol-version", "2025-11-25").send().await.unwrap()).await;
+            assert_detail(&described, &detail["documentation"]);
+            assert!(serde_json::to_vec(&described).unwrap().len() < 65_536);
+        }
         let closed = client
             .delete(format!("{base}{path}"))
             .bearer_auth(token)

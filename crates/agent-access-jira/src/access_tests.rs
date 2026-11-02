@@ -140,7 +140,7 @@ fn provider(server: &MockServer) -> JiraProvider {
     .unwrap();
     config
         .attachments
-        .media_types
+        .upload_media_types
         .push("text/plain".to_string());
     let backend = HttpJiraBackend::new_with_api_base(
         config.clone(),
@@ -479,7 +479,7 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
     .unwrap();
     site_only
         .attachments
-        .media_types
+        .upload_media_types
         .push("text/plain".to_string());
     let without_gateway = JiraProvider::from_backend(
         site_only.clone(),

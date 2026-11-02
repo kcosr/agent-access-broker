@@ -1229,6 +1229,78 @@ validation with `references unknown service <svc>`. Runtime action behavior live
 [providers.md](providers.md) and its linked provider-specific docs; the keys
 below are the config reference.
 
+### Jira and Confluence attachment media policy
+
+Jira and Confluence configure uploads and downloads independently under
+`[providers.<service>.attachments]`:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `upload_media_types` | `[]` | Exact upload `contentType` allowlist; empty denies uploads. Entries must contain `/` and must not contain `*`. Matching preserves the supplied casing and parameters. |
+| `download_media_types.allow` | `["*/*"]` | Download type patterns; empty denies every download. |
+| `download_media_types.deny` | `[]` | Download type patterns that override matching allow entries. |
+
+An omitted download table, an empty table, or omitted fields use those defaults.
+For example, a deny-only table still allows all other types:
+
+```toml
+[providers.jira.attachments]
+upload_media_types = ["text/plain", "application/pdf"]
+download_media_types = { deny = ["text/html", "image/svg+xml"] }
+```
+
+These exclusions are optional examples; the default has no deny rules. Use the
+same keys under `providers.confluence.attachments` for pages, blogs, and their
+supported new-draft attachment actions. Other examples for the download table:
+
+| Policy | Value of `download_media_types` |
+| --- | --- |
+| All types | `{ allow = ["*/*"], deny = [] }` |
+| Selected families and formats | `{ allow = ["text/*", "image/*", "application/pdf"] }` |
+| Images except SVG | `{ allow = ["image/*"], deny = ["image/svg+xml"] }` |
+| No downloads | `{ allow = [] }` |
+| Require a specific declared type | `{ deny = ["application/octet-stream"] }` |
+
+Download patterns are case-insensitive and accept only exact `type/subtype`,
+`type/*`, or `*/*`. Parameters, suffix globs such as `application/*+json`, and
+partial wildcards are invalid configuration. A matching deny always wins; an
+exact allow cannot override a broader deny.
+
+The provider checks attachment metadata after authorization and membership
+checks, before requesting content. It checks the response declaration together
+with the metadata before returning any download bytes:
+
+- Each declaration is classified by its type/subtype before the first `;`;
+  parameters do not affect matching.
+- A missing, null, empty, or `application/octet-stream` declaration is
+  unspecified. If either declaration is concrete, every concrete declaration
+  must pass the policy and unspecified declarations are ignored. The concrete
+  types need not equal each other.
+- If neither declaration is concrete, the policy evaluates
+  `application/octet-stream`. Denying that type therefore refuses downloads
+  with no specific declared type, while permitting an allowed concrete metadata
+  type delivered with a generic HTTP response. `binary/octet-stream` is a
+  concrete type, not an alias for unspecified content.
+- A malformed declaration passes only a universal policy: `allow` contains
+  `*/*` and `deny` is empty. Every restrictive policy denies it. Wildcards in
+  an actual content type, multiple HTTP `Content-Type` headers, a non-text header,
+  and a non-string, non-null Confluence metadata type are malformed.
+- An explicit empty allow list, a deny-all rule, or a denied concrete metadata
+  type is refused before the content request. Unspecified metadata otherwise
+  waits for the response type. Media-policy refusals use
+  `attachment_media_type_denied` with a fixed diagnostic.
+
+Jira still requires its attachment metadata to contain a MIME string; a missing
+field is an upstream protocol failure independently of this policy. Confluence
+retains its existing displayed fallback for missing or invalid metadata, while
+policy evaluation distinguishes unspecified from malformed declarations.
+
+Media rules filter declarations; they do not identify file contents or perform
+malware scanning. Action/resource grants, attachment membership, byte caps,
+redirect and credential restrictions, and stream-size checks apply independently.
+GitLab's `attachments.media_types` controls its uploads only, and its existing
+raw downloads have no media-type policy.
+
 ### `[providers.jira]`
 
 ```toml
@@ -1249,7 +1321,8 @@ allowed_upstream_hosts = [
 max_bytes = 10485760            # 10 MiB; per-attachment cap; default
 max_total_bytes = 52428800      # 50 MiB; total across attachments; default
 max_download_bytes = 104857600  # 100 MiB; single download cap; default
-media_types = ["text/plain", "application/json", "image/png", "text/html"]
+upload_media_types = ["text/plain", "application/json", "image/png", "text/html"]
+download_media_types = { allow = ["*/*"], deny = [] } # default; independent of uploads
 
 [providers.jira.content]
 comment_formats = ["adf"]   # native formats only; [] disables comment writes
@@ -1346,9 +1419,10 @@ dependency_inward = "is blocked by"
   not required, and downloads fail at run time without it. A deployment
   mixing routes allows the tenant, the gateway and the media host, as above.
 - `[providers.jira.attachments]` defaults: `max_bytes` 10 MiB, `max_total_bytes`
-  50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero; each
-  `media_types` entry must contain a `/`. See the cross-section limits checks in
-  [`[limits]`](#limits).
+  50 MiB, `max_download_bytes` 100 MiB. All three must be non-zero. Uploads use
+  the exact `upload_media_types` list; downloads default to all types with an
+  independent allow/deny policy. See [attachment media policy](#jira-and-confluence-attachment-media-policy)
+  and the cross-section limits checks in [`[limits]`](#limits).
 - `[providers.jira.content].comment_formats` is a native-representation
   allowlist and may contain only `adf`; do not add normalized `markdown` or
   `plain_text` values. When `adf` is enabled, comment write action schemas
@@ -1435,7 +1509,8 @@ allowed_upstream_hosts = [
 max_bytes = 10485760            # 10 MiB; default
 max_total_bytes = 52428800      # 50 MiB; default
 max_download_bytes = 104857600  # 100 MiB; default
-media_types = ["text/plain", "application/json", "image/png", "text/html"]
+upload_media_types = ["text/plain", "application/json", "image/png", "text/html"]
+download_media_types = { allow = ["*/*"], deny = [] } # default; all attachment download variants
 
 [providers.confluence.content]
 page_formats = ["atlas_doc_format", "storage"]   # supported formats

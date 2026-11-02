@@ -81,6 +81,11 @@ project scope or an additional filter such as `updated >= -7d`. See the
 [JQL](docs/providers-jira.md#search-and-jql) and
 [CQL](docs/providers-confluence.md#search-and-cql) contracts.
 
+Jira and Confluence attachment downloads allow all media types by default within
+the caller's authorized resources and byte limits. Operators can set independent
+download allow and deny patterns, including `image/*` or `*/*`; uploads retain
+their separate exact allowlist. See [attachment media policy](docs/configuration.md#jira-and-confluence-attachment-media-policy).
+
 Native action schemas expose input fields directly. Field descriptions explain
 locator alternatives, paired content fields, content
 formats and mode requirements, and provider denials name the fields that need

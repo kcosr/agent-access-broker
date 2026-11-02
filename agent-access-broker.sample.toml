@@ -771,7 +771,9 @@ allowed_upstream_hosts = [
 max_bytes = 10485760
 max_total_bytes = 52428800
 max_download_bytes = 104857600
-media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+# Exact upload types; downloads have an independent policy.
+upload_media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+download_media_types = { allow = ["*/*"], deny = [] } # default
 
 [providers.jira.content]
 comment_formats = ["adf"]
@@ -830,7 +832,9 @@ allowed_upstream_hosts = [
 max_bytes = 10485760
 max_total_bytes = 52428800
 max_download_bytes = 104857600
-media_types = ["text/plain", "application/json", "image/png", "text/html", "text/markdown"]
+# Exact upload types; downloads have an independent policy.
+upload_media_types = ["text/plain", "application/json", "image/png", "text/html", "text/markdown"]
+download_media_types = { allow = ["*/*"], deny = [] } # default
 
 [providers.confluence.content]
 # Native write targets and returned read representations. Normalized reads

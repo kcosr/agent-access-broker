@@ -731,6 +731,13 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         )
         .lookup(LookupRequirement::ScopeResolution)
         .raw_download()
+        .documentation(json!({
+            "downloadMediaTypes": {
+                "allow": config.attachments.download_media_types.allow,
+                "deny": config.attachments.download_media_types.deny,
+                "matching": "Every concrete metadata and response media type must match allow and no deny. Generic declarations are ignored alongside a concrete type; wholly unspecified types use application/octet-stream. Malformed declarations are accepted only when allow contains */* and deny is empty. Patterns are exact type/subtype, type/* or */*, case-insensitive; parameters on declarations are ignored."
+            }
+        }))
         .audit_input("issue", "Issue")
         .audit_input("attachmentId", "Attachment ID"),
         jira_read_action(
@@ -5760,7 +5767,7 @@ fn validate_attachment_input(
             "attachment exceeded the configured byte cap",
         ));
     }
-    if !config.media_types.contains(&input.content_type) {
+    if !config.upload_media_types.contains(&input.content_type) {
         return Err(ProviderError::deny(
             ReasonCode::AttachmentMediaTypeDenied,
             "attachment content type is not allowed",
@@ -5785,13 +5792,10 @@ fn validate_download_attachment(
             "Jira attachment exceeds the configured download cap",
         ));
     }
-    if !media_type_allowed(&attachment.content_type, &config.attachments.media_types) {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Jira attachment content type is not allowed",
-        ));
-    }
-    Ok(())
+    config
+        .attachments
+        .download_media_types
+        .check_metadata(&MediaTypeDeclaration::parse(&attachment.content_type))
 }
 
 fn validate_download_content(
@@ -5808,59 +5812,16 @@ fn validate_download_content(
             "Jira attachment download exceeded the configured byte cap",
         ));
     }
-    let Some(content_type) = media_type_essence(&content.content_type) else {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Jira attachment response content type is not allowed",
-        ));
-    };
-    let Some(metadata_type) = media_type_essence(&attachment.content_type) else {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Jira attachment metadata content type is invalid",
-        ));
-    };
     if content.size.is_some_and(|size| size != attachment.size) {
         return Err(ProviderError::error(
             ReasonCode::UpstreamProtocolFailed,
             "Jira attachment response size did not match metadata",
         ));
     }
-    if content_type == "application/octet-stream"
-        && media_type_allowed("application/octet-stream", &config.attachments.media_types)
-        && media_type_allowed(&metadata_type, &config.attachments.media_types)
-    {
-        return Ok(());
-    }
-    if content_type != metadata_type
-        || !media_type_allowed(&content_type, &config.attachments.media_types)
-    {
-        return Err(ProviderError::deny(
-            ReasonCode::AttachmentMediaTypeDenied,
-            "Jira attachment response content type did not match metadata",
-        ));
-    }
-    Ok(())
-}
-
-fn media_type_allowed(value: &str, allowed: &[String]) -> bool {
-    let Some(value) = media_type_essence(value) else {
-        return false;
-    };
-    allowed
-        .iter()
-        .filter_map(|allowed| media_type_essence(allowed))
-        .any(|allowed| allowed == value)
-}
-
-fn media_type_essence(value: &str) -> Option<String> {
-    let essence = value
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    (!essence.is_empty() && essence.contains('/')).then_some(essence)
+    config.attachments.download_media_types.check_download(
+        &MediaTypeDeclaration::parse(&attachment.content_type),
+        &content.media_type_declaration,
+    )
 }
 
 fn issue_metadata_result(issue: &JiraIssueMetadata, config: &JiraProviderConfig) -> Value {
