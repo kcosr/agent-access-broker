@@ -441,6 +441,12 @@ optional release and start dates. Components include ID, name and description. I
 types add a `subtask` flag; statuses are deduplicated by ID and may include
 `statusCategory`. Statuses do not report per-issue-type mappings.
 
+The `project` and `key` rows can advertise `!=` and `NOT IN` when Jira reports
+those operators. The issue-key row has REST `id: "issuekey"` and
+`jqlReference: "key"`; its grammar also accepts the `issuekey` alias. Discovery
+keeps the intersection of Jira and Broker capabilities, so unsupported upstream
+operators are not added merely because Broker parses them.
+
 Use `jqlReference` rather than the display name or REST `id` when constructing
 JQL. A text field might advertise `~`, while a select field might advertise `=`
 or `IN`. Text `~` uses Jira's text-search semantics, not strict whole-value
@@ -1387,7 +1393,10 @@ an optional `projects` array (min 1), an optional `maxResults`, and an optional
 `nextPageToken` continuation (see [Search pagination](#search-pagination)).
 Omit `projects` to search the caller's effective broker scope,
 including grant exclusions and token restrictions; explicit projects only narrow
-that scope. A project clause in JQL is optional.
+that scope. A project clause in JQL is optional. Use canonical uppercase project
+keys in `projects`; empty arrays and wildcard entries such as `["*"]` are
+invalid. Wildcards are also invalid as JQL project or issue-key operands,
+including quoted `"*"`. Omission is the way to search effective access.
 
 MCP tool definitions carry concise input descriptions. For complete grammar,
 examples, pagination, and limits, request action details through your client's
@@ -1441,7 +1450,7 @@ function is accepted only when the request's credential mode is `per_user`.
 
 Supported JQL is intentionally bounded:
 
-- `project` and `key` accept only `=` and `IN`.
+- `project` and `key`/`issuekey` accept `=`, `!=`, `IN`, and `NOT IN`.
 - `status`, `statusCategory`, `issuetype`/`type`, and `priority` accept `=`,
   `!=`, `IN`, and `NOT IN`.
 - `resolution`, `assignee`, `labels`, `component`, `fixVersion`, and
@@ -1496,13 +1505,28 @@ Scope composition:
   returned when that project is authorized and rejected otherwise.
 - Empty or ordering-only JQL with **all** or **all except** scope returns
   `input_invalid`: supply explicit authorized `projects` or a filter such as
-  `updated >= -7d`. Jira's enhanced search endpoint requires a bounded query;
-  the broker conservatively does not treat exclusions alone as a sufficient
-  bound. Ordinary filtered queries retain the containment rules above; Jira
-  remains responsible for evaluating its endpoint-specific query bounds.
+  `updated >= -7d`. The same rule applies to filters containing only project
+  and/or issue-key `!=` or `NOT IN` clauses, including nested `AND`/`OR` groups.
+  For example, `project != ARCHIVE AND key NOT IN (PROJ-123)` requires a finite
+  effective project scope or an additional filter. Narrowing broad authority
+  with explicit authorized `projects` supplies that finite scope, even if the
+  caller then excludes every selected project. Jira's enhanced search endpoint
+  requires a bounded query; this local check does not implement all of its
+  rules. Other nonempty filters retain existing behavior and Jira remains
+  responsible for evaluating its endpoint-specific query bounds.
+- Caller project and issue-key exclusions are query filters, never sources of
+  authority. They may name keys outside the caller's access without granting
+  it, and do not cause resource lookups. Jira evaluates those operands, including
+  aliases; Broker does not subtract caller-written keys from returned results.
+  The actual current project must still pass authorization on every page.
 
 A `text` query is converted to a `key = <value>` clause when the value is a valid
-issue key, otherwise to a `text ~ "<value>"` clause.
+issue key, otherwise to a `text ~ "<value>"` clause. Text wildcards follow Jira's
+matching rules and use the same authorization constraints; they never grant
+access to additional projects. Cross-project JQL such as `text ~ "deploy"` also
+uses effective access when `projects` is omitted. To exclude a project, retain
+the exclusion in JQL, for example `project != ARCHIVE AND text ~ "deploy"`;
+switching to text mode would drop that filter.
 
 Examples with a finite project scope of `PROJ`:
 
@@ -1513,6 +1537,9 @@ Examples with a finite project scope of `PROJ`:
 | `--text PROJ-123` | `(key = PROJ-123) AND project IN (PROJ)` |
 | `--text 'deploy checklist'` | `(text ~ "deploy checklist") AND project IN (PROJ)` |
 | `--jql 'status = "Done"'` | `(status = Done) AND project IN (PROJ)` |
+| `--jql 'project != ARCHIVE AND text ~ "deploy"'` | `(project != ARCHIVE AND text ~ "deploy") AND project IN (PROJ)` |
+| `--jql 'project NOT IN (ARCHIVE, SANDBOX)'` | `(project NOT IN (ARCHIVE, SANDBOX)) AND project IN (PROJ)` |
+| `--jql 'issuekey NOT IN (PROJ-123, PROJ-456)'` | `(key NOT IN (PROJ-123, PROJ-456)) AND project IN (PROJ)` |
 | `--jql 'status = "In Progress" AND (priority = High OR priority = Highest)'` | `(status = "In Progress" AND (priority = High OR priority = Highest)) AND project IN (PROJ)` |
 | `--jql 'labels NOT IN (security, "needs triage")'` | `(labels NOT IN (security, "needs triage")) AND project IN (PROJ)` |
 | `--jql 'resolution IS NOT EMPTY'` | `(resolution IS NOT EMPTY) AND project IN (PROJ)` |

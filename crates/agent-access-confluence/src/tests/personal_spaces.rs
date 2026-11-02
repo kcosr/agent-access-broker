@@ -192,7 +192,7 @@ fn personal_space_cql_quotes_keys_and_keeps_exact_containment() {
             &SearchLimitsConfig::default(),
         )
         .unwrap();
-        assert_eq!(query.cql, format!("space IN (\"{key}\") AND type = page"));
+        assert_eq!(query.cql, format!("type = page AND space IN (\"{key}\")"));
     }
     let excluded = EffectiveSearchScope::AllExcept(BTreeSet::from(["~alice".to_string()]));
     let query = build_confluence_search_query(
@@ -203,7 +203,7 @@ fn personal_space_cql_quotes_keys_and_keeps_exact_containment() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert_eq!(query.cql, "space NOT IN (\"~alice\") AND type = page");
+    assert_eq!(query.cql, "type = page AND space NOT IN (\"~alice\")");
     assert!(!excluded.authorizes_value("~alice"));
     assert!(excluded.authorizes_value("~Alice"));
     for raw in [
@@ -395,7 +395,7 @@ async fn personal_space_page_and_blog_searches_enforce_finite_and_excluded_scope
             };
             Mock::given(method("GET"))
                 .and(path("/wiki/rest/api/content/search"))
-                .and(query_param("cql", format!("{predicate} AND type = {kind}")))
+                .and(query_param("cql", format!("type = {kind} AND {predicate}")))
                 .respond_with(
                     ResponseTemplate::new(200).set_body_json(
                         json!({"results": [personal_content_json(kind, returned_key)]}),

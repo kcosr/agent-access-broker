@@ -701,34 +701,38 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
         )
     };
     let alias_cql = json!({ "query": { "type": "cql", "value": "space = VECTOR" } });
+    let exclusion_cql = json!({ "query": {
+        "type": "cql",
+        "value": "space != ARCHIVE OR (space = VECTOR AND content.id NOT IN (12345))"
+    } });
     let alias_spaces = json!({ "query": { "type": "cql", "value": "" }, "spaces": ["VECTOR"] });
     for (action, scope, inputs, cql, outcome) in [
         (
             "search",
             all_except(&[]),
             &alias_cql,
-            Some("(space = VECTOR) AND type = page"),
+            Some("type = page AND (space = VECTOR)"),
             Ok(()),
         ),
         (
             "blog.search",
             all_except(&[]),
             &alias_cql,
-            Some("(space = VECTOR) AND type = blogpost"),
+            Some("type = blogpost AND (space = VECTOR)"),
             Ok(()),
         ),
         (
             "search",
             all_except(&[]),
             &alias_spaces,
-            Some("space IN (VECTOR) AND type = page"),
+            Some("type = page AND space IN (VECTOR)"),
             Ok(()),
         ),
         (
             "search",
             finite(&["ENG", "ROCKET"]),
             &alias_cql,
-            Some("(space = VECTOR) AND space IN (ENG, ROCKET) AND type = page"),
+            Some("type = page AND space IN (ENG, ROCKET) AND (space = VECTOR)"),
             Ok(()),
         ),
         // A finite boundary admits only granted keys in `spaces`.
@@ -743,28 +747,64 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             "search",
             finite(&["ENG"]),
             &alias_cql,
-            Some("(space = VECTOR) AND space IN (ENG) AND type = page"),
+            Some("type = page AND space IN (ENG) AND (space = VECTOR)"),
             Err(ReasonCode::ScopeUnresolved),
         ),
         (
             "search",
             all_except(&["ROCKET"]),
             &alias_cql,
-            Some("(space = VECTOR) AND space NOT IN (ROCKET) AND type = page"),
+            Some("type = page AND space NOT IN (ROCKET) AND (space = VECTOR)"),
             Err(ReasonCode::ScopeUnresolved),
         ),
         (
             "search",
             all_except(&["ROCKET"]),
             &alias_spaces,
-            Some("space IN (VECTOR) AND type = page"),
+            Some("type = page AND space IN (VECTOR)"),
             Err(ReasonCode::ScopeUnresolved),
         ),
         (
             "blog.search",
             all_except(&["ROCKET"]),
             &alias_cql,
-            Some("(space = VECTOR) AND space NOT IN (ROCKET) AND type = blogpost"),
+            Some("type = blogpost AND space NOT IN (ROCKET) AND (space = VECTOR)"),
+            Err(ReasonCode::ScopeUnresolved),
+        ),
+        (
+            "search",
+            finite(&["ENG", "ROCKET"]),
+            &exclusion_cql,
+            Some(
+                "type = page AND space IN (ENG, ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+            ),
+            Ok(()),
+        ),
+        (
+            "blog.search",
+            finite(&["ENG", "ROCKET"]),
+            &exclusion_cql,
+            Some(
+                "type = blogpost AND space IN (ENG, ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+            ),
+            Ok(()),
+        ),
+        (
+            "search",
+            all_except(&["ROCKET"]),
+            &exclusion_cql,
+            Some(
+                "type = page AND space NOT IN (ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+            ),
+            Err(ReasonCode::ScopeUnresolved),
+        ),
+        (
+            "blog.search",
+            all_except(&["ROCKET"]),
+            &exclusion_cql,
+            Some(
+                "type = blogpost AND space NOT IN (ROCKET) AND (space != ARCHIVE OR (space = VECTOR AND id NOT IN (12345)))",
+            ),
             Err(ReasonCode::ScopeUnresolved),
         ),
     ] {

@@ -23,6 +23,9 @@ mod issue_type_tests;
 #[path = "jql_custom_field_tests.rs"]
 mod jql_custom_field_tests;
 
+#[path = "jql_exclusion_tests.rs"]
+mod jql_exclusion_tests;
+
 #[path = "underscore_key_tests.rs"]
 mod underscore_key_tests;
 
@@ -105,7 +108,7 @@ fn parses_restricted_jql_project_scopes() {
 fn rejects_unsafe_jql_shapes() {
     for jql in [
         "project = PROJ AND key = PROJ-124 OR project = OTHER",
-        "project != OTHER",
+        "project > OTHER",
         "filter = 12345",
         "key = proj-124",
         "issueFunction in linkedIssuesOf(\"project = PROJ\")",
@@ -4158,8 +4161,8 @@ fn jql_input_errors_give_safe_locations_and_supported_choices() {
             "supported operators: =, !=, IN, NOT IN",
         ),
         (
-            "project != PROJ",
-            "operator != is unsupported for project; supported operators: =, IN",
+            "project > PROJ",
+            "operator > is unsupported for project; supported operators: =, !=, IN, NOT IN",
         ),
         (
             "updated >= privateFunction(secretValue)",

@@ -62,12 +62,12 @@ pub(crate) fn jql_documentation() -> Value {
             "orderBy": {"fields": JqlSortField::ALL.iter().map(|field| field.canonical()).collect::<Vec<_>>(), "aliases": JqlSortField::alias_documentation(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_JIRA_ORDER_TERMS},
             "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, text negation, and nested functions are unsupported.",
             "values": "Text operands must be quoted. Bare identifiers use ASCII letters, digits, underscore, hyphen, or dot; quote other values. Single or double quotes delimit ASCII strings, with only the matching quote and backslash escapable; non-ASCII and control characters are rejected. Dates accept YYYY-MM-DD or quoted YYYY/MM/DD, optionally with HH:mm in a quoted string; relative dates use a sign, positive integer, and m/h/d/w, e.g. -7d. Function offsets must be unquoted. Project and issue keys must be canonical uppercase keys; project keys may contain underscores, e.g. OPS_TOOLS and OPS_TOOLS-12345.",
-            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
-            "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, supply explicit projects or a filter such as updated >= -7d: Jira enhanced search requires a bounded query, and exclusions alone are not treated as a sufficient bound.",
+            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access; wildcard project entries are unsupported. Project and issue-key exclusions are query filters, never sources of authority. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
+            "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, empty JQL, ORDER BY-only JQL, and filters containing only project or issue-key exclusions require explicit authorized projects or an additional filter such as updated >= -7d. This includes nested AND/OR groups containing only those exclusions. Finite scopes provide the bound. Other nonempty filters retain Jira endpoint validation.",
             "limits": {"rawQueryBytes": MAX_JIRA_RAW_QUERY_BYTES, "tokens": MAX_JIRA_QUERY_TOKENS, "depth": MAX_JIRA_QUERY_DEPTH, "inListValues": MAX_JIRA_IN_LIST_VALUES, "stringLiteralBytes": MAX_JIRA_STRING_LITERAL_BYTES, "textQueryBytes": MAX_JIRA_TEXT_QUERY_BYTES},
             "errors": "Invalid syntax, unsupported grammar, and query caps return input_invalid. Parser diagnostics report token positions and supported choices without echoing query literals. Scope authorization and returned-issue containment errors remain distinct."
         },
-        "text": "A nonempty text query becomes key = value for a valid issue key, otherwise text ~ quoted-value; it uses the same authorization containment.",
+        "text": "A nonempty text query becomes key = value for a valid issue key, otherwise text ~ quoted-value; it uses the same authorization containment. Quoted text wildcards follow Jira matching rules and never grant project access.",
         "pagination": "maxResults is a positive integer capped by broker configuration. nextPageToken is an opaque broker-signed continuation: pass it back unchanged with the same query, projects, and maxResults in the same execution context. It is bound to the principal, credential mode, and Jira configuration, and expires after 15 minutes or when the broker reloads. Effective authorization is checked on every request; if the effective project scope changed since the token was issued, repeat the search without nextPageToken.",
         "examples": [
             {"query": {"type": "jql", "value": "ORDER BY updated DESC"}},
@@ -244,6 +244,16 @@ pub(crate) fn build_jira_search_query(
     if ast.filter.is_none() && matches!(effective_scope, EffectiveSearchScope::AllExcept(_)) {
         return Err(jql_input_invalid(
             "Jira enhanced search requires a filter or explicit projects when access covers all projects (including all except exclusions); provide projects or a filter such as updated >= -7d",
+        ));
+    }
+    if matches!(effective_scope, EffectiveSearchScope::AllExcept(_))
+        && ast
+            .filter
+            .as_ref()
+            .is_some_and(JqlExpr::is_resource_exclusion_only)
+    {
+        return Err(jql_input_invalid(
+            "Jira search requires explicit projects or an additional filter when the query contains only project or issue-key exclusions and access covers all projects; use projects or a filter such as updated >= -7d",
         ));
     }
     let filter_jql = ast.filter.as_ref().map(JqlExpr::emit);
@@ -525,6 +535,20 @@ pub(crate) enum JqlExpr {
 }
 
 impl JqlExpr {
+    /// A narrow local bound check, not Jira's complete query-bound analysis.
+    /// Negative resource operands are filters and never positive scope selections.
+    fn is_resource_exclusion_only(&self) -> bool {
+        match self {
+            Self::Clause(clause) => {
+                matches!(clause.field, JqlField::Project | JqlField::Key)
+                    && matches!(clause.operator, JqlOperator::NotEq | JqlOperator::NotIn)
+            }
+            Self::And(children) | Self::Or(children) => {
+                children.iter().all(Self::is_resource_exclusion_only)
+            }
+        }
+    }
+
     pub(crate) fn emit(&self) -> String {
         match self {
             Self::Clause(clause) => clause.emit(),
@@ -786,7 +810,10 @@ impl JqlField {
 
     pub(crate) fn allows_operator(self, operator: JqlOperator) -> bool {
         match self {
-            Self::Project | Self::Key => matches!(operator, JqlOperator::Eq | JqlOperator::In),
+            Self::Project | Self::Key => matches!(
+                operator,
+                JqlOperator::Eq | JqlOperator::NotEq | JqlOperator::In | JqlOperator::NotIn
+            ),
             Self::Status | Self::StatusCategory | Self::IssueType | Self::Priority => matches!(
                 operator,
                 JqlOperator::Eq | JqlOperator::NotEq | JqlOperator::In | JqlOperator::NotIn

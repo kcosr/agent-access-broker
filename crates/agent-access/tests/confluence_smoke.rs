@@ -2,6 +2,10 @@
 mod list_mcp;
 #[path = "confluence_smoke/plain_inputs.rs"]
 mod plain_inputs;
+#[path = "common/search_exclusions.rs"]
+mod search_access;
+#[path = "confluence_smoke/search_exclusions.rs"]
+mod search_exclusions;
 #[path = "confluence_smoke/space_list.rs"]
 mod space_listing;
 use agent_access_broker_host::test_support::{
@@ -229,7 +233,7 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         .clone();
     assert_eq!(
         last_search.cql,
-        r#"(title ~ "runbook") AND space IN (ENG) AND type = page"#
+        r#"type = page AND space IN (ENG) AND (title ~ "runbook")"#
     );
     assert_eq!(last_search.spaces, vec!["ENG"]);
     assert_eq!(last_search.max_results, 2);

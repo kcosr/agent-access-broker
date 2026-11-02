@@ -489,7 +489,7 @@ async fn a_person_reads_jira_and_a_personal_confluence_space_through_the_gateway
     mount_gateway(&atlassian, &page, 1, personal_page()).await;
     Mock::given(method("GET"))
         .and(path(search.as_str()))
-        .and(query_param("cql", "space IN (\"~alice\") AND type = page"))
+        .and(query_param("cql", "type = page AND space IN (\"~alice\")"))
         .and(header_is("authorization", "Bearer atlassian-access-1"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({"results": [personal_page_json()]})),

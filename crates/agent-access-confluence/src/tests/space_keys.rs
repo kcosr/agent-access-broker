@@ -77,7 +77,7 @@ fn ordinary_space_keys_remain_exact_in_search_authority() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert_eq!(query.cql, "space IN (TeamDocs) AND type = page");
+    assert_eq!(query.cql, "type = page AND space IN (TeamDocs)");
     let scope = EffectiveSearchScope::AllExcept(BTreeSet::from(["TeamDocs".to_string()]));
     assert!(!scope.authorizes_value("TeamDocs"));
     assert!(scope.authorizes_value("TEAMDOCS"));

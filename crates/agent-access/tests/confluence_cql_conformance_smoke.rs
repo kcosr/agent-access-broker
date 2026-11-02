@@ -7,7 +7,9 @@ use std::process::{Command, Output};
 
 const REQUIRED_COVERAGE: &[&str] = &[
     "space-eq",
+    "space-neq",
     "space-in",
+    "space-not-in",
     "type-page",
     "title-contains",
     "text-contains",
@@ -26,9 +28,13 @@ const REQUIRED_COVERAGE: &[&str] = &[
     "mention-eq",
     "mention-in",
     "id-eq",
+    "id-neq",
     "id-in",
+    "id-not-in",
     "content-id-eq",
+    "content-id-neq",
     "content-id-in",
+    "content-id-not-in",
     "ancestor-eq",
     "ancestor-in",
     "parent-eq",
@@ -50,7 +56,41 @@ const REQUIRED_COVERAGE: &[&str] = &[
     "order-title-default",
     "order-multi",
     "escaping-string-literals",
+    "negative-leading-clause",
+    "negative-leading-group",
 ];
+
+#[test]
+fn example_manifest_covers_exclusions_without_expected_failures() {
+    let manifest: Manifest = serde_json::from_str(include_str!(
+        "fixtures/confluence-cql-conformance.example.json"
+    ))
+    .unwrap();
+    validate_manifest(&manifest).unwrap();
+    for case in &manifest.cases {
+        if case.covers.iter().any(|tag| {
+            matches!(
+                tag.as_str(),
+                "space-neq"
+                    | "space-not-in"
+                    | "id-neq"
+                    | "id-not-in"
+                    | "content-id-neq"
+                    | "content-id-not-in"
+                    | "negative-leading-clause"
+                    | "negative-leading-group"
+            )
+        }) {
+            assert!(
+                case.expect
+                    .as_ref()
+                    .is_none_or(|expect| expect.expected_upstream_failure.is_none()),
+                "new exclusion case {} must expect upstream acceptance",
+                case.id
+            );
+        }
+    }
+}
 
 #[test]
 #[ignore = "requires a live broker, real Confluence credentials, and an external conformance manifest"]

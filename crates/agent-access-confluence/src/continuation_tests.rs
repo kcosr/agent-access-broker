@@ -1155,7 +1155,10 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
         let backend = Arc::new(SearchBackend::default());
         let provider =
             ConfluenceProvider::with_backend(config(), ProviderLimits::default(), backend.clone());
-        let query = json!({ "query": { "type": "cql", "value": "title ~ \"runbook\"" } });
+        let query = json!({ "query": {
+            "type": "cql",
+            "value": "title ~ \"runbook\" AND space != ARCHIVE AND content.id NOT IN (777777, 888888)"
+        } });
         let first = provider
             .invoke(search_invocation(action, finite(&["ENG"]), query.clone()))
             .await
@@ -1165,6 +1168,9 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
         assert!(!token.contains("upstream-cursor-2"));
         let mut next = query.clone();
         next["nextPageToken"] = json!(token);
+        // The ID alias has the same canonical query and may continue it.
+        next["query"]["value"] =
+            json!("title ~ \"runbook\" AND space != ARCHIVE AND id NOT IN (777777, 888888)");
         let second = provider
             .invoke(search_invocation(action, finite(&["ENG"]), next.clone()))
             .await
@@ -1174,6 +1180,33 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
             backend.cursors(),
             vec![None, Some("upstream-cursor-2".to_string())],
             "{action}"
+        );
+
+        // Exclusion operands are part of the query binding. Neither changing
+        // a space/content exclusion nor changing context reuses the cursor.
+        for value in [
+            "title ~ \"runbook\" AND space != SANDBOX AND id NOT IN (777777, 888888)",
+            "title ~ \"runbook\" AND space != ARCHIVE AND id NOT IN (777777, 999999)",
+        ] {
+            let mut changed = next.clone();
+            changed["query"]["value"] = json!(value);
+            let error = provider
+                .invoke(search_invocation(action, finite(&["ENG"]), changed))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        }
+        let changed_context =
+            InvocationBuilder::from(search_invocation(action, finite(&["ENG"]), next.clone()))
+                .execution_context("external")
+                .build();
+        assert_eq!(
+            provider
+                .invoke(changed_context)
+                .await
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::InputInvalid
         );
 
         // A grant change that recomposes the query asks for a new search,
@@ -1201,6 +1234,16 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+        let error = provider
+            .invoke(search_invocation(
+                action,
+                SearchAuthorizationScope::excluding_exact_values(vec!["ENG".into()]),
+                next.clone(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert!(error.message.contains("space scope changed"));
         // Another action's continuation is not this one's.
         let other = if action == "search" {
             "blog.search"

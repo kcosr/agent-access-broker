@@ -82,6 +82,15 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Jira and Confluence search exclusions.** JQL `project` and `key`/`issuekey`,
+  and CQL `space` and `id`/`content.id`, accept `!=` and `NOT IN` within effective
+  access. Jira searchable-field discovery reports those operators when upstream
+  supports them. Exclusion-only Jira queries require a finite project scope or
+  an additional filter. Confluence queries put the fixed positive content type
+  first while preserving policy restrictions and grouped caller filters. See
+  [Jira search](docs/providers-jira.md) and [Confluence search](docs/providers-confluence.md).
+  ([#94](https://github.com/kcosr/agent-access-broker/pull/94))
+
 - **Jira comment bodies in batches.** `issue.view` accepts `includeComments`
   (`jira issue view --include-comments`) for one chronological page of full
   comment and reply bodies. `comment.list` remains metadata-only by default;

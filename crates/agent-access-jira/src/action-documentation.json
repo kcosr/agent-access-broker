@@ -348,7 +348,7 @@
   },
   "search": {
     "resultMetadata": "Search results contain issue timestamps, small user summaries, priority and labels when supplied. They omit description bodies, detailed issue context, customFields, parent, subtasks and issueLinks. Whole-result formatting does not fetch those fields; use a separately authorized issue.view when needed.",
-    "fieldDiscovery": "Use jira.project.view to discover a project's searchable fields and supported operators. Insert the returned jqlReference such as cf[12345]; do not use the display name or customfield_12345. Text ~ performs text matching rather than whole-value equality. Jira still validates field types.",
+    "fieldDiscovery": "Use jira.project.view to discover a project's searchable fields and supported operators. Project and key exclusions are advertised only when Jira also reports != or NOT IN. Insert the returned jqlReference such as cf[12345]; do not use the display name or customfield_12345. Text ~ performs text matching rather than whole-value equality. Jira still validates field types.",
     "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "inputExamples": [
       {
@@ -370,6 +370,29 @@
           "query": {
             "type": "jql",
             "value": "status = Done ORDER BY updated DESC"
+          },
+          "projects": [
+            "PROJ"
+          ],
+          "maxResults": 10
+        }
+      },
+      {
+        "label": "Search effective access with project and issue exclusions",
+        "inputs": {
+          "query": {
+            "type": "jql",
+            "value": "project != ARCHIVE AND key NOT IN (PROJ-123, PROJ-456) AND text ~ \"deploy\""
+          },
+          "maxResults": 10
+        }
+      },
+      {
+        "label": "Exclude projects within a finite selection",
+        "inputs": {
+          "query": {
+            "type": "jql",
+            "value": "project NOT IN (ARCHIVE, SANDBOX)"
           },
           "projects": [
             "PROJ"
