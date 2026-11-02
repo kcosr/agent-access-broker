@@ -36,8 +36,9 @@
 }
 
 /* ---------- table */
-/* The reason code column (shown when a loaded record has one). */
-.wb-table .pt-audit-reason {
+/* The reason code column (shown when a loaded record has one); its header
+   keeps the table's header style. */
+.wb-table td.pt-audit-reason {
   color: var(--wb-fg-2);
   font-size: var(--wb-fs-12);
 }

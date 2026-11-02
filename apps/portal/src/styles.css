@@ -86,6 +86,12 @@
 .wb-settings-sec-titles {
   flex-basis: 20rem;
 }
+/* Rows inside a section's form start flush, like rows placed directly in it. */
+.wb-settings-sec-body > form:first-child > .wb-settings-row:first-child,
+.wb-settings-sec-body > form:first-child > fieldset:first-child > .wb-settings-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
 
 /* ---------- text helpers */
 .pt-on {

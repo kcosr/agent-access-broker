@@ -32,6 +32,11 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); });
 
+/** The Account profile's Sign-in value: how the current session signed in. */
+function signInRow(page: Page) {
+  return page.locator("dt", { hasText: /^Sign-in$/ }).locator("xpath=following-sibling::dd[1]");
+}
+
 async function mockSession(page: Page, localPassword: string, loginMethod = "oidc", isAdmin = false) {
   await page.route("**/v1/**", (route) => route.fulfill({ status: 404, json: { ok: false, reasonCode: "not_found", error: { message: "Not mocked" } } }));
   const session = { role: isAdmin ? "admin" : "user", selfServiceEnabled: true, authenticated: true, principal: "viewer",   groups: [], loginMethod,
@@ -62,7 +67,7 @@ for (const localPassword of ["absent", "disabled", "active"]) {
       await page.getByLabel("Confirm new password", { exact: true }).fill("new-password-value");
       await page.getByRole("button", { name: "Update password" }).click();
       await expect.poll(() => changed).toBe(true);
-      await expect(page.locator("dt", { hasText: /^Sign-in$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("Microsoft");
+      await expect(signInRow(page)).toHaveText("Microsoft");
     }
   });
 }
@@ -308,13 +313,13 @@ for (const loginMethod of ["oidc", "local_password"]) {
       await page.getByLabel("Confirm new password", { exact: true }).fill("new-password-value");
       await page.getByRole("button", { name: "Update password", exact: true }).click();
       await expect(page.getByRole("alert").filter({ hasText: "Current local password could not be verified" })).toBeVisible();
-      await expect(page.getByText(loginMethod, { exact: true })).toBeVisible();
+      await expect(signInRow(page)).toHaveText(loginMethod === "oidc" ? "Microsoft" : "Local password");
       await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toHaveCount(0);
       await page.getByLabel("Current password", { exact: true }).fill("correct-password");
       await page.getByRole("button", { name: "Update password", exact: true }).click();
       await expect.poll(() => attempts).toBe(2);
       await expect(page.getByLabel("Current password", { exact: true })).toHaveValue("");
-      await expect(page.getByText(loginMethod, { exact: true })).toBeVisible();
+      await expect(signInRow(page)).toHaveText(loginMethod === "oidc" ? "Microsoft" : "Local password");
     });
   }
   test(`${loginMethod} password change still signs out an expired browser session`, async ({ page }) => {
@@ -345,5 +350,5 @@ test("CSRF retry still leaves a wrong-current-password error inline", async ({ p
   await page.getByRole("button", { name: "Update password", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Current local password could not be verified" })).toBeVisible();
   expect(attempts).toBe(2);
-  await expect(page.locator("dt", { hasText: /^Sign-in$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("Microsoft");
+  await expect(signInRow(page)).toHaveText("Microsoft");
 });
