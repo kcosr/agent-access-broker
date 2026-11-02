@@ -658,7 +658,7 @@ function ReviewRow({
       {row.reason ? <p className="pt-prose wb-small">{row.reason}</p> : null}
       <ScopedMcpWarningText warning={row.scopedMcpWarning} />
       <div className="pt-catalog-review-fields">
-        <Field label={`Action name for ${source}`}>
+        <Field label={<>Action name<span className="wb-sr-only"> for {source}</span></>}>
           <Input
             mono
             inputSize="sm"
@@ -668,10 +668,10 @@ function ReviewRow({
             spellCheck={false}
           />
         </Field>
-        <Field label={`Display label for ${source}`}>
+        <Field label={<>Display label<span className="wb-sr-only"> for {source}</span></>}>
           <Input inputSize="sm" maxLength={256} value={row.label} disabled={pending} onChange={(event) => update(row.key, { label: event.target.value })} />
         </Field>
-        <Field label={`Effects for ${source}`} hint={row.tool.readOnlyHint === true ? "Upstream suggests read-only." : undefined}>
+        <Field label={<>Effects<span className="wb-sr-only"> for {source}</span></>} hint={row.tool.readOnlyHint === true ? "Upstream suggests read-only." : undefined}>
           <Select inputSize="sm" value={row.readOnly ? "read" : "write"} disabled={pending} onChange={(event) => update(row.key, { readOnly: event.target.value === "read" })}>
             <option value="write">Write-capable / unconfirmed</option>
             <option value="read">Reviewed read-only</option>

@@ -215,7 +215,7 @@ export function KeyValue({
   className,
 }: {
   items: readonly (KeyValueItem | null | false | undefined)[];
-  /** Label column width in px (default 120). */
+  /** Label column width in px (default 120; 96 in the quiet style). */
   labelWidth?: number | undefined;
   className?: string | undefined;
 }) {

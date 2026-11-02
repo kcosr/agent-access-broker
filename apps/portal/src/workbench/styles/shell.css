@@ -30,6 +30,21 @@
     grid-column: 3;
     grid-row: 2;
   }
+  /* No top bar: the sidebar (brand, navigation) runs the full height. */
+  .wb-app--no-topbar {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .wb-app--no-topbar
+    > :is(
+      .wb-sidebar-pane,
+      .wb-sidebar-rail,
+      .wb-app-main,
+      .wb-main,
+      .wb-app-drawer,
+      .wb-drawer
+    ) {
+    grid-row: 1;
+  }
   .wb-app-main,
   .wb-app-drawer {
     display: flex;
@@ -61,7 +76,7 @@
     height: var(--wb-ctl-lg);
     padding: 0 12px;
     border-radius: var(--wb-radius-ctl);
-    background: var(--wb-accent);
+    background: var(--wb-accent-solid);
     color: var(--wb-on-accent);
     font-size: var(--wb-fs-13);
     font-weight: var(--wb-fw-medium);
@@ -115,7 +130,7 @@
     width: 24px;
     height: 24px;
     border-radius: var(--wb-radius-ctl);
-    background: var(--wb-accent);
+    background: var(--wb-accent-solid);
     color: var(--wb-on-accent);
     display: grid;
     place-items: center;
@@ -248,7 +263,10 @@
   .wb-topbar[data-wb-brand="compact"] .wb-brand {
     margin-right: 4px;
   }
-  .wb-topbar[data-wb-brand="compact"] .wb-brand-name,
+  /* the name goes only where the mark stays to show the brand */
+  .wb-topbar[data-wb-brand="compact"]
+    .wb-brand:has(> .wb-brand-mark)
+    > .wb-brand-name,
   .wb-topbar[data-wb-status="short"] .wb-top-status-text {
     position: absolute;
     width: 1px;
@@ -548,6 +566,14 @@
   .wb-side-item[aria-current]:not([aria-current="false"]) .wb-icon {
     color: var(--wb-accent-text);
   }
+  .wb-side-item-count[class*="wb-tone-"] {
+    color: var(--wb-tone-text);
+    font-weight: var(--wb-fw-medium);
+  }
+  .wb-side-item--nested {
+    padding-left: 22px;
+    font-size: var(--wb-fs-13);
+  }
   .wb-side-item:focus-visible {
     outline-offset: -2px;
   }
@@ -657,6 +683,40 @@
   .wb-side-more .wb-icon {
     width: 13px;
     height: 13px;
+  }
+
+  /* ---------- navigation sidebar: brand (in a shell without a top bar), a
+     selector (SidebarTop), groups of links (SidebarNav) and a foot pinned to
+     the bottom (SidebarFoot) */
+  .wb-app--no-topbar .wb-sidebar > .wb-brand {
+    margin: 2px 8px 12px;
+  }
+  .wb-side-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  * + .wb-side-nav {
+    margin-top: 14px;
+  }
+  .wb-side-nav > .wb-side-h {
+    margin-top: 6px;
+  }
+  .wb-sidebar:has(> .wb-side-foot) {
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 12px;
+  }
+  .wb-side-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+    margin-top: auto;
+    padding: 10px 8px 0;
+    border-top: 1px solid var(--wb-border);
+    color: var(--wb-fg-2);
+    font-size: var(--wb-fs-13);
   }
 
   /* ---------- main pane */

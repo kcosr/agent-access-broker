@@ -50,7 +50,7 @@
     cursor: progress;
   }
   .wb-btn--primary {
-    background: var(--wb-accent);
+    background: var(--wb-accent-solid);
     border-color: transparent;
     color: var(--wb-on-accent);
   }
@@ -62,7 +62,7 @@
   .wb-btn--primary:hover,
   .wb-btn--primary:disabled:hover,
   .wb-btn--primary[aria-disabled="true"]:hover {
-    background: var(--wb-accent);
+    background: var(--wb-accent-solid);
   }
   .wb-btn--primary:not(:disabled, [aria-disabled="true"]):hover {
     filter: brightness(1.06);
@@ -144,7 +144,10 @@
     line-height: 16px;
     font-variant-numeric: tabular-nums;
   }
-  .wb-btn--primary .wb-btn-count,
+  .wb-btn--primary .wb-btn-count {
+    background: none;
+    color: inherit;
+  }
   .wb-btn--danger .wb-btn-count {
     background: rgba(255, 255, 255, 0.22);
     color: inherit;
@@ -459,6 +462,10 @@
   }
   .wb-state-pill:not(:has(.wb-icon)) {
     padding-left: 10px;
+  }
+  /* Info marks keep the brighter accent; white text needs its solid fill. */
+  .wb-state-pill.wb-tone-info {
+    background: var(--wb-accent-solid);
   }
   .wb-state-pill .wb-icon {
     width: 14px;

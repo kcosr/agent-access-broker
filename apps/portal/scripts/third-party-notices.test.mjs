@@ -57,6 +57,11 @@ test("production portal ships full notices for its actual dependency closure and
   assert.match(notices, /The above copyright notice and this permission notice/);
   assert.match(readFileSync(path.join(dist, "licenses/NOTICE-Agent-Access-Broker.txt"), "utf8"), /Copyright \(c\) 2026 kcosr/);
   assert.equal(readFileSync(path.join(dist, "licenses/LICENSE-Inter.txt"), "utf8"), readFileSync(path.join(portalRoot, "src/workbench/fonts/LICENSE-Inter.txt"), "utf8"));
+  for (const file of ["fonts/LICENSE-JetBrainsMono.txt", "fonts/LICENSE-IBMPlexSans.txt", "fonts/LICENSE-IBMPlexMono.txt", "LICENSE-Lucide.txt"]) {
+    const name = `licenses/${path.basename(file)}`;
+    assert.ok(Object.hasOwn(manifest.files, name), `Missing kit notice ${name}`);
+    assert.equal(readFileSync(path.join(dist, name), "utf8"), readFileSync(path.join(portalRoot, "src/workbench", file), "utf8"));
+  }
 
   for (const name of Object.keys(manifest.files)) {
     const file = path.join(dist, name);

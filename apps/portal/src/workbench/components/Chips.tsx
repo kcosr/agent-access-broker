@@ -274,7 +274,7 @@ export function Avatar({
 }) {
   const style = {
     "--wb-avatar-bg": highlight
-      ? "var(--wb-accent)"
+      ? "var(--wb-accent-solid)"
       : avatarColor(name.toLowerCase()),
   } as CSSProperties;
   return (
@@ -282,6 +282,7 @@ export function Avatar({
       className={cx(
         "wb-avatar",
         size !== "sm" && `wb-avatar--${size}`,
+        highlight && "wb-avatar--highlight",
         className,
       )}
       style={style}

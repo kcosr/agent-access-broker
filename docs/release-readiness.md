@@ -278,7 +278,8 @@ The release delivery must contain:
   assets, and `licenses` directory, served from the configured `portal.static_dir`.
   Preserve `THIRD-PARTY-NOTICES.txt`, `THIRD-PARTY-MANIFEST.json`,
   `LICENSE-Agent-Access-Broker.txt`, `NOTICE-Agent-Access-Broker.txt`,
-  `LICENSE-Inter.txt`, and `LICENSE-JetBrainsMono.txt` under `licenses`.
+  `LICENSE-Inter.txt`, `LICENSE-JetBrainsMono.txt`, `LICENSE-IBMPlexSans.txt`,
+  `LICENSE-IBMPlexMono.txt`, and `LICENSE-Lucide.txt` under `licenses`.
 - The production broker and CLI sample configurations, administrator/operator/user
   guides, changelog, root `LICENSE` and `NOTICE`, and generated Rust executable
   `THIRD-PARTY-NOTICES.txt` and `rust-dependencies.json`.

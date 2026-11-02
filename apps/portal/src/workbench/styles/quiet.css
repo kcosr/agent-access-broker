@@ -1,0 +1,658 @@
+/*
+ * The quiet style (README, "Styles"): data-wb-style="quiet" on <html>, next
+ * to data-theme. IBM Plex type, ink on paper, sentence-case labels, hairline
+ * rules instead of filled boxes and left-ruled alerts. Colour is kept to a
+ * few hues: failed red, waiting amber, success a muted green, and blue, the
+ * accent, which also means running (primary buttons, focus, the current tab
+ * and selection, tinted with --wb-accent-weak; hover stays grey). Every rule
+ * here is scoped to the attribute, so the default style is untouched.
+ *
+ * Contrast is part of the palette; these values meet WCAG AA (4.5:1).
+ * "Selected" is --wb-accent-weak over the page, side or surface.
+ *   --wb-muted         #726f68 light, #8a8780 dark (the design's ink-3,
+ *                      #8b8880 and #78756e, gives only 3.2-3.5 and
+ *                      3.7-4.0:1): small muted text on page, side, surface,
+ *                      hover and the status tints over the page. On
+ *                      selected backgrounds, where it would fall to
+ *                      3.7-4.4:1, and on the blended hover of sidebar items,
+ *                      top-bar tabs and buttons (4.3-4.4:1), those elements
+ *                      point --wb-muted at --wb-fg-2.
+ *   --wb-accent-text   #2150b5 light, #93b4f9 dark: 5.8-7.3:1 and
+ *                      6.4-8.8:1 on page, side, surface, hover and selected.
+ *   --wb-success-text  #2b7440 light (the design's #2e7a43 gives 4.2-4.5:1
+ *                      on hover and selected backgrounds), #62b57d dark:
+ *                      4.5-5.7:1 and 5.3-7.3:1.
+ *   --wb-warning       #885f09 light (the design's #97690a gives 3.8-4.4:1
+ *                      on side, hover and selected backgrounds) and
+ *   --wb-danger        #c02f2a light, #ef7065 dark (the design's #c2302a and
+ *                      #ee6b60 give 4.43 and 4.35:1 on selected over the side
+ *                      and the surface): status text on every background,
+ *                      selected included. The other status colours are the
+ *                      design's values.
+ *   --wb-on-accent     #ffffff light, #0d1424 dark: 6.6 and 7.6:1 on the
+ *                      primary, 4.9 and 5.9:1 on its hover.
+ * Status marks (--wb-success and the other solids: icons, dots, rules) are
+ * their text colours. The succeeded bars of HistoryStrip
+ * (--wb-success-bar) are a faint green, like the other faint marks
+ * (--wb-deemph); each bar carries its state as text.
+ * The theme is chosen by data-theme as in the default style; any element
+ * with data-theme re-themes its subtree.
+ */
+@layer wb.tokens {
+  [data-wb-style="quiet"] {
+    --wb-font-sans:
+      "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Helvetica Neue", "Liberation Sans", Arial, sans-serif;
+    --wb-font-mono:
+      "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+    /* Plex ships 400, 500 and 600: the in-between weights land on them */
+    --wb-fw-book: 400;
+    --wb-fw-strong: 500;
+    --wb-fw-bold: 600;
+    --wb-tracking-caps: 0;
+    --wb-radius-xs: 3px;
+    --wb-radius-sm: 4px;
+    --wb-radius-seg: 4px;
+    --wb-radius-ctl: 5px;
+    --wb-radius-md: 6px;
+    --wb-radius-row: 6px;
+    --wb-radius-card: 6px;
+    --wb-radius-modal: 8px;
+  }
+
+  [data-wb-style="quiet"],
+  [data-wb-style="quiet"] [data-theme="light"],
+  [data-wb-style="quiet"][data-theme="light"] {
+    --wb-page: #fcfcfa;
+    /* sidebar (and top bar) */
+    --wb-side: #f4f3ef;
+    /* inputs, cards, logs, overlays */
+    --wb-surface: #ffffff;
+    /* hover */
+    --wb-surface-2: #f5f4f0;
+    /* neutral fills: hover blends, avatars, meter tracks */
+    --wb-surface-3: #e9e7e1;
+    --wb-raised: var(--wb-surface);
+    --wb-border: #e8e6e1;
+    --wb-border-strong: #d8d5ce;
+    --wb-fg: #1b1b19;
+    --wb-fg-2: #5b5953;
+    --wb-muted: #726f68;
+    /* blue, the running hue: primary buttons, focus, current tab; weak is
+       the selected tint */
+    --wb-accent: #2556c4;
+    --wb-accent-solid: var(--wb-accent);
+    --wb-accent-weak: rgba(37, 86, 196, 0.09);
+    --wb-accent-text: #2150b5;
+    --wb-on-accent: #ffffff;
+    --wb-shadow-pop:
+      0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 32px rgba(0, 0, 0, 0.08);
+    --wb-shadow-drawer: none;
+    --wb-shadow-raised: 0 0 0 transparent;
+
+    /* status: ok, waiting, failed, running (info); weak = the faint tints */
+    --wb-success: #2b7440;
+    --wb-success-text: #2b7440;
+    --wb-success-weak: #f4f8f5;
+    --wb-success-border: rgba(43, 117, 64, 0.35);
+    /* the succeeded bars in HistoryStrip (quiet only) */
+    --wb-success-bar: #a9cdb2;
+    --wb-warning: #885f09;
+    --wb-warning-text: #885f09;
+    --wb-warning-weak: #fcf8ee;
+    --wb-warning-border: rgba(138, 96, 9, 0.35);
+    --wb-danger: #c02f2a;
+    --wb-danger-text: #c02f2a;
+    --wb-danger-weak: #fdf5f4;
+    --wb-danger-border: rgba(194, 48, 42, 0.35);
+    --wb-info: #2556c4;
+    --wb-info-text: #2556c4;
+    --wb-info-weak: #f3f6fd;
+    --wb-info-border: rgba(37, 86, 196, 0.35);
+    --wb-neutral: #726f68;
+    --wb-neutral-text: #5b5953;
+    --wb-neutral-weak: #f5f4f0;
+    --wb-neutral-border: #d8d5ce;
+
+    --wb-grid: #e8e6e1;
+    --wb-axis: #d8d5ce;
+    --wb-deemph: #d2cfc8;
+  }
+
+  [data-wb-style="quiet"][data-theme="dark"],
+  [data-wb-style="quiet"] [data-theme="dark"] {
+    --wb-page: #151514;
+    --wb-side: #1a1a19;
+    --wb-surface: #1d1d1b;
+    --wb-surface-2: #20201e;
+    --wb-surface-3: #2a2926;
+    --wb-raised: var(--wb-surface);
+    --wb-border: #292826;
+    --wb-border-strong: #3a3936;
+    --wb-fg: #e9e7e2;
+    --wb-fg-2: #a8a59e;
+    --wb-muted: #8a8780;
+    --wb-accent: #7ea6f8;
+    --wb-accent-solid: var(--wb-accent);
+    --wb-accent-weak: rgba(126, 166, 248, 0.14);
+    --wb-accent-text: #93b4f9;
+    --wb-on-accent: #0d1424;
+    --wb-shadow-pop:
+      0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.4);
+    --wb-shadow-drawer: none;
+    --wb-shadow-raised: 0 0 0 transparent;
+
+    --wb-success: #62b57d;
+    --wb-success-text: #62b57d;
+    --wb-success-weak: rgba(98, 181, 125, 0.08);
+    --wb-success-border: rgba(98, 181, 125, 0.35);
+    --wb-success-bar: #3f6b4c;
+    --wb-warning: #d6a24a;
+    --wb-warning-text: #d6a24a;
+    --wb-warning-weak: rgba(214, 162, 74, 0.07);
+    --wb-warning-border: rgba(214, 162, 74, 0.35);
+    --wb-danger: #ef7065;
+    --wb-danger-text: #ef7065;
+    --wb-danger-weak: rgba(238, 107, 96, 0.08);
+    --wb-danger-border: rgba(238, 107, 96, 0.35);
+    --wb-info: #7ea6f8;
+    --wb-info-text: #7ea6f8;
+    --wb-info-weak: rgba(126, 166, 248, 0.07);
+    --wb-info-border: rgba(126, 166, 248, 0.35);
+    --wb-neutral: #8a8780;
+    --wb-neutral-text: #a8a59e;
+    --wb-neutral-weak: #20201e;
+    --wb-neutral-border: #3a3936;
+
+    --wb-grid: #292826;
+    --wb-axis: #3a3936;
+    --wb-deemph: #4a4944;
+  }
+}
+
+/* The quiet font from the style boundary down (a quiet subtree inside a
+   default-style page does not inherit Inter from <body>), and inline code
+   in mono without a chip. */
+@layer wb.base {
+  :where([data-wb-style="quiet"]) {
+    font-family: var(--wb-font-sans);
+  }
+  :where([data-wb-style="quiet"]) :where(code) {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+  }
+}
+
+@layer wb.components {
+  /* ---------- frame: side-coloured chrome, page-coloured panes */
+  [data-wb-style="quiet"] .wb-topbar,
+  [data-wb-style="quiet"] .wb-sidebar,
+  [data-wb-style="quiet"] .wb-sidebar-rail {
+    background: var(--wb-side);
+  }
+  [data-wb-style="quiet"] .wb-brand {
+    gap: 8px;
+    font-size: var(--wb-fs-14);
+    font-weight: var(--wb-fw-semibold);
+    letter-spacing: 0;
+  }
+  /* no tile behind the mark */
+  [data-wb-style="quiet"] .wb-brand-mark {
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    background: none;
+    color: var(--wb-fg);
+  }
+  [data-wb-style="quiet"] .wb-nav-tab {
+    border-radius: var(--wb-radius-sm);
+    font-weight: var(--wb-fw-regular);
+  }
+  /* hover on side-coloured chrome: muted text (counts) rises to fg-2, as on
+     selected backgrounds */
+  [data-wb-style="quiet"] .wb-nav-tab:hover,
+  [data-wb-style="quiet"] .wb-nav > .wb-nav-more-btn[aria-expanded="true"] {
+    --wb-muted: var(--wb-fg-2);
+    background: color-mix(in srgb, var(--wb-surface-3) 55%, transparent);
+  }
+  [data-wb-style="quiet"]
+    .wb-nav-tab[aria-current]:not([aria-current="false"]) {
+    --wb-muted: var(--wb-fg-2);
+    background: var(--wb-accent-weak);
+    font-weight: var(--wb-fw-medium);
+  }
+  /* counts are plain numbers; only status tones colour them */
+  [data-wb-style="quiet"] .wb-nav-count {
+    min-width: 0;
+    height: auto;
+    padding: 0;
+    background: none;
+    color: var(--wb-muted);
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-regular);
+    line-height: inherit;
+  }
+  [data-wb-style="quiet"] .wb-nav-count.wb-tone-warning,
+  [data-wb-style="quiet"] .wb-nav-count.wb-tone-danger {
+    background: none;
+    color: var(--wb-tone-text);
+    font-weight: var(--wb-fw-medium);
+  }
+  [data-wb-style="quiet"] .wb-top-search {
+    border-radius: var(--wb-radius-ctl);
+    background: var(--wb-surface);
+  }
+  [data-wb-style="quiet"] .wb-top-search:hover {
+    border-color: var(--wb-muted);
+  }
+
+  /* ---------- sidebar: sentence-case section labels, grey hover, the current
+     item tinted with the accent */
+  [data-wb-style="quiet"] .wb-side-h {
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-regular);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  [data-wb-style="quiet"] .wb-side-h-count {
+    min-width: 0;
+    padding: 0;
+    background: none;
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-medium);
+  }
+  [data-wb-style="quiet"] .wb-side-item:hover,
+  [data-wb-style="quiet"] .wb-side-check:hover {
+    --wb-muted: var(--wb-fg-2);
+    background: color-mix(in srgb, var(--wb-surface-3) 55%, transparent);
+  }
+  /* the default style tints these accent buttons' hover; quiet keeps it grey */
+  [data-wb-style="quiet"] .wb-side-quick > button:hover,
+  [data-wb-style="quiet"] .wb-side-quick-btn:hover,
+  [data-wb-style="quiet"] .wb-side-more:hover {
+    background: color-mix(in srgb, var(--wb-surface-3) 55%, transparent);
+  }
+  [data-wb-style="quiet"]
+    .wb-side-item[aria-current]:not([aria-current="false"]) {
+    --wb-muted: var(--wb-fg-2);
+    background: var(--wb-accent-weak);
+    font-weight: var(--wb-fw-medium);
+  }
+
+  /* ---------- main pane, toolbar, entity header, drawer */
+  [data-wb-style="quiet"] .wb-main {
+    --wb-pane-bg: var(--wb-page);
+  }
+  [data-wb-style="quiet"] .wb-toolbar,
+  [data-wb-style="quiet"] .wb-page-head,
+  [data-wb-style="quiet"] .wb-main > .wb-tabs,
+  [data-wb-style="quiet"] .wb-toolbar + .wb-tabs,
+  [data-wb-style="quiet"] .wb-drawer-foot {
+    background: var(--wb-page);
+  }
+  [data-wb-style="quiet"] .wb-toolbar-title {
+    font-size: var(--wb-fs-20);
+    line-height: var(--wb-lh-tight);
+  }
+  [data-wb-style="quiet"] .wb-page-title {
+    font-size: var(--wb-fs-20);
+    letter-spacing: var(--wb-tracking-tight);
+  }
+  [data-wb-style="quiet"] .wb-drawer {
+    --wb-pane-bg: var(--wb-page);
+    background: var(--wb-page);
+  }
+  [data-wb-style="quiet"] .wb-drawer-title {
+    font-size: var(--wb-fs-18);
+  }
+  [data-wb-style="quiet"] .wb-drawer-section-title {
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-13);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  [data-wb-style="quiet"] .wb-drawer-section-count {
+    padding: 0;
+    background: none;
+    color: var(--wb-muted);
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-regular);
+  }
+  /* fact list: a narrower, muted label column (KeyValue labelWidth and
+     settings sections still set their own) */
+  :where([data-wb-style="quiet"]) .wb-kv {
+    --wb-kv-label: 96px;
+  }
+
+  /* ---------- lists */
+  [data-wb-style="quiet"] .wb-group-title {
+    font-size: var(--wb-fs-13-5);
+  }
+  [data-wb-style="quiet"] .wb-row-title {
+    font-size: var(--wb-fs-14);
+    font-weight: var(--wb-fw-medium);
+    letter-spacing: 0;
+  }
+  [data-wb-style="quiet"] .wb-row.is-active {
+    --wb-muted: var(--wb-fg-2);
+  }
+  /* the default style tints the row actions' hover; quiet keeps it grey */
+  [data-wb-style="quiet"] .wb-row-actions .wb-btn--icon:hover {
+    background: color-mix(in srgb, var(--wb-surface-3) 55%, transparent);
+    color: var(--wb-fg);
+  }
+  [data-wb-style="quiet"] .wb-list-note {
+    padding: 0;
+    border-radius: 0;
+    background: none;
+  }
+
+  /* ---------- tables: hairlines, sentence-case headers, 42px rows */
+  [data-wb-style="quiet"] .wb-table {
+    --wb-table-head-h: 36px;
+    font-size: var(--wb-fs-13-5);
+  }
+  [data-wb-style="quiet"] .wb-table thead th {
+    font-size: var(--wb-fs-12-5);
+    font-weight: var(--wb-fw-regular);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  /* one-line rows are 42px whatever they hold (a switch, row actions) */
+  [data-wb-style="quiet"] .wb-table td,
+  [data-wb-style="quiet"] .wb-table tbody th[scope="row"] {
+    height: 42px;
+    padding-block: 6px;
+  }
+  [data-wb-style="quiet"] .wb-table--compact {
+    --wb-table-head-h: 30px;
+    font-size: var(--wb-fs-12-5);
+  }
+  [data-wb-style="quiet"] .wb-table--compact thead th {
+    font-size: var(--wb-fs-12);
+  }
+  [data-wb-style="quiet"] .wb-table--compact td,
+  [data-wb-style="quiet"] .wb-table--compact tbody th[scope="row"] {
+    height: 32px;
+    padding-block: 3px;
+  }
+  [data-wb-style="quiet"] .wb-table tbody tr.is-selected,
+  [data-wb-style="quiet"] .wb-table tbody tr.is-active,
+  [data-wb-style="quiet"] .wb-table tbody tr[aria-selected="true"],
+  [data-wb-style="quiet"]
+    .wb-table
+    tbody
+    tr[aria-current]:not([aria-current="false"]) {
+    --wb-muted: var(--wb-fg-2);
+  }
+  /* error over stale rows: a left-ruled line */
+  [data-wb-style="quiet"] .wb-table-alert .wb-empty {
+    padding: 2px 0 2px 12px;
+    border: 0;
+    border-left: 2px solid var(--wb-danger);
+    border-radius: 0;
+    background: none;
+  }
+  [data-wb-style="quiet"] .wb-table-alert .wb-empty-icon {
+    display: none;
+  }
+
+  /* ---------- buttons: plain bordered, accent primary, red-text destructive */
+  [data-wb-style="quiet"]
+    .wb-btn:not(.wb-btn--primary, .wb-btn--ghost, .wb-btn--danger-ghost):not(
+      :disabled,
+      [aria-disabled="true"]
+    ):hover {
+    --wb-muted: var(--wb-fg-2);
+    background: color-mix(in srgb, var(--wb-surface-3) 45%, var(--wb-surface));
+    filter: none;
+  }
+  [data-wb-style="quiet"]
+    .wb-btn--primary:not(:disabled, [aria-disabled="true"]):hover {
+    background: color-mix(in srgb, var(--wb-accent) 86%, var(--wb-page));
+    filter: none;
+  }
+  [data-wb-style="quiet"] .wb-btn--danger {
+    border-color: var(--wb-border-strong);
+    background: var(--wb-surface);
+    color: var(--wb-danger-text);
+  }
+  [data-wb-style="quiet"] .wb-btn--danger:disabled:hover,
+  [data-wb-style="quiet"] .wb-btn--danger[aria-disabled="true"]:hover {
+    background: var(--wb-surface);
+  }
+  [data-wb-style="quiet"] .wb-btn-count {
+    padding: 0;
+    background: none;
+    color: var(--wb-muted);
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-regular);
+  }
+  /* full strength: dimmed white on the blue primary falls below AA */
+  [data-wb-style="quiet"] .wb-btn--primary .wb-btn-count {
+    background: none;
+    color: inherit;
+  }
+
+  /* ---------- segmented control: a bordered group, tinted pressed segment */
+  [data-wb-style="quiet"] .wb-seg {
+    gap: 0;
+    padding: 1px;
+    border: 1px solid var(--wb-border-strong);
+    border-radius: var(--wb-radius-ctl);
+    background: var(--wb-surface);
+  }
+  [data-wb-style="quiet"] .wb-seg-btn {
+    border-radius: var(--wb-radius-sm);
+    font-weight: var(--wb-fw-regular);
+  }
+  [data-wb-style="quiet"] .wb-seg-btn[aria-pressed="true"],
+  [data-wb-style="quiet"]
+    .wb-seg-btn[aria-current]:not([aria-current="false"]) {
+    --wb-muted: var(--wb-fg-2);
+    background: var(--wb-accent-weak);
+    box-shadow: none;
+    font-weight: var(--wb-fw-medium);
+  }
+
+  /* ---------- chips, badges, pills: hairline tags, glyph + word */
+  [data-wb-style="quiet"] .wb-chip-toggle {
+    border-radius: var(--wb-radius-ctl);
+  }
+  [data-wb-style="quiet"] .wb-chip-toggle[aria-pressed="true"] {
+    --wb-muted: var(--wb-fg-2);
+  }
+  /* full strength: the dimmed accent count falls below AA on the tint */
+  [data-wb-style="quiet"]
+    .wb-chip-toggle[aria-pressed="true"]
+    .wb-chip-toggle-count {
+    opacity: 1;
+  }
+  [data-wb-style="quiet"] .wb-chip {
+    border: 1px solid var(--wb-border-strong);
+    border-radius: var(--wb-radius-sm);
+    background: transparent;
+  }
+  [data-wb-style="quiet"] .wb-chip--readonly {
+    border-style: dashed;
+  }
+  [data-wb-style="quiet"] .wb-badge:not(.wb-badge--dot) {
+    height: 18px;
+    padding: 0 5px;
+    border-color: var(--wb-border-strong);
+    border-radius: var(--wb-radius-xs);
+    background: transparent;
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-regular);
+  }
+  /* status words take their colour only when they need attention */
+  [data-wb-style="quiet"] .wb-badge.wb-tone-success {
+    color: var(--wb-fg-2);
+  }
+  [data-wb-style="quiet"] .wb-state-pill {
+    gap: 6px;
+    height: auto;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--wb-fg-2);
+    font-size: inherit;
+    font-weight: var(--wb-fw-medium);
+  }
+  [data-wb-style="quiet"] .wb-state-pill.wb-tone-success {
+    color: var(--wb-fg);
+  }
+  [data-wb-style="quiet"]
+    .wb-state-pill:is(.wb-tone-info, .wb-tone-warning, .wb-tone-danger) {
+    color: var(--wb-tone-text);
+  }
+  [data-wb-style="quiet"] .wb-state-pill .wb-icon {
+    color: var(--wb-tone);
+  }
+  [data-wb-style="quiet"] .wb-state-pill:not(:has(.wb-icon))::before {
+    content: "";
+    flex: none;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--wb-tone);
+  }
+  /* HistoryStrip: succeeded runs are faint green bars */
+  [data-wb-style="quiet"] .wb-history-bar--ok {
+    background: var(--wb-success-bar);
+  }
+  [data-wb-style="quiet"] .wb-kbd {
+    padding: 2px 5px;
+    border-bottom-width: 1px;
+  }
+  /* letter avatars are grey; the highlighted one (the signed-in user) accent */
+  [data-wb-style="quiet"] .wb-avatar {
+    background: var(--wb-surface-3);
+    color: var(--wb-fg-2);
+  }
+  [data-wb-style="quiet"] .wb-avatar--highlight {
+    background: var(--wb-accent);
+    color: var(--wb-on-accent);
+  }
+
+  /* ---------- forms */
+  [data-wb-style="quiet"] .wb-input[readonly] {
+    background: var(--wb-surface-2);
+  }
+  [data-wb-style="quiet"] .wb-switch {
+    background: var(--wb-border-strong);
+  }
+  [data-wb-style="quiet"] .wb-switch:checked {
+    background: var(--wb-accent);
+  }
+  [data-wb-style="quiet"] .wb-switch:checked::after {
+    background: var(--wb-on-accent);
+  }
+
+  /* ---------- overlays */
+  [data-wb-style="quiet"] .wb-menu-heading,
+  [data-wb-style="quiet"] .wb-palette-section {
+    font-size: var(--wb-fs-12);
+    font-weight: var(--wb-fw-medium);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  [data-wb-style="quiet"] .wb-palette-item[aria-selected="true"] {
+    --wb-muted: var(--wb-fg-2);
+  }
+  /* errors keep the inverted toast, marked by a failed-colour rule */
+  [data-wb-style="quiet"] .wb-toast--error {
+    background: var(--wb-fg);
+    color: var(--wb-page);
+    box-shadow:
+      inset 3px 0 0 var(--wb-danger),
+      var(--wb-shadow-pop);
+  }
+
+  /* ---------- states: no icon tiles, left-ruled alerts */
+  [data-wb-style="quiet"] .wb-empty-icon {
+    width: auto;
+    height: auto;
+    border-radius: 0;
+    background: none;
+  }
+  [data-wb-style="quiet"] .wb-meter {
+    --wb-tone: var(--wb-fg-2);
+  }
+  [data-wb-style="quiet"] .wb-meter-track {
+    background: var(--wb-surface-3);
+  }
+  [data-wb-style="quiet"] .wb-banner {
+    padding: 1px 0 1px 12px;
+    border: 0;
+    border-left: 2px solid var(--wb-tone);
+    border-radius: 0;
+    background: none;
+  }
+  [data-wb-style="quiet"] .wb-banner > .wb-icon {
+    display: none;
+  }
+  [data-wb-style="quiet"] .wb-draftbar {
+    border-top-color: var(--wb-warning);
+    background: var(--wb-page);
+  }
+  [data-wb-style="quiet"] .wb-draftbar--neutral {
+    border-top-color: var(--wb-border);
+  }
+
+  /* ---------- tabs, pages, code */
+  [data-wb-style="quiet"] .wb-tab {
+    font-weight: var(--wb-fw-regular);
+  }
+  [data-wb-style="quiet"] .wb-tab[aria-selected="true"],
+  [data-wb-style="quiet"] .wb-tab[aria-current]:not([aria-current="false"]) {
+    font-weight: var(--wb-fw-medium);
+  }
+  [data-wb-style="quiet"] .wb-tab-count {
+    min-width: 0;
+    padding: 0;
+    background: none;
+    color: var(--wb-muted);
+    font-size: var(--wb-fs-12-5);
+    line-height: inherit;
+  }
+  [data-wb-style="quiet"] .wb-code,
+  [data-wb-style="quiet"] .wb-copy {
+    background: var(--wb-surface);
+  }
+  [data-wb-style="quiet"] .wb-code-key {
+    color: var(--wb-fg-2);
+  }
+  [data-wb-style="quiet"]
+    .wb-copy.is-copied
+    :is(.wb-copy-status, .wb-copy-btn) {
+    color: var(--wb-fg);
+  }
+  [data-wb-style="quiet"] .wb-label-caps {
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-13);
+    letter-spacing: 0;
+    text-transform: none;
+  }
+}
+
+@layer wb.utilities {
+  /* text links: accent text over a softened accent underline */
+  [data-wb-style="quiet"] .wb-link {
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+    text-underline-offset: 3px;
+  }
+  [data-wb-style="quiet"]
+    .wb-link:not(:disabled, [aria-disabled="true"]):hover {
+    text-decoration-color: currentColor;
+    text-underline-offset: 3px;
+  }
+  [data-wb-style="quiet"] .wb-link:disabled,
+  [data-wb-style="quiet"] .wb-link[aria-disabled="true"] {
+    text-decoration: none;
+  }
+}

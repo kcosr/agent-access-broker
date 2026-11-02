@@ -609,7 +609,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   `apps/portal/src/workbench` is a pinned shared workbench-ui snapshot. Builds
   and checks require no upstream access. Never edit the snapshot in place:
   public contributors submit a Broker issue or proposed patch for maintainer
-  review; maintainers commit changes to the private upstream and re-vendor.
+  review; maintainers commit changes to the shared upstream and re-vendor.
   Follow [the contribution workflow](docs/workbench-vendoring.md).
   `npm --prefix apps/portal run check:workbench` verifies the snapshot; portal
   builds and unit tests also run this check.

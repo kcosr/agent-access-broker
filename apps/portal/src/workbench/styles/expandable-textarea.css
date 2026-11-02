@@ -1,0 +1,47 @@
+/* A focused editing view; the surrounding form owns persistence. The
+   dialog's size rules name .wb-modal too, so they win over the modal's own
+   sizes whatever order the stylesheets load in. */
+@layer wb.components {
+  .wb-expandable-textarea {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 6px;
+  }
+  .wb-expandable-textarea-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .wb-modal.wb-textarea-editor {
+    top: 5vh;
+    width: min(1120px, 94vw);
+    height: 90vh;
+    max-height: 90vh;
+    height: 90dvh;
+    max-height: 90dvh;
+  }
+  .wb-textarea-editor .wb-modal-body,
+  .wb-textarea-editor .wb-field {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .wb-textarea-editor .wb-textarea {
+    flex: 1;
+    min-height: 120px;
+    resize: none;
+  }
+  @media (max-width: 640px) {
+    .wb-modal.wb-textarea-editor {
+      inset: 0;
+      width: 100%;
+      height: 100vh;
+      max-height: 100vh;
+      height: 100dvh;
+      max-height: 100dvh;
+      border-radius: 0;
+      transform: none;
+    }
+  }
+}

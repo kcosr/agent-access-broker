@@ -628,7 +628,8 @@
   }
 
   /* ---------- list/table pager ("N of M · Load more") */
-  .wb-list-pager {
+  .wb-list-pager,
+  .wb-page-pager {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -638,16 +639,19 @@
     color: var(--wb-fg-2);
     font-size: var(--wb-fs-12-5);
   }
-  .wb-list-pager-count {
+  .wb-list-pager-count,
+  .wb-page-pager-count {
     font-variant-numeric: tabular-nums;
   }
-  .wb-list-pager-status {
+  .wb-list-pager-status,
+  .wb-page-pager-status {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     color: var(--wb-muted);
   }
-  .wb-list-pager-status .wb-spinner .wb-icon {
+  .wb-list-pager-status .wb-spinner .wb-icon,
+  .wb-page-pager-status .wb-spinner .wb-icon {
     width: 13px;
     height: 13px;
   }
@@ -658,6 +662,13 @@
     gap: 8px 12px;
     width: 100%;
     color: var(--wb-danger-text);
+  }
+  .wb-page-pager-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-inline-start: auto;
   }
 
   /* ---------- sparkline (table cells, tiles) */

@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode, SyntheticEvent } from "react";
 import { cx } from "../lib/cx";
 import { formatNumber } from "../lib/time";
 import { Button } from "./Button";
+import type { IconName } from "./Icon";
 import { Spinner } from "./Spinner";
 
 export interface ListPagerProps {
@@ -39,6 +40,162 @@ export interface ListPagerProps {
 function nouns(noun: ListPagerProps["noun"]): readonly [string, string] {
   if (noun === undefined) return ["item", "items"];
   return typeof noun === "string" ? [noun, `${noun}s`] : noun;
+}
+
+export interface PagePagerProps {
+  /** One-based position of the first shown item; zero for an empty page. */
+  start: number;
+  /** Items shown on this page. */
+  shown: number;
+  /** All matching items across pages. */
+  total: number;
+  /** "item", or [singular, plural] for irregular words. */
+  noun?: string | readonly [string, string] | undefined;
+  /** Navigation landmark name; distinguish pagers when several are on a page. */
+  label?: string | undefined;
+  /** Real navigation links, rendered through LinkProvider. */
+  previousHref?: string | undefined;
+  nextHref?: string | undefined;
+  /** Local paging actions; use these instead of hrefs for in-place state. */
+  onPrevious?: (() => void) | undefined;
+  onNext?: (() => void) | undefined;
+  /** Override the bounds inferred from start, shown and total. */
+  hasPrevious?: boolean | undefined;
+  hasNext?: boolean | undefined;
+  /** A page is loading: keep the current range and block navigation. */
+  loading?: boolean | undefined;
+  /** Background work is running; navigation remains available. */
+  updating?: boolean | undefined;
+  /** Keep both controls visible but unavailable. */
+  disabled?: boolean | undefined;
+  className?: string | undefined;
+}
+
+/** Keep the router link mounted when paging temporarily blocks navigation. */
+function PageLink({
+  href,
+  disabled,
+  icon,
+  iconRight,
+  children,
+}: {
+  href: string | undefined;
+  disabled: boolean;
+  icon?: IconName;
+  iconRight?: IconName;
+  children: ReactNode;
+}) {
+  const blockWhenDisabled = (event: SyntheticEvent) => {
+    if (disabled) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  return (
+    <Button
+      size="sm"
+      icon={icon}
+      iconRight={iconRight}
+      href={href ?? ""}
+      role="link"
+      aria-disabled={disabled || undefined}
+      tabIndex={disabled ? -1 : undefined}
+      onClickCapture={blockWhenDisabled}
+      onAuxClickCapture={blockWhenDisabled}
+      onContextMenuCapture={blockWhenDisabled}
+      onDragStartCapture={blockWhenDisabled}
+      onKeyDownCapture={(event: KeyboardEvent<HTMLAnchorElement>) => {
+        if (event.key === "Enter" || event.key === " ")
+          blockWhenDisabled(event);
+      }}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** Bounded page navigation: a result range and Previous/Next links or buttons. */
+export function PagePager({
+  start,
+  shown,
+  total,
+  noun,
+  label = "Pagination",
+  previousHref,
+  nextHref,
+  onPrevious,
+  onNext,
+  hasPrevious = start > 1,
+  hasNext = shown > 0 && start + shown - 1 < total,
+  loading = false,
+  updating = false,
+  disabled = false,
+  className,
+}: PagePagerProps) {
+  const [one, many] = nouns(noun);
+  const range =
+    shown > 0
+      ? `${formatNumber(start)}–${formatNumber(start + shown - 1)}`
+      : "0";
+  const links = previousHref !== undefined || nextHref !== undefined;
+  const previousDisabled =
+    disabled ||
+    loading ||
+    !hasPrevious ||
+    (links ? !previousHref : !onPrevious);
+  const nextDisabled =
+    disabled || loading || !hasNext || (links ? !nextHref : !onNext);
+  return (
+    <nav className={cx("wb-page-pager", className)} aria-label={label}>
+      <span className="wb-page-pager-count" role="status">
+        {range} of {formatNumber(total)} {total === 1 ? one : many}
+      </span>
+      {loading || updating ? (
+        <span className="wb-page-pager-status" role="status">
+          <Spinner />
+          {loading ? "Loading…" : "Updating…"}
+        </span>
+      ) : null}
+      <div className="wb-page-pager-actions">
+        {links ? (
+          <PageLink
+            icon="chevron-left"
+            href={previousHref}
+            disabled={previousDisabled}
+          >
+            Previous
+          </PageLink>
+        ) : (
+          <Button
+            size="sm"
+            icon="chevron-left"
+            onClick={onPrevious}
+            disabled={previousDisabled}
+          >
+            Previous
+          </Button>
+        )}
+        {links ? (
+          <PageLink
+            iconRight="chevron-right"
+            href={nextHref}
+            disabled={nextDisabled}
+          >
+            Next
+          </PageLink>
+        ) : (
+          <Button
+            size="sm"
+            iconRight="chevron-right"
+            onClick={onNext}
+            disabled={nextDisabled}
+          >
+            Next
+          </Button>
+        )}
+      </div>
+    </nav>
+  );
 }
 
 /**

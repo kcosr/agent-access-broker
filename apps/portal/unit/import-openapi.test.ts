@@ -88,6 +88,16 @@ describe("OpenAPI import configuration", () => {
     expect(accepted.match(/<input[^>]*value="https:\/\/docs.example.test\/openapi.json"[^>]*>/)?.[0]).toContain('disabled=""');
     expect(renderEditor(data, [])).toContain("openapi_http (unavailable)");
   });
+  test("long operation names remain in accessible review labels without repeating visibly", () => {
+    const data = fixture();
+    const source = "list_records_with_extended_metadata_and_configuration_for_archived_workspace_entries";
+    data.preview!.manifest.tools[0].definition.action = source;
+    data.preview!.manifest.tools[0].definition.source = { operationId: source };
+    const html = renderToStaticMarkup(createElement(ImportReview, { data, onClose: () => {}, onAccept: async () => true, frame: inlineFrame }));
+    for (const label of ["Action name", "Display label", "Effects"]) {
+      expect(html).toContain(`${label}<span class="wb-sr-only"> for ${source}</span>`);
+    }
+  });
   test("route or security changes require review under the existing operation identity", () => {
     const data = fixture();
     data.service.actions.push({ definition: structuredClone(data.preview!.manifest.tools[0].definition), status: "enabled", version: 1, definitionHash: "hash" });

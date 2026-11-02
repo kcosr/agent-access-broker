@@ -193,7 +193,10 @@ export function TopBar({
   );
 }
 
-/** Accent square + app name; a link home when `href` is set. */
+/**
+ * The app name after its mark (an icon on an accent square), or the name
+ * alone with `icon={null}`; a link home when `href` is set.
+ */
 export function Brand({
   name,
   icon = "pulse",
@@ -201,16 +204,19 @@ export function Brand({
   className,
 }: {
   name: string;
-  icon?: IconName | undefined;
+  /** The mark's icon (default "pulse"); null for no mark. */
+  icon?: IconName | null | undefined;
   href?: string | undefined;
   className?: string | undefined;
 }) {
   const Link = useLinkComponent();
   const body = (
     <>
-      <span className="wb-brand-mark" aria-hidden="true">
-        <Icon name={icon} />
-      </span>
+      {icon === null ? null : (
+        <span className="wb-brand-mark" aria-hidden="true">
+          <Icon name={icon} />
+        </span>
+      )}
       <span className="wb-brand-name">{name}</span>
     </>
   );

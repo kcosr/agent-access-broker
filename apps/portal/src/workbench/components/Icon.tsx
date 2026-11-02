@@ -177,6 +177,20 @@ const PATHS = {
   book: (
     <path d="M3 13.25V3.5a1 1 0 0 1 1-1h8.5V12H4.25A1.25 1.25 0 0 0 3 13.25zm0 0a1.25 1.25 0 0 0 1.25 1.25h8.25V12" />
   ),
+  // Lucide Notebook, normalized to the kit's 16px grid. See LICENSE-Lucide.txt.
+  notebook: (
+    <>
+      <path d="M1.333333 4H4M1.333333 6.666667H4M1.333333 9.333333H4M1.333333 12H4" />
+      <rect
+        x="2.666667"
+        y="1.333333"
+        width="10.666667"
+        height="13.333333"
+        rx="1.333333"
+      />
+      <path d="M10.666667 1.333333v13.333333" />
+    </>
+  ),
   chart: <path d="M2 14h12M4.5 11V7.5M8 11V3.5M11.5 11V9" />,
   enter: <path d="M13 3v5a2 2 0 0 1-2 2H3M6 7l-3 3 3 3" />,
   more: (
