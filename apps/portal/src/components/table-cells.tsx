@@ -2,20 +2,28 @@
 // badges beside cell text come from the kit (DataColumn fit/grow/extra,
 // StateCell).
 import type { ReactNode } from "react";
-import { Badge, Button, Menu } from "../workbench";
+import { Button, Icon, Menu } from "../workbench";
 
 /** A column's `extra`: "+N" more items beside a truncating list, so the count never clips. */
 export function moreCount(count: number): ReactNode {
   return count > 0 ? <span className="wb-muted">+{count}</span> : null;
 }
 
-/** A column's `extra` beside a grant's truncating actions: how many more, and Write-capable when any action can write. */
+/**
+ * A column's `extra` beside a grant's truncating actions: how many more, and a
+ * pencil named Write-capable when any action can write. The word itself would
+ * crowd the action names in dense tables; detail views keep it.
+ */
 export function actionsExtra(more: number, writes: boolean): ReactNode {
   if (!more && !writes) return null;
   return (
     <>
       {moreCount(more)}
-      {writes ? <Badge tone="warning">Write-capable</Badge> : null}
+      {writes ? (
+        <span className="wb-tone-warning wb-tone-color">
+          <Icon name="pencil" size={14} title="Write-capable" />
+        </span>
+      ) : null}
     </>
   );
 }

@@ -2861,7 +2861,11 @@ test("grant action columns preserve hidden selections and show write capability"
   await expect(page).toHaveURL(/\/ui\/admin\/policies\?grant=classified-actions$/);
   const row = tableRow(page, "classified-actions");
   // The open drawer narrows the table, so the Actions column may be hidden; its content stays.
-  await expect(await columnCell(row, "Actions")).toContainText("Write-capable");
+  // Dense tables name the write capability with a pencil (accessible name and hover title), not the word.
+  const actionsCell = await columnCell(row, "Actions");
+  await expect(actionsCell.getByRole("img", { name: "Write-capable", exact: true, includeHidden: true })).toHaveCount(1);
+  await expect(actionsCell.locator("svg > title")).toHaveText("Write-capable");
+  await expect(actionsCell.locator(".wb-badge")).toHaveCount(0);
   const drawer = page.getByRole("complementary", { name: "Grant classified-actions", exact: true });
   await expect(drawer.getByText("Write-capable: 1 read-only action, 1 write-capable action")).toBeVisible();
   const grantActions = drawer.getByRole("region", { name: "Actions", exact: true });
@@ -2870,7 +2874,9 @@ test("grant action columns preserve hidden selections and show write capability"
   await page.screenshot({ path: testInfo.outputPath("grant-write-capability.png"), fullPage: true });
 
   await page.goto(`${baseUrl}/ui/admin/principals/admin/grants`);
-  await expect(tableRow(page, "classified-actions").getByText("Write-capable", { exact: true })).toBeVisible();
+  const referenceRow = tableRow(page, "classified-actions");
+  await expect(referenceRow.getByRole("img", { name: "Write-capable", exact: true })).toBeVisible();
+  await expect(referenceRow.locator(".wb-badge", { hasText: "Write-capable" })).toHaveCount(0);
   await page.goto(`${baseUrl}/ui/admin/policies/classified-actions/edit`);
   await writes.getByRole("button", { name: "Select none of the matching write-capable actions", exact: true }).click();
   await expect(page.locator("#grant-service").getByTitle("1 read-only action, 0 write-capable actions")).toHaveText("Read-only");

@@ -677,7 +677,7 @@ exposing the proof result. See [the SDK contract](provider-sdk.md#companion-read
 
 The grant picker separates Read-only and Write-capable actions, with independent
 All/None controls for search matches. Grant listings derive a Write-capable
-checkmark from their explicit action selections. Unreviewed actions are treated
+pencil marker from their explicit action selections. Unreviewed actions are treated
 as potentially writable. Neither filtering nor classification changes silently
 modify grants, and future tools are not automatically selected.
 
