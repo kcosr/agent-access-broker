@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import type { AgentTokenIssuancePolicy, AgentTokenOptions, Session } from "../src/types";
 import { agentTokenIssuanceDescription, isAgentTokenIssuancePolicy, selfTokenIssuanceMode, tokenIssuanceBlocker } from "../src/lib/token-issuance-policy";
-import { TokenEffect } from "../src/features/tokens/token-effect";
+import { TokenEffect, TokenReadOnlyControl } from "../src/features/tokens/token-effect";
 
 const policy: AgentTokenIssuancePolicy = { mode: "write_capable", source: "user", groupIds: [] };
 const ttl = { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] };
@@ -38,6 +38,24 @@ test("token warnings describe only an explicit stored false; missing values neve
   for (const readOnly of [true, undefined, null, "false", 0]) expect(renderToStaticMarkup(createElement(TokenEffect, { readOnly }))).toBe("");
   expect(renderToStaticMarkup(createElement(TokenEffect, { readOnly: true, quiet: true }))).toContain("Read-only");
   expect(renderToStaticMarkup(createElement(TokenEffect, { readOnly: undefined, quiet: true }))).toContain("Restriction unavailable");
+});
+
+test.each([true, false])("required read-only policy is plain text for a draft with readOnly=%s", (readOnly) => {
+  const changes: boolean[] = [];
+  const markup = renderToStaticMarkup(createElement(TokenReadOnlyControl, { readOnly, required: true, disabled: false, onChange: (value) => changes.push(value) }));
+  expect(markup).toContain("Read-only");
+  expect(markup).toContain("Required by your account’s token issuance policy");
+  expect(markup).not.toContain("<input");
+  expect(markup.includes("Apply read-only restriction")).toBe(!readOnly);
+  expect(changes).toEqual([]);
+});
+
+test.each([true, false])("selectable read-only control preserves the draft Boolean %s", (readOnly) => {
+  const markup = renderToStaticMarkup(createElement(TokenReadOnlyControl, { readOnly, required: false, disabled: false, onChange: () => {} }));
+  expect(markup).toContain('type="checkbox"');
+  expect(markup.includes('checked=""')).toBe(readOnly);
+  expect(markup).not.toContain("Required by your account");
+  expect(markup).not.toContain("Apply read-only restriction");
 });
 
 

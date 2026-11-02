@@ -3189,8 +3189,9 @@ test("managed issuance policy controls new tokens while inherited reads and exis
     expect(await apiSignIn(user, principalId, password)).not.toBeNull();
     await user.goto(`${baseUrl}/ui/tokens/new`);
     const editor = user.getByRole("main", { name: "Issue agent token", exact: true });
-    await expect(editor.getByRole("checkbox", { name: "Read-only", exact: true })).toBeChecked();
-    await expect(editor.getByRole("checkbox", { name: "Read-only", exact: true })).toBeDisabled();
+    await expect(editor.getByRole("checkbox", { name: "Read-only", exact: true })).toHaveCount(0);
+    await expect(editor.getByRole("region", { name: "Token restriction", exact: true }).getByText("Read-only", { exact: true })).toBeVisible();
+    await expect(editor.getByText("Required by your account’s token issuance policy", { exact: true })).toBeVisible();
     await expect(editor.getByRole("button", { name: "Follow current grants", exact: true })).toBeEnabled();
     await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Inherited reads");
     await editor.getByRole("button", { name: "Issue token", exact: true }).click();

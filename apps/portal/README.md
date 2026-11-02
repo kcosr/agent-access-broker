@@ -10,9 +10,11 @@ independent self-service setting.
 Administrators configure **Agent token issuance** under a user's **Account
 access** or a managed group's **Token issuance** section. Users start with
 **Inherit from groups** and groups with **Disabled**. Explicit account settings
-override inherited group permission. Every agent-token form starts with
-**Read-only** checked, independently of **Follow current grants** or selected
-restrictions. Read-only issuers cannot clear that restriction. A policy change
+override inherited group permission. Every new agent-token form starts read-only,
+independently of **Follow current grants** or selected restrictions. Personal
+issuers limited to read-only tokens see plain **Read-only** text and a note that
+their issuance policy requires it. Write-capable issuers and administrative forms
+show a checked **Read-only** checkbox that can be cleared explicitly. A policy change
 keeps the draft and requires explicit acceptance of a newly required restriction.
 Existing tokens keep their stored restriction, shown as quiet **Read-only** text
 or a **Write-capable** warning. Disabling issuance leaves their previews and

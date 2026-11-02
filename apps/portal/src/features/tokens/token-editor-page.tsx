@@ -1,5 +1,5 @@
 import { agentTokenIssuanceDescription, selfTokenIssuanceMode, tokenIssuanceBlocker } from "../../lib/token-issuance-policy";
-import { TokenEffect } from "./token-effect";
+import { TokenEffect, TokenReadOnlyControl } from "./token-effect";
 // A local token draft shares boundary validation between preview and issuance.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBlocker, useNavigate, useParams, useSearchParams } from "react-router";
@@ -228,8 +228,7 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
             <TokenDetails draft={draft} options={options} ttlPolicy={ttlPolicy} disabled={pending} update={update} />
             <Card title="Token restriction">
               <div className="pt-card-body">
-                <Checkbox label="Read-only" checked={draft.readOnly} disabled={pending || readOnlyRequired || Boolean(policyBlocker)} onChange={(event) => update({ ...draft, readOnly: event.target.checked })} description={readOnlyRequired ? "Required by your account's token issuance policy" : "Allow only actions the current catalog classifies as reads. Write grants remain blocked."} />
-                {readOnlyRequired && !draft.readOnly ? <Button disabled={pending} onClick={() => update({ ...draft, readOnly: true })}>Apply read-only restriction</Button> : null}
+                <TokenReadOnlyControl readOnly={draft.readOnly} required={readOnlyRequired} disabled={pending || Boolean(policyBlocker)} onChange={(readOnly) => update({ ...draft, readOnly })} />
                 {subject.administered ? <p className="pt-prose">Owner’s self-issuance policy: {agentTokenIssuanceDescription(options.agentTokenIssuancePolicy)}. Administrative issuance can choose either restriction.</p> : null}
               </div>
             </Card>

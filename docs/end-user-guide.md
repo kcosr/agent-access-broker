@@ -241,10 +241,11 @@ self-service and service grants. Disabled issuance leaves existing tokens and
 their inspection, preview, pause, resume and revocation available.
 
 Set a descriptive name, finite lifetime, and one or more effective execution
-contexts. Keep **Read-only** checked for a token that can use only actions
-classified as reads. It starts checked on new forms and is required when your
-account may issue only read-only tokens. A Write-capable issuance permission
-lets you clear it explicitly. The restriction belongs to this token and cannot
+contexts. New tokens start read-only and can use only actions classified as reads.
+If your account may issue only read-only tokens, the form shows plain
+**Read-only** text and a note that your issuance policy requires it. With
+Write-capable issuance permission, the form shows a checked **Read-only** checkbox
+that you can clear explicitly. The restriction belongs to this token and cannot
 be edited after issuance. Changing your account's issuance permission does not
 change existing tokens. **Follow current grants** follows your grants within the
 selected contexts, including later reads; a read-only token continues to block

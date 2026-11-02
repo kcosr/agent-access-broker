@@ -204,9 +204,10 @@ in `default`. It does not authorize Jira search or writes.
 2. In **Details**, give it a descriptive **Name**, such as `demo-jira-reader`.
    Choose a finite **Lifetime** offered by your broker and select the required
    **Execution contexts**.
-3. Keep **Read-only** checked. It starts checked on new forms and is locked
-   when your account may issue only read-only tokens. In **Access**, choose
-   **Restrict to selected**.
+3. Keep the token **Read-only**. If your account may issue only read-only tokens,
+   the form shows plain **Read-only** text and a note that your issuance policy
+   requires it. With Write-capable issuance permission, leave the **Read-only**
+   checkbox checked. In **Access**, choose **Restrict to selected**.
 
 ![Token creation page with details, execution contexts, and access mode](../images/portal/guide-annotated/user-token-details-light.png)
 
@@ -217,7 +218,7 @@ current grants. The operator configures the available lifetime choices.*
    The same action selector is used in the grant builder. **All** and **None**
    affect only search-matching actions in their column, preserving other
    selections. Actions without reviewed read-only metadata appear under
-   **Write-capable** and cannot be newly selected while Read-only is checked.
+   **Write-capable** and cannot be newly selected while the draft is read-only.
    Previously selected writes remain visible for correction.
 5. Choose **Selected resources and groups** and select the catalog resource
    representing the `DEMO` Jira project. Avoid choosing a broader group when the
@@ -266,7 +267,7 @@ during issuance can also lose the one-time token response.
 Expected result: an active `agent_invoke` token exists with the intended boundary
 and expiry. Token issuance never expands your grants. **Follow current grants**
 instead follows effective grants within the selected contexts, including later
-grant changes. Keep Read-only checked to inherit later reads while still
+grant changes. Use a read-only token to inherit later reads while still
 blocking writes. An account-policy downgrade requires an explicit **Apply
 read-only restriction** choice on a draft that allowed writes; Disabled blocks
 submission without clearing the draft. Existing tokens keep their stored

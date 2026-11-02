@@ -787,9 +787,10 @@ test("read-only issuers keep Follow current grants and issue an explicit durable
   const model = await fixture(page);
   setIssuanceMode(model, "read_only");
   await page.goto(`${baseUrl}/ui/tokens/new`);
-  await expect(readOnlyCheckbox(page)).toBeChecked();
-  await expect(readOnlyCheckbox(page)).toBeDisabled();
-  await expect(editor(page).getByText("Required by your account's token issuance policy", { exact: true })).toBeVisible();
+  await expect(readOnlyCheckbox(page)).toHaveCount(0);
+  const restriction = editor(page).getByRole("region", { name: "Token restriction", exact: true });
+  await expect(restriction.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(restriction.getByText("Required by your account’s token issuance policy", { exact: true })).toBeVisible();
   await expect(editor(page).getByRole("button", { name: "Follow current grants", exact: true })).toBeEnabled();
   await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("future-reads");
   await issueButton(page).click();
@@ -834,12 +835,15 @@ test("a stale write-capable draft requires Apply read-only restriction and retai
   await refreshQueries(page);
   const apply = editor(page).getByRole("button", { name: "Apply read-only restriction", exact: true });
   await expect(apply).toBeVisible();
-  await expect(readOnlyCheckbox(page)).not.toBeChecked();
-  await expect(readOnlyCheckbox(page)).toBeDisabled();
+  await expect(readOnlyCheckbox(page)).toHaveCount(0);
+  await expect(editor(page).getByRole("complementary", { name: "Token summary", exact: true }).getByText("Write-capable", { exact: true })).toBeVisible();
+  await expect.poll(() => model.previews.at(-1)?.readOnly).toBe(false);
   await expect(issueButton(page)).toBeDisabled();
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("policy-changed");
   await apply.click();
-  await expect(readOnlyCheckbox(page)).toBeChecked();
+  await expect(readOnlyCheckbox(page)).toHaveCount(0);
+  await expect(apply).toHaveCount(0);
+  await expect.poll(() => model.previews.at(-1)?.readOnly).toBe(true);
   await expect(service(page, "Jira").getByLabel("issue.update", { exact: true })).toBeChecked();
   await expect(issueButton(page)).toBeDisabled();
   await service(page, "Jira").getByLabel("issue.update", { exact: true }).uncheck();
@@ -886,7 +890,8 @@ test("a policy denial refetches metadata and preserves the original Boolean", as
   await expect(editor(page).getByRole("alert").filter({ hasText: "This account may issue only read-only agent tokens" })).toBeVisible();
   await expect.poll(() => model.optionReads).toBeGreaterThan(reads);
   await expect(editor(page).getByRole("button", { name: "Apply read-only restriction", exact: true })).toBeVisible();
-  await expect(readOnlyCheckbox(page)).not.toBeChecked();
+  await expect(readOnlyCheckbox(page)).toHaveCount(0);
+  await expect(editor(page).getByRole("complementary", { name: "Token summary", exact: true }).getByText("Write-capable", { exact: true })).toBeVisible();
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("denied-draft");
 });
 
