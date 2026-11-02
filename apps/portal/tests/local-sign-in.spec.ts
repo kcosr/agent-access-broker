@@ -62,7 +62,7 @@ for (const localPassword of ["absent", "disabled", "active"]) {
       await page.getByLabel("Confirm new password", { exact: true }).fill("new-password-value");
       await page.getByRole("button", { name: "Update password" }).click();
       await expect.poll(() => changed).toBe(true);
-      await expect(page.getByText("oidc", { exact: true })).toBeVisible();
+      await expect(page.locator("dt", { hasText: /^Sign-in$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("Microsoft");
     }
   });
 }
@@ -345,5 +345,5 @@ test("CSRF retry still leaves a wrong-current-password error inline", async ({ p
   await page.getByRole("button", { name: "Update password", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "Current local password could not be verified" })).toBeVisible();
   expect(attempts).toBe(2);
-  await expect(page.getByText("oidc", { exact: true })).toBeVisible();
+  await expect(page.locator("dt", { hasText: /^Sign-in$/ }).locator("xpath=following-sibling::dd[1]")).toHaveText("Microsoft");
 });

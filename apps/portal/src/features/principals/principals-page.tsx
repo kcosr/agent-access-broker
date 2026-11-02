@@ -313,7 +313,7 @@ function principalColumns(serviceAccounts: boolean): DataColumn<PrincipalRecord>
     ...(serviceAccounts
       ? []
       : [
-          { key: "signInMethods", header: "Sign-in methods", priority: 2, cell: (principal: PrincipalRecord) => <SignInMethodBadges methods={principal.signInMethods} /> } satisfies DataColumn<PrincipalRecord>,
+          { key: "signInMethods", header: "Sign-in methods", priority: 3, cell: (principal: PrincipalRecord) => <SignInMethodBadges methods={principal.signInMethods} /> } satisfies DataColumn<PrincipalRecord>,
           {
             key: "email",
             header: "Email",

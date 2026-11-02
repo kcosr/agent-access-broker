@@ -224,13 +224,15 @@ function scopeCell(row: ActionRow) {
   return row.catalog ? <span className="wb-muted">{ACTION_GRANT_LABEL}</span> : <span className="wb-muted">—</span>;
 }
 
-/** The label (when it adds to the action name) and the description on one line. */
+/** The label (when it adds to the action name) and the description (when it adds to the label) on one line. */
 function describe(row: ActionRow) {
   const label = row.label && row.label !== row.action ? row.label : null;
-  const description = row.description.trim().split("\n")[0] ?? "";
+  const full = row.description.trim();
+  const firstLine = full.split("\n")[0] ?? "";
+  const description = firstLine === label ? "" : firstLine;
   if (!label && !description) return <span className="wb-muted">—</span>;
   return (
-    <span title={[label, row.description.trim()].filter(Boolean).join(" — ")}>
+    <span title={[...new Set([label, full])].filter(Boolean).join(" — ")}>
       {label}
       {label && description ? " · " : null}
       {description ? <span className={label ? "wb-muted" : undefined}>{description}</span> : null}

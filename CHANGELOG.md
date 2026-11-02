@@ -305,6 +305,11 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Portal layout polish: grant action columns start level, settings sections
+  wrap wide actions below their description, the Users table fits beside an
+  open drawer, Account names the sign-in method in words, and a group's Grants
+  tab shows one Create grant button.
+
 - Import-review fields use compact labels and responsive rows so long operation
   names do not overlap adjacent controls. Portal primary actions and information
   badges retain readable text contrast with the updated shared UI components.

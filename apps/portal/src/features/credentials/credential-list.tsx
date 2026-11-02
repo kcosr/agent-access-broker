@@ -569,7 +569,7 @@ function UsedBy({ consumers, otherConsumers, administered }: Pick<CredentialConn
   return (
     <DrawerSection title="Used by">
       {consumers.length ? (
-        <ul className="wb-small">
+        <ul className="pt-links">
           {consumers.map((consumer) => (
             <li key={consumer.service}>
               {consumer.displayName} <span className="wb-num wb-muted">{consumer.service}</span>

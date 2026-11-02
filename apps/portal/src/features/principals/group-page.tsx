@@ -138,12 +138,15 @@ function GroupFrame({ group, tab, tabs, toolbar, drawer, tint = false, children 
             }
             actions={
               <>
-                <AdminButton
-                  icon="plus"
-                  href={paths.grantNew({ subject: `group:${group.groupId}`, returnTo: paths.group(group.groupId, "grants") })}
-                >
-                  Create grant
-                </AdminButton>
+                {/* The Grants tab has its own Create grant in its toolbar. */}
+                {tab !== "grants" ? (
+                  <AdminButton
+                    icon="plus"
+                    href={paths.grantNew({ subject: `group:${group.groupId}`, returnTo: paths.group(group.groupId, "grants") })}
+                  >
+                    Create grant
+                  </AdminButton>
+                ) : null}
                 <AdminButton
                   variant={active ? "danger-ghost" : "default"}
                   icon={active ? "pause" : "play"}

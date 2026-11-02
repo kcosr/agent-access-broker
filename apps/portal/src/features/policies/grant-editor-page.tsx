@@ -182,6 +182,7 @@ function GrantEditor({
   const dirty = useMemo(() => JSON.stringify({ ...draft, validationMessages: [] }) !== JSON.stringify({ ...initial, validationMessages: [] }), [draft, initial]);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && !saved.current && !readonly && currentLocation.pathname !== nextLocation.pathname);
   const title = draft.mode === "edit" ? "Edit grant" : draft.mode === "duplicate" ? "Duplicate grant" : draft.mode === "inspect" ? "Grant" : "Create grant";
+  const titledByRef = draft.mode === "edit" || draft.mode === "inspect";
   const exit = (grantRef?: string) => navigate(returnTo ?? (grantRef ? paths.grant(grantRef) : paths.policies()));
 
   function update(next: PolicyGrantDraft) {
@@ -274,17 +275,22 @@ function GrantEditor({
       <Main label={title} footer={footer} scrollRef={scrollRef} tint>
         <PageHeader
           back={{ href: returnTo ?? paths.policies(), label: returnTo ? "Back" : "Policies" }}
-          title={draft.mode === "edit" || draft.mode === "inspect" ? <span className="pt-title-mono">{draft.grantRef}</span> : title}
+          title={titledByRef ? <span className="pt-title-mono">{draft.grantRef}</span> : title}
           meta={
             <>
-              <span>{title}</span>
-              {draft.grantRef ? (
+              {/* A new grant's title already says what the page does. */}
+              {titledByRef ? (
                 <>
+                  <span>{title}</span>
                   <span className="wb-sep">·</span>
-                  <span className="wb-num">version {draft.version ?? "read-only"}</span>
                 </>
               ) : null}
-              <span className="wb-sep">·</span>
+              {draft.grantRef ? (
+                <>
+                  <span className="wb-num">version {draft.version ?? "read-only"}</span>
+                  <span className="wb-sep">·</span>
+                </>
+              ) : null}
               <span>policy authority {policyAuthority}</span>
             </>
           }
