@@ -1227,7 +1227,7 @@ Examples with a finite space scope of `ENG`:
 | `--text release` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
 | `--cql 'title ~ "release"'` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
 | `--cql 'space NOT IN (ARCHIVE, SANDBOX) AND id != 12345'` | `type = blogpost AND space IN (ENG) AND (space NOT IN (ARCHIVE, SANDBOX) AND id != 12345)` |
-| `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `type = blogpost AND space IN (ENG) AND (label IN (release, "llm")) ORDER BY created DESC` |
+| `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `type = blogpost AND space IN (ENG) AND (label IN (release, llm)) ORDER BY created DESC` |
 
 Blog metadata, create, update, and attachment listing use Confluence REST API v2.
 Blog attachment upload/download use the v1 content attachment endpoints.
