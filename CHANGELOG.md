@@ -26,6 +26,7 @@ All notable changes to this project are documented in this file.
   checks; see the [provider SDK](docs/provider-sdk.md).
   GitLab's upload and download policies are unchanged. See
   [attachment media policy](docs/configuration.md#jira-and-confluence-attachment-media-policy).
+  ([#95](https://github.com/kcosr/agent-access-broker/pull/95))
 
 - **Comment inclusion extends host and presentation contracts.** Downstream hosts
   constructing `AdmittedRequestParts` must supply `companion_reads_authorized`.
@@ -244,6 +245,7 @@ All notable changes to this project are documented in this file.
   `X-Content-Type-Options: nosniff`, preserving their `Content-Type` and metadata
   receipts. The disposition carries no filename; filenames remain in metadata.
   See [raw success responses](docs/http-api.md#raw-success-response).
+  ([#95](https://github.com/kcosr/agent-access-broker/pull/95))
 
 - **Agent guidance is available on demand.** The five access skills now focus
   on their interfaces; service recipes, typed CLI usage templates and help
