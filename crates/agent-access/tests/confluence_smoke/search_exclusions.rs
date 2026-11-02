@@ -92,8 +92,15 @@ fn inputs(query: &str) -> Value {
 
 fn allowed(value: &Value, action: &str) {
     assert_eq!(value["decision"], "allow", "{value}");
-    let collection = if action == "search" { "pages" } else { "blogs" };
-    assert_eq!(value["result"][collection][0]["id"], "123456", "{value}");
+    let (collection, id_field) = if action == "search" {
+        ("pages", "id")
+    } else {
+        ("blogs", "blogId")
+    };
+    assert_eq!(
+        value["result"][collection][0][id_field], "123456",
+        "{value}"
+    );
 }
 
 async fn last_query(server: &MockServer, expected: &str) {
