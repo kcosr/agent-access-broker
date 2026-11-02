@@ -699,10 +699,15 @@ export function GrantDrawer({
               Delete
             </Button>
           ) : null}
+          {/* Icon only beside the edit actions, where the label wrapped onto its own line. */}
           {auditHref ? (
-            <Button variant="ghost" icon="history" href={auditHref}>
-              View audit
-            </Button>
+            editable ? (
+              <IconButton icon="history" label="View audit" href={auditHref} />
+            ) : (
+              <Button variant="ghost" icon="history" href={auditHref}>
+                View audit
+              </Button>
+            )
           ) : null}
         </>
       }

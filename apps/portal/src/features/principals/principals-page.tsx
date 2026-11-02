@@ -305,8 +305,8 @@ function principalColumns(serviceAccounts: boolean): DataColumn<PrincipalRecord>
       header: "Principal ID",
       sortable: true,
       priority: 2,
-      truncate: true,
-      minWidth: "12ch",
+      // IDs show in full up to the cap; the name and groups take the spare width.
+      hug: "32ch",
       className: "wb-cell-mono",
       cell: (principal) => principal.principalId
     },
@@ -318,8 +318,8 @@ function principalColumns(serviceAccounts: boolean): DataColumn<PrincipalRecord>
             key: "email",
             header: "Email",
             priority: 4,
-            truncate: true,
-            minWidth: "12ch",
+            hug: "32ch",
+            hideWhenEmpty: true,
             cell: (principal: PrincipalRecord) => principal.email ?? ""
           } satisfies DataColumn<PrincipalRecord>,
           {

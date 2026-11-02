@@ -28,7 +28,7 @@ export function ManagementTokens({ principal, tokens }: { principal: PrincipalDe
   const rows = managementTokens(tokens);
   const columns = useMemo<DataColumn<AdminBrokerTokenRecord>[]>(
     () => [
-    { key: "name", header: "Name", primary: true, hug: "28ch", cell: (token) => token.name },
+    { key: "name", header: "Name", primary: true, truncate: true, minWidth: "16ch", title: (token) => token.name, cell: (token) => token.name },
     { key: "class", header: "Class", cell: (token) => <Badge variant="outline">{token.tokenClass}</Badge> },
     { key: "id", header: "ID", priority: 4, className: "wb-cell-mono", title: (token) => token.tokenId, cell: (token) => token.tokenId.slice(0, 8) },
     {
@@ -93,7 +93,6 @@ export function ManagementTokens({ principal, tokens }: { principal: PrincipalDe
         label="Management tokens"
         rows={rows}
         rowId={(token) => `m:${token.tokenId}`}
-        fill="end"
         columns={columns}
         // One keyboard cursor per view: the agent tokens table above has it.
         cursor={false}

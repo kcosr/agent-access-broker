@@ -125,6 +125,7 @@ function PrincipalFrame({
   const principals = usePrincipalActions();
   const tokens = useManagementTokenActions();
   const serviceAccount = principal.kind === "service_account";
+  const kindLabel = serviceAccount ? "Service account" : principal.kind === "system" ? "System" : "User";
   const name = identityDisplayName(principal.displayName);
   const admin = principal.role === "admin";
   const active = principal.status === "active";
@@ -148,8 +149,9 @@ function PrincipalFrame({
       }
       meta={
         <>
-          <Badge variant="outline">{serviceAccount ? "Service account" : principal.kind === "system" ? "System" : "User"}</Badge>
-          <Badge tone={admin ? "info" : "neutral"}>{ROLE_LABELS[principal.role]}</Badge>
+          <Badge variant="outline">{kindLabel}</Badge>
+          {/* A user with the User role shows "User" once. */}
+          {ROLE_LABELS[principal.role] !== kindLabel ? <Badge tone={admin ? "info" : "neutral"}>{ROLE_LABELS[principal.role]}</Badge> : null}
           <Badge tone={active ? "success" : "muted"} variant="dot">
             {principal.status}
           </Badge>

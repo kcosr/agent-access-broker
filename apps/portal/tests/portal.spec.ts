@@ -2832,7 +2832,7 @@ test("grant action columns preserve hidden selections and show write capability"
   await expect(reads.getByText(/^1 of \d+$/)).toBeVisible();
   await expect(writes.getByText(/^1 of \d+$/)).toBeVisible();
   // The card header summarizes the selection.
-  await expect(page.locator("#grant-service").getByText("Writes: 1 read-only action, 1 write-capable action")).toBeVisible();
+  await expect(page.locator("#grant-service").getByText("Write-capable: 1 read-only action, 1 write-capable action")).toBeVisible();
   await reads.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("grant-action-picker.png"), fullPage: true });
   await search.fill("no-such-action");
@@ -2846,16 +2846,16 @@ test("grant action columns preserve hidden selections and show write capability"
   await expect(page).toHaveURL(/\/ui\/admin\/policies\?grant=classified-actions$/);
   const row = tableRow(page, "classified-actions");
   // The open drawer narrows the table, so the Actions column may be hidden; its content stays.
-  await expect(await columnCell(row, "Actions")).toContainText("Writes");
+  await expect(await columnCell(row, "Actions")).toContainText("Write-capable");
   const drawer = page.getByRole("complementary", { name: "Grant classified-actions", exact: true });
-  await expect(drawer.getByText("Writes: 1 read-only action, 1 write-capable action")).toBeVisible();
+  await expect(drawer.getByText("Write-capable: 1 read-only action, 1 write-capable action")).toBeVisible();
   const grantActions = drawer.getByRole("region", { name: "Actions", exact: true });
   await expect(grantActions.getByText("comment.view", { exact: true })).toBeVisible();
   await expect(grantActions.getByText("issue.update", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("grant-write-capability.png"), fullPage: true });
 
   await page.goto(`${baseUrl}/ui/admin/principals/admin/grants`);
-  await expect(tableRow(page, "classified-actions").getByText("Writes", { exact: true })).toBeVisible();
+  await expect(tableRow(page, "classified-actions").getByText("Write-capable", { exact: true })).toBeVisible();
   await page.goto(`${baseUrl}/ui/admin/policies/classified-actions/edit`);
   await writes.getByRole("button", { name: "Select none of the matching write-capable actions", exact: true }).click();
   await expect(page.locator("#grant-service").getByTitle("1 read-only action, 0 write-capable actions")).toHaveText("Read-only");
@@ -2863,7 +2863,7 @@ test("grant action columns preserve hidden selections and show write capability"
   await editor.save.click();
   expect((await saving).postDataJSON().actions).toEqual(["comment.view"]);
   await expect(page).toHaveURL(/\/ui\/admin\/policies\?grant=classified-actions$/);
-  await expect(await columnCell(row, "Actions")).not.toContainText("Writes");
+  await expect(await columnCell(row, "Actions")).not.toContainText("Write-capable");
   await expectNoHorizontalOverflow(page);
 });
 

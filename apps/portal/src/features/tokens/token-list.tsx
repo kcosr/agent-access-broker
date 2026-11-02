@@ -161,8 +161,10 @@ export function TokenTable({ model, label = "Tokens" }: { model: TokenListModel;
         key: "name",
         header: "Name",
         sortable: true,
-        // Token names are identifiers: they hug, up to a cap (full name on hover).
-        hug: "28ch",
+        // The name takes the spare width, so the row (and its highlight) spans the table.
+        truncate: true,
+        minWidth: "16ch",
+        title: (token) => token.name,
         cell: (token) => token.name
       },
       {
@@ -292,8 +294,6 @@ export function TokenTable({ model, label = "Tokens" }: { model: TokenListModel;
       label={label}
       rows={shown}
       rowId={(token) => token.tokenId}
-      // Every column hugs: the table packs left and the spare width stays at the end.
-      fill="end"
       columns={columns}
       sort={list.state.sort}
       onSortChange={(sort) => list.setState({ sort })}

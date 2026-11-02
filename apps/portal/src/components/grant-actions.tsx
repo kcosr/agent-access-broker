@@ -107,7 +107,7 @@ export function GrantActionSelector({
   );
 }
 
-/** "Writes" badge when any selected action is write-capable; missing metadata never claims read-only. */
+/** "Write-capable" badge when any selected action is write-capable; missing metadata never claims read-only. */
 export function WriteCapability({ available, selected }: { available: readonly ClassifiedAction[]; selected: readonly string[] }) {
   if (!selected.length) return null;
   const counts = actionSelectionCounts(available, selected);
@@ -121,7 +121,7 @@ export function WriteCapability({ available, selected }: { available: readonly C
   }
   return (
     <Badge tone="warning" icon="pencil" title={label}>
-      Writes<span className="wb-sr-only">: {label}</span>
+      Write-capable<span className="wb-sr-only">: {label}</span>
     </Badge>
   );
 }

@@ -59,10 +59,10 @@ describe("grant action classification and selection", () => {
     const badge = (selected: string[]) => renderToStaticMarkup(createElement(WriteCapability, { available: actions, selected }));
     expect(badge([])).toBe("");
     expect(badge(["issue.view"])).toContain(">Read-only<");
-    expect(badge(["issue.view"])).not.toContain("Writes");
-    expect(badge(["issue.view", "issue.update"])).toContain("Writes");
+    expect(badge(["issue.view"])).not.toContain("Write-capable");
+    expect(badge(["issue.view", "issue.update"])).toContain(">Write-capable<");
     expect(badge(["issue.view", "issue.update"])).toContain("1 read-only action, 1 write-capable action");
-    expect(badge(["unreviewed.read"])).toContain("Writes");
+    expect(badge(["unreviewed.read"])).toContain(">Write-capable<");
     expect(badge(["unreviewed.read"])).not.toContain('type="checkbox"');
   });
 });

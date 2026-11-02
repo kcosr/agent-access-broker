@@ -17,6 +17,15 @@
   gap: 12px;
 }
 
+/* The import tab's Credentials rows line up with the 160px key-value labels in
+   the cards above (KeyValue labelWidth, 12px column gap). */
+.pt-catalog-credentials .wb-settings-row {
+  gap: 12px;
+}
+.pt-catalog-credentials .wb-settings-label {
+  flex-basis: 160px;
+}
+
 /* Definition documents: an app-specific file choice built from kit controls. */
 .pt-import-file,
 .pt-import-file-content {

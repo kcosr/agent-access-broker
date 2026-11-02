@@ -399,7 +399,7 @@ export function ImportTab({
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Credentials" description={<>Execution credentials are used for agent calls. {discoveryText(data)} Secrets are never displayed after saving.</>}>
+      <SettingsSection className="pt-catalog-credentials" title="Credentials" description={<>Execution credentials are used for agent calls. {discoveryText(data)} Secrets are never displayed after saving.</>}>
         {credentialRows}
         {personalToken ? (
           <SettingsRow label="Your personal discovery token" help={<span className="wb-num">{session.principal}</span>} group>

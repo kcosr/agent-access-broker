@@ -289,7 +289,7 @@ function actionColumns({
       key: "effect",
       header: "Effect",
       priority: 2,
-      cell: (row) => (row.readOnly ? <span className="wb-muted">Read-only</span> : <Badge tone="warning">Writes</Badge>)
+      cell: (row) => (row.readOnly ? <span className="wb-muted">Read-only</span> : <Badge tone="warning">Write-capable</Badge>)
     },
     ...(operations
       ? [

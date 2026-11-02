@@ -658,14 +658,13 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
   }
   const connection = row.connection;
   const credential = connection.credential;
-  const status = credentialStatus(credential);
   return (
     <>
       {credential ? (
-        <DrawerSection title="Status">
+        // The header's pill shows the status; this section holds its details.
+        <DrawerSection title="Details">
           <KeyValue
             items={[
-              { label: "Status", value: <Badge tone={credentialTone(credential)}>{status}</Badge> },
               { label: "Last checked", value: <Time value={credential.lastVerificationAttemptAt} format="datetime" fallback="Never" /> },
               { label: "Last verified", value: <Time value={credential.lastVerifiedAt} format="datetime" fallback="Never" /> },
               credential.lastVerificationErrorCode ? { label: "Last error", value: <span className="wb-mono">{credential.lastVerificationErrorCode}</span> } : null,

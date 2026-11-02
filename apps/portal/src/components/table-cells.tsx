@@ -9,13 +9,13 @@ export function moreCount(count: number): ReactNode {
   return count > 0 ? <span className="wb-muted">+{count}</span> : null;
 }
 
-/** A column's `extra` beside a grant's truncating actions: how many more, and Writes when any action can write. */
+/** A column's `extra` beside a grant's truncating actions: how many more, and Write-capable when any action can write. */
 export function actionsExtra(more: number, writes: boolean): ReactNode {
   if (!more && !writes) return null;
   return (
     <>
       {moreCount(more)}
-      {writes ? <Badge tone="warning">Writes</Badge> : null}
+      {writes ? <Badge tone="warning">Write-capable</Badge> : null}
     </>
   );
 }
