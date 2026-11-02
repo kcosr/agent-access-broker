@@ -6,6 +6,28 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Jira and Confluence attachment downloads allow all media types by default.**
+  This also widens downloads for existing configurations that omitted
+  `attachments.media_types`, including callers whose read-only grants already
+  authorize download actions. To deny every download, set
+  `attachments.download_media_types = { allow = [] }` or remove the download
+  actions from grants. The shared `attachments.media_types` key is rejected:
+  move the upload list to `attachments.upload_media_types`, and set
+  `attachments.download_media_types.allow` explicitly to retain a download
+  allowlist. Download patterns support exact types, `type/*`, and `*/*`, with
+  deny rules taking precedence. Every concrete metadata/response type must pass;
+  matching types are no longer required, and generic octet-stream declarations
+  beside a concrete type need no separate allow entry. Upload matching remains
+  exact, with omission denying uploads; wildcard upload entries are rejected.
+  Downstream SDK users must replace `AttachmentLimitsConfig.media_types` with
+  `upload_media_types` and supply `download_media_types`, normally through
+  `Default`. The new `MediaTypePolicyConfig` and `MediaTypeDeclaration` provide
+  validation, classification, and staged `check_metadata`/`check_download`
+  checks; see the [provider SDK](docs/provider-sdk.md).
+  GitLab's upload and download policies are unchanged. See
+  [attachment media policy](docs/configuration.md#jira-and-confluence-attachment-media-policy).
+  ([#95](https://github.com/kcosr/agent-access-broker/pull/95))
+
 - **Comment inclusion extends host and presentation contracts.** Downstream hosts
   constructing `AdmittedRequestParts` must supply `companion_reads_authorized`.
   Set it to `false` unless the host proves every declared direct companion read
@@ -217,6 +239,13 @@ All notable changes to this project are documented in this file.
   ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
+
+- **Raw downloads use explicit download response headers.** Successful native
+  and command downloads carry `Content-Disposition: attachment` and
+  `X-Content-Type-Options: nosniff`, preserving their `Content-Type` and metadata
+  receipts. The disposition carries no filename; filenames remain in metadata.
+  See [raw success responses](docs/http-api.md#raw-success-response).
+  ([#95](https://github.com/kcosr/agent-access-broker/pull/95))
 
 - **Agent guidance is available on demand.** The five access skills now focus
   on their interfaces; service recipes, typed CLI usage templates and help

@@ -666,6 +666,7 @@
           <li><b>Discovery.</b> The broker filters service, resource and action listings by the caller's identity, context and policy. Each invocation is authorized separately.</li>
           <li><b>Service connections.</b> Select one service per client connection to expose raw provider names without a broker prefix. Current grants, backend credentials, rate limits and audit still apply. A connection view does not narrow the token itself.</li>
           <li><b>MCP transports.</b> The stdio server runs beside the agent and supports JSON input and output, file references for uploads and downloads, and saving read or write responses locally. A local save failure is reported separately from confirmed operation success, without replaying the operation. The HTTP endpoint serves remote clients and supports JSON input and output only.</li>
+          <li><b>Attachment formats.</b> Authorized Jira and Confluence downloads allow all media types by default, with optional allow/deny patterns independent of exact upload lists. Byte limits and attachment membership checks still apply. Media rules filter declarations without inspecting file contents; see <a href="configuration.md#jira-and-confluence-attachment-media-policy">attachment media policy</a>.</li>
         </ul>
         <ul class="list">
           <li><b>Authentication.</b> All four interfaces use platform-attached identity in managed environments and an <code>agent_invoke</code> token for unmanaged clients.</li>

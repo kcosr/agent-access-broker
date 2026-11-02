@@ -1,5 +1,5 @@
 //! Configuration building blocks and validators shared by backends.
-use crate::EgressProxyConfig;
+use crate::{EgressProxyConfig, MediaTypePolicyConfig};
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -85,8 +85,12 @@ pub struct AttachmentLimitsConfig {
     pub max_total_bytes: u64,
     #[serde(default = "default_download_max_bytes")]
     pub max_download_bytes: u64,
+    /// Exact upload declarations; an empty list permits no uploads.
     #[serde(default)]
-    pub media_types: Vec<String>,
+    pub upload_media_types: Vec<String>,
+    /// Independent download policy; omission permits all declared media types.
+    #[serde(default)]
+    pub download_media_types: MediaTypePolicyConfig,
 }
 
 impl Default for AttachmentLimitsConfig {
@@ -95,7 +99,8 @@ impl Default for AttachmentLimitsConfig {
             max_bytes: default_attachment_max_bytes(),
             max_total_bytes: default_attachment_max_total_bytes(),
             max_download_bytes: default_download_max_bytes(),
-            media_types: vec![],
+            upload_media_types: vec![],
+            download_media_types: MediaTypePolicyConfig::default(),
         }
     }
 }
@@ -396,13 +401,17 @@ pub fn validate_attachment_limits(
     config: &AttachmentLimitsConfig,
     errors: &mut Vec<String>,
 ) {
-    validate_upload_limits(
-        label,
-        config.max_bytes,
-        config.max_total_bytes,
-        &config.media_types,
-        errors,
-    );
+    validate_upload_limits(label, config.max_bytes, config.max_total_bytes, &[], errors);
+    for media_type in &config.upload_media_types {
+        if media_type.trim().is_empty() || !media_type.contains('/') || media_type.contains('*') {
+            errors.push(format!(
+                "{label}.upload_media_types contains invalid exact media type {media_type}"
+            ));
+        }
+    }
+    config
+        .download_media_types
+        .validate(&format!("{label}.download_media_types"), errors);
     if config.max_download_bytes == 0 {
         errors.push(format!("{label}.max_download_bytes must be non-zero"));
     }

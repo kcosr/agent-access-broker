@@ -233,6 +233,24 @@ each request is still checked against the allowlist. None of them reads files,
 the process environment or secret references; the host resolves secret
 references such as a proxy's `password_ref`.
 
+`AttachmentLimitsConfig` separates the exact `upload_media_types` list from
+`download_media_types: MediaTypePolicyConfig`. Uploads default to an empty list;
+download policy defaults to `allow = ["*/*"]` and `deny = []`. The policy's
+`validate` method checks exact, family and universal patterns. The SDK treats
+this configuration table as intentionally exhaustive, like the other config
+building blocks; downstream renderers and struct literals must handle every
+field. See [attachment media policy](configuration.md#jira-and-confluence-attachment-media-policy).
+
+Use `MediaTypeDeclaration::parse` for textual metadata and `from_headers` for
+the full response header map. The latter classifies duplicate or non-text
+`Content-Type` fields as malformed. Adapters use `unspecified` for absent or null
+metadata and `malformed` for a present value with the wrong type, while retaining
+their original display values separately. Call the policy's `check_metadata`
+after authorization and containment, before requesting content, then
+`check_download` with metadata and response declarations before returning a
+stream. Both return value-free media-policy denials. They do not validate file
+contents, impose byte limits, or replace upstream identity and membership checks.
+
 ### Building a provider
 
 `build(&BuildContext)` constructs the provider for one runtime generation. It is
@@ -1491,6 +1509,9 @@ The host also stops every raw download, streamed or in memory, at
 is a backstop, not a replacement: keep rejecting a declared length over the cap
 while it can still be an ordinary error, and bound your own stream so the
 provider stops reading upstream and applies any smaller limit of its own.
+The host gives every successful raw response `Content-Disposition: attachment`
+without a filename and `X-Content-Type-Options: nosniff`; it preserves the stream's
+declared `Content-Type` and result metadata. Providers keep filenames in metadata.
 
 Report upstream throttling with `upstream_rate_limited(service, retry_after)`,
 where `UpstreamRetryAfter::from_headers` reads a bounded `Retry-After`. Its

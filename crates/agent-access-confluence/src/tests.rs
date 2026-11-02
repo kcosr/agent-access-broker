@@ -11,6 +11,7 @@ use wiremock::matchers::{method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod documentation;
+mod download_media_policy;
 mod personal_spaces;
 mod plain_inputs;
 mod search_exclusions;
@@ -3409,6 +3410,7 @@ async fn confluence_draft_attachment_lookup_paginates_beyond_first_page() {
             page_id: "123456".to_string(),
             filename: format!("attachment-{index}.txt"),
             size: index,
+            media_type_declaration: None,
             content_type: "text/plain".to_string(),
         })
         .collect();
@@ -3452,7 +3454,8 @@ fn confluence_attachment_upload_validation_rejects_limit_and_integrity_mismatche
         max_bytes: 4,
         max_total_bytes: 8,
         max_download_bytes: 32,
-        media_types: vec!["text/plain".to_string()],
+        upload_media_types: vec!["text/plain".to_string()],
+        ..crate::AttachmentLimitsConfig::default()
     };
     let input = AttachmentInput {
         field: "file".to_string(),
@@ -4679,6 +4682,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
                     page_id: "123456".to_string(),
                     filename: "one.txt".to_string(),
                     size: 1,
+                    media_type_declaration: None,
                     content_type: "text/plain".to_string(),
                 },
                 ConfluenceAttachment {
@@ -4686,6 +4690,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
                     page_id: "123456".to_string(),
                     filename: "two.txt".to_string(),
                     size: 2,
+                    media_type_declaration: None,
                     content_type: "text/plain".to_string(),
                 },
             ],
@@ -6323,6 +6328,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         confluence_download_config(5),
         ProviderLimits::default(),
         Arc::new(AttachmentDownloadBackend {
+            content_requests: Default::default(),
             attachment: confluence_attachment("att123", 6, "text/plain"),
             content: confluence_attachment_content(b"ok", "text/plain"),
         }),
@@ -6343,6 +6349,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         confluence_download_config(32),
         ProviderLimits::default(),
         Arc::new(AttachmentDownloadBackend {
+            content_requests: Default::default(),
             attachment: confluence_attachment("att123", 2, "text/plain"),
             content: confluence_attachment_content(b"{}", "application/json"),
         }),
@@ -6360,17 +6367,16 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
     assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut config = confluence_download_config(32);
-    config.attachments.media_types = vec![
-        "text/plain".to_string(),
-        "application/octet-stream".to_string(),
-    ];
+    config.attachments.download_media_types.allow = vec!["text/plain".to_string()];
     let provider = ConfluenceProvider::with_backend(
         config,
         ProviderLimits::default(),
         Arc::new(AttachmentDownloadBackend {
+            content_requests: Default::default(),
             attachment: confluence_attachment("att123", 4, "text/plain"),
             content: ConfluenceAttachmentContent {
                 filename: "diagram.txt".to_string(),
+                media_type_declaration: MediaTypeDeclaration::parse("application/octet-stream"),
                 content_type: "application/octet-stream".to_string(),
                 size: Some(5),
                 sha256: None,
@@ -6397,6 +6403,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         confluence_download_config(4),
         ProviderLimits::default(),
         Arc::new(AttachmentDownloadBackend {
+            content_requests: Default::default(),
             attachment: confluence_attachment("att123", 4, "text/plain"),
             content: confluence_attachment_content(b"12345", "text/plain"),
         }),
@@ -6420,6 +6427,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
             .with_max_upstream_response_bytes(64)
             .with_max_download_bytes(128),
         Arc::new(AttachmentDownloadBackend {
+            content_requests: Default::default(),
             attachment: confluence_attachment("att123", large_bytes.len() as u64, "text/plain"),
             content: confluence_attachment_content(&large_bytes, "text/plain"),
         }),
@@ -6444,9 +6452,11 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         confluence_download_config(32),
         ProviderLimits::default(),
         Arc::new(AttachmentDownloadBackend {
+            content_requests: Default::default(),
             attachment: confluence_attachment("att123", 5, "text/plain"),
             content: ConfluenceAttachmentContent {
                 filename: "diagram.txt".to_string(),
+                media_type_declaration: MediaTypeDeclaration::parse("text/plain"),
                 content_type: "text/plain".to_string(),
                 size: None,
                 sha256: None,
@@ -6771,6 +6781,7 @@ struct BlogViewBackend {
 struct AttachmentDownloadBackend {
     attachment: ConfluenceAttachment,
     content: ConfluenceAttachmentContent,
+    content_requests: std::sync::atomic::AtomicUsize,
 }
 
 struct AttachmentListBackend {
@@ -7389,11 +7400,136 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
+        self.content_requests
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(ConfluenceBackendResponse {
             value: self.content.clone(),
             status: 200,
             duration_ms: 5,
         })
+    }
+
+    async fn blog_metadata(
+        &self,
+        blog_id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
+        ok(ConfluenceBlog {
+            id: blog_id.to_string(),
+            title: "Notes".into(),
+            space: "ENG".into(),
+            space_id: "98765".into(),
+            space_alias: None,
+            web_url: None,
+            space_web_url: None,
+            status: Some("current".into()),
+            version: 1,
+            created_at: None,
+            updated_at: None,
+            created_by: None,
+            updated_by: None,
+            bodies: BTreeMap::new(),
+        })
+    }
+
+    async fn space_by_id(
+        &self,
+        space_id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        ok(ConfluenceSpace {
+            id: space_id.to_string(),
+            key: "ENG".into(),
+            alias: None,
+            web_url: None,
+            status: Some("current".into()),
+            homepage_id: None,
+        })
+    }
+
+    async fn blog_attachments(
+        &self,
+        blog_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
+        self.page_attachments(blog_id, credential).await
+    }
+
+    async fn blog_attachment_content(
+        &self,
+        blog_id: &str,
+        attachment_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
+    {
+        self.attachment_content(blog_id, attachment_id, credential)
+            .await
+    }
+
+    async fn draft_page(
+        &self,
+        page_id: &str,
+        _body_format: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
+        ok(draft_content(page_id, ConfluenceDraftContentType::Page))
+    }
+
+    async fn draft_blog(
+        &self,
+        blog_id: &str,
+        _body_format: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
+        ok(draft_content(blog_id, ConfluenceDraftContentType::Blog))
+    }
+
+    async fn page_draft_attachments_page(
+        &self,
+        _page_id: &str,
+        _max_results: u32,
+        _next_position: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
+    {
+        ok(ConfluenceAttachmentListPage {
+            attachments: vec![self.attachment.clone()],
+            next_position: None,
+        })
+    }
+
+    async fn blog_draft_attachments_page(
+        &self,
+        blog_id: &str,
+        max_results: u32,
+        next_position: Option<&str>,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
+    {
+        self.page_draft_attachments_page(blog_id, max_results, next_position, credential)
+            .await
+    }
+
+    async fn page_draft_attachment_content(
+        &self,
+        page_id: &str,
+        attachment_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
+    {
+        self.attachment_content(page_id, attachment_id, credential)
+            .await
+    }
+
+    async fn blog_draft_attachment_content(
+        &self,
+        blog_id: &str,
+        attachment_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
+    {
+        self.attachment_content(blog_id, attachment_id, credential)
+            .await
     }
 }
 
@@ -7988,6 +8124,7 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
                 page_id: "123456".to_string(),
                 filename: "diagram.png".to_string(),
                 size: 12,
+                media_type_declaration: None,
                 content_type: "image/png".to_string(),
             }],
             status: 200,
@@ -8852,6 +8989,7 @@ fn attachment_list_backend() -> AttachmentListBackend {
                 page_id: "123456".to_string(),
                 filename: "one.txt".to_string(),
                 size: 1,
+                media_type_declaration: None,
                 content_type: "text/plain".to_string(),
             },
             ConfluenceAttachment {
@@ -8859,6 +8997,7 @@ fn attachment_list_backend() -> AttachmentListBackend {
                 page_id: "123456".to_string(),
                 filename: "two.txt".to_string(),
                 size: 2,
+                media_type_declaration: None,
                 content_type: "text/plain".to_string(),
             },
         ],
@@ -8897,7 +9036,7 @@ fn confluence_config() -> ConfluenceProviderConfig {
 fn confluence_download_config(max_download_bytes: u64) -> ConfluenceProviderConfig {
     let mut config = confluence_config();
     config.attachments.max_download_bytes = max_download_bytes;
-    config.attachments.media_types = vec!["text/plain".to_string()];
+    config.attachments.download_media_types.allow = vec!["text/plain".to_string()];
     config
 }
 
@@ -8907,6 +9046,7 @@ fn confluence_attachment(id: &str, size: u64, content_type: &str) -> ConfluenceA
         page_id: "123456".to_string(),
         filename: "diagram.txt".to_string(),
         size,
+        media_type_declaration: None,
         content_type: content_type.to_string(),
     }
 }
@@ -9038,7 +9178,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         .mount(&server)
         .await;
     let mut config = confluence_config();
-    config.attachments.media_types = vec!["text/plain".to_string()];
+    config.attachments.upload_media_types = vec!["text/plain".to_string()];
     let provider = ConfluenceProvider::with_backend(
         config,
         ProviderLimits::default(),
@@ -9291,7 +9431,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
     reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
     let origin = format!("http://{}", reserved.local_addr().unwrap());
     let mut config = confluence_config();
-    config.attachments.media_types = vec!["text/plain".to_string()];
+    config.attachments.upload_media_types = vec!["text/plain".to_string()];
     config.allowed_upstream_hosts = vec![format!("{origin}/wiki/rest/api/**")];
     let backend = HttpConfluenceBackend::new_with_api_base(
         config.clone(),
@@ -9367,7 +9507,7 @@ async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
             .mount(&server)
             .await;
         let mut config = confluence_config();
-        config.attachments.media_types = vec!["text/plain".to_string()];
+        config.attachments.upload_media_types = vec!["text/plain".to_string()];
         let error = ConfluenceProvider::with_backend(
             config,
             ProviderLimits::default(),
@@ -9535,6 +9675,7 @@ impl DraftThrottleBackend {
             page_id: id.to_string(),
             filename: format!("upload-{}.txt", uploads.len() + 1),
             size: 5,
+            media_type_declaration: None,
             content_type: "text/plain".to_string(),
         };
         uploads.push(attachment.clone());
@@ -9825,7 +9966,7 @@ fn draft_throttle_provider(
 ) -> (ConfluenceProvider, Arc<DraftThrottleBackend>, String) {
     let backend = Arc::new(backend);
     let mut config = confluence_config();
-    config.attachments.media_types = vec!["text/plain".to_string()];
+    config.attachments.upload_media_types = vec!["text/plain".to_string()];
     let provider = ConfluenceProvider::with_backend_and_signing_key(
         config,
         ProviderLimits::default(),
@@ -10020,6 +10161,7 @@ async fn throttled_reads_after_draft_publish_or_discard_are_unverified() {
             page_id: backend.id().to_string(),
             filename: "existing.txt".to_string(),
             size: 1,
+            media_type_declaration: None,
             content_type: "text/plain".to_string(),
         }];
         let (provider, backend, handle) = draft_throttle_provider(backend);

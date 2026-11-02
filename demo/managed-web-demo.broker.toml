@@ -173,7 +173,9 @@ allowed_upstream_hosts = [
 ]
 
 [providers.jira.attachments]
-media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+# Exact upload types; downloads have an independent policy.
+upload_media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+download_media_types = { allow = ["*/*"], deny = [] } # default
 
 [providers.jira.content]
 comment_formats = ["adf"]
@@ -198,7 +200,9 @@ allowed_upstream_hosts = [
 ]
 
 [providers.confluence.attachments]
-media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+# Exact upload types; downloads have an independent policy.
+upload_media_types = ["text/plain", "text/markdown", "application/json", "image/png", "text/html"]
+download_media_types = { allow = ["*/*"], deny = [] } # default
 
 [providers.confluence.content]
 page_formats = ["atlas_doc_format", "storage"]

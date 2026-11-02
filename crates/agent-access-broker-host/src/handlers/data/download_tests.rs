@@ -33,6 +33,40 @@ fn metadata_serialization_enforces_the_encoded_header_boundary() {
     assert!(bounded_metadata(&exceeds, RAW_METADATA_JSON_LIMIT).is_err());
 }
 
+#[tokio::test]
+async fn raw_downloads_force_attachment_without_rewriting_type_or_metadata() {
+    for content_type in ["text/html; charset=utf-8", "image/svg+xml"] {
+        for sensitive in [false, true] {
+            let contents = b"<script>untrusted content</script>";
+            let metadata = json!({
+                "filename": "report\"; name=untrusted.html",
+                "contentType": content_type,
+                "size": contents.len(),
+            });
+            let stream = ProviderResultStream::from_bytes(content_type, contents.to_vec());
+            // The common raw path also serves non-Atlassian providers and imports.
+            let response =
+                raw_result_response(response(metadata.clone(), stream), None, sensitive).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[CONTENT_TYPE], content_type);
+            assert_eq!(response.headers()[CONTENT_DISPOSITION], "attachment");
+            assert_eq!(response.headers()[X_CONTENT_TYPE_OPTIONS], "nosniff");
+            assert_eq!(response.headers().contains_key(CACHE_CONTROL), sensitive);
+            if sensitive {
+                assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
+            }
+            let encoded = response.headers()[RESULT_METADATA_HEADER].to_str().unwrap();
+            let envelope: Value = serde_json::from_slice(&BASE64.decode(encoded).unwrap()).unwrap();
+            assert_eq!(envelope["result"], metadata);
+            assert_eq!(envelope["service"], "reports");
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(bytes.as_ref(), contents);
+        }
+    }
+}
+
 struct Dropped(Arc<AtomicBool>);
 impl Drop for Dropped {
     fn drop(&mut self) {
@@ -64,6 +98,7 @@ async fn oversized_metadata_drops_transfer_and_preserves_only_bounded_write_evid
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
     assert!(!response.headers().contains_key(RESULT_METADATA_HEADER));
+    assert!(!response.headers().contains_key(CONTENT_DISPOSITION));
     let body = axum::body::to_bytes(response.into_body(), 32_768)
         .await
         .unwrap();

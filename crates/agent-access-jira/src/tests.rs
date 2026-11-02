@@ -14,6 +14,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 #[path = "comment_page_tests.rs"]
 mod comment_page_tests;
 
+#[path = "attachment_media_tests.rs"]
+mod attachment_media_tests;
+
 #[path = "documentation_tests.rs"]
 mod documentation_tests;
 
@@ -7021,8 +7024,9 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         JiraAttachmentContent::from_bytes("evidence.txt", "text/plain", b"hello".to_vec()),
     );
     let backend = Arc::new(backend);
-    let provider =
-        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+    let mut config = jira_config();
+    config.attachments.download_media_types.allow = vec!["text/plain".to_string()];
+    let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
     let error = provider
         .invoke(
             InvocationBuilder::new("jira", "attachment.download")
@@ -7060,7 +7064,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     assert_eq!(error.reason_code(), ReasonCode::AttachmentMediaTypeDenied);
 
     let mut config = jira_config();
-    config.attachments.media_types = vec![
+    config.attachments.download_media_types.allow = vec![
         "text/plain".to_string(),
         "application/octet-stream".to_string(),
     ];
@@ -7069,6 +7073,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         JiraAttachmentContent {
             filename: "evidence.txt".to_string(),
             content_type: "application/octet-stream".to_string(),
+            media_type_declaration: MediaTypeDeclaration::unspecified(),
             size: Some(6),
             sha256: None,
             stream: ProviderResultStream::from_bytes("application/octet-stream", b"hello".to_vec()),
@@ -7168,6 +7173,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         JiraAttachmentContent {
             filename: "evidence.txt".to_string(),
             content_type: "text/plain".to_string(),
+            media_type_declaration: MediaTypeDeclaration::parse("text/plain"),
             size: None,
             sha256: None,
             stream: ProviderResultStream::from_stream(
@@ -9469,7 +9475,7 @@ fn jira_config_with_search_cap(max_results: u32) -> JiraProviderConfig {
         egress_proxy: None,
         allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
         attachments: crate::AttachmentLimitsConfig {
-            media_types: vec!["text/plain".to_string()],
+            upload_media_types: vec!["text/plain".to_string()],
             ..crate::AttachmentLimitsConfig::default()
         },
         content: crate::JiraContentConfig {

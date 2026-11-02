@@ -3546,12 +3546,17 @@ On success the broker:
 
 - sets `Content-Type` from the stream (falling back to
   `application/octet-stream`),
+- sets `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`,
 - sets `X-Agent-Access-Result-Metadata` to the base64-encoded JSON of the
   `ResponseEnvelope` (so the metadata that would have been the body is still
   available), and
 - streams the raw download bytes as the response body.
 
 Catalog-marked sensitive downloads also carry `Cache-Control: no-store`.
+The download disposition and `nosniff` headers apply to every raw download,
+including native providers and command imports. The disposition has no filename;
+filenames remain in result metadata. These headers request download delivery and
+prevent browser MIME sniffing without changing the stream's declared type.
 The encoded metadata header is limited to 16,384 bytes for every raw download,
 including native providers. Bounded serialization accepts at most 12,288 bytes
 of envelope JSON. Oversized or invalid header construction returns a normal JSON

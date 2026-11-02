@@ -3844,6 +3844,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
             page_id: page_id.to_string(),
             filename: attachment.filename.clone(),
             size: attachment.size,
+            media_type_declaration: None,
             content_type: attachment.content_type.clone(),
         };
         self.attachments
@@ -3885,6 +3886,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
             page_id: blog_id.to_string(),
             filename: attachment.filename.clone(),
             size: attachment.size,
+            media_type_declaration: None,
             content_type: attachment.content_type.clone(),
         };
         self.blog_attachments
@@ -3926,6 +3928,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
             page_id: page_id.to_string(),
             filename: attachment.filename.clone(),
             size: attachment.size,
+            media_type_declaration: None,
             content_type: attachment.content_type.clone(),
         };
         self.page_draft_attachments
@@ -3967,6 +3970,7 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
             page_id: blog_id.to_string(),
             filename: attachment.filename.clone(),
             size: attachment.size,
+            media_type_declaration: None,
             content_type: attachment.content_type.clone(),
         };
         self.blog_draft_attachments
@@ -4634,7 +4638,7 @@ hash_key_ref = {hash_key}
 [providers.confluence]
 tenant_host = "example.atlassian.net"
 allowed_upstream_hosts = ["https://example.atlassian.net/wiki/rest/api/**", "https://example.atlassian.net/wiki/api/v2/**"]
-attachments = {{ media_types = ["text/plain"] }}
+attachments = {{ upload_media_types = ["text/plain"] }}
 content = {{ page_formats = ["storage", "atlas_doc_format"] }}
 search = {{ max_results = 2 }}
 
@@ -4697,7 +4701,7 @@ fn confluence_provider_config(max_results: u32) -> ConfluenceProviderConfig {
             "https://example.atlassian.net/wiki/api/v2/**".to_string(),
         ],
         attachments: agent_access_provider::AttachmentLimitsConfig {
-            media_types: vec!["text/plain".to_string()],
+            upload_media_types: vec!["text/plain".to_string()],
             ..agent_access_provider::AttachmentLimitsConfig::default()
         },
         content: agent_access_confluence::ConfluenceContentConfig {

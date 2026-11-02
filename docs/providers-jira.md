@@ -1832,9 +1832,9 @@ returned only by `comment.property.get` and are excluded from audit.
 **`attachment.add`** is the only Jira action that accepts multipart body parts.
 Each declared part is validated: the `field` and `filename` must be non-empty, and
 the `filename` must contain no `/` or `\`; `size` must be in `1..=max_bytes`; the
-`contentType` must be in the `media_types` allowlist; and `sha256` must be exactly
-64 hex characters matching the uploaded part. The running total is enforced against
-`max_total_bytes`. Body admission validates the declared parts; invocation
+`contentType` must exactly match the `upload_media_types` allowlist; and `sha256`
+must be exactly 64 hex characters matching the uploaded part. The running total
+is enforced against `max_total_bytes`. Body admission validates the declared parts; invocation
 confirms the issue's project immediately before the first upload. Uploads run
 one at a time. On a failure, every remaining file is
 recorded as `skipped`. A run where all files fail, or any file fails (partial),
@@ -1894,6 +1894,18 @@ hop carries the correlation headers. The byte
 cap is `min(config.attachments.max_download_bytes, limits.max_download_bytes)`, and
 the streamed size is checked against the metadata size. Download is served as a raw
 stream (see the raw-download negotiation in [docs/http-api.md](http-api.md)).
+
+Downloads default to all media types, independently of the upload list.
+`attachments.download_media_types` accepts exact and family allow/deny patterns;
+deny takes precedence. Every concrete declaration from attachment metadata and
+the HTTP response must pass, but the declarations need not match each other.
+A generic `application/octet-stream` response needs no extra allow entry when
+metadata declares an allowed concrete type. A malformed declaration is accepted
+only by a universal allow-all policy; restrictive policies deny it before
+returning bytes. Jira still requires a MIME string in attachment metadata.
+See [attachment media policy](configuration.md#jira-and-confluence-attachment-media-policy)
+for unknown types, pattern syntax, defaults and examples. These rules filter
+declared types without inspecting file contents.
 
 **`attachment.list`** is a single fetch, not paginated. Its input accepts exactly
 `{ issue }` or `{ url }`. One `issue?fields=project,attachment` fetch returns a

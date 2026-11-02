@@ -21,7 +21,9 @@ use axum::Json;
 use axum::body::Body;
 use axum::extract::multipart::{MultipartError, MultipartRejection};
 use axum::extract::{ConnectInfo, FromRequest, MatchedPath, Multipart, Path, RawQuery, State};
-use axum::http::header::{ACCEPT, CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::header::{
+    ACCEPT, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
+};
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
 use axum::response::IntoResponse;
 use base64::Engine;
@@ -2147,6 +2149,8 @@ async fn raw_result_response(
         HeaderValue::from_str(&stream.content_type)
             .unwrap_or_else(|_| HeaderValue::from_static(RAW_RESULT_MIME)),
     );
+    headers.insert(CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(RESULT_METADATA_HEADER, metadata_header);
     if exports_secrets {
         headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));

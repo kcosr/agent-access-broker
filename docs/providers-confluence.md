@@ -1328,7 +1328,8 @@ or over-depth comment responses instead of returning partial results.
 
 **`attachment.add`** accepts multipart parts and applies the same per-file checks
 as Jira (non-empty `field`/`filename`, no `/` or `\` in the filename, size within
-caps, allowlisted media type, 64-hex `sha256`), confirming the page→space first.
+caps, an exact `upload_media_types` match, 64-hex `sha256`), confirming the
+page→space first. An omitted or empty upload list denies uploads.
 
 **`attachment.download`** confirms page→space by lookup before authorization,
 then proves attachment→page membership, validates metadata, and streams the
@@ -1341,6 +1342,18 @@ redirect on the same origin outside that site, such as another cloud ID on the
 gateway, fails the download (`upstream_protocol_failed`) before it is sent,
 whether it comes directly or back from a media host. Hops to Atlassian's media
 hosts carry the correlation headers but no credential.
+
+Page, blog, page-draft and blog-draft attachment downloads share the independent
+`attachments.download_media_types` policy. Its default permits all media types;
+operators can set exact or family allow/deny patterns, with deny taking
+precedence. Every concrete metadata/response type must pass, but the types need
+not equal each other. A generic response can use a concrete metadata type without
+another allow entry. Malformed declarations pass only an unrestricted policy;
+restrictive policies deny them before returning bytes. Confluence preserves its
+displayed metadata fallback while distinguishing malformed and unspecified types
+for policy evaluation. See [attachment media policy](configuration.md#jira-and-confluence-attachment-media-policy)
+for syntax and examples. Media rules do not inspect file contents or change
+space authorization, attachment membership, byte caps, or draft restrictions.
 
 **`attachment.list`** is cursor-paginated. Its input accepts `{ pageId }` or
 `{ url }` plus optional `maxResults` and `nextPageToken`. The `nextPageToken` is

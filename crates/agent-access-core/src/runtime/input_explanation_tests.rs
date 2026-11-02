@@ -703,7 +703,7 @@ base_url = "https://ci.example.com/"
                 r#"[content]
 comment_formats = ["adf"]
 [attachments]
-media_types = ["text/plain", "application/json"]
+upload_media_types = ["text/plain", "application/json"]
 [comments]
 allowed_visibility = [{ type = "role", value = "Developers" }]
 "#,
@@ -741,7 +741,7 @@ page_formats = ["storage", "atlas_doc_format"]
 blog_formats = ["storage"]
 comment_formats = ["storage"]
 [attachments]
-media_types = ["text/plain", "application/json"]
+upload_media_types = ["text/plain", "application/json"]
 "#,
             ),
         ),

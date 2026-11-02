@@ -4154,7 +4154,7 @@ read_only = true
 [providers.jira]
 tenant_host = "example.atlassian.net"
 allowed_upstream_hosts = ["https://example.atlassian.net/rest/api/3/**"]
-attachments = {{ media_types = ["text/plain"] }}
+attachments = {{ upload_media_types = ["text/plain"] }}
 content = {{ comment_formats = ["adf"] }}
 search = {{ max_results = 2 }}
 
@@ -4392,7 +4392,7 @@ fn jira_provider_config(max_results: u32) -> JiraProviderConfig {
         egress_proxy: None,
         allowed_upstream_hosts: vec!["https://example.atlassian.net/rest/api/3/**".to_string()],
         attachments: agent_access_provider::AttachmentLimitsConfig {
-            media_types: vec!["text/plain".to_string()],
+            upload_media_types: vec!["text/plain".to_string()],
             ..agent_access_provider::AttachmentLimitsConfig::default()
         },
         content: agent_access_jira::JiraContentConfig {
