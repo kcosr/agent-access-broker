@@ -310,8 +310,9 @@ All notable changes to this project are documented in this file.
   open drawer, Account names the sign-in method in words, and a group's Grants
   tab shows one Create grant button. Write-capable actions use that one label
   on every page, token tables span the pane, the Users table hides an empty
-  Email column and shows principal IDs in full, and principal headers and
-  credential drawers no longer repeat the role or status.
+  Email column and shows principal IDs in full, the audit table no longer
+  scrolls sideways at 1024 pixels, and principal headers and credential drawers
+  no longer repeat the role or status.
 
 - Import-review fields use compact labels and responsive rows so long operation
   names do not overlap adjacent controls. Portal primary actions and information

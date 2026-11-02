@@ -38,7 +38,7 @@ export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions:
       const ttlPolicy = administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
       if (!ttlPolicy) return "Token issuance policy is unavailable. Refresh the portal and try again.";
       if (!agentTokenOptions) return "Token options are unavailable. Refresh the portal and try again.";
-      if (agentTokenOptions.executionContexts.length === 0) return "This principal needs an active policy grant before an execution-context-bound token can be issued.";
+      if (agentTokenOptions.executionContexts.length === 0) return `${administered ? "This principal needs" : "You need"} an active policy grant before an execution-context-bound token can be issued.`;
       if (!principalId) return "The token owner is unavailable. Refresh the portal and try again.";
       return null;
     }

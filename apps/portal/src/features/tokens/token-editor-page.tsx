@@ -58,7 +58,7 @@ export function TokenEditorPage() {
   } else if ((!ttlPolicy || ttlPolicy.options.length === 0) && !initialized) {
     state = <EmptyState icon="key" title="Token issuance unavailable">Token issuance policy is unavailable. Refresh the portal and try again.</EmptyState>;
   } else if (!options || (options.executionContexts.length === 0 && !initialized)) {
-    state = <EmptyState icon="shield" title="No active grants">This principal needs an active policy grant before an execution-context-bound token can be issued.</EmptyState>;
+    state = <EmptyState icon="shield" title="No active grants">{subject.administered ? "This principal needs" : "You need"} an active policy grant before an execution-context-bound token can be issued.</EmptyState>;
   } else {
     initializedOwner.current = ownerKey;
     return <TokenEditor key={ownerKey} subject={subject} options={options} ttlPolicy={ttlPolicy ?? null} services={params.getAll("service")} returnTo={returnTo} header={<PageHeader title="Issue agent token" back={back} meta={meta} />} optionsError={query.error} retryOptions={() => { void query.refetch(); }} />;
@@ -98,7 +98,7 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   const currentBlocker = !ttlPolicy || ttlPolicy.options.length === 0
     ? "Token issuance policy is unavailable. Refresh the portal and try again."
     : options.executionContexts.length === 0
-      ? "This principal needs an active policy grant before a token can be issued."
+      ? `${subject.administered ? "This principal needs" : "You need"} an active policy grant before a token can be issued.`
       : null;
   const request = ttlPolicy ? buildAgentTokenIssuance(draft, options, ttlPolicy) : { valid: false as const, issues: [] };
   const permitted = canWriteSubject(session, subject);
