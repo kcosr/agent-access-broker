@@ -110,7 +110,7 @@ describe("merged effective access", () => {
       );
     const all = render([item("issue.view", "default", sbc), item("search", "default", sbc)], ["issue.view", "search"]);
     // A disclosure: the names are one keyboard-operable click away.
-    expect(all).toMatch(/<details class="pt-access-all"><summary>All 2 granted actions<\/summary>.*issue\.<wbr\/>view.*search.*<\/details>/);
+    expect(all).toMatch(/<details class="wb-disclosure pt-access-all"><summary><svg[^>]*>.*?<\/svg>All 2 granted actions<\/summary>.*issue\.<wbr\/>view.*search.*<\/details>/);
     // A row missing one granted action (different access in that context) lists its actions.
     const split = render([item("issue.view", "default", sbc), item("search", "default", eng)], ["issue.view", "search"]);
     expect(split).not.toContain("granted actions");

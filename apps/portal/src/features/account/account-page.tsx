@@ -33,6 +33,9 @@ import { usePortalTheme } from "../../app/theme";
 import { useOwnMicrosoftMembership, useOwnServiceLimits } from "../../data/queries";
 import { useAuthActions } from "../../mutations/auth";
 
+/** How this session signed in; unknown methods show their wire name. */
+const LOGIN_METHOD_LABELS: Record<string, string> = { local_password: "Local password", oidc: "Microsoft" };
+
 export function AccountPage() {
   const { session } = useSession();
   const { mode, setMode } = usePortalTheme();
@@ -69,7 +72,7 @@ export function AccountPage() {
                 { label: "Groups", value: session.groups?.length ? session.groups.join(", ") : <span className="wb-muted">None</span> },
                 microsoftGroups ? { label: "Microsoft groups", value: <StateCell label={microsoftGroups.text} tone={microsoftGroups.tone} /> } : null,
                 { label: "Role", value: session.role ? ROLE_LABELS[session.role] : "" },
-                { label: "Sign-in", value: session.loginMethod ?? "Browser session" },
+                { label: "Sign-in", value: session.loginMethod ? (LOGIN_METHOD_LABELS[session.loginMethod] ?? session.loginMethod) : "Browser session" },
                 session.signInMethods ? { label: "Sign-in methods", value: <SignInMethodBadges methods={session.signInMethods} /> } : null,
                 { label: "Session expires", value: <Time value={session.expiresAt} format="datetime" fallback="Unknown" /> }
               ]}

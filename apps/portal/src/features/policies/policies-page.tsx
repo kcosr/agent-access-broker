@@ -641,7 +641,8 @@ export function GrantDrawer({
   const policy = usePolicyActions();
   const runner = useActionRunner();
   const service = policyService(catalog, grant.service);
-  const editable = canWritePolicies(session, grant.service) && grant.writable && writableAuthority && grant.status !== "deleted";
+  const duplicable = canWritePolicies(session, grant.service) && writableAuthority && grant.status !== "deleted";
+  const editable = duplicable && grant.writable;
   const readActions = grant.actions.filter((action) => service?.actions.find((item) => item.action === action)?.readOnly === true);
   const writeActions = grant.actions.filter((action) => !readActions.includes(action));
   const auditHref =
@@ -679,24 +680,9 @@ export function GrantDrawer({
             <Button variant="primary" icon="pencil" href={paths.grantEdit(grant.grantRef)}>
               Edit
             </Button>
-          ) : null}
-          {canWritePolicies(session, grant.service) && writableAuthority && grant.status !== "deleted" ? (
+          ) : duplicable ? (
             <Button icon="copy" href={paths.grantNew({ from: grant.grantRef })}>
               Duplicate
-            </Button>
-          ) : null}
-          {editable ? (
-            <Button
-              icon={grant.status === "active" ? "pause" : "play"}
-              pending={runner.busy}
-              onClick={() => void runner.run("toggle", () => policy.setEnabled(grant, grant.status !== "active"))}
-            >
-              {grant.status === "active" ? "Disable" : "Enable"}
-            </Button>
-          ) : null}
-          {editable ? (
-            <Button variant="danger-ghost" icon="trash" onClick={() => policy.confirmDelete(grant, onClose)}>
-              Delete
             </Button>
           ) : null}
           {auditHref ? (
@@ -705,6 +691,22 @@ export function GrantDrawer({
             </Button>
           ) : null}
         </>
+      }
+      secondaryActions={
+        editable
+          ? [
+              { id: "duplicate", label: "Duplicate", icon: "copy", href: paths.grantNew({ from: grant.grantRef }) },
+              {
+                id: "toggle",
+                label: grant.status === "active" ? "Disable" : "Enable",
+                icon: grant.status === "active" ? "pause" : "play",
+                disabled: runner.busy,
+                onSelect: () => void runner.run("toggle", () => policy.setEnabled(grant, grant.status !== "active"))
+              },
+              { type: "separator" },
+              { id: "delete", label: "Delete", icon: "trash", danger: true, onSelect: () => policy.confirmDelete(grant, onClose) }
+            ]
+          : undefined
       }
     >
       {!grant.writable ? (

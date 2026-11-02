@@ -1041,6 +1041,16 @@ test("local browser login supports administration, self-service credentials, tok
     await page.getByRole("main").getByRole("link", { name: "Principals", exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/admin\/principals\?kind=service-accounts$/);
     await expect(tableRow(page, "Reporting Service")).toBeVisible();
+    // The summary drawer keeps Open as a button; its section links sit in the More actions menu.
+    await tableRow(page, "Reporting Service").getByRole("link", { name: "Reporting Service", exact: true }).click();
+    const accountDrawer = drawer("Reporting Service");
+    await expect(accountDrawer.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+    await accountDrawer.getByRole("button", { name: "More actions", exact: true }).click();
+    await expect(page.getByRole("menu", { name: "More actions", exact: true }).getByRole("menuitem")).toHaveText(["Grants", "Tokens"]);
+    await page.keyboard.press("Escape");
+    await expect(accountDrawer.getByRole("button", { name: "More actions", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(accountDrawer).toHaveCount(0);
 
     await sidebar.getByRole("button", { name: /^Users/ }).click();
     await page.getByRole("button", { name: "Create user", exact: true }).click();
@@ -1457,6 +1467,11 @@ test("local browser login supports administration, self-service credentials, tok
     const grantRow = tableRow(page, grantRef);
     await expect(await columnCell(grantRow, "Subjects")).toHaveText("User Access, Alice Updated");
     await expect(grantRow.getByRole("link", { name: `Edit ${grantRef}`, exact: true })).toBeAttached();
+    // Edit stays a button; the grant's other actions sit in the drawer's More actions menu.
+    await grantDrawer.getByRole("button", { name: "More actions", exact: true }).click();
+    await expect(page.getByRole("menu", { name: "More actions", exact: true }).getByRole("menuitem")).toHaveText(["Duplicate", "Disable", "Delete"]);
+    await page.keyboard.press("Escape");
+    await expect(grantDrawer.getByRole("button", { name: "More actions", exact: true })).toBeFocused();
 
     await grantDrawer.getByRole("link", { name: "Edit", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/ui/admin/policies/${grantRef}/edit$`));
@@ -2832,7 +2847,7 @@ test("grant action columns preserve hidden selections and show write capability"
   await expect(reads.getByText(/^1 of \d+$/)).toBeVisible();
   await expect(writes.getByText(/^1 of \d+$/)).toBeVisible();
   // The card header summarizes the selection.
-  await expect(page.locator("#grant-service").getByText("Writes: 1 read-only action, 1 write-capable action")).toBeVisible();
+  await expect(page.locator("#grant-service").getByText("Write-capable: 1 read-only action, 1 write-capable action")).toBeVisible();
   await reads.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("grant-action-picker.png"), fullPage: true });
   await search.fill("no-such-action");
@@ -2846,16 +2861,22 @@ test("grant action columns preserve hidden selections and show write capability"
   await expect(page).toHaveURL(/\/ui\/admin\/policies\?grant=classified-actions$/);
   const row = tableRow(page, "classified-actions");
   // The open drawer narrows the table, so the Actions column may be hidden; its content stays.
-  await expect(await columnCell(row, "Actions")).toContainText("Writes");
+  // Dense tables name the write capability with a pencil (accessible name and hover title), not the word.
+  const actionsCell = await columnCell(row, "Actions");
+  await expect(actionsCell.getByRole("img", { name: "Write-capable", exact: true, includeHidden: true })).toHaveCount(1);
+  await expect(actionsCell.locator("svg > title")).toHaveText("Write-capable");
+  await expect(actionsCell.locator(".wb-badge")).toHaveCount(0);
   const drawer = page.getByRole("complementary", { name: "Grant classified-actions", exact: true });
-  await expect(drawer.getByText("Writes: 1 read-only action, 1 write-capable action")).toBeVisible();
+  await expect(drawer.getByText("Write-capable: 1 read-only action, 1 write-capable action")).toBeVisible();
   const grantActions = drawer.getByRole("region", { name: "Actions", exact: true });
   await expect(grantActions.getByText("comment.view", { exact: true })).toBeVisible();
   await expect(grantActions.getByText("issue.update", { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("grant-write-capability.png"), fullPage: true });
 
   await page.goto(`${baseUrl}/ui/admin/principals/admin/grants`);
-  await expect(tableRow(page, "classified-actions").getByText("Writes", { exact: true })).toBeVisible();
+  const referenceRow = tableRow(page, "classified-actions");
+  await expect(referenceRow.getByRole("img", { name: "Write-capable", exact: true })).toBeVisible();
+  await expect(referenceRow.locator(".wb-badge", { hasText: "Write-capable" })).toHaveCount(0);
   await page.goto(`${baseUrl}/ui/admin/policies/classified-actions/edit`);
   await writes.getByRole("button", { name: "Select none of the matching write-capable actions", exact: true }).click();
   await expect(page.locator("#grant-service").getByTitle("1 read-only action, 0 write-capable actions")).toHaveText("Read-only");
@@ -2863,7 +2884,7 @@ test("grant action columns preserve hidden selections and show write capability"
   await editor.save.click();
   expect((await saving).postDataJSON().actions).toEqual(["comment.view"]);
   await expect(page).toHaveURL(/\/ui\/admin\/policies\?grant=classified-actions$/);
-  await expect(await columnCell(row, "Actions")).not.toContainText("Writes");
+  await expect(await columnCell(row, "Actions")).not.toContainText("Write-capable");
   await expectNoHorizontalOverflow(page);
 });
 

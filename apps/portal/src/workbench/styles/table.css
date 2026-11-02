@@ -47,6 +47,25 @@
     color: var(--wb-fg-2);
     font-weight: var(--wb-fw-regular);
     text-align: left;
+    /* Text cells share the row's text baseline, so smaller mono text lines
+       up with the sans text beside it. */
+    vertical-align: baseline;
+  }
+  /* Icons, sparklines and avatars are centred. */
+  .wb-table :is(td, tbody th[scope="row"]):has(svg, .wb-avatar) {
+    vertical-align: middle;
+  }
+  /* So are controls, padded less: a baseline cell takes no share of a
+     taller row, so a control must not make the row taller than its text. */
+  .wb-table
+    :is(td, tbody th[scope="row"]):has(
+      .wb-btn,
+      button:not(.wb-row-link),
+      input,
+      select,
+      textarea
+    ) {
+    padding-block: 2px;
     vertical-align: middle;
   }
   /* Visually hidden text (a " on jira" suffix in a row link) is anchored

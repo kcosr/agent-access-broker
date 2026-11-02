@@ -305,21 +305,21 @@ function principalColumns(serviceAccounts: boolean): DataColumn<PrincipalRecord>
       header: "Principal ID",
       sortable: true,
       priority: 2,
-      truncate: true,
-      minWidth: "12ch",
+      // IDs show in full up to the cap; the name and groups take the spare width.
+      hug: "32ch",
       className: "wb-cell-mono",
       cell: (principal) => principal.principalId
     },
     ...(serviceAccounts
       ? []
       : [
-          { key: "signInMethods", header: "Sign-in methods", priority: 2, cell: (principal: PrincipalRecord) => <SignInMethodBadges methods={principal.signInMethods} /> } satisfies DataColumn<PrincipalRecord>,
+          { key: "signInMethods", header: "Sign-in methods", priority: 3, cell: (principal: PrincipalRecord) => <SignInMethodBadges methods={principal.signInMethods} /> } satisfies DataColumn<PrincipalRecord>,
           {
             key: "email",
             header: "Email",
             priority: 4,
-            truncate: true,
-            minWidth: "12ch",
+            hug: "32ch",
+            hideWhenEmpty: true,
             cell: (principal: PrincipalRecord) => principal.email ?? ""
           } satisfies DataColumn<PrincipalRecord>,
           {
@@ -432,12 +432,6 @@ function PrincipalDrawer({ principal, onClose, returnFocus }: { principal: Princ
           <Button variant="primary" icon="external" href={paths.principal(principal.principalId)}>
             Open
           </Button>
-          <Button icon="shield" href={paths.principal(principal.principalId, "grants")}>
-            Grants
-          </Button>
-          <Button icon="key" href={paths.principal(principal.principalId, "tokens")}>
-            Tokens
-          </Button>
           {session.auditQueryable ? (
             <Button variant="ghost" icon="history" href={auditListPath("admin", { principal: principal.principalId })}>
               View audit
@@ -445,6 +439,10 @@ function PrincipalDrawer({ principal, onClose, returnFocus }: { principal: Princ
           ) : null}
         </>
       }
+      secondaryActions={[
+        { id: "grants", label: "Grants", icon: "shield", href: paths.principal(principal.principalId, "grants") },
+        { id: "tokens", label: "Tokens", icon: "key", href: paths.principal(principal.principalId, "tokens") }
+      ]}
     >
       <DrawerSection title="Details">
         <KeyValue

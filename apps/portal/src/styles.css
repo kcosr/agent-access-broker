@@ -78,6 +78,21 @@
   min-width: 0;
 }
 
+/* Settings section heads: when wide actions would leave the title and
+   description a narrow column, the actions wrap below them instead. */
+.wb-settings-sec-head {
+  flex-wrap: wrap;
+}
+.wb-settings-sec-titles {
+  flex-basis: 20rem;
+}
+/* Rows inside a section's form start flush, like rows placed directly in it. */
+.wb-settings-sec-body > form:first-child > .wb-settings-row:first-child,
+.wb-settings-sec-body > form:first-child > fieldset:first-child > .wb-settings-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
 /* ---------- text helpers */
 .pt-on {
   color: var(--wb-muted);
@@ -180,12 +195,11 @@
   max-width: 100%;
   overflow-wrap: anywhere;
 }
+/* The kit disclosure, at the table's size and weight. */
 .pt-access-all > summary {
-  width: fit-content;
-  color: var(--wb-accent-text, var(--wb-accent));
   font-family: var(--wb-font-sans);
   font-size: var(--wb-fs-12-5);
-  cursor: pointer;
+  font-weight: var(--wb-fw-regular);
 }
 .pt-access-all[open] > summary {
   margin-bottom: 2px;
@@ -271,9 +285,13 @@
   border: 1px solid var(--wb-border);
   border-radius: var(--wb-radius-md);
 }
+/* Each column's head and list share rows across the columns, so both lists
+   start level even when only one head wraps its All and None buttons. */
 .pt-action-column {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-row: span 2;
+  grid-template-rows: subgrid;
+  align-content: start;
   gap: 8px;
   min-width: 0;
   padding: 10px;
@@ -284,6 +302,7 @@
 .pt-action-column-head {
   display: flex;
   flex-wrap: wrap;
+  align-self: start;
   align-items: center;
   gap: 6px;
 }
@@ -414,6 +433,10 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+/* The body's gap spaces its fields; the kit's field-to-field margin would double it. */
+.pt-card-body > .wb-field + .wb-field {
+  margin-top: 0;
 }
 
 /* ---------- agent token editor: form and preview, with a summary rail */

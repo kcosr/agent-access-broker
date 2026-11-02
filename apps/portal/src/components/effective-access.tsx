@@ -12,7 +12,7 @@ import { clauseLabel } from "../lib/resource-labels";
 import { useResourceTypes } from "../lib/resource-types";
 import { portalQueryKeys } from "../lib/portal-queries";
 import { useSession } from "../app/session";
-import { EmptyState, ErrorState, Icon, SkeletonBlock } from "../workbench";
+import { Disclosure, EmptyState, ErrorState, Icon, SkeletonBlock } from "../workbench";
 
 /** One clause: its inclusions minus exclusions, and whole-request conditions. */
 export function AccessClause({ type, clause, alternative = false }: { type: ResourceType; clause: EffectiveAccessClause; alternative?: boolean }) {
@@ -117,10 +117,9 @@ export function EffectiveAccessSummary({
                     <th scope="row" className="pt-access-actions">
                       {everyGrantedAction(row.service, row.actions) || row.actions.length > LISTED_ACTIONS ? (
                         // Collapsed, but one keyboard-operable click away.
-                        <details className="pt-access-all">
-                          <summary>{everyGrantedAction(row.service, row.actions) ? `All ${row.actions.length} granted actions` : `${row.actions.length} actions`}</summary>
+                        <Disclosure className="pt-access-all" summary={everyGrantedAction(row.service, row.actions) ? `All ${row.actions.length} granted actions` : `${row.actions.length} actions`}>
                           <ActionList actions={row.actions} />
-                        </details>
+                        </Disclosure>
                       ) : (
                         <ActionList actions={row.actions} />
                       )}

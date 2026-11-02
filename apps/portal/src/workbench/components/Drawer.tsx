@@ -11,6 +11,8 @@ import type { CSSProperties, ReactNode, Ref } from "react";
 import { cx } from "../lib/cx";
 import { OverlayScope, useLayer, useOverlayOwner } from "../lib/layers";
 import { IconButton } from "./Button";
+import { Menu } from "./Popover";
+import type { MenuEntry } from "./Popover";
 
 export interface DrawerProps {
   id?: string | undefined;
@@ -23,8 +25,15 @@ export interface DrawerProps {
   kicker?: ReactNode;
   /** Line under the title (state pill, owner, relative time). */
   meta?: ReactNode;
-  /** Buttons under the meta line. */
+  /** Primary buttons under the meta line, always shown. */
   actions?: ReactNode;
+  /**
+   * Secondary actions, always in a "More actions" (⋯) menu after `actions`.
+   * Falsy entries are skipped; no menu without an item.
+   */
+  secondaryActions?:
+    | readonly (MenuEntry | null | false | undefined)[]
+    | undefined;
   /** Bottom of the header, e.g. <Tabs>. */
   headerExtra?: ReactNode;
   /** Sticky footer (editors: Save / Cancel). */
@@ -54,6 +63,7 @@ export function Drawer({
   kicker,
   meta,
   actions,
+  secondaryActions,
   headerExtra,
   footer,
   children,
@@ -77,6 +87,12 @@ export function Drawer({
   useLayoutEffect(() => {
     returnRef.current = returnFocus;
   });
+  const more = (secondaryActions ?? []).filter(
+    (entry): entry is MenuEntry => !!entry,
+  );
+  const hasMore = more.some(
+    (entry) => entry.type === undefined || entry.type === "item",
+  );
   const layers = useLayer(true, onClose, false);
   const owner = useOverlayOwner(ref);
 
@@ -154,8 +170,24 @@ export function Drawer({
               {title}
             </h2>
             {meta ? <div className="wb-drawer-meta">{meta}</div> : null}
-            {actions ? (
-              <div className="wb-drawer-actions">{actions}</div>
+            {actions || hasMore ? (
+              <div className="wb-drawer-actions">
+                {actions}
+                {hasMore ? (
+                  <Menu
+                    label="More actions"
+                    items={more}
+                    trigger={(props) => (
+                      <IconButton
+                        {...props}
+                        variant="default"
+                        icon="more"
+                        label="More actions"
+                      />
+                    )}
+                  />
+                ) : null}
+              </div>
             ) : null}
             {headerExtra}
           </div>

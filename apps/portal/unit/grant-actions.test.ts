@@ -3,6 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { actionSelectionCounts, grantActionGroups, selectMatchingActions } from "../src/lib/grant-actions";
 import { GrantActionSelector, WriteCapability } from "../src/components/grant-actions";
+import { actionsExtra } from "../src/components/table-cells";
 
 const actions = [
   { action: "issue.view", description: "Read one issue", readOnly: true },
@@ -59,12 +60,23 @@ describe("grant action classification and selection", () => {
     const badge = (selected: string[]) => renderToStaticMarkup(createElement(WriteCapability, { available: actions, selected }));
     expect(badge([])).toBe("");
     expect(badge(["issue.view"])).toContain(">Read-only<");
-    expect(badge(["issue.view"])).not.toContain("Writes");
-    expect(badge(["issue.view", "issue.update"])).toContain("Writes");
+    expect(badge(["issue.view"])).not.toContain("Write-capable");
+    expect(badge(["issue.view", "issue.update"])).toContain(">Write-capable<");
     expect(badge(["issue.view", "issue.update"])).toContain("1 read-only action, 1 write-capable action");
-    expect(badge(["unreviewed.read"])).toContain("Writes");
+    expect(badge(["unreviewed.read"])).toContain(">Write-capable<");
     expect(badge(["unreviewed.read"])).not.toContain('type="checkbox"');
   });
+});
+
+test("dense grant tables mark write capability with a named pencil, not the word", () => {
+  const extra = (more: number, writes: boolean) => renderToStaticMarkup(createElement("div", null, actionsExtra(more, writes)));
+  expect(actionsExtra(0, false)).toBeNull();
+  expect(extra(3, false)).toBe('<div><span class="wb-muted">+3</span></div>');
+  const writes = extra(2, true);
+  expect(writes).toContain('role="img"');
+  expect(writes).toContain("<title>Write-capable</title>");
+  expect(writes).not.toContain("wb-badge");
+  expect(writes.replace(/<title>[^<]*<\/title>/g, "").replace(/<[^>]+>/g, "")).toBe("+2");
 });
 
 test("action filters can be identified independently for each service", () => {

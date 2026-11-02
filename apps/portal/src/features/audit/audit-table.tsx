@@ -129,7 +129,8 @@ function auditColumns({ types, who, principalNames, tokenNames, showNode }: Colu
     {
       key: "phase",
       header: "Phase",
-      priority: 3,
+      // p4: beside a Reason column at 1024px, Phase made the table scroll sideways.
+      priority: 4,
       hideWhenEmpty: true,
       cell: (record) => auditRecordPhase(record)
     },
