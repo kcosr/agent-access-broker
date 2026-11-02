@@ -546,6 +546,14 @@ pub fn openapi_from_catalog(
                             RESULT_METADATA_HEADER: {
                                 "description": "Base64-encoded JSON ResponseEnvelope metadata",
                                 "schema": { "type": "string" }
+                            },
+                            "Content-Disposition": {
+                                "description": "Download disposition without a filename parameter; filename metadata remains in the response envelope",
+                                "schema": { "type": "string", "const": "attachment" }
+                            },
+                            "X-Content-Type-Options": {
+                                "description": "Prevents browser media-type sniffing of the download",
+                                "schema": { "type": "string", "const": "nosniff" }
                             }
                         },
                         "content": {

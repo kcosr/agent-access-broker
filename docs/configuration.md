@@ -1282,9 +1282,11 @@ with the metadata before returning any download bytes:
   type delivered with a generic HTTP response. `binary/octet-stream` is a
   concrete type, not an alias for unspecified content.
 - A malformed declaration passes only a universal policy: `allow` contains
-  `*/*` and `deny` is empty. Every restrictive policy denies it. Wildcards in
-  an actual content type, multiple HTTP `Content-Type` headers, a non-text header,
-  and a non-string, non-null Confluence metadata type are malformed.
+  `*/*` and `deny` is empty. Every restrictive policy denies it. A nonblank string
+  whose essence is not a valid type/subtype token pair, such as `pdf`, `text/`,
+  or a comma-joined list, is malformed. Wildcards in an actual content type,
+  multiple HTTP `Content-Type` headers, a non-text header, and a non-string,
+  non-null Confluence metadata type are also malformed.
 - An explicit empty allow list, a deny-all rule, or a denied concrete metadata
   type is refused before the content request. Unspecified metadata otherwise
   waits for the response type. Media-policy refusals use

@@ -614,6 +614,14 @@ async fn conformance_actions_reach_every_discovery_surface() {
         raw["headers"].get(RESULT_METADATA_HEADER).is_some(),
         "{raw}"
     );
+    assert_eq!(
+        raw["headers"]["Content-Disposition"]["schema"],
+        json!({"type": "string", "const": "attachment"})
+    );
+    assert_eq!(
+        raw["headers"]["X-Content-Type-Options"]["schema"],
+        json!({"type": "string", "const": "nosniff"})
+    );
     let upload = operation("item.upload");
     let multipart = &upload["requestBody"]["content"]["multipart/form-data"];
     assert_eq!(multipart["schema"]["required"], json!(["request"]));
@@ -831,6 +839,8 @@ async fn conformance_actions_move_json_markdown_downloads_and_uploads() {
         .await;
     assert_eq!(download.status(), StatusCode::OK);
     assert_eq!(download.headers()[CONTENT_TYPE], "text/plain");
+    assert_eq!(download.headers()["content-disposition"], "attachment");
+    assert_eq!(download.headers()["x-content-type-options"], "nosniff");
     let metadata: Value = serde_json::from_slice(
         &BASE64
             .decode(download.headers()[RESULT_METADATA_HEADER].to_str().unwrap())

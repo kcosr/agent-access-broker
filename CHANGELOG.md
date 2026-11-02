@@ -21,7 +21,10 @@ All notable changes to this project are documented in this file.
   exact, with omission denying uploads; wildcard upload entries are rejected.
   Downstream SDK users must replace `AttachmentLimitsConfig.media_types` with
   `upload_media_types` and supply `download_media_types`, normally through
-  `Default`. GitLab's upload and download policies are unchanged. See
+  `Default`. The new `MediaTypePolicyConfig` and `MediaTypeDeclaration` provide
+  validation, classification, and staged `check_metadata`/`check_download`
+  checks; see the [provider SDK](docs/provider-sdk.md).
+  GitLab's upload and download policies are unchanged. See
   [attachment media policy](docs/configuration.md#jira-and-confluence-attachment-media-policy).
 
 - **Comment inclusion extends host and presentation contracts.** Downstream hosts
