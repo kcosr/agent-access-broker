@@ -540,7 +540,7 @@
 }
 .pt-token-summary-service {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 2px 8px;
   width: calc(100% + 12px);

@@ -19,7 +19,8 @@ username assertion as a CLI identity header.
 In an already configured managed fingerprint ingress, `--no-token` bypasses
 inherited token configuration without reading or exporting the workspace token.
 Otherwise retain ordinary configured identity. `agent-access auth status` shows
-managed `readOnlyAccess`; read-only paths list and execute only classified reads
+path-only `readOnlyAccess` and issued-token `brokerToken.readOnly`. Either true
+value limits listing and execution to classified reads
 under the user's normal grants. Unreviewed imported actions count as writes.
 Report a write's need for a writable connection without switching credentials
 or access paths to evade the ceiling. Local file output remains available.

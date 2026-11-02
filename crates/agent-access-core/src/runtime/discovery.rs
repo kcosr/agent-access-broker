@@ -677,6 +677,7 @@ mod tests {
             token_id: Some("one".into()),
             token_scopes: Some(
                 AgentInvokeTokenCaveats {
+                    read_only: false,
                     allowed_services: Some(vec!["fake".into()]),
                     allowed_execution_contexts: Some(vec![context()]),
                     service_restrictions: Some(BTreeMap::from([(
@@ -1097,6 +1098,7 @@ mod tests {
         let mut restricted = foreign.clone();
         restricted.source.as_mut().unwrap().token_scopes = Some(
             AgentInvokeTokenCaveats {
+                read_only: false,
                 allowed_services: None,
                 allowed_execution_contexts: Some(vec![context.clone()]),
                 service_restrictions: None,

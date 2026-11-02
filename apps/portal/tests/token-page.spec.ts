@@ -12,11 +12,11 @@ const envelope = (result: unknown) => ({ ok: true, result });
 const stamp = { createdAt: "2026-10-14T00:00:00Z", updatedAt: "2026-10-14T00:00:00Z", createdBy: "viewer", updatedBy: "viewer" };
 const ttlPolicy = { defaultTtl: "1h", maxTtl: "8h", options: ["1h", "8h"] };
 const rawToken = "aab_test_one_time_token_page_secret";
-const owner = (principalId: string, status = "active") => ({ principalId, kind: "user", displayName: principalId, role: "user", selfServiceEnabled: true, status, groups: [], signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [], ...stamp });
+const owner = (principalId: string, status = "active") => ({ agentTokenIssuance: "write_capable", agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, principalId, kind: "user", displayName: principalId, role: "user", selfServiceEnabled: true, status, groups: [], signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [], ...stamp });
 const action = (action: string, readOnly: boolean, executionContexts = ["internal", "external"]) => ({ action, readOnly, description: `${action} description`, executionContexts, requiredScopeTypes: ["project"], resourceType: "jira_project" as const, effectiveAccessByExecutionContext: Object.fromEntries(executionContexts.map((context) => [context, [{ included: [{ kind: "all" as const }], excluded: [] }]])) });
 function tokenOptions(): AgentTokenOptions {
   return {
-    policyGeneration: 1,
+    policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] },
     executionContexts: ["internal", "external"],
     resources: [{ id: "project", displayName: "Example project", resourceType: "jira_project", selector: { kind: "exact", value: "EXAMPLE" }, allowedExecutionContexts: ["internal", "external"], enabled: true }],
     resourceGroups: [{ id: "empty-group", name: "Empty group" }],
@@ -36,7 +36,7 @@ test.afterAll(async () => { await assets.close(); });
 
 async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnabled = true) {
   const model = {
-    session: { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: [], csrfHeader: "x-csrf-token", csrfToken: "fixture", loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: ttlPolicy, administered: { agentInvoke: ttlPolicy, userManage: ttlPolicy, admin: ttlPolicy } } } as Session,
+    session: { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: [], csrfHeader: "x-csrf-token", csrfToken: "fixture", loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { mode: "write_capable", source: "user", groupIds: [] } }, administered: { agentInvoke: ttlPolicy, userManage: ttlPolicy, admin: ttlPolicy } } } as Session,
     options: tokenOptions(),
     principalStatus: "active",
     requests: [] as string[],
@@ -70,7 +70,7 @@ async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnab
       // Match the backend's structural rejection instead of concealing the bug
       // with an unconditional successful empty preview.
       const restrictions = body.serviceRestrictions ?? {};
-      const invalid = !body.allowedExecutionContexts?.length || (body.allowedServices !== undefined && (!body.allowedServices.length || body.allowedServices.some((service) => !Object.hasOwn(restrictions, service) || !restrictions[service].actions.length)));
+      const invalid = typeof body.readOnly !== "boolean" || !body.allowedExecutionContexts?.length || (body.allowedServices !== undefined && (!body.allowedServices.length || body.allowedServices.some((service) => !Object.hasOwn(restrictions, service) || !restrictions[service].actions.length)));
       if (invalid) {
         model.invalidPreviews.push(body);
         await route.fulfill({ status: 400, json: { ok: false, reasonCode: "input_invalid", error: { message: "allowedServices, actions, and contexts must not be empty" } } });
@@ -123,7 +123,7 @@ test("incomplete boundaries never request a preview, while names do not refetch 
   await page.goto(`${baseUrl}/ui/tokens/new`);
   await expect(editor(page)).toBeVisible();
   await expect.poll(() => model.previews.length).toBe(1);
-  expect(model.previews[0]).toEqual({ allowedExecutionContexts: ["internal", "external"] });
+  expect(model.previews[0]).toEqual({ readOnly: true, allowedExecutionContexts: ["internal", "external"] });
   await restrict(page);
   await expect(editor(page).getByRole("button", { name: "Issue token", exact: true })).toBeDisabled();
   const count = model.previews.length;
@@ -165,7 +165,7 @@ test("empty selected resources and live empty groups remain valid previews and i
   expect(model.issued).toEqual([{
     pathname: "/v1/tokens",
     body: {
-      name: "empty-is-valid", ttl: "1h", allowedExecutionContexts: ["internal", "external"], allowedServices: ["jira"],
+      readOnly: true, name: "empty-is-valid", ttl: "1h", allowedExecutionContexts: ["internal", "external"], allowedServices: ["jira"],
       serviceRestrictions: { jira: { actions: ["issue.view"], resources: { resourceIds: [], resourceGroupIds: ["empty-group"] } } }
     }
   }]);
@@ -181,6 +181,7 @@ test("each service shares the grant picker with independent filters and scoped b
   await page.goto(`${baseUrl}/ui/tokens/new`);
   await restrict(page);
   for (const name of ["jira", "tracker"]) await editor(page).getByRole("checkbox", { name, exact: true }).check();
+  await editor(page).getByRole("checkbox", { name: "Read-only", exact: true }).uncheck();
   const jira = service(page, "Jira");
   const tracker = service(page, "Tracker");
   const jiraFilter = jira.getByRole("searchbox", { name: "Filter jira actions", exact: true });
@@ -365,13 +366,13 @@ test("the summary counts each service's selection and opens a collapsed service"
   await page.goto(`${baseUrl}/ui/tokens/new?service=jira`);
   const summary = editor(page).getByRole("complementary", { name: "Token summary", exact: true });
   await expect(summary).toContainText("1 service");
-  await expect(summary.getByRole("button", { name: /^Jira/ })).toContainText("5 of 5 actions · all granted resources");
+  await expect(summary.getByRole("button", { name: /^Jira/ })).toContainText("3 of 5 actions · all granted resources");
   await editor(page).getByRole("group", { name: "jira resources", exact: true }).getByRole("button", { name: "Selected resources and groups", exact: true }).click();
   // Only resource types the service's actions use are offered.
   await expect(service(page, "Jira").getByRole("checkbox", { name: /^Example project/ })).toBeVisible();
   await expect(service(page, "Jira").getByRole("checkbox", { name: /^Example space/ })).toHaveCount(0);
   await service(page, "Jira").getByLabel("Empty group", { exact: true }).check();
-  await expect(summary.getByRole("button", { name: /^Jira/ })).toContainText("5 of 5 actions · 1 group");
+  await expect(summary.getByRole("button", { name: /^Jira/ })).toContainText("3 of 5 actions · 1 group");
   await editor(page).getByRole("button", { name: "Collapse Jira", exact: true }).click();
   await expect(service(page, "Jira")).toHaveCount(0);
   await summary.getByRole("button", { name: /^Jira/ }).click();
@@ -447,19 +448,19 @@ for (const change of ["signed-out", "different-viewer", "same-viewer-capabilitie
   });
 }
 
-test("Access toolbar and action drawer preserve full-service prefills", async ({ page }) => {
+test("Access toolbar and action drawer prefill the service’s read actions", async ({ page }) => {
   const model = await fixture(page);
   await page.goto(`${baseUrl}/ui/access?service=jira`);
   await page.getByRole("button", { name: "Issue token", exact: true }).first().click();
   await expect(page).toHaveURL(/\/ui\/tokens\/new\?/);
   const jira = service(page, "Jira");
-  for (const action of model.options.services[0].actions) await expect(jira.getByLabel(action.action, { exact: true })).toBeChecked();
+  for (const action of model.options.services[0].actions) await expect(jira.getByLabel(action.action, { exact: true })).toBeChecked({ checked: action.readOnly });
   await expect(editor(page).getByRole("checkbox", { name: "tracker", exact: true })).not.toBeChecked();
   await editor(page).getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page).toHaveURL(/\/ui\/access\?service=jira$/);
   await page.getByRole("link", { name: "issue.view", exact: true }).click();
   await page.getByRole("button", { name: "Issue token for Jira", exact: true }).click();
-  for (const action of model.options.services[0].actions) await expect(jira.getByLabel(action.action, { exact: true })).toBeChecked();
+  for (const action of model.options.services[0].actions) await expect(jira.getByLabel(action.action, { exact: true })).toBeChecked({ checked: action.readOnly });
   expect(model.errors).toEqual([]);
 });
 
@@ -500,7 +501,7 @@ test("an initialized owner draft survives empty grant and lifetime-policy refres
   await expect.poll(() => model.optionReads).toBeGreaterThan(previous);
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("retained-draft");
   await expect(editor(page).getByRole("button", { name: "Issue token", exact: true })).toBeDisabled();
-  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: ttlPolicy } };
+  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { mode: "write_capable", source: "user", groupIds: [] } } } };
   const sessionReads = model.sessionReads;
   await refreshQueries(page);
   await expect.poll(() => model.sessionReads).toBeGreaterThan(sessionReads);
@@ -540,7 +541,7 @@ test("discarding into a different service-prefilled URL resets the owner draft",
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("");
   await expect(editor(page).getByRole("checkbox", { name: "jira", exact: true })).not.toBeChecked();
   await expect(editor(page).getByRole("checkbox", { name: "tracker", exact: true })).toBeChecked();
-  for (const action of model.options.services[1].actions) await expect(service(page, "Tracker").getByLabel(action.action, { exact: true })).toBeChecked();
+  for (const action of model.options.services[1].actions) await expect(service(page, "Tracker").getByLabel(action.action, { exact: true })).toBeChecked({ checked: action.readOnly });
   expect(model.issued).toEqual([]);
   expect(model.errors).toEqual([]);
 });
@@ -667,7 +668,7 @@ test("a removed lifetime remains explicit and can be replaced after policy refre
   await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("updated-lifetime");
   const lifetime = editor(page).getByLabel("Lifetime", { exact: true });
   await lifetime.selectOption("8h");
-  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "1h", options: ["1h"] } } };
+  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "1h", options: ["1h"] } } };
   await refreshQueries(page);
   await expect(lifetime).toHaveValue("8h");
   await expect(lifetime.locator('option[value="8h"]')).toContainText("no longer available");
@@ -677,7 +678,7 @@ test("a removed lifetime remains explicit and can be replaced after policy refre
   await expect(editor(page).getByRole("button", { name: "Issue token", exact: true })).toBeEnabled();
   await editor(page).getByRole("button", { name: "Issue token", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Token created", exact: true })).toBeVisible();
-  expect(model.issued).toEqual([{ pathname: "/v1/tokens", body: { name: "updated-lifetime", ttl: "1h", allowedExecutionContexts: ["internal", "external"] } }]);
+  expect(model.issued).toEqual([{ pathname: "/v1/tokens", body: { readOnly: true, name: "updated-lifetime", ttl: "1h", allowedExecutionContexts: ["internal", "external"] } }]);
   expect(model.errors).toEqual([]);
 });
 
@@ -772,3 +773,194 @@ test("a password-required redirect suppresses a pending issuance success and its
     expect(model.errors).toEqual([]);
   } finally { releasePreview(); releaseIssue(); }
 });
+
+function setIssuanceMode(model: Awaited<ReturnType<typeof fixture>>, mode: "disabled" | "read_only" | "write_capable") {
+  const access = { mode, source: "user" as const, groupIds: [] };
+  model.options = { ...model.options, agentTokenIssuancePolicy: access };
+  model.session = { ...model.session, tokenIssuancePolicy: { ...model.session.tokenIssuancePolicy, selfAgentInvoke: { ...ttlPolicy, access } } };
+}
+
+const readOnlyCheckbox = (page: Page) => editor(page).getByRole("checkbox", { name: "Read-only", exact: true });
+const issueButton = (page: Page) => editor(page).getByRole("button", { name: "Issue token", exact: true });
+
+test("read-only issuers keep Follow current grants and issue an explicit durable ceiling", async ({ page }) => {
+  const model = await fixture(page);
+  setIssuanceMode(model, "read_only");
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await expect(readOnlyCheckbox(page)).toBeChecked();
+  await expect(readOnlyCheckbox(page)).toBeDisabled();
+  await expect(editor(page).getByText("Required by your account's token issuance policy", { exact: true })).toBeVisible();
+  await expect(editor(page).getByRole("button", { name: "Follow current grants", exact: true })).toBeEnabled();
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("future-reads");
+  await issueButton(page).click();
+  expect(model.issued[0].body).toEqual({ name: "future-reads", ttl: "1h", readOnly: true, allowedExecutionContexts: ["internal", "external"] });
+  const reveal = page.getByRole("dialog", { name: "Token created", exact: true });
+  await expect(reveal.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(reveal.getByText("Write-capable", { exact: true })).toHaveCount(0);
+});
+
+test("changing the Boolean retains selected writes for explicit correction", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await expect(readOnlyCheckbox(page)).toBeChecked();
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "jira", exact: true }).check();
+  await expect(service(page, "Jira").getByLabel("issue.update", { exact: true })).toBeDisabled();
+  await readOnlyCheckbox(page).uncheck();
+  await service(page, "Jira").getByLabel("issue.view", { exact: true }).check();
+  await service(page, "Jira").getByLabel("issue.update", { exact: true }).check();
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("kept-selections");
+  await readOnlyCheckbox(page).check();
+  await expect(service(page, "Jira").getByLabel("issue.update", { exact: true })).toBeChecked();
+  await expect(service(page, "Jira").getByLabel("issue.update", { exact: true })).toBeEnabled();
+  await expect(issueButton(page)).toBeDisabled();
+  await expect.poll(() => model.previews.at(-1)?.readOnly).toBe(true);
+  expect(model.previews.at(-1)?.serviceRestrictions?.jira.actions).toEqual(["issue.update", "issue.view"]);
+  await service(page, "Jira").getByLabel("issue.update", { exact: true }).uncheck();
+  await expect(issueButton(page)).toBeEnabled();
+  expect(model.issued).toHaveLength(0);
+});
+
+test("a stale write-capable draft requires Apply read-only restriction and retains invalid selections", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("policy-changed");
+  await readOnlyCheckbox(page).uncheck();
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "jira", exact: true }).check();
+  await service(page, "Jira").getByLabel("issue.view", { exact: true }).check();
+  await service(page, "Jira").getByLabel("issue.update", { exact: true }).check();
+  setIssuanceMode(model, "read_only");
+  await refreshQueries(page);
+  const apply = editor(page).getByRole("button", { name: "Apply read-only restriction", exact: true });
+  await expect(apply).toBeVisible();
+  await expect(readOnlyCheckbox(page)).not.toBeChecked();
+  await expect(readOnlyCheckbox(page)).toBeDisabled();
+  await expect(issueButton(page)).toBeDisabled();
+  await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("policy-changed");
+  await apply.click();
+  await expect(readOnlyCheckbox(page)).toBeChecked();
+  await expect(service(page, "Jira").getByLabel("issue.update", { exact: true })).toBeChecked();
+  await expect(issueButton(page)).toBeDisabled();
+  await service(page, "Jira").getByLabel("issue.update", { exact: true }).uncheck();
+  await issueButton(page).click();
+  expect(model.issued[0].body.readOnly).toBe(true);
+  expect(model.issued[0].body.serviceRestrictions?.jira.actions).toEqual(["issue.view"]);
+});
+
+test("disabled policy refresh preserves the draft and a completed one-time secret", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("preserve-draft");
+  await readOnlyCheckbox(page).uncheck();
+  setIssuanceMode(model, "disabled");
+  await refreshQueries(page);
+  await expect(editor(page).getByText("Agent token issuance is disabled for this account.", { exact: true }).first()).toBeVisible();
+  await expect(issueButton(page)).toBeDisabled();
+  await expect(readOnlyCheckbox(page)).not.toBeChecked();
+  await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("preserve-draft");
+  setIssuanceMode(model, "write_capable");
+  await refreshQueries(page);
+  await issueButton(page).click();
+  const reveal = page.getByRole("dialog", { name: "Token created", exact: true });
+  await expect(reveal.getByLabel("Token", { exact: true })).toHaveText(rawToken);
+  setIssuanceMode(model, "disabled");
+  await refreshQueries(page);
+  await expect(reveal.getByLabel("Token", { exact: true })).toHaveText(rawToken);
+  await expect(reveal.getByText("Write-capable", { exact: true })).toBeVisible();
+  expect(model.issued[0].body.readOnly).toBe(false);
+});
+
+test("a policy denial refetches metadata and preserves the original Boolean", async ({ page }) => {
+  const model = await fixture(page);
+  await page.route("**/v1/tokens", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    setIssuanceMode(model, "read_only");
+    await route.fulfill({ status: 403, json: { ok: false, reasonCode: "token_issuance_denied", error: { message: "This account may issue only read-only agent tokens" }, details: { category: "read_only_required" } } });
+  });
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("denied-draft");
+  await readOnlyCheckbox(page).uncheck();
+  const reads = model.optionReads;
+  await issueButton(page).click();
+  await expect(editor(page).getByRole("alert").filter({ hasText: "This account may issue only read-only agent tokens" })).toBeVisible();
+  await expect.poll(() => model.optionReads).toBeGreaterThan(reads);
+  await expect(editor(page).getByRole("button", { name: "Apply read-only restriction", exact: true })).toBeVisible();
+  await expect(readOnlyCheckbox(page)).not.toBeChecked();
+  await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("denied-draft");
+});
+
+test("disabled issuance keeps inventory, existing-token previews and lifecycle available", async ({ page }) => {
+  const model = await fixture(page);
+  setIssuanceMode(model, "disabled");
+  model.records = [false, true].map((readOnly) => ({ tokenId: readOnly ? "read" : "write", name: readOnly ? "Reader" : "Writer", tokenClass: "agent_invoke", principalId: "viewer", scopes: { readOnly, allowedExecutionContexts: ["internal"] }, ...stamp }));
+  await page.goto(`${baseUrl}/ui/access`);
+  await expect(page.getByRole("table", { name: "Access", exact: true }).getByRole("rowheader", { name: "issue.update", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Issue token", exact: true }).first()).toBeDisabled();
+  await page.goto(`${baseUrl}/ui/tokens`);
+  const writer = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Writer", exact: true }) });
+  const reader = page.getByRole("row").filter({ has: page.getByRole("link", { name: "Reader", exact: true }) });
+  await expect(writer.getByText("Write-capable", { exact: true })).toBeVisible();
+  await expect(reader.getByText("Read-only", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Access", exact: true })).toHaveCount(0);
+  await writer.getByRole("link", { name: "Writer", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "Token Writer", exact: true });
+  await expect(drawer.getByRole("button", { name: "Pause token", exact: true })).toBeEnabled();
+  await expect(drawer.getByRole("button", { name: "Revoke", exact: true })).toBeEnabled();
+  await drawer.getByText("Show what this token can reach now", { exact: true }).click();
+  await expect.poll(() => model.previews.at(-1)?.readOnly).toBe(false);
+  const pause = page.waitForRequest((request) => new URL(request.url()).pathname === "/v1/tokens/write/pause");
+  await drawer.getByRole("button", { name: "Pause token", exact: true }).click();
+  expect((await pause).method()).toBe("POST");
+});
+
+test("administrator issuance ignores the owner's disabled self-issuance policy", async ({ page }) => {
+  const model = await fixture(page, "admin");
+  setIssuanceMode(model, "disabled");
+  await page.goto(`${baseUrl}/ui/admin/principals/target/tokens/new`);
+  await expect(readOnlyCheckbox(page)).toBeChecked();
+  await expect(readOnlyCheckbox(page)).toBeEnabled();
+  await readOnlyCheckbox(page).uncheck();
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("admin-write-token");
+  await issueButton(page).click();
+  expect(model.issued[0]).toMatchObject({ pathname: "/v1/admin/principals/target/agent-tokens", body: { readOnly: false } });
+});
+
+for (const missing of ["session", "options"] as const) {
+  test(`missing ${missing} policy never enables issuance or retries an intentionally absent member`, async ({ page }) => {
+    const model = await fixture(page);
+    if (missing === "session") model.session.tokenIssuancePolicy = {};
+    else delete (model.options as Partial<AgentTokenOptions>).agentTokenIssuancePolicy;
+    await page.goto(`${baseUrl}/ui/tokens/new`);
+    await expect(page.getByText("Token issuance policy is unavailable.", { exact: true }).first()).toBeVisible();
+    expect(model.issued).toHaveLength(0);
+    if (await issueButton(page).count()) await expect(issueButton(page)).toBeDisabled();
+    expect(model.sessionReads).toBeLessThanOrEqual(2);
+    expect(model.optionReads).toBeLessThanOrEqual(2);
+    expect(model.errors).toEqual([]);
+  });
+}
+
+for (const failed of ["session", "options"] as const) {
+  test(`a failed ${failed} refresh blocks issuance with a cached draft until retry succeeds`, async ({ page }) => {
+    const model = await fixture(page);
+    await page.goto(`${baseUrl}/ui/tokens/new`);
+    await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("cached-draft");
+    await readOnlyCheckbox(page).uncheck();
+    let unavailable = true;
+    await page.route(failed === "session" ? "**/v1/auth/session" : "**/v1/tokens/options", async (route) => {
+      if (!unavailable) return route.fallback();
+      await route.fulfill({ status: 503, json: { ok: false, error: { message: "Policy metadata unavailable" } } });
+    });
+    await refreshQueries(page);
+    await expect(editor(page).getByText("Token issuance policy could not be refreshed.", { exact: true }).first()).toBeVisible();
+    await expect(issueButton(page)).toBeDisabled();
+    await expect(readOnlyCheckbox(page)).not.toBeChecked();
+    await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("cached-draft");
+    unavailable = false;
+    await editor(page).getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(issueButton(page)).toBeEnabled();
+    expect(model.issued).toHaveLength(0);
+    expect(model.errors).toEqual([]);
+  });
+}

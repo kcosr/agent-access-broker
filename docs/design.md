@@ -1023,10 +1023,11 @@ sequenceDiagram
    a token of any other class is denied with `BrokerTokenClassDenied` (403). If
    `managed_store.require_registered_principal_for_invocation` is set, the
    principal must be registered.
-5. **Broker-token caveats.** An `AgentInvoke` token's `allowedServices`, finite
-   `allowedExecutionContexts`, and optional `serviceRestrictions` can narrow
+5. **Broker-token caveats.** An `AgentInvoke` token's required Boolean `readOnly`,
+   required finite `allowedExecutionContexts`, optional `allowedServices` and
+   optional `serviceRestrictions` can narrow
    the service, context, action, and canonical resource set, but never create a
-   grant. An absent caveat does not narrow its corresponding dimension.
+   grant. An absent optional caveat does not narrow its corresponding dimension.
    A malformed stored caveat fails closed. Action restrictions run before
    lookup or credential work; finite resources are checked after
    canonical resolution, and search authorization is intersected before the
@@ -1368,6 +1369,50 @@ proof of staleness. A completed pause prevents later admission but does not undo
 operations already admitted. See [MCP lifetime](mcp.md#trusted-identity-and-session-lifetime)
 and [database invariants](database.md#managed-identity-access-and-bindings).
 
+## Agent token issuance and read-only tokens
+
+Issuance permission is administrator-owned state on principals and managed
+groups. Principals default to `inherit`, groups to `disabled`, including existing
+accounts after migration `033_agent_token_issuance`. Explicit principal values
+(`disabled`, `read_only`, `write_capable`) override groups; otherwise the most
+permissive active effective managed group wins, with no contribution resolving
+to Disabled. TOML identity contributes no groups. Principal HTTP creation is
+create-only and refuses duplicates with 409. The internal
+`ManagedStore::create_or_update_principal` upsert applies this field only on
+insert and preserves existing overrides; access PATCH is the change path.
+
+Personal issuance resolves membership and permission inside the immediate token
+insertion transaction, using current authority mode and one timestamp, after
+ordinary validation, audit preflight and active-account/self-service checks.
+It checks the requested Boolean without coercion. The existing runtime snapshot
+publication fence prevents stale-snapshot insertion. Administrative issuance
+uses admitted administrator write authority independently of personal permission.
+Policy-only changes do not edit or revoke tokens, change role assignments,
+participate in invocation admission or enter identity/MCP owner proofs.
+
+Every issued `agent_invoke` token stores required `readOnly` alongside contexts
+and optional service restrictions. The shared action-ceiling rule checks it
+before credential, OAuth, scope or dispatch work without filtering grants.
+Read-only **Follow current grants** tokens can inherit future reads while writes
+stay excluded. Explicit current write selections are invalid on new read-only
+issuance; existing-token preview instead intersects retained selections with
+current grants and classifications. Preview uses the token's Boolean, never the
+manager's login path or owner's current issuance mode.
+
+Token refusals use `service_action_denied`, message `broker token is read-only`,
+and `brokerToken` audit provenance. Issuance-policy refusals use host-only SDK
+`ReasonCode::TokenIssuanceDenied` (`token_issuance_denied`, HTTP 403), with
+`disabled` or `read_only_required` details. Identity summaries expose
+`brokerToken: {readOnly: boolean}` only for admitted issued agent tokens with a
+present token ID. Trusted-path `readOnlyAccess` remains separate; synthetic
+trusted-path scopes contain false but never populate `brokerToken`.
+
+The mutation owner retains token insertion, transaction-captured decision and
+completion audit after disconnect. Completion failure retains the committed row
+and returns the existing audit-unavailable error without the secret; issuance
+is never retried automatically. See [storage and recovery](database.md#agent-token-issuance-storage-and-upgrade)
+and [account settings](roles.md#agent-token-issuance).
+
 ## Execution-context boundary
 
 The fixed `X-Agent-Access-Context` header is a trusted ingress attribute, not a
@@ -1392,10 +1437,8 @@ Every normalized TOML or managed grant has a nonempty finite context list.
 Context intersects subject, service, action, resource scope, and credential
 mode. Agent-token issuance requires a finite `allowedExecutionContexts` caveat
 containing one or more effective contexts; it can only narrow this grant set.
-Resolution of a stored token without this caveat still enforces current grants,
-but the token does not independently restrict execution context. Stored caveats
-cannot be amended. When deployment security depends on copied-token containment,
-revoke tokens without this caveat and issue replacements with finite contexts.
+Stored tokens without valid contexts or a Boolean `readOnly` fail closed.
+Stored caveats cannot be amended; issue a replacement to change them.
 
 An agent token may additionally store one `serviceRestrictions` entry per
 selected service. Each entry contains an action list and optional `resources`

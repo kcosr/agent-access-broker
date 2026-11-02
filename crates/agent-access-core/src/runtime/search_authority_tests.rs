@@ -185,6 +185,7 @@ fn operation(identity: IdentityContext) -> GovernedOperationContext {
 
 fn caveats(resources: ResourceSelection) -> AgentInvokeTokenCaveats {
     AgentInvokeTokenCaveats {
+        read_only: false,
         allowed_services: Some(vec![SERVICE.into()]),
         allowed_execution_contexts: Some(vec![context()]),
         service_restrictions: Some(BTreeMap::from([(

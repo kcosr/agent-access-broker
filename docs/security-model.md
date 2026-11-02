@@ -440,7 +440,8 @@ leasing or provider dispatch. It removes no grant, so it cannot let a
 lower-precedence grant win. The ceiling is only as accurate as classification:
 actions are writes unless a backend or a reviewed import selection classifies
 them as reads, and a reclassification applies to requests admitted after it is
-published. Issued Broker tokens and browser sign-in keep the person's full grants.
+published. Issued Broker tokens and browser sign-in do not inherit the path's setting;
+issued tokens retain their own stored read-only and other restrictions.
 
 MCP proofs pin the original human, binding or identity-token revision, and the
 path's read-only setting through body intake and final admission. Identity
@@ -495,7 +496,15 @@ security-relevant properties are:
   work, but an already-admitted request may finish. Resume restores the same
   secret under current groups and grants. Use permanent revocation when the
   secret may have been disclosed; revocation wins concurrent transitions.
-- **Token boundaries are caveats, not grants.** Optional per-service action and
+- **Issuance permission governs creation only.** An explicit account setting
+  overrides groups; otherwise the most permissive active effective managed group
+  applies. New/existing accounts require explicit permission. The decision runs
+  in the insertion transaction after normal prerequisites; administrative
+  issuance is independently authorized. Permission changes do not alter issued
+  tokens, invocation checks or existing MCP sessions.
+- **Token boundaries are caveats, not grants.** Required `readOnly: true`
+  limits a token to current reviewed reads even when it follows future grants;
+  false gives no additional permission. Optional per-service action and
   canonical resource restrictions are checked in addition to current policy.
   They do not create candidates, affect policy priority, select credentials, or
   stitch grants. Action denial occurs before lookup or credential work; finite
@@ -539,7 +548,8 @@ security-relevant properties are:
 - **Management authority is not invocation authority.** A manager may use their
   whole-service authority to grant themselves access, but the assignment itself
   never authorizes invocation. They retain normal self-service token issuance;
-  issuing an `agent_invoke` token still requires an effective invocation grant,
+  issuing an `agent_invoke` token still requires explicit issuance permission
+  and an effective invocation grant,
   so dormant bearer tokens cannot be created from an assignment alone.
 - **Microsoft failure is provider-scoped.** Discovery, key, or token endpoint
   failure makes Microsoft login unavailable, and membership renewal retry with
@@ -996,7 +1006,7 @@ so configured identity headers remain with the original Broker endpoint.
 | Authorization is revoked while an already prepared request is uploading. | Existing request snapshots may finish; concurrency limits and a total receive deadline bound pending uploads. Stop ingress and terminate the process when incident response requires canceling prepared work. |
 | Agent summarizes sensitive content it was authorized to read. | Keep broker policy narrow and pair it with agent-side output controls for sensitive workflows. |
 | An agent asserts its own context header. | Broker always requires a valid named trusted caller credential for protected headers on public and Git listeners. Keep that credential private and configure the caller with only its approved contexts and forwarding capability; asserted ingress must replace client context values. |
-| A stored agent token without `allowedExecutionContexts` is copied between environments. | Current context-aware grants still limit access, but the token itself does not restrict execution context. Its caveats cannot be amended. When copied-token containment matters, revoke it and issue a replacement; issuance requires a finite execution-context caveat. |
+| A stored agent token has missing/invalid `allowedExecutionContexts` or `readOnly`. | Strict parsing denies it. Migration does not repair invalid authority; issue a valid replacement through the supported API. |
 | A coarse token without `serviceRestrictions` inherits an action or resource added to its owner's policy. | Current grants still limit access, but the token has no independent action or resource ceiling. Use purpose-specific tokens with explicit action lists and finite resource values where expansion containment matters. |
 | A token stores a finite value whose supporting grant is later removed. | The token is not mutated and cannot authorize by itself. Requests deny under current policy; restoration makes only the still-caveated value usable again. |
 | Resource owner approves an overly broad project or space. | Require broker policy review by security or agent platform owners; start with narrow pilot scopes. |
@@ -1205,8 +1215,8 @@ generic search or API tool can therefore reach everything allowed by its selecte
 upstream credential. Use a resource-aware provider when folder, project, namespace
 or query restrictions are required. Read-only classification is an administrator
 reviewed assertion; upstream tool annotations are suggestions. It determines what
-read-only identity paths can call, so a mislabelled write gives them write
-effect; acceptance that reclassifies a granted action requires confirmation.
+read-only tokens and identity paths can call, so a mislabelled write gives
+them write effect; acceptance that reclassifies a granted action requires confirmation.
 
 Only base administrators manage imports, under the operator's exact destination
 allowlist. Accepted mappings and schemas are stored locally. Complete manual

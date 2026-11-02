@@ -772,15 +772,26 @@ hash_key_ref = "env:AGENT_ACCESS_BROKER_TOKEN_HASH_KEY"
   caller-filtered `tokenIssuancePolicy` used by the portal. Changing TTL config
   therefore changes newly opened issuance forms after session refresh; it does
   not rewrite, expire, or revoke existing token rows.
+- Personal issuance additionally requires the administrator-owned
+  [account/group permission](roles.md#agent-token-issuance), separate from these
+  lifetime lists. Principals default to `inherit`, groups to `disabled`; both
+  new and existing accounts need explicit permission. There is no global or
+  TOML group issuance switch. TOML identity groups contribute nothing.
+  Session `tokenIssuancePolicy.selfAgentInvoke.access` reports current personal
+  permission; without `[broker_tokens]`, `tokenIssuancePolicy` is `{}` and issuance
+  is unavailable.
+- Every issued `agent_invoke` token requires a Boolean `readOnly` in `scopes`.
+  API clients and CLI callers must select it explicitly; portal forms start
+  checked. True limits actions to current reviewed reads, including when the
+  token follows later grants. False creates no extra permission. Permission
+  changes do not rewrite existing tokens; management token classes reject this
+  caveat.
 - Every newly issued `agent_invoke` token must also carry a finite
   `allowedExecutionContexts` caveat in `scopes`: one or more contexts for both
   self-service and administrative issuance. Choices come from active effective
   grants for the principal, and selected services must be visible in at least
-  one selected context. A token caveat can only narrow matching grants. A stored
-  agent token without this field remains governed by current grants but does not
-  independently restrict execution context. Stored token caveats cannot be amended.
-  When token-copy containment matters, revoke tokens that lack this field and
-  issue replacements with finite execution-context caveats.
+  one selected context. A token caveat can only narrow matching grants. Stored agent tokens without valid contexts or `readOnly` fail closed.
+  Stored token caveats cannot be amended.
 - Issuance may add the request-level `serviceRestrictions` caveat to constrain
   selected services to immutable action lists and finite canonical resource
   values. It is derived from the configured service/action catalog and current

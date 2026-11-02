@@ -15,7 +15,7 @@ async fn revoked_token_finishes_only_operations_prepared_before_revocation() {
     let issued = store.issue_broker_token(runtime.broker_token_hasher().unwrap(), BrokerTokenIssueRequest {
         principal_id: "alice".into(), name: "prepared requests".into(),
         token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
-        scopes: json!({"allowedExecutionContexts": ["external"], "allowedServices": ["fake"]}),
+        scopes: json!({"readOnly": false, "allowedExecutionContexts": ["external"], "allowedServices": ["fake"]}),
         expires_at: None, created_by: "test".into(),
     }).unwrap();
     let mut headers = HeaderMap::new();

@@ -170,7 +170,8 @@ Every command below targets the broker over HTTP except `config validate`,
 ### `auth`
 
 - `auth status` — `GET /v1/me`. Prints the identity summary as pretty JSON,
-  including `readOnlyAccess` behind fingerprint-aware ingress and, for a person
+  including `brokerToken.readOnly` for an issued invocation token (true or false),
+  path-only `readOnlyAccess` behind fingerprint-aware ingress and, for a person
   with a Microsoft sign-in, `microsoftMembership` (group evidence expiry and
   renewal state).
 - `auth token status` — locally inspects the configured `identity.token_file`
@@ -622,9 +623,15 @@ Manages the calling principal's own `agent_invoke` tokens. All `tokens`
 subcommands reject `--token-value`.
 
 - `tokens list [--include-revoked] [--include-expired]` — `GET /v1/tokens`.
-- `tokens issue --name <NAME> --execution-context <CONTEXT> [--execution-context <CONTEXT> ...] [--ttl <DUR> | --expires-at <TS> | --never] [--service <SVC> ...] [--action <SERVICE=ACTION> ...] [--resource-id <SERVICE=ID> ...] [--resource-group-id <SERVICE=ID> ...] [--restrict-resources <SERVICE> ...] [--service-restrictions-file <PATH>]`
+- `tokens issue --name <NAME> --read-only true|false --execution-context <CONTEXT> [--execution-context <CONTEXT> ...] [--ttl <DUR> | --expires-at <TS> | --never] [--service <SVC> ...] [--action <SERVICE=ACTION> ...] [--resource-id <SERVICE=ID> ...] [--resource-group-id <SERVICE=ID> ...] [--restrict-resources <SERVICE> ...] [--service-restrictions-file <PATH>]`
   — `POST /v1/tokens`. There is no `--token-class` flag; self-service issuance is
-  always `agent_invoke` server-side. Repeatable `--service` narrows the issued
+  always `agent_invoke` server-side. `--read-only true|false` is required and
+  serializes the explicit stored Boolean; it is never inferred from selected
+  actions. Read-only issuers must choose true. Even with true, omitting service
+  restrictions follows current grants and later reads while blocking writes.
+  An explicit write selection with true is invalid. Inspect current permission
+  in `GET /v1/tokens/options` (`agentTokenIssuancePolicy`). Repeatable `--service`
+  narrows the issued
   token's service allowlist. Repeatable `--action`, `--resource-id`, and
   `--resource-group-id` construct `serviceRestrictions`. Each referenced service
   must also appear in `--service`; a service with resource flags needs at least
@@ -764,14 +771,20 @@ commands described below. All `admin` subcommands reject `--token-value`.
 - `admin store status` — `GET /v1/admin/store/status`.
 - `admin config status | reload` — `GET /v1/admin/config/status` or
   `POST /v1/admin/config/reload`.
-- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
-  `create --kind` defaults to `user`. `update` sends only fields selected by
+- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
+  `create --kind` defaults to `user`; issuance defaults to `inherit` on creation.
+  Creating an existing principal is refused with HTTP 409 and changes nothing.
+  Change issuance with `access set --agent-token-issuance`; that flag alone is sufficient.
+  `inherit` removes an override, and omission leaves the setting unchanged.
+  `update` sends only fields selected by
   flags and requires at least one field flag. Microsoft link takes the Entra
   user Object ID, not an email, UPN, tenant ID, or encoded subject. Link returns
   the structured Microsoft login method; unlink revokes its browser sessions
   and external membership but leaves local identity state and independently
   issued broker tokens intact.
-- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
+- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] [--agent-token-issuance disabled|read_only|write_capable] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] [--agent-token-issuance disabled|read_only|write_capable] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
+  Group issuance defaults to `disabled`; update omission preserves it. Groups
+  do not accept `inherit`. See [issuance resolution](roles.md#agent-token-issuance).
   List, inspect, and member-list work in both TOML and managed identity
   authority modes. Mutating group commands require managed identity authority;
   TOML groups are static config resources changed by editing TOML and
@@ -854,9 +867,12 @@ the same effective group.
 - `admin rights list | grant <principal> --right <RIGHT> [--service ...] [--credential-name ...] [--expires-at ...] [--reason ...] | revoke <right_id>`.
   A credential right names a credential connection: `--service` is the
   connection ID and `--credential-name` is `default`.
-- `admin tokens list | issue <principal> --name <NAME> [--token-class <CLASS>] [--execution-context <CONTEXT> ...] [--service <SVC> ...] [--action <SERVICE=ACTION> ...] [--resource-id <SERVICE=ID> ...] [--resource-group-id <SERVICE=ID> ...] [--restrict-resources <SERVICE> ...] [--service-restrictions-file <PATH>] [--ttl ... | --expires-at ... | --never] | pause <token_id> | resume <token_id> | revoke <token_id>`.
+- `admin tokens list | issue <principal> --name <NAME> [--token-class <CLASS>] [--read-only true|false] [--execution-context <CONTEXT> ...] [--service <SVC> ...] [--action <SERVICE=ACTION> ...] [--resource-id <SERVICE=ID> ...] [--resource-group-id <SERVICE=ID> ...] [--restrict-resources <SERVICE> ...] [--service-restrictions-file <PATH>] [--ttl ... | --expires-at ... | --never] | pause <token_id> | resume <token_id> | revoke <token_id>`.
   Unlike self-service `tokens issue`, `admin tokens issue` accepts `--token-class`
-  (default `agent_invoke`). The broker validates expiry input on the shared
+  (default `agent_invoke`). That class requires `--read-only true|false`;
+  `user_manage` and `admin` reject the flag even when false. Administrator
+  issuance is independent of the owner's self-issuance policy and self-service
+  flag. The broker validates expiry input on the shared
   admin issue route: pass at most one of `--ttl`, `--expires-at`, or `--never`.
   `--ttl` must match the configured option list for the selected class;
   `--expires-at` accepts a future RFC3339 timestamp without requiring a listed
@@ -940,7 +956,9 @@ the same effective group.
 - `tokens effective-access --request-file <PATH>` previews token caveats for
   the caller. `admin tokens effective-access <principal> --request-file <PATH>`
   previews the same caveats for an administered principal. Requests use the
-  canonical token caveat fields; results retain policy generation and symbolic
+  canonical token caveat fields, including required Boolean `readOnly`. Preview
+  uses that Boolean independently of the owner's current issuance permission
+  and accepts retained selections whose current access has changed. Results retain policy generation and symbolic
   coverage with exclusions. See [resources.md](resources.md).
 - `admin policy managers list [--service <SERVICE>] | grant --service <SERVICE> --principal <PRINCIPAL> | revoke --service <SERVICE> --principal <PRINCIPAL>`.
   Administrators can change assignments; auditors can list them. Grant is
@@ -953,8 +971,8 @@ An assigned service policy manager uses the existing `admin policy status`,
 `user_manage` token. Results are server-filtered to assigned configured
 services; `grants export` and `policy managers list` require global administrative read access. The
 manager retains normal self-service commands when `selfServiceEnabled` is true. The assignment does not grant
-service invocation, and self-service agent-token issuance still requires an
-effective invocation grant.
+service invocation, and self-service agent-token issuance still requires explicit
+issuance permission and an effective invocation grant.
 
 ### `jira` (typed)
 
@@ -1984,7 +2002,7 @@ git clone https://git.example.com/team/project
 
 # Issue a self-service token that follows current policy in two contexts
 agent-access --url http://127.0.0.1:8787 --token-env USER_MANAGE_TOKEN \
-  tokens issue --name codex-workstation \
+  tokens issue --name codex-workstation --read-only true \
   --execution-context workstation --execution-context internal --ttl 30d
 ```
 

@@ -845,7 +845,7 @@ resources = { resource_group_ids = ["team"] }
     fn token_absent_and_empty_resource_selections_are_distinct_and_legacy_is_rejected() {
         let parse = |restriction| {
             crate::AgentInvokeTokenCaveats::parse_stored(
-                &serde_json::json!({"allowedServices":["gitlab"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"gitlab":restriction}}),
+                &serde_json::json!({"readOnly":false,"allowedServices":["gitlab"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"gitlab":restriction}}),
             )
         };
         assert!(crate::AgentInvokeTokenCaveats::parse_stored(&serde_json::json!({})).is_err());

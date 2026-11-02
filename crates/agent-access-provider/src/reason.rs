@@ -69,6 +69,8 @@ pub enum ReasonCode {
     BrokerTokenClassDenied,
     ManagementDenied,
     SelfServiceDisabled,
+    /// The host refused personal agent-token creation under the account issuance policy.
+    TokenIssuanceDenied,
     CsrfInvalid,
     PasswordChangeRequired,
     LocalLoginFailed,
@@ -201,6 +203,7 @@ impl ReasonCode {
             Self::BrokerTokenClassDenied => "broker_token_class_denied",
             Self::ManagementDenied => "management_denied",
             Self::SelfServiceDisabled => "self_service_disabled",
+            Self::TokenIssuanceDenied => "token_issuance_denied",
             Self::CsrfInvalid => "csrf_invalid",
             Self::PasswordChangeRequired => "password_change_required",
             Self::LocalLoginFailed => "local_login_failed",
@@ -350,6 +353,7 @@ impl ReasonCode {
             | Self::BrokerTokenClassDenied
             | Self::ManagementDenied
             | Self::SelfServiceDisabled
+            | Self::TokenIssuanceDenied
             | Self::CsrfInvalid
             | Self::PasswordChangeRequired
             | Self::OidcGroupClaimsIncomplete
@@ -451,6 +455,7 @@ impl ReasonCode {
             Self::BrokerTokenClassDenied,
             Self::ManagementDenied,
             Self::SelfServiceDisabled,
+            Self::TokenIssuanceDenied,
             Self::CsrfInvalid,
             Self::PasswordChangeRequired,
             Self::LocalLoginFailed,

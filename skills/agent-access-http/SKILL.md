@@ -22,8 +22,9 @@ MCP connections, not REST identity. In a configured managed fingerprint ingress,
 the trusted ingress forwards identity; do not read/export the workspace token.
 Otherwise retain configured ordinary Broker authentication.
 
-`GET /v1/me` reports managed `readOnlyAccess`. Read-only paths list and execute
-only classified reads, with normal grants; unreviewed imported actions count as
+`GET /v1/me` reports path-only `readOnlyAccess` and issued-token
+`brokerToken.readOnly`. Either true value permits listing and executing only
+classified reads, with normal grants; unreviewed imported actions count as
 writes. Report a write's need for a writable connection without switching
 credentials or access paths to evade the ceiling. Identity/context denials need
 the stated configuration remedy, not a caller-supplied trusted header.

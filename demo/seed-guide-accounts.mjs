@@ -55,11 +55,12 @@ for (const persona of ['auditor', 'onboarding']) {
   const account = accounts[persona];
   const role = persona === 'auditor' ? 'auditor' : 'user';
   const selfServiceEnabled = persona !== 'auditor';
+  const agentTokenIssuance = persona === 'auditor' ? 'disabled' : 'read_only';
   let principal = inventory.find(value => value.principalId === account.principal);
   if (!principal) principal = await api('/v1/admin/principals', 'POST', {
-    principalId: account.principal, displayName: persona === 'auditor' ? 'Documentation Auditor' : 'New Demo User', kind: 'user', role, selfServiceEnabled,
+    principalId: account.principal, displayName: persona === 'auditor' ? 'Documentation Auditor' : 'New Demo User', kind: 'user', role, selfServiceEnabled, agentTokenIssuance,
   });
-  if (principal.role !== role || principal.selfServiceEnabled !== selfServiceEnabled || principal.status !== 'active') throw new Error(`Existing guide identity has unexpected access: ${account.principal}`);
+  if (principal.role !== role || principal.selfServiceEnabled !== selfServiceEnabled || principal.agentTokenIssuance !== agentTokenIssuance || principal.status !== 'active') throw new Error(`Existing guide identity has unexpected access: ${account.principal}`);
   const route = `/v1/admin/principals/${encodeURIComponent(account.principal)}/login-methods`;
   const methods = await api(route);
   if (!methods.some(method => method.method === 'local_password' && method.status === 'active')) {

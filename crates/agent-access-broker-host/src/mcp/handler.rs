@@ -26,7 +26,7 @@ use std::{
 };
 use tracing::Instrument;
 
-/// Appended to the server instructions of a read-only identity path.
+/// Appended to the server instructions of a read-only identity path or issued token.
 pub(super) const READ_ONLY_INSTRUCTION: &str =
     "This connection is read-only: only actions classified as reads are listed or executable.";
 
@@ -58,9 +58,12 @@ impl Handler {
             .cloned()
             .ok_or_else(|| ErrorData::internal_error("Missing Broker request admission", None))
     }
-    /// Whether the identity admitted for this request uses a read-only path.
+    /// Whether the identity admitted for this request has a read-only path or token ceiling.
     fn read_only_access(&self, context: &RequestContext<RoleServer>) -> Result<bool, ErrorData> {
-        Ok(self.admitted(context)?.identity.read_only_access() == Some(true))
+        Ok(self
+            .admitted(context)?
+            .identity
+            .has_read_only_agent_access())
     }
     fn catalog(request: &Admitted) -> ApiCatalog {
         let mut catalog = agent_access_core::empty_catalog(json!({}));
@@ -418,7 +421,7 @@ impl ServerHandler for Handler {
     }
     /// The pinned SDK's default `initialize` (store the peer info, negotiate
     /// the protocol version), plus the read-only notice for an admitted
-    /// read-only identity path. Changing that setting ends the session, so
+    /// read-only identity path or issued token. Changing that setting ends the session, so
     /// the notice holds for the session's lifetime.
     async fn initialize(
         &self,

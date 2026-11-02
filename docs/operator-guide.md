@@ -276,8 +276,8 @@ An asserted caller never inherits the direct default.
 Before removing a context, repair active grants that reference it and review
 existing token caveats. Active references block reload; tokens bound only to
 retired contexts become stale. Stored token caveats cannot be amended. When
-environment containment is required, revoke tokens that omit
-`allowedExecutionContexts` and issue context-bound replacements. Validate
+a stored token lacks valid `allowedExecutionContexts` or `readOnly`, strict
+parsing denies it; issue a valid context-bound replacement. Validate
 representative allowed/denied discovery, invocation, MCP,
 Git, and audit behavior for every ingress path. See [resources](resources.md) for
 resource/group exclusions and live context semantics.
@@ -838,15 +838,32 @@ surface is added.
 
 Agent-token issuance audit includes the authenticated actor, target owner,
 token ID/class/name/expiry, allowed services and contexts, and
-canonical per-service action/resource restrictions. It never includes the raw
-token secret. Runtime denial continues to use existing reason codes:
+canonical per-service action/resource restrictions. Completion
+`providerAudit.management.target` includes `boundary.readOnly` and
+`issuanceAuthority` (`personal` or `administrative`). Personal success records
+`agentTokenIssuancePolicy` with the mode, source and contributing group IDs
+captured inside the insertion transaction; administrative success identifies its administrative authority independently.
+Permission changes record their actual previous/new configured settings.
+Personal refusal uses `token_issuance_denied` with category `disabled` or
+`read_only_required`. Audit never includes the raw token secret.
+
+Token insertion and the completion audit attempt survive a client disconnect.
+If completion audit fails after insertion, issuance returns the existing
+audit-unavailable error without the one-time secret, while the row remains.
+Never retry issuance automatically: inspect/revoke an unused token before
+deliberately issuing another. The managed and audit stores do not commit atomically.
+
+Runtime denial continues to use existing reason codes:
 `service_action_denied` for service/action/resource caveat rejection,
 `scope_unresolved` when a restricted canonical scope cannot be resolved, and
 `execution_context_denied` for context caveat rejection. A write refused on a
 [read-only identity path](managed-identity.md#read-only-paths) is
 `service_action_denied` with reason `identity access is read-only` and audit
 `identityAccess: {readOnly, requestedService, requestedAction}`; attested
-invocation records carry `identitySource.readOnlyAccess`.
+invocation records carry `identitySource.readOnlyAccess`. A write refused by a
+token's stored ceiling uses `service_action_denied`, message `broker token is
+read-only`, and `brokerToken` audit details with token ID, service, action and
+`readOnly: true`; it does not masquerade as a trusted-path refusal.
 
 Configure the audit store explicitly. The SQLite backend is a standalone
 database that the portal, CLI, and API can query:
@@ -1398,6 +1415,8 @@ Uploaded documents are retained in the database and its backups; URL imports
 continue to fetch only for discovery or manual refresh. Rolling back across
 `032` requires the pre-migration backup, even if no document has been uploaded.
 See [uploaded documents](imported-openapi.md#uploading-and-replacing-a-document).
+The next migration, `033_agent_token_issuance`, requires explicit permission for
+new personal issuance; follow [its upgrade and collision recovery procedure](#agent-token-issuance-upgrade).
 
 Command imports can opt resource types out of exclusions with
 `supportsExclusions: false`. Before deploying a command version that cannot
@@ -1643,6 +1662,75 @@ states and service log events.
   its fifth try about 73 minutes after the first: correct the registration's
   client secret and reload within that time to let the revocations complete.
 
+### Agent token issuance upgrade
+
+Migration `033_agent_token_issuance` follows `032_imported_source_documents`.
+Take the matched pre-upgrade backup described above before attempting it, and
+retain the previous binary. Deploy matching Broker, CLI and portal artifacts:
+agent-token issue and preview bodies now require an explicit Boolean `readOnly`,
+and CLI issuance requires `--read-only true|false` for `agent_invoke`.
+Management token classes reject that flag/field.
+
+Both existing and new accounts default to `agentTokenIssuance = inherit`, and
+managed groups to `disabled`. This disables new personal issuance until an
+administrator explicitly grants permission, including for administrator accounts.
+Roles, self-service and existing tokens remain unchanged. Configure intended
+access after startup, for example:
+
+```bash
+agent-access admin groups update engineering-readers --agent-token-issuance read_only
+agent-access admin principals access set alice --agent-token-issuance inherit
+agent-access admin principals access set automation-owner --agent-token-issuance write_capable
+```
+
+The group example assumes Alice is a current member. An explicit account
+setting overrides every group; otherwise the most permissive active effective
+managed group wins. TOML identity groups do not contribute. See
+[issuance rules](roles.md#agent-token-issuance). Administrative issuance remains
+available under administrator write authority independently of personal mode.
+
+The migration adds `readOnly: false` to existing agent-token scopes objects to
+preserve their behavior, including paused, expired and revoked tokens. It does
+not repair malformed JSON, non-object scopes, missing/invalid contexts, unknown
+members or invalid restrictions. These remain denied. After migration, the
+current parser requires the Boolean; current-schema opens do not rewrite rows.
+
+Before changing any token, the migration scans for an already present top-level
+`readOnly` key. Any unrevoked collision aborts the whole migration, including
+paused or expired tokens, and reports every colliding unrevoked token ID only.
+A previously unsupported key must not become valid authority through the upgrade.
+Already irrevocably revoked colliding rows remain byte-for-byte unchanged and
+unusable. The migration never automatically repairs, revokes or deletes them.
+
+For a collision failure:
+
+1. Preserve failed startup evidence and the original store. Stop the failed new
+   process. SQL, seed work, validation and ledger advancement have rolled back;
+   the original store is unchanged at schema 032.
+2. Start the previous binary against that unchanged store using its matching
+   configuration. If the original store is suspect, restore the matched
+   pre-upgrade backup first. Keep agent traffic drained during recovery.
+3. Using administrator credentials and the previous CLI, revoke every reported
+   ID; no owner lookup or direct database edit is needed:
+
+   ```bash
+   /path/to/previous/agent-access --config /secure/operator.toml \
+     admin tokens revoke <token_id>
+   ```
+
+   The equivalent authenticated HTTP operation is
+   `DELETE /v1/admin/tokens/{token_id}`. Revocation is permanent; do not attempt
+   to alter the unsupported scopes or enable the token.
+4. Stop the previous process, take a fresh matched pre-upgrade backup, then
+   retry startup with the new binary and temporary `auto_migrate = true`.
+   Irrevocably revoked collisions are preserved and no longer block migration.
+5. Complete the usual readiness and access checks and restore `auto_migrate = false`.
+
+After a successful migration the older binary refuses the newer schema.
+Rollback requires the matching pre-upgrade database backup and binary; never
+lower the ledger version in place.
+
+
 ## Common failures
 
 A rate refusal includes the limiting wait/body/operation budget and projected
@@ -1686,6 +1774,8 @@ thresholds; raising invocation limits does not raise login budgets.
 | `audit_query_timeout` | The audit query exceeded its 5-second budget. Narrow the time range or filters. |
 | `input_invalid` with `cursor is invalid or stale` | The cursor belongs to another route, caller, or audit database (for example after `audit.path` changed). Repeat the query without `--cursor`. |
 | `broker_token_not_found` | Confirm the caller is using the raw token shown at issuance time and that the hash key has not changed. |
+| `token_issuance_denied` | Personal issuance is Disabled or requires Read-only. Check `details.category` and the account/group setting; existing tokens are unchanged. Administrative issuance uses its separate authority. |
+| `service_action_denied` with `broker token is read-only` | The token's stored ceiling blocks this write. Changing issuance permission cannot change the token; an authorized owner or administrator must deliberately issue a replacement if writes are needed. |
 | `broker_token_class_denied` | Use a token class allowed for the operation: `admin`, `user_manage`, or `agent_invoke`. |
 | `caller_authentication_required` / `caller_authentication_invalid` | Configure the attesting service as a named trusted caller and verify its injected credential matches Broker's loaded secret. Protected context/fingerprint headers always require valid caller authentication. |
 | `identity_assertion_invalid` / `identity_assertion_unsupported` | Check exact username/bearer fields, competing identity carriers, protected Connection/trailer fields, and that the request targets HTTP MCP. Never send the user header on REST, browser, management or Git routes. |

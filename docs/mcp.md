@@ -298,9 +298,9 @@ and [administrator bindings](managed-identity.md#username-bindings).
 
 ## Read-only identity connections
 
-An administrator can make a username binding or a human's identity token
-[read-only](managed-identity.md#read-only-paths). A connection admitted through a
-read-only path lists and executes only actions the current runtime catalog
+An issued agent token with stored `readOnly: true`, or a username binding or
+human identity token made [read-only](managed-identity.md#read-only-paths),
+limits its connection to reads. Either connection lists and executes only actions the current runtime catalog
 classifies as reads. Its grants still decide which of those reads it has, and a
 permitted read selects the same grant as on a full-access path.
 
@@ -323,7 +323,12 @@ command action") or before dispatch ("imported service changed or is
 unavailable; repeat discovery"). Local stdio behind fingerprint-aware ingress
 sees the same filtered catalog through REST, where a write call returns 403
 `service_action_denied` with reason `identity access is read-only`. Read-only
-paths do not restrict local output files.
+paths and tokens do not restrict local output files. For an issued token, REST
+uses message `broker token is read-only`; identity summaries report
+`brokerToken.readOnly` independently of path-only `readOnlyAccess`. Permission
+to issue new tokens never changes an existing token or requires its MCP session
+to reconnect. A read-only token that follows current grants can gain later reads
+while continuing to block writes.
 
 ## Trusted identity and session lifetime
 

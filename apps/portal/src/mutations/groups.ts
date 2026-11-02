@@ -8,12 +8,12 @@ import { paths } from "../app/paths";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
 import { usePortalInvalidation } from "../data/invalidation";
-import type { GroupRecord } from "../types";
+import type { AgentTokenIssuanceMode, GroupRecord } from "../types";
 
-export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean };
-export type NewGroup = { groupId: string; displayName: string; description: string; autoEnrollNewMicrosoftUsers: boolean };
+export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: AgentTokenIssuanceMode };
+export type NewGroup = { groupId: string; displayName: string; description: string; autoEnrollNewMicrosoftUsers: boolean; agentTokenIssuance: AgentTokenIssuanceMode };
 
-export function groupProfilePatch(group: Pick<GroupRecord, "displayName" | "description" | "autoEnrollNewMicrosoftUsers">, draft: Omit<NewGroup, "groupId">): GroupPatch {
+export function groupProfilePatch(group: Pick<GroupRecord, "displayName" | "description" | "autoEnrollNewMicrosoftUsers">, draft: Omit<NewGroup, "groupId" | "agentTokenIssuance">): GroupPatch {
   const patch: GroupPatch = {};
   if (draft.displayName !== (group.displayName ?? "")) patch.displayName = draft.displayName || null;
   if (draft.description !== (group.description ?? "")) patch.description = draft.description || null;
@@ -33,6 +33,7 @@ export function useGroupActions() {
       invalidate.oauthConnections();
       invalidate.admin();
       invalidate.agentTokenOptions();
+      void invalidate.session();
     }
 
     async function create(input: NewGroup) {
@@ -42,7 +43,8 @@ export function useGroupActions() {
           groupId,
           displayName: input.displayName.trim() || undefined,
           description: input.description.trim() || undefined,
-          autoEnrollNewMicrosoftUsers: input.autoEnrollNewMicrosoftUsers
+          autoEnrollNewMicrosoftUsers: input.autoEnrollNewMicrosoftUsers,
+          agentTokenIssuance: input.agentTokenIssuance
         })
       );
       toast("Group created", { tone: "success" });

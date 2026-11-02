@@ -484,6 +484,7 @@ fn seed_admin_and_alice(directory: &FixtureDir, key: &Path) -> String {
     for principal in ["admin", "alice"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -497,6 +498,7 @@ fn seed_admin_and_alice(directory: &FixtureDir, key: &Path) -> String {
     }
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "admin".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,

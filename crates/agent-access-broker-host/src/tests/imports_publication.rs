@@ -113,7 +113,7 @@ async fn imported_prepared_transport_rotation_publishes_new_authority_without_st
                 principal_id: "alice".into(),
                 name: "transport publication".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedServices":["observability","transported"],"allowedExecutionContexts":["default"]}),
+                scopes: json!({"allowedServices":["observability","transported"],"readOnly": false, "allowedExecutionContexts":["default"]}),
                 expires_at: None,
                 created_by: "admin".into(),
             },

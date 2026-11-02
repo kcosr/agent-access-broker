@@ -101,7 +101,7 @@ export function useAccessList(subject: AccountSubject) {
   const types = useResourceTypes();
   const data = useConsoleData(subject);
   const options = useAgentTokenOptions(subject);
-  const tokenActions = useAgentTokenActions(subject, options.options);
+  const tokenActions = useAgentTokenActions(subject, options.options, options.query.isError);
   const contexts = options.options?.executionContexts ?? [];
   // Services with granted actions, named from the token options (not agent discovery).
   const services = useMemo<ServiceSummary[]>(() => {

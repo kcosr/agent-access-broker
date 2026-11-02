@@ -439,7 +439,7 @@ async fn resource_policy_api_rejects_retired_scopes_and_invalid_selector_shapes(
     assert_eq!(grant.status(), StatusCode::BAD_REQUEST);
     let token = catalog_request(&fixture.app, &fixture.admin_token, Method::POST,
         "/v1/admin/principals/admin/agent-tokens", "catalog-retired-token-scopes",
-        Some(json!({"name":"retired scopes","allowedServices":["fake"],"allowedExecutionContexts":["default"],
+        Some(json!({"name":"retired scopes","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["default"],
             "serviceRestrictions":{"fake":{"actions":["echo"],"resourceScopes":{"project":["TEST"]}}},"never":true}))).await;
     assert_eq!(token.status(), StatusCode::BAD_REQUEST);
 }
@@ -753,6 +753,7 @@ async fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixtur
         .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),

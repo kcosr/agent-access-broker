@@ -97,7 +97,7 @@ fn attested(base: &IdentityContext, read_only: bool) -> IdentityContext {
             namespace: None,
             binding_id: None,
             read_only_access: Some(read_only),
-            token_scopes: Some(json!({"allowedExecutionContexts": ["default"]})),
+            token_scopes: Some(json!({"readOnly": false, "allowedExecutionContexts": ["default"]})),
         }),
         ..base.clone()
     }

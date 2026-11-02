@@ -13,7 +13,7 @@ const methods = (localPassword: string, microsoft = "active") => ({ localPasswor
 const principal = (id: string, localPassword: string, microsoft = "active") => ({ role: "user", selfServiceEnabled: true,
   principalId: id, kind: "user", displayName: id, status: "active", groups: [],
   createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin",
-  signInMethods: methods(localPassword, microsoft), groupMemberships: [], activePolicyGroupSubjects: [], policyReferenceSections: []
+  signInMethods: methods(localPassword, microsoft), agentTokenIssuance: "inherit", agentTokenIssuancePolicy: { mode: "disabled", source: "default", groupIds: [] }, groupMemberships: [], activePolicyGroupSubjects: [], policyReferenceSections: []
 });
 
 // These tests exercise the browser against explicit API contracts; no provider or broker process is required.

@@ -630,7 +630,7 @@ impl BrokerRuntime {
             namespace: resolved.proof.namespace().map(str::to_owned),
             binding_id: resolved.proof.binding_id().map(str::to_owned),
             read_only_access: Some(resolved.read_only()),
-            token_scopes: Some(json!({"allowedExecutionContexts":contexts})),
+            token_scopes: Some(json!({"allowedExecutionContexts":contexts,"readOnly":false})),
         };
         let principal_kind = resolved.principal.principal_kind();
         let mut identity = self.identity_from_principal_groups(

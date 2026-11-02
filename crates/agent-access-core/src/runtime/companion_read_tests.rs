@@ -214,6 +214,7 @@ fn token() -> ParsedAgentInvokeTokenCaveats<'static> {
         token_id: None,
         read_only_access: false,
         caveats: AgentInvokeTokenCaveats {
+            read_only: false,
             allowed_services: Some(vec![SERVICE.into()]),
             allowed_execution_contexts: Some(vec![context()]),
             service_restrictions: Some(BTreeMap::from([(

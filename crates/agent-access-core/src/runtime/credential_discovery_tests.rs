@@ -389,6 +389,7 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
     let store = runtime.managed_store().unwrap();
     store
         .create_or_update_principal(crate::PrincipalWriteRequest {
+            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
             role: crate::PrincipalRole::User,
             self_service_enabled: Some(false),
             principal_id: "agent-one".into(),
@@ -508,7 +509,7 @@ async fn native_input_denials_before_policy_follow_caller_discovery() {
 
     let restricted = shell_token_identity(json!({
         "allowedServices": ["jira"],
-        "allowedExecutionContexts": ["default"],
+        "readOnly": false, "allowedExecutionContexts": ["default"],
         "serviceRestrictions": {"jira": {
             "actions": ["issue.view"],
             "resources": {"resourceIds": ["project-OTHER"]}

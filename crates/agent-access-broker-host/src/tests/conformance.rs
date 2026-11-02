@@ -1392,6 +1392,7 @@ async fn managed_conformance() -> ManagedConformance {
     for principal in ["admin", "alice"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -1405,6 +1406,7 @@ async fn managed_conformance() -> ManagedConformance {
     }
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -1437,7 +1439,7 @@ async fn managed_conformance() -> ManagedConformance {
     let agent_token = issue(
         "alice",
         agent_access_core::BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts": ["default"]}),
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     ManagedConformance {
         dir,

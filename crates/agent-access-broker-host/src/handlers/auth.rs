@@ -209,7 +209,10 @@ pub(crate) async fn auth_session(
     };
     match pending.admit(&state, &snapshot, &headers).await {
         Ok(cookie_identity) => {
-            let result = session_result(&snapshot, &cookie_identity).await;
+            let result = match session_result(&snapshot, &cookie_identity).await {
+                Ok(result) => result,
+                Err(error) => return session_policy_error_response(response_context, error).await,
+            };
             auth_success_response(
                 response_context,
                 Some(cookie_identity.identity.principal.clone()),
@@ -411,7 +414,7 @@ pub(crate) async fn auth_local_login(
     let return_to = sanitize_return_to(snapshot.runtime.config(), body.return_to.as_deref());
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(&snapshot, &identity).await;
-    let result = browser_session_result(
+    let result = match browser_session_result(
         &snapshot,
         BrowserSessionResultFields {
             sign_in_methods: &verified.sign_in_methods,
@@ -427,7 +430,12 @@ pub(crate) async fn auth_local_login(
             policy_management_services: &policy_management_services,
             return_to: Some(return_to),
         },
-    );
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => return session_policy_error_response(response_context, error).await,
+    };
     let mut response = auth_success_response(
         response_context,
         Some(identity.principal.clone()),
@@ -644,7 +652,10 @@ pub(crate) async fn auth_password_change(
     let Some(issued) = changed.replacement_session else {
         // Keep the OIDC cookie and session provenance. Local password writes only
         // revoke local sessions; do not silently exchange the Microsoft session.
-        let result = session_result(&snapshot, &cookie_identity).await;
+        let result = match session_result(&snapshot, &cookie_identity).await {
+            Ok(result) => result,
+            Err(error) => return session_policy_error_response(response_context, error).await,
+        };
         return auth_committed_success_response(
             response_context,
             Some(principal_id),
@@ -664,7 +675,7 @@ pub(crate) async fn auth_password_change(
     );
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(&snapshot, &identity).await;
-    let result = browser_session_result(
+    let result = match browser_session_result(
         &snapshot,
         BrowserSessionResultFields {
             sign_in_methods: &verified.sign_in_methods,
@@ -680,7 +691,12 @@ pub(crate) async fn auth_password_change(
             policy_management_services: &policy_management_services,
             return_to: None,
         },
-    );
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => return session_policy_error_response(response_context, error).await,
+    };
     let mut response = auth_committed_success_response(
         response_context,
         Some(identity.principal.clone()),
@@ -1138,15 +1154,29 @@ fn cookie_identity_from_session(
     )
 }
 
-fn browser_session_result(
+async fn browser_session_result(
     snapshot: &RuntimeSnapshot,
     fields: BrowserSessionResultFields<'_>,
-) -> Value {
+) -> Result<Value, ManagedStoreError> {
     let csrf_token = snapshot
         .runtime
         .browser_csrf_key()
         .and_then(|key| key.token_for_session(fields.token_id).ok());
     let is_admin = fields.role == PrincipalRole::Admin;
+    let access = if snapshot.runtime.config().broker_tokens.is_some() {
+        let principal = fields.identity.principal.clone();
+        let authority =
+            super::management::common::agent_token_issuance_authority(snapshot.runtime.config());
+        Some(
+            snapshot
+                .managed_store_call(move |store| {
+                    store.agent_token_issuance_policy(&principal, authority)
+                })
+                .await?,
+        )
+    } else {
+        None
+    };
     let mut result = json!({
         "authenticated": true,
         "principal": &fields.identity.principal,
@@ -1164,7 +1194,7 @@ fn browser_session_result(
         "passwordChangeRequired": fields.password_change_required,
         "csrfHeader": &snapshot.runtime.config().browser_auth.csrf_header,
         "csrfToken": csrf_token,
-        "tokenIssuancePolicy": token_issuance_policy(snapshot.runtime.config(), is_admin),
+        "tokenIssuancePolicy": token_issuance_policy(snapshot.runtime.config(), is_admin, access.as_ref()),
         "auditQueryable": crate::handlers::spec::route_feature_available(
             snapshot,
             agent_access_core::RouteFeature::AuditQuery,
@@ -1173,10 +1203,14 @@ fn browser_session_result(
     if let Some(return_to) = fields.return_to {
         result["returnTo"] = json!(return_to);
     }
-    result
+    Ok(result)
 }
 
-fn token_issuance_policy(config: &BrokerConfig, is_admin: bool) -> Value {
+fn token_issuance_policy(
+    config: &BrokerConfig,
+    is_admin: bool,
+    access: Option<&agent_access_core::AgentTokenIssuancePolicy>,
+) -> Value {
     let Some(tokens) = config.broker_tokens.as_ref() else {
         return json!({});
     };
@@ -1195,6 +1229,7 @@ fn token_issuance_policy(config: &BrokerConfig, is_admin: bool) -> Value {
     );
     let mut policy = json!({
         "selfAgentInvoke": {
+            "access": access,
             "defaultTtl": self_default_ttl,
             "maxTtl": self_max_ttl,
             "options": tokens.self_agent_invoke_ttl_options.iter().map(|option| option.as_str()).collect::<Vec<_>>(),
@@ -1225,7 +1260,7 @@ fn token_issuance_policy(config: &BrokerConfig, is_admin: bool) -> Value {
 async fn session_result(
     snapshot: &RuntimeSnapshot,
     cookie_identity: &BrowserCookieIdentity,
-) -> Value {
+) -> Result<Value, ManagedStoreError> {
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(snapshot, &cookie_identity.identity).await;
     browser_session_result(
@@ -1245,6 +1280,22 @@ async fn session_result(
             return_to: None,
         },
     )
+    .await
+}
+
+async fn session_policy_error_response(
+    context: AuthResponseContext<'_>,
+    error: ManagedStoreError,
+) -> Response {
+    let reason = error.reason_code();
+    auth_error_response(
+        context,
+        None,
+        StatusCode::from_u16(reason.http_status()).unwrap_or(StatusCode::SERVICE_UNAVAILABLE),
+        reason,
+        "session access policy is unavailable",
+    )
+    .await
 }
 
 async fn session_management_access(
@@ -1921,4 +1972,55 @@ fn auth_response(status: StatusCode, envelope: AuthEnvelope) -> Response {
             .insert(axum::http::header::RETRY_AFTER, retry_after);
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_access_core::{
+        AgentTokenIssuanceMode, AgentTokenIssuancePolicy, AgentTokenIssuanceSource,
+    };
+
+    #[test]
+    fn session_token_policy_preserves_ttl_and_omits_all_policy_when_tokens_unconfigured() {
+        let mut config = agent_access_core::parse_broker_config_raw(
+            "session-policy-test.toml",
+            r#"
+[identity]
+mode = "required"
+authority = "toml"
+[policy]
+authority = "toml"
+default_decision = "deny"
+[broker_tokens]
+hash_key_ref = "env:UNUSED_SESSION_POLICY_TEST_KEY"
+default_agent_invoke_ttl = "8h"
+max_self_issued_agent_invoke_ttl = "1d"
+self_agent_invoke_ttl_options = ["8h", "1d"]
+[limits]
+upload_spool_dir = "upload-spool"
+"#,
+            &Arc::new(crate::backend_registry()),
+        )
+        .unwrap();
+        let access = AgentTokenIssuancePolicy {
+            mode: AgentTokenIssuanceMode::ReadOnly,
+            source: AgentTokenIssuanceSource::Groups,
+            group_ids: vec!["readers".into()],
+        };
+        let policy = token_issuance_policy(&config, false, Some(&access));
+        assert_eq!(
+            policy,
+            json!({"selfAgentInvoke":{
+                "defaultTtl":"8h", "maxTtl":"1d", "options":["8h","1d"],
+                "access":{"mode":"read_only","source":"groups","groupIds":["readers"]},
+            }})
+        );
+        let admin = token_issuance_policy(&config, true, Some(&access));
+        assert_eq!(admin["selfAgentInvoke"], policy["selfAgentInvoke"]);
+        assert!(admin["administered"].is_object());
+        config.broker_tokens = None;
+        assert_eq!(token_issuance_policy(&config, true, None), json!({}));
+        assert_eq!(token_issuance_policy(&config, false, None), json!({}));
+    }
 }

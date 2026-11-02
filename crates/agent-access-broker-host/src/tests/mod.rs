@@ -107,6 +107,8 @@ mod resource_management;
 mod security_snapshot;
 mod service_limits;
 mod state_lock_lifetime;
+mod token_issuance_owner;
+mod token_issuance_policy;
 mod trusted_user_mcp;
 
 fn resource_id(scope: &str, value: &str) -> String {
@@ -5227,7 +5229,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "token-issue-bob-no-invocation-grant",
         "Authorization",
         format!("Bearer {}", fixture.bob_user_token),
-        Some(r#"{"name":"dormant","allowedExecutionContexts":["external"]}"#),
+        Some(r#"{"name":"dormant","readOnly": false, "allowedExecutionContexts":["external"]}"#),
     )
     .await;
     assert_eq!(
@@ -5290,32 +5292,32 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
     for (request_id, body, expected_message) in [
         (
             "self-context-missing",
-            r#"{"name":"missing"}"#,
+            r#"{"name":"missing","readOnly":false}"#,
             "missing field `allowedExecutionContexts`",
         ),
         (
             "self-context-zero",
-            r#"{"name":"zero","allowedExecutionContexts":[]}"#,
+            r#"{"name":"zero","readOnly": false, "allowedExecutionContexts":[]}"#,
             "allowedExecutionContexts must not be empty",
         ),
         (
             "self-context-duplicate",
-            r#"{"name":"duplicate","allowedExecutionContexts":["external","external"]}"#,
+            r#"{"name":"duplicate","readOnly": false, "allowedExecutionContexts":["external","external"]}"#,
             "allowedExecutionContexts contains duplicate context external",
         ),
         (
             "self-context-unavailable",
-            r#"{"name":"unknown","allowedExecutionContexts":["workstation"]}"#,
+            r#"{"name":"unknown","readOnly": false, "allowedExecutionContexts":["workstation"]}"#,
             "allowedExecutionContexts context is not available to the principal: workstation",
         ),
         (
             "self-context-unconfigured",
-            r#"{"name":"unknown","allowedExecutionContexts":["retired"]}"#,
+            r#"{"name":"unknown","readOnly": false, "allowedExecutionContexts":["retired"]}"#,
             "allowedExecutionContexts references unconfigured context retired",
         ),
         (
             "self-device-name-removed",
-            r#"{"name":"legacy","deviceName":"workstation","allowedExecutionContexts":["external"]}"#,
+            r#"{"name":"legacy","deviceName":"workstation","readOnly": false, "allowedExecutionContexts":["external"]}"#,
             "unknown field `deviceName`",
         ),
     ] {
@@ -5347,7 +5349,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "self-context-multiple",
         "Authorization",
         format!("Bearer {}", fixture.alice_user_token),
-        Some(r#"{"name":"multiple","allowedExecutionContexts":["internal","external"]}"#),
+        Some(r#"{"name":"multiple","readOnly": false, "allowedExecutionContexts":["internal","external"]}"#),
     )
     .await;
     assert_eq!(self_multiple.status(), StatusCode::OK);
@@ -5373,7 +5375,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "Authorization",
         format!("Bearer {}", fixture.alice_user_token),
         Some(
-            r#"{"name":"finite","allowedServices":["fake"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}}}"#,
+            r#"{"name":"finite","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}}}"#,
         ),
     )
     .await;
@@ -5402,7 +5404,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "Authorization",
         format!("Bearer {}", fixture.alice_user_token),
         Some(
-            r#"{"name":"group subset","allowedServices":["fake"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-ops"],"resourceGroupIds":[]}}}}"#,
+            r#"{"name":"group subset","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-ops"],"resourceGroupIds":[]}}}}"#,
         ),
     )
     .await;
@@ -5411,7 +5413,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
     let ineffective = authed_json_request(
         fixture.app.clone(), Method::POST, "/v1/tokens", "self-restriction-currently-empty",
         "Authorization", format!("Bearer {}", fixture.alice_user_token),
-        Some(r#"{"name":"currently empty","allowedServices":["fake"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-ops"],"resourceGroupIds":[]}}}}"#),
+        Some(r#"{"name":"currently empty","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-ops"],"resourceGroupIds":[]}}}}"#),
     ).await;
     assert_eq!(ineffective.status(), StatusCode::OK);
     let ineffective = response_json(ineffective).await;
@@ -5431,17 +5433,17 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
     for (request_id, body, expected_message) in [
         (
             "self-restriction-unavailable-action",
-            r#"{"name":"unavailable action","allowedServices":["fake"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["missing"]}}}"#,
+            r#"{"name":"unavailable action","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["missing"]}}}"#,
             "action is not available to the principal",
         ),
         (
             "self-restriction-unknown-resource",
-            r#"{"name":"unknown resource","allowedServices":["fake"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["issue-test-1"],"resourceGroupIds":[]}}}}"#,
+            r#"{"name":"unknown resource","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["issue-test-1"],"resourceGroupIds":[]}}}}"#,
             "resource is not available to the principal",
         ),
         (
             "self-restriction-service-not-selected",
-            r#"{"name":"service not selected","allowedServices":["fake"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"jira":{"actions":["issue.view"]}}}"#,
+            r#"{"name":"service not selected","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"jira":{"actions":["issue.view"]}}}"#,
             "is not present in allowedServices",
         ),
     ] {
@@ -5469,15 +5471,15 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
     for (request_id, body) in [
         (
             "admin-specialized-zero",
-            r#"{"name":"zero","allowedExecutionContexts":[]}"#,
+            r#"{"name":"zero","readOnly": false, "allowedExecutionContexts":[]}"#,
         ),
         (
             "admin-specialized-ineffective",
-            r#"{"name":"ineffective","allowedExecutionContexts":["workstation"]}"#,
+            r#"{"name":"ineffective","readOnly": false, "allowedExecutionContexts":["workstation"]}"#,
         ),
         (
             "admin-specialized-device-name-removed",
-            r#"{"name":"legacy","allowedExecutionContexts":["external"],"deviceName":"workstation"}"#,
+            r#"{"name":"legacy","readOnly": false, "allowedExecutionContexts":["external"],"deviceName":"workstation"}"#,
         ),
     ] {
         let response = authed_json_request(
@@ -5501,7 +5503,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "Authorization",
         format!("Bearer {}", fixture.admin_token),
         Some(
-            r#"{"name":"specialized","allowedServices":["fake"],"allowedExecutionContexts":["external","internal"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}},"never":true}"#,
+            r#"{"name":"specialized","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external","internal"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}},"never":true}"#,
         ),
     )
     .await;
@@ -5512,7 +5514,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         specialized["result"]["record"]["scopes"],
         json!({
             "allowedServices": ["fake"],
-            "allowedExecutionContexts": ["external", "internal"],
+            "readOnly": false, "allowedExecutionContexts": ["external", "internal"],
             "serviceRestrictions": {
                 "fake": {
                     "actions": ["echo"],
@@ -5546,7 +5548,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "Authorization",
         format!("Bearer {}", fixture.admin_token),
         Some(
-            r#"{"name":"legacy","tokenClass":"agent_invoke","never":true,"deviceName":"workstation","scopes":{"allowedExecutionContexts":["external"]}}"#,
+            r#"{"name":"legacy","tokenClass":"agent_invoke","never":true,"deviceName":"workstation","scopes":{"readOnly": false, "allowedExecutionContexts":["external"]}}"#,
         ),
     )
     .await;
@@ -5562,7 +5564,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "Authorization",
         format!("Bearer {}", fixture.admin_token),
         Some(
-            r#"{"name":"generic","tokenClass":"agent_invoke","never":true,"scopes":{"allowedServices":["fake"],"allowedExecutionContexts":["external","internal"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}}}}"#,
+            r#"{"name":"generic","tokenClass":"agent_invoke","never":true,"scopes":{"allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external","internal"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}}}}"#,
         ),
     )
     .await;
@@ -5605,7 +5607,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
         "Authorization",
         format!("Bearer {}", fixture.admin_token),
         Some(
-            r#"{"name":"service account","allowedServices":["fake"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-svc"],"resourceGroupIds":[]}}},"never":true}"#,
+            r#"{"name":"service account","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-svc"],"resourceGroupIds":[]}}},"never":true}"#,
         ),
     )
     .await;
@@ -5754,7 +5756,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
             .iter()
             .find(|record| record["name"] == "stale agent")
             .unwrap()["scopes"],
-        json!({"allowedExecutionContexts": ["retired"]})
+        json!({"readOnly": false, "allowedExecutionContexts": ["retired"]})
     );
     assert_eq!(
         records
@@ -5763,7 +5765,7 @@ async fn token_context_options_issuance_projection_and_fail_closed_http_contract
             .unwrap()["scopes"],
         json!({
             "allowedServices": ["fake"],
-            "allowedExecutionContexts": ["internal"],
+            "readOnly": false, "allowedExecutionContexts": ["internal"],
             "serviceRestrictions": {
                 "fake": {"actions": "echo"}
             }
@@ -5976,7 +5978,7 @@ async fn managed_policy_changes_remain_authoritative_over_immutable_token_bounda
         "Authorization",
         authorization.clone(),
         Some(
-            r#"{"name":"finite ENG","allowedServices":["fake"],"allowedExecutionContexts":["default"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-eng"],"resourceGroupIds":[]}}},"never":true}"#,
+            r#"{"name":"finite ENG","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["default"],"serviceRestrictions":{"fake":{"actions":["echo"],"resources":{"resourceIds":["project-eng"],"resourceGroupIds":[]}}},"never":true}"#,
         ),
     )
     .await;
@@ -5994,7 +5996,7 @@ async fn managed_policy_changes_remain_authoritative_over_immutable_token_bounda
         "Authorization",
         authorization.clone(),
         Some(
-            r#"{"name":"policy-following resources","allowedServices":["fake"],"allowedExecutionContexts":["default"],"serviceRestrictions":{"fake":{"actions":["echo"]}},"never":true}"#,
+            r#"{"name":"policy-following resources","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["default"],"serviceRestrictions":{"fake":{"actions":["echo"]}},"never":true}"#,
         ),
     )
     .await;
@@ -6284,6 +6286,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     .unwrap();
     managed_store
         .create_group(agent_access_core::GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "users".to_string(),
             display_name: Some("Users".to_string()),
             description: Some("Policy users".to_string()),
@@ -6363,7 +6366,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(admin_login_body["result"]["passwordChangeRequired"], true);
     assert_eq!(
         admin_login_body["result"]["tokenIssuancePolicy"]["selfAgentInvoke"],
-        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"]})
+        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"],"access":{"mode":"disabled","source":"default","groupIds":[]}})
     );
     assert_eq!(
         admin_login_body["result"]["tokenIssuancePolicy"]["administered"],
@@ -6761,7 +6764,9 @@ async fn managed_store_admin_and_user_token_smoke() {
                 .header(REQUEST_ID_HEADER, "managed-create-alice")
                 .header("Authorization", &admin_authorization)
                 .header("Content-Type", "application/json")
-                .body(Body::from(r#"{"principalId":"alice","kind":"user"}"#))
+                .body(Body::from(
+                    r#"{"principalId":"alice","kind":"user","agentTokenIssuance":"write_capable"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -7057,7 +7062,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "managed-admin-issue-persistent-agent",
         "Authorization",
         admin_authorization.clone(),
-        Some(r#"{"name":"persistent agent","never":true,"allowedExecutionContexts":["default"]}"#),
+        Some(r#"{"name":"persistent agent","never":true,"readOnly": false, "allowedExecutionContexts":["default"]}"#),
     )
     .await;
     assert_eq!(persistent_agent.status(), StatusCode::OK);
@@ -7151,7 +7156,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(login_body["result"]["passwordChangeRequired"], true);
     assert_eq!(
         login_body["result"]["tokenIssuancePolicy"]["selfAgentInvoke"],
-        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"]})
+        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"],"access":{"mode":"write_capable","source":"user","groupIds":[]}})
     );
     assert!(
         login_body["result"]["tokenIssuancePolicy"]
@@ -7200,7 +7205,7 @@ async fn managed_store_admin_and_user_token_smoke() {
                 .header("X-Agent-Access-CSRF", &initial_csrf_token)
                 .header("Content-Type", "application/json")
                 .body(Body::from(
-                    r#"{"name":"browser-token","allowedExecutionContexts":["default"]}"#,
+                    r#"{"name":"browser-token","readOnly": false, "allowedExecutionContexts":["default"]}"#,
                 ))
                 .unwrap(),
         )
@@ -7538,7 +7543,7 @@ async fn managed_store_admin_and_user_token_smoke() {
                 .header("Cookie", &changed_session_cookie)
                 .header("Content-Type", "application/json")
                 .body(Body::from(
-                    r#"{"name":"browser-token","allowedExecutionContexts":["default"]}"#,
+                    r#"{"name":"browser-token","readOnly": false, "allowedExecutionContexts":["default"]}"#,
                 ))
                 .unwrap(),
         )
@@ -7564,7 +7569,7 @@ async fn managed_store_admin_and_user_token_smoke() {
                 .header("X-Agent-Access-CSRF", &csrf_token)
                 .header("Content-Type", "application/json")
                 .body(Body::from(
-                    r#"{"name":"browser-token","allowedExecutionContexts":["default"]}"#,
+                    r#"{"name":"browser-token","readOnly": false, "allowedExecutionContexts":["default"]}"#,
                 ))
                 .unwrap(),
         )
@@ -8185,7 +8190,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "managed-self-issue-agent-token",
         "Authorization",
         format!("Bearer {raw_token}"),
-        Some(r#"{"name":"alice self invoke","ttl":"30d","allowedServices":["fake"],"allowedExecutionContexts":["default"]}"#),
+        Some(r#"{"name":"alice self invoke","ttl":"30d","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["default"]}"#),
     )
     .await;
     assert_eq!(self_issue_token.status(), StatusCode::OK);
@@ -8229,7 +8234,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "managed-self-issue-unknown-service",
         "Authorization",
         format!("Bearer {raw_token}"),
-        Some(r#"{"name":"bad service","allowedServices":["missing"],"allowedExecutionContexts":["default"]}"#),
+        Some(r#"{"name":"bad service","allowedServices":["missing"],"readOnly": false, "allowedExecutionContexts":["default"]}"#),
     )
     .await;
     assert_eq!(self_issue_unknown_service.status(), StatusCode::BAD_REQUEST);
@@ -8241,23 +8246,23 @@ async fn managed_store_admin_and_user_token_smoke() {
     for (request_id, body) in [
         (
             "managed-self-issue-zero-ttl",
-            r#"{"name":"bad ttl","ttl":"0d","allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad ttl","ttl":"0d","readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-both-expiry-inputs",
-            r#"{"name":"bad ttl","ttl":"1d","expiresAt":"2999-01-01T00:00:00Z","allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad ttl","ttl":"1d","expiresAt":"2999-01-01T00:00:00Z","readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-past-expiry",
-            r#"{"name":"bad expiry","expiresAt":"2000-01-01T00:00:00Z","allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad expiry","expiresAt":"2000-01-01T00:00:00Z","readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-never",
-            r#"{"name":"bad never","never":true,"allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad never","never":true,"readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-expiry-beyond-max",
-            r#"{"name":"bad max","expiresAt":"2999-01-01T00:00:00Z","allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad max","expiresAt":"2999-01-01T00:00:00Z","readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-smuggled-principal",
@@ -8265,7 +8270,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         ),
         (
             "managed-self-issue-smuggled-scopes",
-            r#"{"name":"bad","scopes":{"allowedServices":["fake"]},"allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad","scopes":{"allowedServices":["fake"]},"readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-unknown-field",
@@ -8273,19 +8278,19 @@ async fn managed_store_admin_and_user_token_smoke() {
         ),
         (
             "managed-self-issue-empty-services",
-            r#"{"name":"bad","allowedServices":[],"allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad","allowedServices":[],"readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-duplicate-services",
-            r#"{"name":"bad","allowedServices":["fake","fake"],"allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad","allowedServices":["fake","fake"],"readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-non-array-services",
-            r#"{"name":"bad","allowedServices":"fake","allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad","allowedServices":"fake","readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
         (
             "managed-self-issue-non-string-service",
-            r#"{"name":"bad","allowedServices":["fake",5],"allowedExecutionContexts":["default"]}"#,
+            r#"{"name":"bad","allowedServices":["fake",5],"readOnly": false, "allowedExecutionContexts":["default"]}"#,
         ),
     ] {
         let response = authed_json_request(
@@ -8583,7 +8588,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "managed-self-issue-gitlab-only",
         "Authorization",
         format!("Bearer {raw_token}"),
-        Some(r#"{"name":"gitlab only","allowedServices":["gitlab"],"allowedExecutionContexts":["default"]}"#),
+        Some(r#"{"name":"gitlab only","allowedServices":["gitlab"],"readOnly": false, "allowedExecutionContexts":["default"]}"#),
     )
     .await;
     assert_eq!(self_issue_gitlab_only.status(), StatusCode::OK);
@@ -8614,7 +8619,9 @@ async fn managed_store_admin_and_user_token_smoke() {
         "managed-self-issue-unrestricted",
         "Authorization",
         format!("Bearer {raw_token}"),
-        Some(r#"{"name":"unrestricted","allowedExecutionContexts":["default"]}"#),
+        Some(
+            r#"{"name":"unrestricted","readOnly": false, "allowedExecutionContexts":["default"]}"#,
+        ),
     )
     .await;
     assert_eq!(self_issue_unrestricted.status(), StatusCode::OK);
@@ -8626,7 +8633,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert!(unrestricted_issued["result"]["record"]["expiresAt"].is_string());
     assert_eq!(
         unrestricted_issued["result"]["record"]["scopes"],
-        json!({"allowedExecutionContexts": ["default"]})
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"]})
     );
     let unrestricted_token = unrestricted_issued["result"]["token"]
         .as_str()
@@ -8903,7 +8910,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "managed-issue-agent-token",
         "Authorization",
         admin_authorization.clone(),
-        Some(r#"{"name":"alice invoke","tokenClass":"agent_invoke","scopes":{"allowedExecutionContexts":["default"]},"never":true}"#),
+        Some(r#"{"name":"alice invoke","tokenClass":"agent_invoke","scopes":{"readOnly": false, "allowedExecutionContexts":["default"]},"never":true}"#),
     )
     .await;
     assert_eq!(agent_token_issue.status(), StatusCode::OK);
@@ -8921,7 +8928,7 @@ async fn managed_store_admin_and_user_token_smoke() {
         "Authorization",
         admin_authorization.clone(),
         Some(
-            r#"{"name":"bad scope","tokenClass":"agent_invoke","scopes":{"allowedServices":[],"allowedExecutionContexts":["default"]},"ttl":"8h"}"#,
+            r#"{"name":"bad scope","tokenClass":"agent_invoke","scopes":{"allowedServices":[],"readOnly": false, "allowedExecutionContexts":["default"]},"ttl":"8h"}"#,
         ),
     )
     .await;
@@ -11946,6 +11953,7 @@ async fn browser_login_audit_failure_does_not_issue_cookie() {
     let password_hasher = runtime.local_password_hasher().unwrap().clone();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -12068,6 +12076,7 @@ async fn browser_login_enforces_origin_and_sets_session_cookie() {
     let password_hasher = runtime.local_password_hasher().unwrap().clone();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -12275,6 +12284,7 @@ async fn browser_rate_fixture_with(
     .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -12287,6 +12297,7 @@ async fn browser_rate_fixture_with(
         .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "admin".to_string(),
@@ -12299,6 +12310,7 @@ async fn browser_rate_fixture_with(
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -12331,7 +12343,7 @@ async fn browser_rate_fixture_with(
                     name: "rate isolation fixture".to_string(),
                     token_class: token_class.clone(),
                     scopes: if token_class == agent_access_core::BrokerTokenClass::AgentInvoke {
-                        json!({"allowedExecutionContexts": ["default"]})
+                        json!({"readOnly": false, "allowedExecutionContexts": ["default"]})
                     } else {
                         json!({})
                     },
@@ -12491,6 +12503,22 @@ async fn browser_rate_isolation_covers_provisioning_discovery_specs_session_and_
         ..test_limits()
     })
     .await;
+    fixture
+        .state
+        .current()
+        .runtime
+        .managed_store()
+        .unwrap()
+        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            principal_id: "alice".into(),
+            role: None,
+            self_service_enabled: None,
+            agent_token_issuance: Some(
+                agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+            ),
+            actor: "admin".into(),
+        })
+        .unwrap();
     // Login has already exhausted the independent authentication budgets.
     // Browsing and authenticated discovery are never counted.
     for round in 0..2 {
@@ -12514,7 +12542,7 @@ async fn browser_rate_isolation_covers_provisioning_discovery_specs_session_and_
                 response_json(response).await
             );
         }
-        let issued = fixture.browser_request(Method::POST, "/v1/tokens", Some(json!({"name": format!("provisioned-{round}"), "allowedExecutionContexts": ["default"]}))).await;
+        let issued = fixture.browser_request(Method::POST, "/v1/tokens", Some(json!({"name": format!("provisioned-{round}"), "readOnly": false, "allowedExecutionContexts": ["default"]}))).await;
         assert_eq!(
             issued.status(),
             StatusCode::OK,
@@ -12784,6 +12812,7 @@ async fn managed_jira_verify_marks_upstream_verified_after_provider_probe() {
     let store = runtime.managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -12880,6 +12909,7 @@ async fn managed_jira_verify_does_not_mark_credential_after_upstream_failure() {
     let store = runtime.managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -12958,6 +12988,7 @@ async fn managed_verify_does_not_mark_credential_after_local_failure() {
     let store = runtime.managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -13035,6 +13066,7 @@ async fn admin_verify_rejects_disabled_managed_credential_owner() {
     let store = runtime.managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -17001,6 +17033,7 @@ async fn spec_token_fixture_with_restrictions(
     .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "spec-user".to_string(),
@@ -17013,6 +17046,7 @@ async fn spec_token_fixture_with_restrictions(
         .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "spec-admin".to_string(),
@@ -17025,6 +17059,7 @@ async fn spec_token_fixture_with_restrictions(
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("spec-admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -17034,6 +17069,7 @@ async fn spec_token_fixture_with_restrictions(
     if admin_role {
         store
             .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("spec-user").into(),
                 role: Some(agent_access_core::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -17046,7 +17082,7 @@ async fn spec_token_fixture_with_restrictions(
     let mut scopes = if token_class == agent_access_core::BrokerTokenClass::AgentInvoke {
         json!({
             "allowedServices": allowed_services,
-            "allowedExecutionContexts": ["default"]
+            "readOnly": false, "allowedExecutionContexts": ["default"]
         })
     } else {
         json!({})
@@ -17213,6 +17249,7 @@ async fn token_context_fixture() -> TokenContextFixture {
     for principal in ["alice", "bob", "admin"] {
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.to_string(),
@@ -17225,7 +17262,19 @@ async fn token_context_fixture() -> TokenContextFixture {
             .unwrap();
     }
     store
+        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            principal_id: "alice".into(),
+            role: None,
+            self_service_enabled: None,
+            agent_token_issuance: Some(
+                agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+            ),
+            actor: "test".into(),
+        })
+        .unwrap();
+    store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "svc-app".to_string(),
@@ -17238,6 +17287,7 @@ async fn token_context_fixture() -> TokenContextFixture {
         .unwrap();
     store
         .create_group(agent_access_core::GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "operators".to_string(),
             display_name: None,
             description: None,
@@ -17248,6 +17298,7 @@ async fn token_context_fixture() -> TokenContextFixture {
     store.add_group("alice", "operators", "test").unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "bob".into(),
             role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
             self_service_enabled: None,
@@ -17265,6 +17316,7 @@ async fn token_context_fixture() -> TokenContextFixture {
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -17299,7 +17351,7 @@ async fn token_context_fixture() -> TokenContextFixture {
                 principal_id: "alice".to_string(),
                 name: "stale agent".to_string(),
                 token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["retired"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts": ["retired"]}),
                 expires_at: None,
                 created_by: "test".to_string(),
             },
@@ -17321,7 +17373,7 @@ async fn token_context_fixture() -> TokenContextFixture {
             "corrupt agent",
             json!({
                 "allowedServices": ["fake"],
-                "allowedExecutionContexts": ["internal"],
+                "readOnly": false, "allowedExecutionContexts": ["internal"],
                 "serviceRestrictions": {
                     "fake": {"actions": "echo"}
                 }
@@ -17418,6 +17470,7 @@ async fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
     seed_managed_fixture_resources(&store);
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "admin".to_string(),
@@ -17430,6 +17483,7 @@ async fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
         .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "nogroups".to_string(),
@@ -17442,6 +17496,7 @@ async fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -17450,6 +17505,7 @@ async fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
         .unwrap();
     store
         .create_group(agent_access_core::GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "agents".to_string(),
             display_name: Some("Agents".to_string()),
             description: None,
@@ -17564,6 +17620,7 @@ async fn service_policy_management_fixture_with_policy_authority(
     for principal in ["admin", "alice", "bob"] {
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.to_string(),
@@ -17577,6 +17634,7 @@ async fn service_policy_management_fixture_with_policy_authority(
     }
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -17585,6 +17643,7 @@ async fn service_policy_management_fixture_with_policy_authority(
         .unwrap();
     store
         .create_group(agent_access_core::GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "service-managers".to_string(),
             display_name: Some("Service Managers".to_string()),
             description: None,
@@ -17597,6 +17656,7 @@ async fn service_policy_management_fixture_with_policy_authority(
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "bob".into(),
             role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
             self_service_enabled: None,
@@ -17615,6 +17675,7 @@ async fn service_policy_management_fixture_with_policy_authority(
     if policy_authority != "managed" {
         store
             .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: "bob".into(),
                 role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
                 self_service_enabled: None,
@@ -17777,6 +17838,7 @@ where
     .unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "gateway-user".to_string(),
@@ -17798,7 +17860,7 @@ where
                 token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
                 scopes: json!({
                     "allowedServices": ["gitlab_git"],
-                    "allowedExecutionContexts": ["default"]
+                    "readOnly": false, "allowedExecutionContexts": ["default"]
                 }),
                 expires_at: None,
                 created_by: "test".to_string(),
@@ -19482,7 +19544,7 @@ async fn token_issuance_waits_for_policy_coordinator_and_all_concurrent_requests
         "Authorization",
         format!("Bearer {}", fixture.alice_user_token),
         Some(
-            r#"{"name":"first","allowedServices":["fake"],"allowedExecutionContexts":["external"]}"#,
+            r#"{"name":"first","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"]}"#,
         ),
     );
     let second = authed_json_request(
@@ -19493,7 +19555,7 @@ async fn token_issuance_waits_for_policy_coordinator_and_all_concurrent_requests
         "Authorization",
         format!("Bearer {}", fixture.alice_user_token),
         Some(
-            r#"{"name":"second","allowedServices":["fake"],"allowedExecutionContexts":["external"]}"#,
+            r#"{"name":"second","allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["external"]}"#,
         ),
     );
     tokio::pin!(first, second);

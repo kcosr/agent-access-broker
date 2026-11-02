@@ -399,6 +399,7 @@ mod tests {
     fn user(store: &ManagedStore, id: &str) {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: id.into(),
@@ -492,6 +493,7 @@ mod tests {
         store.remove_identity_token("alice").unwrap();
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".into(),

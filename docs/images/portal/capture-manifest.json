@@ -25,15 +25,15 @@
       "file": "guide/admin-create-user-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft user enrollment, group selection, independent local password sign-in, and self-service",
-      "sha256": "6b6dc0d453e26f0d6ed47271f25c4cdd79be9180face794b1b28161468cfa889"
+      "description": "Draft user enrollment with explicit read-only token issuance, group selection, independent local password sign-in, and self-service",
+      "sha256": "d1825574b03a0223b7181db0fb6dc893e07519f14068af11162ec7520054a6b8"
     },
     {
       "file": "guide/admin-create-group-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft policy group with a stable identifier and human-readable purpose",
-      "sha256": "c4a5010194384d306262ffb3b4984a0bd88b8124089b87e5b0440990060be62e"
+      "description": "Draft policy group with a stable identifier, human-readable purpose and explicit read-only token issuance contribution",
+      "sha256": "c7e77d364f1dd447dc030836a32b7819be92a4144891fcf2fdf5ab5c2abba34c"
     },
     {
       "file": "guide/admin-create-service-account-light.png",
@@ -102,8 +102,8 @@
       "file": "guide/admin-account-access-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Administrator viewing a real documentation auditor role with personal self-service disabled",
-      "sha256": "b113e782492788cc01726a49a5203fa9bf4725adfed8a81d4cc6eb8d2ac059a6"
+      "description": "Administrator viewing a real documentation auditor role with personal self-service and agent token issuance disabled",
+      "sha256": "1a4885c53129054c38def84e37c3d10c05051a270ad0a15dedd992c282a87493"
     },
     {
       "file": "guide/admin-disable-user-light.png",
@@ -228,36 +228,36 @@
       "file": "guide/user-tokens-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "User invocation token inventory and lifecycle status",
-      "sha256": "c44b84808102a558a17e8d85c0802c239916137756053e78dd3d65a81186c8f3"
+      "description": "User invocation token inventory with a stored write-capable ceiling badge and lifecycle status",
+      "sha256": "6275ed535055b1f491eaff86c97bac5c88af0f314996e5faad7e3a7146930e1c"
     },
     {
       "file": "guide/user-token-details-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Synthetic unsubmitted token creation page with explicit lifetime, contexts, and restricted access",
-      "sha256": "bedfd1027ea21b4c19226688d07153872305c2ce072664b34177fe56ecae6053"
+      "description": "Synthetic unsubmitted read-only token creation page with explicit lifetime, contexts, and restricted access",
+      "sha256": "248d1a710c824764a3c3cad3c89deb2345514f99a5c492f535cd06eaa82c7c18"
     },
     {
       "file": "guide/user-token-access-light.png",
       "theme": "light",
       "viewport": "1440x960",
       "description": "Synthetic unsubmitted token restricted to Jira issue.view using the shared read-only and write-capable action columns",
-      "sha256": "7262e286ef487fc4a38540beee06f2004738a5060a150bc9d9f4f229aab4a5ff"
+      "sha256": "cee425c19b651d8ce219fa95d8eef9ec51bfec4c1e842a8b44b276c047d2dadb"
     },
     {
       "file": "guide/user-token-resources-light.png",
       "theme": "light",
       "viewport": "1440x960",
       "description": "Synthetic unsubmitted Jira token selecting only the exact DEMO Jira project resource",
-      "sha256": "86adf1de44003660f3557eda62a0bee67ff861785730d7e0f138a4b68cdfe882"
+      "sha256": "71802365283d63d55b4c0a8d0d33a2d6a044bc4a9fd5758ee00bca4d2e7f1aed"
     },
     {
       "file": "guide/user-token-boundary-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Synthetic unsubmitted token page with the live Boundary and Effective access summaries; no token is issued",
-      "sha256": "68bb871bbd0b2377adc40aa0ec4e7f84e66e8eedeff86fdc2366f8f5315b467a"
+      "description": "Synthetic unsubmitted read-only token with the live summary rail and Effective access preview; action selection is collapsed and no token is issued",
+      "sha256": "5dafed2462e33462ba542377402ed0e0ca0dc0b4526a268d8dbed7ad034063f7"
     },
     {
       "file": "guide/user-token-revoke-light.png",

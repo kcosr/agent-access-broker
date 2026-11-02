@@ -153,6 +153,7 @@ async fn fixture_with(
             for principal in ["alice", "bob"] {
                 store
                     .create_principal(PrincipalWriteRequest {
+                        agent_token_issuance: Default::default(),
                         principal_id: principal.into(),
                         kind: "user".into(),
                         role: PrincipalRole::User,

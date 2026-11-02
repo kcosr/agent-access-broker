@@ -150,7 +150,8 @@ actions and exposes typed wrappers for supported services.
 - Backend actions default to `read_only = false`; explicitly opt reviewed reads
   in via `ActionDescriptor::read_only()`. Runtime/discovery/management `readOnly`
   classifies upstream effects for grant selection; it does not gate local output.
-  It is also the ceiling of read-only trusted-identity paths, checked against the
+  It is also the ceiling of read-only issued agent tokens and trusted-identity
+  paths, checked against the
   current catalog on every request, so reclassifying a native action changes what
   those paths can do: call out every native reclassification in `CHANGELOG.md`.
   JSON and multipart-upload responses support local output, including writes.
@@ -226,6 +227,31 @@ Microsoft group auto-enrollment adds local membership only in the new JIT
 principal's creation transaction after mapped-group admission; preserve the
 disabled-group pause, no-backfill/no-re-add semantics, and transaction-captured
 enrollment and setting-change audit details.
+
+## Agent token issuance
+
+Account `agentTokenIssuance` defaults to `inherit`; group settings default to
+`disabled`. Resolve the explicit account override first, otherwise the most
+permissive active effective managed group at transaction time. TOML identity
+supplies no group contributions. Principal HTTP creation is create-only and
+refuses duplicates with 409. The internal `create_or_update_principal` upsert
+preserves an existing override; only access PATCH changes it. Personal issuance
+checks this policy inside the insertion transaction, after existing prerequisites. Administrative routes use
+their admitted write authority independently. Policy changes never alter existing
+tokens, invocation admission, identity proofs or MCP owners.
+
+Require explicit `readOnly` on every issued agent token and effective-access
+request. Follow current grants remains available for read-only tokens. Reject
+explicit write selections on new read-only issuance, but preview retained
+selections as their current intersection. Use the shared action ceiling before
+credential/provider work without filtering grants. Keep path `readOnlyAccess`
+and token `brokerToken.readOnly` provenance distinct. Migration `033` backfills
+false once; the current parser has no old-shape fallback. Preserve collision
+refusal and revoked-row recovery described in `docs/operator-guide.md`.
+
+Token commit and completion audit belong to the cancellation-resistant mutation
+owner. A failed completion returns the existing audit-unavailable error without
+the secret while retaining the committed row; never retry issuance automatically.
 
 ## Microsoft membership renewal
 
@@ -991,7 +1017,10 @@ Refuse writes before credential, OAuth, scope or provider work; Git push is
 refused at receive-pack discovery and POST before the body is parsed, and the
 POST's unread body is only discarded. Carry the setting as serialized
 `identitySource.readOnlyAccess`, never in `token_scopes` or stored token
-caveats. Browser sessions and issued Broker tokens are unaffected.
+caveats. Browser sessions and issued Broker tokens do not inherit a login
+path's restriction. Issued agent tokens carry their own required `scopes.readOnly`
+Boolean; identity summaries expose it as `brokerToken.readOnly` only for an
+admitted `agent_invoke` source with a token ID, never synthetic trusted paths.
 
 Carry one private proof through MCP intake/session/final governed admission.
 Revalidate it before credential or provider work; never resolve a queued request

@@ -81,6 +81,7 @@ async fn browser_management_reads_forbid_caching() {
         .managed_store()
         .unwrap()
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".to_string(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -351,7 +352,7 @@ async fn admin_reads_and_policy_dry_runs_write_no_audit_records() {
     let invalid_proposal = GRANT_PROPOSAL.replace(r#""echo""#, r#""no-such-action""#);
     let effective_access = r#"{"service":"fake","actions":["echo"],"executionContexts":["default"],
         "resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}"#;
-    let token_boundary = r#"{"allowedExecutionContexts":["default"]}"#;
+    let token_boundary = r#"{"readOnly": false, "allowedExecutionContexts":["default"]}"#;
     for (token, method, uri, body) in [
         (&fixture.admin, Method::GET, "/v1/admin/store/status", None),
         (&fixture.admin, Method::GET, "/v1/admin/config/status", None),
@@ -532,7 +533,7 @@ pub(super) fn concrete_route(route: &str, ids: &BTreeMap<&str, String>) -> Strin
 pub(super) fn read_post_body(catalog_operation: &str) -> Option<&'static str> {
     match catalog_operation {
         "tokens.effective_access" | "admin.tokens.effective_access_principal_agent" => {
-            Some(r#"{"allowedExecutionContexts":["default"]}"#)
+            Some(r#"{"readOnly": false, "allowedExecutionContexts":["default"]}"#)
         }
         "admin.policy.effective_access" => Some(
             r#"{"service":"fake","actions":["echo"],"executionContexts":["default"],

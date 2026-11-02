@@ -205,6 +205,7 @@ async fn fixture() -> Fixture {
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
             role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),
@@ -217,6 +218,7 @@ async fn fixture() -> Fixture {
         .unwrap();
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -229,6 +231,11 @@ async fn fixture() -> Fixture {
     })
     .unwrap();
     let issue = |class, name: &str| {
+        let scopes = if class == BrokerTokenClass::AgentInvoke {
+            json!({"allowedExecutionContexts":["default"],"readOnly":false})
+        } else {
+            json!({})
+        };
         store
             .issue_broker_token(
                 &hasher,
@@ -236,7 +243,7 @@ async fn fixture() -> Fixture {
                     principal_id: "alice".into(),
                     name: name.into(),
                     token_class: class,
-                    scopes: json!({"allowedExecutionContexts":["default"]}),
+                    scopes,
                     expires_at: None,
                     created_by: "test".into(),
                 },

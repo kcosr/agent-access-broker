@@ -49,7 +49,7 @@ impl Imports {
         let agent = fixture.issue(
             "alice",
             BrokerTokenClass::AgentInvoke,
-            json!({"allowedServices": services, "allowedExecutionContexts": ["default"]}),
+            json!({"allowedServices": services, "readOnly": false, "allowedExecutionContexts": ["default"]}),
         );
         Self {
             fixture,

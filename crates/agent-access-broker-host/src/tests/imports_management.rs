@@ -1063,6 +1063,7 @@ async fn personal_discovery_rotation_invalidates_preview_without_service_edit() 
         .managed_store()
         .unwrap()
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("alice").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,

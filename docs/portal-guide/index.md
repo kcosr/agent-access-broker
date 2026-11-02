@@ -71,14 +71,15 @@ When audit access is available, **Search audit for …** opens the Audit page
 with the query and its default time range. Audit records are searched on that
 page, rather than loaded into the palette.
 
-## Understand the four controls
+## Understand the access controls
 
 | Control | What it decides |
 | --- | --- |
 | Account role | Which administration pages and operations you may use. An auditor can inspect metadata and global audit; an administrator can change them. |
 | Personal self-service | Whether you can manage your own credentials, connections, tokens, and activity. This is independent of role. |
+| Agent token issuance | Whether new personal tokens may be issued, and whether they must be read-only. An account override wins over groups; changing it leaves existing tokens unchanged. |
 | Invocation grants | Which service actions, resources, execution contexts, and credential modes a principal may use. Group membership can make a group grant applicable. |
-| Agent token restrictions | A ceiling on existing grants, with its own lifetime and execution contexts. A token never creates an invocation grant. |
+| Agent token restrictions | A ceiling on existing grants, including the stored Read-only choice, lifetime and execution contexts. A token never creates an invocation grant. |
 
 An upstream credential supplies authentication to the upstream service. Saving
 one does not grant access. A Broker invocation token is the credential you give

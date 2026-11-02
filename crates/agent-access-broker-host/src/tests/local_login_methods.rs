@@ -110,6 +110,7 @@ async fn local_password_admin_requires_explicit_enrollment_and_audits_previous_s
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "bob".into(),
@@ -416,6 +417,7 @@ async fn local_password_enable_keeps_committed_success_if_completion_audit_fails
         let store = snapshot.runtime.managed_store().unwrap();
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".into(),

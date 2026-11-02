@@ -104,6 +104,7 @@ pub(super) async fn audit_fixture_with(
     for principal in ["admin", "alice", "bob", "carol"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.to_string(),
@@ -117,6 +118,7 @@ pub(super) async fn audit_fixture_with(
     }
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -125,6 +127,7 @@ pub(super) async fn audit_fixture_with(
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "bob".into(),
             role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
             self_service_enabled: None,
@@ -144,7 +147,7 @@ pub(super) async fn audit_fixture_with(
         agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let issue = |principal: &str, token_class: agent_access_core::BrokerTokenClass| {
         let scopes = if token_class == agent_access_core::BrokerTokenClass::AgentInvoke {
-            json!({"allowedExecutionContexts": ["default"]})
+            json!({"readOnly": false, "allowedExecutionContexts": ["default"]})
         } else {
             json!({})
         };
@@ -509,6 +512,22 @@ async fn browser_sessions_read_audit_without_the_csrf_header() {
 #[tokio::test]
 async fn visibility_follows_admin_service_manager_and_self_tiers() {
     let fixture = audit_fixture(Backend::Sqlite).await;
+    fixture
+        .state
+        .current()
+        .runtime
+        .managed_store()
+        .unwrap()
+        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            principal_id: "alice".into(),
+            role: None,
+            self_service_enabled: None,
+            agent_token_issuance: Some(
+                agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+            ),
+            actor: "admin".into(),
+        })
+        .unwrap();
     // Real requests: the admin grants alice fake.echo (policy records
     // scoped to fake), alice invokes it with her agent token and issues
     // herself a token (no scope service), and bob manages a grant for fake.
@@ -542,7 +561,7 @@ async fn visibility_follows_admin_service_manager_and_self_tiers() {
             Method::POST,
             &fixture.alice,
             "/v1/tokens",
-            Some(r#"{"name":"alice scope","ttl":"8h","allowedExecutionContexts":["default"]}"#),
+            Some(r#"{"name":"alice scope","ttl":"8h","readOnly": false, "allowedExecutionContexts":["default"]}"#),
             "audit-scope-alice-token-issue",
         )
         .await;

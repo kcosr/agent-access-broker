@@ -1,5 +1,6 @@
 fn enrollment_group_request(group_id: &str, enabled: bool) -> GroupWriteRequest {
     GroupWriteRequest {
+        agent_token_issuance: AgentTokenIssuanceMode::Disabled,
         group_id: group_id.into(),
         display_name: None,
         description: None,
@@ -10,6 +11,7 @@ fn enrollment_group_request(group_id: &str, enabled: bool) -> GroupWriteRequest 
 
 fn enrollment_group_patch(group_id: &str, enabled: Option<bool>) -> GroupPatchRequest {
     GroupPatchRequest {
+        agent_token_issuance: None,
         group_id: group_id.into(),
         display_name: None,
         description: None,

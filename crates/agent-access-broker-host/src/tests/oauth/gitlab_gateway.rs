@@ -1169,6 +1169,7 @@ async fn a_service_account_token_on_the_connection_is_presented_as_basic() {
     let store = fixture.runtime.managed_store().unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "robot".into(),
@@ -1186,7 +1187,7 @@ async fn a_service_account_token_on_the_connection_is_presented_as_basic() {
                 principal_id: "robot".into(),
                 name: "robot agent".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                 expires_at: None,
                 created_by: "test".into(),
             },

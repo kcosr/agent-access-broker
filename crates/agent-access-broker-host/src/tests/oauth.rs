@@ -201,6 +201,7 @@ async fn oauth_fixture_with(
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "admin".into(),
@@ -213,6 +214,7 @@ async fn oauth_fixture_with(
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -221,6 +223,7 @@ async fn oauth_fixture_with(
         .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),
@@ -234,6 +237,7 @@ async fn oauth_fixture_with(
     if let Some(group) = subject.and_then(|value| value.strip_prefix("group:")) {
         store
             .create_group(agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
                 group_id: group.into(),
                 display_name: None,
                 description: None,
@@ -281,7 +285,7 @@ async fn oauth_fixture_with(
                 principal_id: "alice".into(),
                 name: "oauth agent".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                 expires_at: None,
                 created_by: "test".into(),
             },

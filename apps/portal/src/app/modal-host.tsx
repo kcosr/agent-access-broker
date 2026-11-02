@@ -67,11 +67,7 @@ function OpenModal({ modal }: { modal: Exclude<ModalState, null> }) {
                 ]}
               />
               {modal.record.tokenClass === "agent_invoke" ? (
-                modal.record.scopes.serviceRestrictions ? (
-                  <TokenBoundary record={modal.record} options={modal.options} contexts={false} />
-                ) : (
-                  <p className="pt-prose">All actions and resources allowed by current grants.</p>
-                )
+                <TokenBoundary record={modal.record} options={modal.options} contexts={false} />
               ) : null}
             </>
           }

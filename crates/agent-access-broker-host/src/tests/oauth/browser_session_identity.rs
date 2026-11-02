@@ -15,7 +15,7 @@ fn admin_token(
     token_class: BrokerTokenClass,
 ) -> agent_access_core::IssuedBrokerToken {
     let scopes = if token_class == BrokerTokenClass::AgentInvoke {
-        json!({"allowedExecutionContexts": ["default"]})
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"]})
     } else {
         json!({})
     };

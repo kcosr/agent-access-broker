@@ -1,5 +1,6 @@
 fn identity_user_request(id: &str) -> PrincipalWriteRequest {
     PrincipalWriteRequest {
+        agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
         role: PrincipalRole::User,
         self_service_enabled: None,
         principal_id: id.into(),
@@ -311,7 +312,7 @@ fn identity_pause_does_not_pause_issued_broker_tokens_and_reverse() {
                 principal_id: "alice".into(),
                 name: "independent".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts":["default"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts":["default"]}),
                 expires_at: None,
                 created_by: "admin".into(),
             },

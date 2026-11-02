@@ -218,6 +218,7 @@ async fn fixture_configured(
     .unwrap();
     store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "microsoft-users".to_string(),
             display_name: None,
             description: None,
@@ -307,7 +308,7 @@ impl Fixture {
                     principal_id: principal.clone(),
                     name: "renewal-agent".into(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "test".into(),
                 },
@@ -938,6 +939,7 @@ async fn attempts_keep_their_interval_across_reload_and_sign_in() {
     f.clock.advance_seconds(40);
     f.store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::Admin,
             self_service_enabled: None,
             principal_id: "admin".into(),
@@ -1712,6 +1714,7 @@ async fn sign_in_reload_and_unlink_during_a_renewal_supersede_it() {
     f.expire(&method);
     f.store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::Admin,
             self_service_enabled: None,
             principal_id: "admin".into(),
@@ -2146,6 +2149,7 @@ impl Fixture {
     fn admin_token(&self) -> String {
         self.store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::Admin,
                 self_service_enabled: None,
                 principal_id: "admin".into(),

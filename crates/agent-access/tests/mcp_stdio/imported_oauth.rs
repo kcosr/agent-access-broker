@@ -492,6 +492,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),
@@ -504,6 +505,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -512,6 +514,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
             role: PrincipalRole::Admin,
             self_service_enabled: None,
             principal_id: "admin".into(),
@@ -633,6 +636,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     if group_grant {
         store
             .create_group(GroupWriteRequest {
+                agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
                 group_id: "metrics-readers".into(),
                 display_name: None,
                 description: None,
@@ -649,6 +653,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         // protocol-switch cases retain administrator discovery coverage below.
         store
             .patch_principal_access(PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: "alice".into(),
                 role: Some(PrincipalRole::User),
                 self_service_enabled: None,
@@ -674,7 +679,7 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
     })
     .unwrap();
     let agent = store.issue_broker_token(&hasher,BrokerTokenIssueRequest {
-        principal_id:"alice".into(),name:"personal scoped MCP".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":["metrics"],"allowedExecutionContexts":["default"]}),expires_at:None,created_by:"alice".into(),
+        principal_id:"alice".into(),name:"personal scoped MCP".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":["metrics"],"allowedExecutionContexts":["default"],"readOnly":false}),expires_at:None,created_by:"alice".into(),
     }).unwrap().token;
     let admin_token = store
         .issue_broker_token(

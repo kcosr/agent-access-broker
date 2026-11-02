@@ -556,6 +556,7 @@ async fn service_limits_cover_gateway_services_and_every_principal_kind() {
         .clone();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "build-bot".to_string(),

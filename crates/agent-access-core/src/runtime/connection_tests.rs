@@ -55,6 +55,7 @@ fn store_token(runtime: &BrokerRuntime, service: &str, token: &str) {
     let store = runtime.managed_store().unwrap();
     store
         .create_or_update_principal(crate::PrincipalWriteRequest {
+            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
             role: crate::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "agent-one".into(),
@@ -510,6 +511,7 @@ fn managed_matrix() -> (
     let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
     store
         .create_group(crate::GroupWriteRequest {
+            agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
             auto_enroll_new_microsoft_users: false,
             group_id: "agents".into(),
             display_name: None,
@@ -524,6 +526,7 @@ fn managed_matrix() -> (
     ] {
         store
             .create_principal(crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -614,7 +617,7 @@ fn agent_token(runtime: &BrokerRuntime, principal: &str) -> String {
                 principal_id: principal.into(),
                 name: format!("{principal} agent"),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                 expires_at: None,
                 created_by: "admin".into(),
             },
@@ -841,6 +844,7 @@ async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
             .unwrap();
     let store = runtime.managed_store().unwrap();
     let principal = |kind: &str| crate::PrincipalWriteRequest {
+        agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
         role: crate::PrincipalRole::User,
         self_service_enabled: None,
         principal_id: "agent-one".into(),
@@ -891,6 +895,7 @@ fn store_git_token(runtime: &BrokerRuntime, profile: &str) {
     let store = runtime.managed_store().unwrap();
     store
         .create_or_update_principal(crate::PrincipalWriteRequest {
+            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
             role: crate::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "agent-one".into(),

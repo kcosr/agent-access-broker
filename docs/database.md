@@ -61,7 +61,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `025_principal_access`, `026_trusted_user_identity`,
 `027_command_imports`, `028_oauth_revocations`,
 `029_identity_access_path_controls`, `030_group_auto_enrollment`,
-`031_oidc_membership_renewal`, and `032_imported_source_documents` in order. The
+`031_oidc_membership_renewal`, `032_imported_source_documents`, and
+`033_agent_token_issuance` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -111,8 +112,8 @@ erDiagram
 | Table | Purpose | Important fields |
 | --- | --- | --- |
 | `schema_migrations` | Append-only catalog migration ledger. | `version`, per-migration `checksum`, `applied_at` |
-| `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `status`, `display_name`, `email`, `external_subject`, timestamps |
-| `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, `auto_enroll_new_microsoft_users`, timestamps, actor metadata |
+| `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `agent_token_issuance`, `status`, `display_name`, `email`, `external_subject`, timestamps |
+| `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, `auto_enroll_new_microsoft_users`, `agent_token_issuance`, timestamps, actor metadata |
 | `principal_groups` | Group membership for managed principals. | `principal_id`, `group_id`, creator metadata |
 | `broker_tokens` | HMAC-hashed broker-issued tokens. | `token_id`, `token_hash`, `principal_id`, `token_class`, `scopes_json`, expiry/revocation fields |
 | `rights` | Self-service management rights. A credential connection's rights have its ID in `service` and `default` in `credential_name`. | `right_id`, `principal_id`, `right_name`, `service`, `credential_name`, `resource_scope_json`, expiry/revocation fields |
@@ -278,8 +279,11 @@ historical and paused state. Rotating the broker-token hash key without a token
 migration makes existing token hashes unresolvable, so the hash key should be
 backed up and rotated only with an explicit operational plan.
 
-`agent_invoke` token `scopes_json` may contain `allowedServices`, the finite
-`allowedExecutionContexts` caveat, and a canonical `serviceRestrictions` map.
+`agent_invoke` token `scopes_json` requires a Boolean `readOnly` and the finite
+`allowedExecutionContexts` caveat; it may contain `allowedServices` and a canonical
+`serviceRestrictions` map. True admits only actions currently classified as
+reads, even when no service restrictions are stored and grants change later.
+False adds no read-only ceiling. Management-token classes reject this member.
 Each service entry contains actions and optional `resources` references with
 `resourceIds` and `resourceGroupIds`. Missing resources follow grants; a present
 empty selection permits no resource access. Group membership, resource contexts,
@@ -298,6 +302,37 @@ writes that existing shape only when `never` is explicitly requested and is an
 allowed option for that issuance surface. Issuance-policy configuration changes
 do not modify existing rows, and non-expiring tokens use the same revocation
 path as finite tokens.
+
+### Agent token issuance storage and upgrade
+
+Migration `033_agent_token_issuance` adds checked `agent_token_issuance` TEXT
+columns: principals default to `inherit`, groups to `disabled`. These defaults
+apply to existing and new accounts; explicit administrator permission is required
+for personal issuance. The current policy is resolved from the explicit account
+setting or active effective managed memberships inside the issuance transaction.
+No issuance policy is consulted when an existing token is used.
+
+The one-time transactional seed adds `readOnly: false` to old `agent_invoke`
+scopes objects, preserving existing behavior and every other member, token ID,
+hash, owner, creator, name, timestamp, expiry and lifecycle field. It includes
+active, paused, expired and revoked rows. Management tokens and credentials are
+untouched. Malformed JSON and non-object roots remain byte-for-byte unchanged
+and denied; missing contexts, unknown members and invalid restrictions are not
+repaired. The current parser strictly requires valid contexts and `readOnly`.
+
+Before rewriting any row, the seed scans every old object for a top-level
+`readOnly` collision. Any unrevoked collision aborts startup, including paused
+or expired tokens. The diagnostic lists every colliding unrevoked token ID and
+no scopes/token material. Irrevocably revoked colliding rows are preserved
+byte-for-byte and denied by revocation. SQL, seed, structural validation and
+ledger advance commit together; failure leaves schema 032 unchanged. Current
+schema opens never repeat the rewrite. Do not edit stored JSON or the ledger.
+
+A pre-upgrade backup is required. Follow the exact
+[collision recovery procedure](operator-guide.md#agent-token-issuance-upgrade)
+using the previous binary on the unchanged schema-032 store, revoke the named
+token IDs, back up again and retry. Rollback after successful upgrade requires
+the matching pre-upgrade backup and binary.
 
 ## Admin Roles And Browser Login State
 

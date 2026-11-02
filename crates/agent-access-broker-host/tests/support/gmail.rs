@@ -207,6 +207,7 @@ pub(crate) async fn gmail_fixture() -> GmailFixture {
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "admin".into(),
@@ -219,6 +220,7 @@ pub(crate) async fn gmail_fixture() -> GmailFixture {
         .unwrap();
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -227,6 +229,7 @@ pub(crate) async fn gmail_fixture() -> GmailFixture {
         .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".into(),
@@ -261,7 +264,7 @@ pub(crate) async fn gmail_fixture() -> GmailFixture {
                 principal_id: "alice".into(),
                 name: "oauth agent".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                scopes: json!({"readOnly":false,"allowedExecutionContexts": ["default"]}),
                 expires_at: None,
                 created_by: "test".into(),
             },

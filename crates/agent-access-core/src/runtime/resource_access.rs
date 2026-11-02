@@ -393,8 +393,8 @@ impl BrokerRuntime {
         caveats: &AgentInvokeTokenCaveats,
     ) -> Result<EffectiveAccessPreview, ManagedStoreError> {
         let snapshot = self.policy_snapshot();
-        // The previewed ceiling is an issued Broker token's, which is never
-        // read-only.
+        // The proposed/stored token supplies its own class ceiling. The
+        // manager's trusted-identity path does not constrain the preview.
         let token = ParsedAgentInvokeTokenCaveats {
             token_id: None,
             caveats: caveats.clone(),

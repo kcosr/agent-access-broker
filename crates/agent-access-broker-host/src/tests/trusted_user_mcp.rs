@@ -151,6 +151,7 @@ async fn fixture_start(
     ] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 principal_id: principal.into(),
                 kind: "user".into(),
                 role,
@@ -178,7 +179,7 @@ async fn fixture_start(
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let issue = |principal: &str, class| {
         let scopes = if class == BrokerTokenClass::AgentInvoke {
-            json!({"allowedExecutionContexts": ["default"]})
+            json!({"readOnly": false, "allowedExecutionContexts": ["default"]})
         } else {
             json!({})
         };

@@ -170,9 +170,10 @@ A canceled HTTP response waiter does not abandon a committed catalog publication
 
 The Read-only / Write-capable classification is the administrator's reviewed
 statement of an action's upstream effect. It selects grant actions, and it is the
-ceiling of [read-only identity paths](managed-identity.md#read-only-paths): a
-read-only username binding or identity token can list and call only actions
-classified as Read-only, within the person's grants. Unreviewed actions are
+ceiling of read-only issued agent tokens and
+[read-only identity paths](managed-identity.md#read-only-paths): a
+read-only issued token, username binding or identity token can list and call
+only actions classified as Read-only, within the person's grants. Unreviewed actions are
 Write-capable and stay hidden from those paths.
 
 A request is judged on the runtime snapshot it was admitted with, so a

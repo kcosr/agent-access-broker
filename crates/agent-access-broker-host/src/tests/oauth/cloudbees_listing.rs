@@ -55,7 +55,7 @@ async fn cloudbees_job_listing_honors_token_resource_and_action_ceilings() {
     let issue = |name: &str, actions: Vec<&str>| {
         fixture.runtime.managed_store().unwrap().issue_broker_token(fixture.runtime.broker_token_hasher().unwrap(),BrokerTokenIssueRequest {
         principal_id:"alice".into(),name:name.into(),token_class:BrokerTokenClass::AgentInvoke,
-        scopes:json!({"allowedExecutionContexts":["default"],"allowedServices":["cloudbees_ci"],"serviceRestrictions":{"cloudbees_ci":{"actions":actions,"resources":{"resourceIds":["ci-A"]}}}}),expires_at:None,created_by:"test".into(),
+        scopes:json!({"readOnly": false, "allowedExecutionContexts":["default"],"allowedServices":["cloudbees_ci"],"serviceRestrictions":{"cloudbees_ci":{"actions":actions,"resources":{"resourceIds":["ci-A"]}}}}),expires_at:None,created_by:"test".into(),
     }).unwrap().token
     };
     let narrow = issue("one job", vec!["job.list"]);

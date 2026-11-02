@@ -527,6 +527,7 @@ mod tests {
     fn token_identity(selection: Option<ResourceSelection>) -> IdentityContext {
         let mut identity = IdentityContext::anonymous();
         let caveats = AgentInvokeTokenCaveats {
+            read_only: false,
             allowed_services: Some(vec!["fake".into()]),
             allowed_execution_contexts: Some(vec![ExecutionContext::new("default").unwrap()]),
             service_restrictions: Some(BTreeMap::from([(

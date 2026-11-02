@@ -24,7 +24,11 @@ command prefix or pack body is parsed and before any upstream credential is
 resolved; the POST's unread body is only discarded (see
 [refused pushes](#refused-pushes)). The denial's audit keeps the classified
 repository scope. An explicit Basic Broker token keeps its own authority.
-Direct-only caller secrets are invalid in the dedicated carrier here.
+An issued agent token with `scopes.readOnly: true` also permits only granted
+fetches and refuses receive-pack discovery/POST before parsing or forwarding,
+using `service_action_denied` with message `broker token is read-only` and
+`brokerToken` audit provenance. Current issuance permission does not affect
+existing tokens. Direct-only caller secrets are invalid in the dedicated carrier here.
 
 This document owns `[gateways]` entries with `kind = "git_http"`. Git HTTP
 gateways are host-matched protocol surfaces on the gateway listener and are

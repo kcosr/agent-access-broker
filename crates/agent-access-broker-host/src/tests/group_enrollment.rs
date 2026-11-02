@@ -154,6 +154,7 @@ async fn group_enrollment_rejects_null_and_non_boolean_settings() {
         .managed_store()
         .unwrap()
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "onboarding".into(),
             display_name: None,
             description: None,
@@ -206,6 +207,7 @@ async fn group_enrollment_requires_admin_write_authority() {
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "onboarding".into(),
             display_name: None,
             description: None,
@@ -215,6 +217,7 @@ async fn group_enrollment_requires_admin_write_authority() {
         .unwrap();
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "carol".into(),
             role: Some(PrincipalRole::Auditor),
             self_service_enabled: None,
@@ -270,6 +273,7 @@ async fn group_enrollment_browser_edits_require_csrf() {
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -350,6 +354,7 @@ async fn group_enrollment_preflight_failure_prevents_write_and_completion_failur
             if !is_create {
                 store
                     .create_group(GroupWriteRequest {
+                        agent_token_issuance: Default::default(),
                         group_id: "onboarding".into(),
                         display_name: None,
                         description: None,
@@ -457,6 +462,7 @@ async fn group_enrollment_mutation_owner_completes_audit_after_waiter_cancellati
         target,
         move |store| {
             let result = store.create_group_with_effect(GroupWriteRequest {
+                agent_token_issuance: Default::default(),
                 group_id: "onboarding".into(),
                 display_name: None,
                 description: None,
@@ -529,6 +535,7 @@ async fn group_enrollment_toml_projection_is_false_and_flag_writes_are_rejected(
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::WriteCapable,
             group_id: "onboarding".into(),
             display_name: None,
             description: None,
@@ -561,20 +568,24 @@ async fn group_enrollment_toml_projection_is_false_and_flag_writes_are_rejected(
         };
         assert_eq!(group["groupId"], "onboarding");
         assert_eq!(group["autoEnrollNewMicrosoftUsers"], false);
+        assert_eq!(
+            group["agentTokenIssuance"], "disabled",
+            "TOML groups never contribute dormant managed issuance authority"
+        );
         assert_eq!(group["memberCount"], 1, "project the TOML membership");
     }
     for (method, path, body, request_id, group_id) in [
         (
             Method::POST,
             "/v1/admin/groups",
-            r#"{"groupId":"new-default","autoEnrollNewMicrosoftUsers":true}"#,
+            r#"{"groupId":"new-default","autoEnrollNewMicrosoftUsers":true,"agentTokenIssuance":"read_only"}"#,
             "enrollment-toml-create",
             "new-default",
         ),
         (
             Method::PATCH,
             "/v1/admin/groups/onboarding",
-            r#"{"autoEnrollNewMicrosoftUsers":true}"#,
+            r#"{"autoEnrollNewMicrosoftUsers":true,"agentTokenIssuance":"read_only"}"#,
             "enrollment-toml-patch",
             "onboarding",
         ),

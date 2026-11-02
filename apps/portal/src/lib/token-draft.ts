@@ -4,6 +4,7 @@ import { agentTokenSelectedActions, buildAgentTokenServiceRestrictions } from ".
 
 /** Owner-scoped editor state. Live grant options and the owner are kept separately. */
 export type AgentTokenDraft = {
+  readOnly: boolean;
   name: string;
   lifetime: string;
   accessMode: "policy" | "restricted";
@@ -17,6 +18,7 @@ export function createAgentTokenDraft(options: AgentTokenOptions, ttlPolicy: Tok
   const selectedServices = [...new Set(services)].filter((service) => options.services.some((option) => option.service === service));
   return {
     name: "",
+    readOnly: true,
     lifetime: ttlPolicy.defaultTtl ?? ttlPolicy.options[0] ?? "",
     // A stale service link must still require an explicit boundary choice.
     accessMode: services.length ? "restricted" : "policy",
@@ -24,7 +26,7 @@ export function createAgentTokenDraft(options: AgentTokenOptions, ttlPolicy: Tok
     selectedServices,
     selectedActions: Object.fromEntries(selectedServices.map((service) => [
       service,
-      options.services.find((option) => option.service === service)!.actions.map((action) => action.action),
+      options.services.find((option) => option.service === service)!.actions.filter((action) => action.readOnly === true).map((action) => action.action),
     ])),
     resourceSelections: {},
   };
@@ -53,6 +55,7 @@ export function buildAgentTokenBoundary(draft: AgentTokenDraft, options: AgentTo
   return {
     valid: true,
     boundary: {
+      readOnly: draft.readOnly,
       allowedExecutionContexts: [...draft.selectedExecutionContexts],
       ...(draft.accessMode === "restricted" ? {
         allowedServices: [...draft.selectedServices],
@@ -69,6 +72,13 @@ export function buildAgentTokenIssuance(draft: AgentTokenDraft, options: AgentTo
   if (!draft.name.trim()) issues.push({ field: "name", message: "Enter a token name." });
   if (!draft.lifetime || !ttlPolicy.options.includes(draft.lifetime)) issues.push({ field: "lifetime", message: "Choose an available token lifetime." });
   if (!boundary.valid) issues.push(...boundary.issues);
+  if (draft.readOnly && draft.accessMode === "restricted") {
+    for (const service of draft.selectedServices) {
+      const actions = options.services.find((option) => option.service === service)?.actions ?? [];
+      const writes = agentTokenSelectedActions(draft.selectedActions, service).filter((id) => actions.some((action) => action.action === id && action.readOnly !== true));
+      if (writes.length) issues.push({ field: `service:${service}`, message: `Remove write actions from the read-only token: ${writes.join(", ")}.` });
+    }
+  }
   if (!boundary.valid || issues.length) return { valid: false, issues };
   return {
     valid: true,
@@ -81,18 +91,19 @@ export function buildAgentTokenIssuance(draft: AgentTokenDraft, options: AgentTo
 }
 
 /** Keep selected unavailable actions removable, with their reviewed effects when still known. */
-export function tokenActionChoices(options: AgentTokenOptions, service: string, contexts: string[], selected: string[]): ClassifiedAction[] {
+export function tokenActionChoices(options: AgentTokenOptions, service: string, contexts: string[], selected: string[], readOnly = false): ClassifiedAction[] {
   const actions = options.services.find((option) => option.service === service)?.actions ?? [];
   const known = new Set(actions.map((action) => action.action));
   const choices: ClassifiedAction[] = actions.flatMap((action) => {
-    const available = action.executionContexts.some((context) => contexts.includes(context));
-    if (!available && !selected.includes(action.action)) return [];
+    const inContext = action.executionContexts.some((context) => contexts.includes(context));
+    if (!inContext && !selected.includes(action.action)) return [];
+    const available = inContext && (!readOnly || action.readOnly === true);
     return [{
       action: action.action,
       description: action.description,
       readOnly: action.readOnly,
       available,
-      ...(available ? {} : { unavailableReason: "Not available in the selected execution contexts" }),
+      ...(available ? {} : { unavailableReason: !inContext ? "Not available in the selected execution contexts" : "Not allowed by the token’s read-only restriction" }),
     }];
   });
   for (const action of new Set(selected)) {

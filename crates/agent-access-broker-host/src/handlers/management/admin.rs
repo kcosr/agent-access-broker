@@ -1,14 +1,12 @@
 use crate::handlers::management::common::{
-    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
-    ManagementContext, admin_agent_token_issue_expires_at, agent_token_boundary_audit,
-    agent_token_issue_scopes, agent_token_list_query, append_management_audit_with_phase,
-    credential_input_schema_query, default_token_ttl_seconds,
-    management_audit_unavailable_response, management_committed_write_audit_completion,
-    management_context, management_context_error_response, management_pre_audited_success_response,
-    management_response, management_store_call, management_store_error_response,
-    management_success_envelope, management_success_response, management_token_store_call,
-    management_write_audit_preflight, parse_and_validate_agent_token_issue_scopes,
-    timestamp_after_seconds_checked,
+    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementContext,
+    admin_agent_token_issue_expires_at, agent_token_boundary_audit, agent_token_issue_scopes,
+    agent_token_list_query, credential_input_schema_query, default_token_ttl_seconds,
+    management_committed_write_audit_completion, management_context,
+    management_context_error_response, management_pre_audited_success_response,
+    management_store_call, management_store_error_response, management_success_response,
+    management_token_store_call, management_write_audit_preflight,
+    parse_and_validate_agent_token_issue_scopes, timestamp_after_seconds_checked,
 };
 use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
@@ -52,6 +50,8 @@ pub(crate) struct PrincipalCreateBody {
     #[serde(default)]
     role: PrincipalRole,
     self_service_enabled: Option<bool>,
+    #[serde(default)]
+    agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +61,8 @@ pub(crate) struct PrincipalAccessBody {
     role: Option<PrincipalRole>,
     #[serde(default, deserialize_with = "deserialize_present")]
     self_service_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    agent_token_issuance: Option<agent_access_core::PrincipalAgentTokenIssuance>,
 }
 
 /// Reads an optional field that, when present, must hold a value: an
@@ -95,6 +97,8 @@ pub(crate) struct GroupCreateBody {
     description: Option<String>,
     #[serde(default, deserialize_with = "deserialize_present")]
     auto_enroll_new_microsoft_users: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    agent_token_issuance: Option<agent_access_core::AgentTokenIssuanceMode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +111,8 @@ pub(crate) struct GroupPatchBody {
     status: Option<String>,
     #[serde(default, deserialize_with = "deserialize_present")]
     auto_enroll_new_microsoft_users: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    agent_token_issuance: Option<agent_access_core::AgentTokenIssuanceMode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,23 +322,6 @@ fn admin_issued_token(
     }
 }
 
-fn admin_token_success_audit_target(record: &BrokerTokenRecord) -> Option<Value> {
-    let mut target = serde_json::Map::from_iter([
-        ("principal".to_string(), json!(record.principal_id.clone())),
-        ("tokenId".to_string(), json!(record.token_id.clone())),
-        ("tokenClass".to_string(), json!(record.token_class.as_str())),
-        ("name".to_string(), json!(record.name.clone())),
-        ("expiresAt".to_string(), json!(record.expires_at.clone())),
-    ]);
-    if record.token_class == BrokerTokenClass::AgentInvoke {
-        target.insert(
-            "boundary".to_string(),
-            agent_token_boundary_audit(&record.scopes),
-        );
-    }
-    Some(Value::Object(target))
-}
-
 fn admin_token_issue_expires_at(
     config: &BrokerConfig,
     body: &TokenIssueBody,
@@ -431,6 +420,7 @@ fn admin_token_ttl_options<'a>(
 fn management_token_scopes(scopes: &Value) -> Result<Value, String> {
     if let Some(scopes) = scopes.as_object() {
         for key in [
+            "readOnly",
             "allowedExecutionContexts",
             "allowedServices",
             "serviceRestrictions",
@@ -458,6 +448,7 @@ fn toml_group_records(config: &BrokerConfig) -> Vec<GroupRecord> {
             description: None,
             status: group.status.clone(),
             auto_enroll_new_microsoft_users: false,
+            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
             created_at: None,
             created_by: None,
             updated_at: None,
@@ -1050,17 +1041,22 @@ where
         let context = owner_context;
         match management_store_call(&context, mutate).await {
             Ok(result) => {
+                let mut completion = json!({"group": result.group.group_id});
                 if let Some(change) = result.auto_enrollment_change {
+                    completion["autoEnrollNewMicrosoftUsers"] = json!({
+                        "previous": change.previous, "current": change.current,
+                    });
+                }
+                if let Some(change) = result.agent_token_issuance_change {
+                    completion["agentTokenIssuance"] = json!({
+                        "previous": change.previous, "current": change.current,
+                    });
+                }
+                if completion.as_object().is_some_and(|value| value.len() > 1) {
                     management_committed_write_audit_completion(
                         &context,
                         operation,
-                        Some(json!({
-                            "group": result.group.group_id,
-                            "autoEnrollNewMicrosoftUsers": {
-                                "previous": change.previous,
-                                "current": change.current,
-                            },
-                        })),
+                        Some(completion),
                     )
                     .await;
                 }
@@ -1136,6 +1132,7 @@ pub(crate) async fn admin_groups_create(
             display_name: body.display_name,
             description: body.description,
             auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users.unwrap_or(false),
+            agent_token_issuance: body.agent_token_issuance.unwrap_or_default(),
             created_by: actor,
         })
     })
@@ -1191,6 +1188,7 @@ pub(crate) async fn admin_groups_patch(
             description: body.description,
             status: body.status,
             auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users,
+            agent_token_issuance: body.agent_token_issuance,
             updated_by: actor,
         })
     })
@@ -1533,6 +1531,7 @@ pub(crate) async fn admin_principals_create(
             external_subject: body.external_subject,
             role: body.role,
             self_service_enabled: body.self_service_enabled,
+            agent_token_issuance: body.agent_token_issuance,
             created_by: actor,
         })
     })
@@ -1568,6 +1567,8 @@ pub(crate) async fn admin_principals_get(
     let managed_policy = context.snapshot.runtime.config().policy.authority == "managed";
     let principal_for_store = principal.clone();
     let resolved_at = Utc::now().to_rfc3339();
+    let authority =
+        super::common::agent_token_issuance_authority(context.snapshot.runtime.config());
     match management_store_call(&context, move |store| {
         let mut principal = store.principal(&principal_for_store)?;
         let membership = store.effective_membership_at(&principal_for_store, &resolved_at)?;
@@ -1577,11 +1578,12 @@ pub(crate) async fn admin_principals_get(
         } else {
             Vec::new()
         };
-        Ok((principal, membership, policy_grants))
+        let issuance_policy = store.agent_token_issuance_policy(&principal_for_store, authority)?;
+        Ok((principal, membership, policy_grants, issuance_policy))
     })
     .await
     {
-        Ok((principal, membership, policy_grants)) => {
+        Ok((principal, membership, policy_grants, issuance_policy)) => {
             let subject = principal_subject(&principal.principal_id);
             let active_policy_group_subjects = membership
                 .policy_groups
@@ -1622,7 +1624,9 @@ pub(crate) async fn admin_principals_get(
                 active_policy_group_subjects,
                 sections,
             );
-            management_success_response(&context, operation, target, json!(detail)).await
+            let mut detail = json!(detail);
+            detail["agentTokenIssuancePolicy"] = json!(issuance_policy);
+            management_success_response(&context, operation, target, detail).await
         }
         Err(error) => management_store_error_response(&context, operation, target, error).await,
     }
@@ -1854,13 +1858,16 @@ pub(crate) async fn admin_principal_access_patch(
         Err(response) => return *response,
     };
     let target = Some(json!({"principal": principal}));
-    if body.role.is_none() && body.self_service_enabled.is_none() {
+    if body.role.is_none()
+        && body.self_service_enabled.is_none()
+        && body.agent_token_issuance.is_none()
+    {
         return management_context_error_response(
             &context,
             StatusCode::BAD_REQUEST,
             operation,
             ReasonCode::InputInvalid,
-            "at least one of role or selfServiceEnabled is required",
+            "at least one of role, selfServiceEnabled, or agentTokenIssuance is required",
             target,
         )
         .await;
@@ -1876,6 +1883,7 @@ pub(crate) async fn admin_principal_access_patch(
             principal_id: principal,
             role: body.role,
             self_service_enabled: body.self_service_enabled,
+            agent_token_issuance: body.agent_token_issuance,
             actor,
         })
     })
@@ -1884,6 +1892,8 @@ pub(crate) async fn admin_principal_access_patch(
         Ok(change) => {
             let completion_target = Some(json!({
                 "principal": change.principal.principal_id,
+                "previousAgentTokenIssuance": change.previous_agent_token_issuance,
+                "agentTokenIssuance": change.principal.agent_token_issuance,
                 "previousRole": change.previous_role,
                 "role": change.principal.role,
                 "previousSelfServiceEnabled": change.previous_self_service_enabled,
@@ -2660,58 +2670,26 @@ pub(crate) async fn admin_principal_token_issue(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        let issue_request = BrokerTokenIssueRequest {
-            principal_id: principal,
-            name: body.name,
-            token_class: body.token_class,
-            scopes,
-            expires_at,
-            created_by: actor,
-        };
-        store.issue_broker_token_with_catalog(&hasher, issue_request, catalog.as_ref())
-    })
+    super::common::committed_token_issuance(
+        state,
+        context,
+        operation,
+        target,
+        false,
+        move |store, catalog| {
+            let issue_request = BrokerTokenIssueRequest {
+                principal_id: principal,
+                name: body.name,
+                token_class: body.token_class,
+                scopes,
+                expires_at,
+                created_by: actor,
+            };
+            store.issue_broker_token_with_catalog(&hasher, issue_request, catalog.as_ref())
+        },
+        |token| json!(admin_issued_token(token.token, token.record, false)),
+    )
     .await
-    {
-        Ok(token) => {
-            let success_target = admin_token_success_audit_target(&token.record);
-            let audit_envelope = management_success_envelope(
-                &context,
-                operation,
-                success_target.clone(),
-                Value::Null,
-            );
-            if let Err(error) = append_management_audit_with_phase(
-                &context.snapshot,
-                &context.request_id,
-                &context.broker_request_id,
-                &context.identity,
-                &context.source,
-                &audit_envelope,
-                ManagementAuditExtra {
-                    catalog_change: None,
-                    phase: Some("success"),
-                    verification: None,
-                },
-            )
-            .await
-            {
-                return management_audit_unavailable_response(
-                    &context.request_id,
-                    &context.broker_request_id,
-                    operation,
-                    &context.identity.principal,
-                    error,
-                );
-            }
-            let token = admin_issued_token(token.token, token.record, false);
-            management_response(
-                StatusCode::OK,
-                management_success_envelope(&context, operation, success_target, json!(token)),
-            )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_principal_agent_tokens_list(
@@ -2809,7 +2787,14 @@ pub(crate) async fn admin_principal_agent_token_options(
     if context.principal_role == Some(PrincipalRole::Auditor) {
         options.mcp = None;
     }
-    management_success_response(&context, operation, target, json!(options)).await
+    let mut options = json!(options);
+    match super::common::agent_token_issuance_policy(&context, principal.clone()).await {
+        Ok(policy) => options["agentTokenIssuancePolicy"] = json!(policy),
+        Err(error) => {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    }
+    management_success_response(&context, operation, target, options).await
 }
 
 pub(crate) async fn admin_principal_agent_token_issue(
@@ -2897,6 +2882,7 @@ pub(crate) async fn admin_principal_agent_token_issue(
         .agent_token_options_for_identity(&identity);
     let scopes = match agent_token_issue_scopes(
         &context.snapshot.runtime,
+        body.read_only,
         body.allowed_services.clone(),
         body.allowed_execution_contexts.clone(),
         body.service_restrictions.clone(),
@@ -2947,60 +2933,29 @@ pub(crate) async fn admin_principal_agent_token_issue(
     }
     let actor = context.identity.principal.clone();
     let principal_for_store = principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        store.issue_broker_token_with_catalog(
-            &hasher,
-            BrokerTokenIssueRequest {
-                principal_id: principal_for_store,
-                name: body.name,
-                token_class: BrokerTokenClass::AgentInvoke,
-                scopes,
-                expires_at,
-                created_by: actor,
-            },
-            catalog.as_ref(),
-        )
-    })
-    .await
-    {
-        Ok(token) => {
-            let success_target = admin_token_success_audit_target(&token.record);
-            let audit_envelope = management_success_envelope(
-                &context,
-                operation,
-                success_target.clone(),
-                Value::Null,
-            );
-            if let Err(error) = append_management_audit_with_phase(
-                &context.snapshot,
-                &context.request_id,
-                &context.broker_request_id,
-                &context.identity,
-                &context.source,
-                &audit_envelope,
-                ManagementAuditExtra {
-                    catalog_change: None,
-                    phase: Some("success"),
-                    verification: None,
+    super::common::committed_token_issuance(
+        state,
+        context,
+        operation,
+        target,
+        false,
+        move |store, catalog| {
+            store.issue_broker_token_with_catalog(
+                &hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: principal_for_store,
+                    name: body.name,
+                    token_class: BrokerTokenClass::AgentInvoke,
+                    scopes,
+                    expires_at,
+                    created_by: actor,
                 },
+                catalog.as_ref(),
             )
-            .await
-            {
-                return management_audit_unavailable_response(
-                    &context.request_id,
-                    &context.broker_request_id,
-                    operation,
-                    &context.identity.principal,
-                    error,
-                );
-            }
-            management_response(
-                StatusCode::OK,
-                management_success_envelope(&context, operation, success_target, json!(token)),
-            )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+        |token| json!(token),
+    )
+    .await
 }
 
 pub(crate) async fn admin_principal_agent_token_get(
@@ -3797,6 +3752,9 @@ upload_spool_dir = "upload-spool"
             management_token_scopes(&json!({"managementRight": "credentials.write"})).unwrap(),
             json!({"managementRight": "credentials.write"})
         );
+        for read_only in [true, false] {
+            assert!(management_token_scopes(&json!({"readOnly": read_only})).is_err());
+        }
         for key in [
             "allowedExecutionContexts",
             "allowedServices",

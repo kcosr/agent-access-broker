@@ -410,6 +410,7 @@ fn avery(runtime: &BrokerRuntime, config: &BrokerConfig, services: &[&str]) -> (
     let store = runtime.managed_store().unwrap();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "avery".into(),
@@ -422,6 +423,7 @@ fn avery(runtime: &BrokerRuntime, config: &BrokerConfig, services: &[&str]) -> (
         .unwrap();
     store
         .create_group(agent_access_core::GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "engineering".into(),
             display_name: None,
             description: None,
@@ -439,7 +441,7 @@ fn avery(runtime: &BrokerRuntime, config: &BrokerConfig, services: &[&str]) -> (
                 name: "laptop agent".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
                 scopes: json!({"allowedServices": services,
-                    "allowedExecutionContexts": ["default"]}),
+                    "readOnly": false, "allowedExecutionContexts": ["default"]}),
                 expires_at: None,
                 created_by: "admin".into(),
             },
@@ -799,7 +801,7 @@ async fn requests_carry_the_caller_authority_resources_and_credentials_on_stdin_
     let bob = contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     let (status, created) = invoke_as(
         &app,
@@ -1234,7 +1236,7 @@ async fn queued_calls_recheck_resources_and_credentials_after_their_permit() {
     let bob = contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     contract.respond("invoke", Some(CREATED));
     let registry = runtime.command_registry().clone();
@@ -1995,7 +1997,7 @@ async fn deadlines_and_shutdown_kill_commands_and_audit_their_authority_once() {
     let bob = contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     let registry = runtime.command_registry().clone();
     contract.hold(true);
@@ -2180,7 +2182,7 @@ async fn username_token_credentials_execute_in_both_modes_across_rewrap() {
     let bob = contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     contract.respond("invoke", Some(CREATED));
     let calls = |app: Router| {
@@ -2278,7 +2280,7 @@ async fn calls_are_fenced_again_immediately_before_the_command_starts() {
     let bob = contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["fenced"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["fenced"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     contract.respond("invoke", Some(CREATED));
 
@@ -2425,7 +2427,7 @@ async fn a_recreated_resource_without_attributes_fails_the_queued_call() {
     let bob = contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     contract.respond("invoke", Some(CREATED));
     let registry = runtime.command_registry().clone();
@@ -2519,6 +2521,7 @@ async fn personal_mode_added_after_acceptance_is_provisioned_and_verified_from_a
     let store = broker.runtime().managed_store().unwrap().clone();
     store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "avery".into(),

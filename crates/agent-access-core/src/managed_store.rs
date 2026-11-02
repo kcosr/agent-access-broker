@@ -1,3 +1,5 @@
+mod agent_token_issuance;
+pub use agent_token_issuance::*;
 mod connection_credentials;
 mod identity_access;
 mod identity_tokens;
@@ -83,7 +85,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION;
+const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION: &str = "033_agent_token_issuance";
 const MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION: &str = "032_imported_source_documents";
 const MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION: &str = "031_oidc_membership_renewal";
 const MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION: &str = "030_group_auto_enrollment";
@@ -277,6 +280,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         seed: None,
         structural_validation: imported_store::validate_imported_source_documents_structure,
     },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION,
+        checksum: "0f8a8ba569ecee69b6abcb095e71c15573ccddafcfa4cab1f0a9933683d39f9d",
+        sql: include_str!("managed_store/agent_token_issuance.sql"),
+        seed: Some(agent_token_issuance::seed),
+        structural_validation: agent_token_issuance::validate_structure,
+    },
 ];
 
 fn production_migration_catalog() -> ManagedStoreMigrationCatalog<'static> {
@@ -418,6 +428,8 @@ pub enum ManagedStoreError {
     PrincipalDisabled,
     #[error("self-service is disabled")]
     SelfServiceDisabled,
+    #[error("{}", category.message())]
+    TokenIssuanceDenied { category: TokenIssuanceDenial },
     #[error("group was not found")]
     GroupNotFound,
     #[error("resource was not found")]
@@ -523,6 +535,7 @@ impl ManagedStoreError {
             Self::PrincipalNotFound => ReasonCode::PrincipalNotFound,
             Self::PrincipalDisabled => ReasonCode::PrincipalDisabled,
             Self::SelfServiceDisabled => ReasonCode::SelfServiceDisabled,
+            Self::TokenIssuanceDenied { .. } => ReasonCode::TokenIssuanceDenied,
             Self::GroupNotFound => ReasonCode::GroupNotFound,
             Self::ResourceNotFound => ReasonCode::ResourceNotFound,
             Self::ResourceGroupNotFound => ReasonCode::ResourceGroupNotFound,
@@ -1659,8 +1672,8 @@ impl ManagedStore {
         tx.execute(
             "INSERT INTO principals
              (principal_id, kind, display_name, email, external_subject, status,
-              created_at, updated_at, disabled_at, created_by, role, self_service_enabled)
-             VALUES (?1, 'user', ?1, NULL, NULL, 'active', ?2, ?2, NULL, 'system:initial_admin', 'admin', 1)",
+              created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance)
+             VALUES (?1, 'user', ?1, NULL, NULL, 'active', ?2, ?2, NULL, 'system:initial_admin', 'admin', 1, 'inherit')",
             params![request.principal_id, now],
         )
         .map_err(sql_unavailable)?;
@@ -1742,8 +1755,8 @@ impl ManagedStore {
             conn.execute(
                 "INSERT INTO principals
                  (principal_id, kind, display_name, email, external_subject, status,
-                  created_at, updated_at, disabled_at, created_by, role, self_service_enabled)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6, NULL, ?7, ?8, ?9)",
+                  created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6, NULL, ?7, ?8, ?9, ?10)",
                 params![
                     request.principal_id,
                     request.kind,
@@ -1753,7 +1766,8 @@ impl ManagedStore {
                     now,
                     request.created_by,
                     request.role.as_str(),
-                    self_service_enabled
+                    self_service_enabled,
+                    request.agent_token_issuance.as_str()
                 ],
             )
             .map_err(sql_unavailable)?;
@@ -1794,8 +1808,8 @@ impl ManagedStore {
         conn.execute(
             "INSERT INTO principals
              (principal_id, kind, display_name, email, external_subject, status,
-              created_at, updated_at, disabled_at, created_by, role, self_service_enabled)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6, NULL, ?7, ?8, ?9)",
+              created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6, NULL, ?7, ?8, ?9, ?10)",
             params![
                 request.principal_id,
                 request.kind,
@@ -1805,7 +1819,8 @@ impl ManagedStore {
                 now,
                 request.created_by,
                 request.role.as_str(),
-                self_service_enabled
+                self_service_enabled,
+                request.agent_token_issuance.as_str()
             ],
         )
         .map_err(sql_unavailable)?;
@@ -1968,7 +1983,7 @@ impl ManagedStore {
         let mut statement = conn
             .prepare(
                 "SELECT principal_id, kind, display_name, email, external_subject, status,
-                        created_at, updated_at, disabled_at, created_by, role, self_service_enabled
+                        created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance
                  FROM principals
                  ORDER BY principal_id",
             )
@@ -2011,21 +2026,28 @@ impl ManagedStore {
         tx.execute(
             "INSERT INTO groups
              (group_id, display_name, description, status, created_at, created_by, updated_at,
-              updated_by, disabled_at, auto_enroll_new_microsoft_users)
-             VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?4, ?5, NULL, ?6)",
+              updated_by, disabled_at, auto_enroll_new_microsoft_users, agent_token_issuance)
+             VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?4, ?5, NULL, ?6, ?7)",
             params![
                 group_id,
                 normalize_optional_text(request.display_name),
                 normalize_optional_text(request.description),
                 now,
                 request.created_by,
-                request.auto_enroll_new_microsoft_users
+                request.auto_enroll_new_microsoft_users,
+                request.agent_token_issuance.as_str()
             ],
         )
         .map_err(sql_unavailable)?;
         let group = group_by_id(&tx, &group_id)?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(GroupMutationResult {
+            agent_token_issuance_change: (request.agent_token_issuance
+                != AgentTokenIssuanceMode::Disabled)
+                .then_some(GroupAgentTokenIssuanceChange {
+                    previous: AgentTokenIssuanceMode::Disabled,
+                    current: request.agent_token_issuance,
+                }),
             auto_enrollment_change: request.auto_enroll_new_microsoft_users.then_some(
                 GroupAutoEnrollmentChange {
                     previous: false,
@@ -2062,7 +2084,18 @@ impl ManagedStore {
                 previous: previous.auto_enroll_new_microsoft_users,
                 current,
             });
+        let agent_token_issuance_change = request
+            .agent_token_issuance
+            .filter(|value| *value != previous.agent_token_issuance)
+            .map(|current| GroupAgentTokenIssuanceChange {
+                previous: previous.agent_token_issuance,
+                current,
+            });
         let now = normalized_now_string();
+        if let Some(change) = &agent_token_issuance_change {
+            tx.execute("UPDATE groups SET agent_token_issuance=?2, updated_at=?3, updated_by=?4 WHERE group_id=?1",
+                params![group_id, change.current.as_str(), now, updated_by]).map_err(sql_unavailable)?;
+        }
         if let Some(change) = &auto_enrollment_change {
             tx.execute(
                 "UPDATE groups
@@ -2115,6 +2148,7 @@ impl ManagedStore {
         Ok(GroupMutationResult {
             group,
             auto_enrollment_change,
+            agent_token_issuance_change,
         })
     }
 
@@ -2144,12 +2178,12 @@ impl ManagedStore {
                  )
                  SELECT g.group_id, g.display_name, g.description, g.status, g.created_at,
                         g.created_by, g.updated_at, g.updated_by, g.disabled_at,
-                        COUNT(e.principal_id) AS member_count, g.auto_enroll_new_microsoft_users
+                        COUNT(e.principal_id) AS member_count, g.auto_enroll_new_microsoft_users, g.agent_token_issuance
                  FROM groups g
                  LEFT JOIN effective e ON e.group_id = g.group_id
                  GROUP BY g.group_id, g.display_name, g.description, g.status, g.created_at,
                           g.created_by, g.updated_at, g.updated_by, g.disabled_at,
-                          g.auto_enroll_new_microsoft_users
+                          g.auto_enroll_new_microsoft_users, g.agent_token_issuance
                  ORDER BY g.group_id",
             )
             .map_err(sql_unavailable)?;
@@ -2254,21 +2288,20 @@ impl ManagedStore {
         hasher: &BrokerTokenHasher,
         request: BrokerTokenIssueRequest,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
-        self.issue_broker_token_inner(hasher, request, false, None)
+        self.issue_broker_token_inner(hasher, request, None, None)
     }
 
     fn issue_broker_token_inner(
         &self,
         hasher: &BrokerTokenHasher,
         request: BrokerTokenIssueRequest,
-        personal: bool,
+        personal_authority: Option<AgentTokenIssuanceAuthority>,
         catalog: Option<&ManagedResourceCatalog>,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
         validate_broker_token_issue_request(&request)?;
         let expires_at = normalize_optional_timestamp(request.expires_at.as_deref(), "expiresAt")?;
         let raw_token = generate_broker_token(&request.token_class);
         let token_hash = hasher.hash(&raw_token)?;
-        let now = now_string();
         let token_id = Uuid::new_v4().to_string();
         let scopes_json = serde_json::to_string(&request.scopes)
             .map_err(|_| input_invalid("token scopes must be JSON serializable"))?;
@@ -2279,7 +2312,8 @@ impl ManagedStore {
         if request.token_class == BrokerTokenClass::AgentInvoke {
             validate_token_resource_references(&conn, &request.scopes, catalog)?;
         }
-        let principal = principal_by_id(&conn, &request.principal_id)?;
+        let now = normalized_now_string();
+        let principal = principal_by_id_without_groups(&conn, &request.principal_id)?;
         if principal.status == "disabled" {
             return Err(ManagedStoreError::PrincipalDisabled);
         }
@@ -2290,9 +2324,18 @@ impl ManagedStore {
                 "service accounts may only receive agent_invoke tokens",
             ));
         }
-        if personal {
-            require_self_service(&conn, &request.principal_id)?;
-        }
+        let issuance_policy = if let Some(authority) = personal_authority {
+            if !principal.self_service_enabled {
+                return Err(ManagedStoreError::SelfServiceDisabled);
+            }
+            let policy = agent_token_issuance::policy_at_conn(&conn, &principal, authority, &now)?;
+            let caveats = AgentInvokeTokenCaveats::parse_stored(&request.scopes)
+                .map_err(|error| input_invalid(error.to_string()))?;
+            agent_token_issuance::authorize(&policy, caveats.read_only)?;
+            Some(policy)
+        } else {
+            None
+        };
         if request.token_class == BrokerTokenClass::Admin
             && (principal.kind != "user" || !principal.role.can_read_admin())
         {
@@ -2323,6 +2366,7 @@ impl ManagedStore {
         Ok(IssuedBrokerToken {
             token: raw_token,
             record,
+            issuance_policy,
         })
     }
 
@@ -3068,8 +3112,8 @@ impl ManagedStore {
             tx.execute(
                 "INSERT INTO principals
                  (principal_id, kind, display_name, email, external_subject, status,
-                  created_at, updated_at, disabled_at, created_by, role, self_service_enabled)
-                 VALUES (?1, 'user', ?2, ?3, NULL, 'active', ?4, ?4, NULL, ?5, 'user', 1)",
+                  created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance)
+                 VALUES (?1, 'user', ?2, ?3, NULL, 'active', ?4, ?4, NULL, ?5, 'user', 1, 'inherit')",
                 params![
                     request.jit_principal_id,
                     normalized_optional_profile_value(request.display_name.as_deref()),
@@ -3676,14 +3720,16 @@ impl ManagedStore {
         &self,
         hasher: &BrokerTokenHasher,
         request: SelfAgentTokenIssueRequest,
+        authority: AgentTokenIssuanceAuthority,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
-        self.issue_self_agent_token_with_catalog(hasher, request, None)
+        self.issue_self_agent_token_with_catalog(hasher, request, authority, None)
     }
 
     pub fn issue_self_agent_token_with_catalog(
         &self,
         hasher: &BrokerTokenHasher,
         request: SelfAgentTokenIssueRequest,
+        authority: AgentTokenIssuanceAuthority,
         catalog: Option<&ManagedResourceCatalog>,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
         validate_self_agent_token_issue_request(&request)?;
@@ -3697,7 +3743,7 @@ impl ManagedStore {
                 expires_at: request.expires_at,
                 created_by: request.created_by,
             },
-            true,
+            Some(authority),
             catalog,
         )
     }
@@ -3708,7 +3754,7 @@ impl ManagedStore {
         request: BrokerTokenIssueRequest,
         catalog: Option<&ManagedResourceCatalog>,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
-        self.issue_broker_token_inner(hasher, request, false, catalog)
+        self.issue_broker_token_inner(hasher, request, None, catalog)
     }
 
     pub fn list_self_agent_tokens(
@@ -5764,6 +5810,7 @@ pub struct PrincipalRecord {
     pub groups: Vec<String>,
     pub role: PrincipalRole,
     pub self_service_enabled: bool,
+    pub agent_token_issuance: PrincipalAgentTokenIssuance,
     pub created_at: String,
     pub updated_at: String,
     pub disabled_at: Option<String>,
@@ -5803,6 +5850,7 @@ pub struct GroupRecord {
     pub description: Option<String>,
     pub status: String,
     pub auto_enroll_new_microsoft_users: bool,
+    pub agent_token_issuance: AgentTokenIssuanceMode,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
     pub updated_at: Option<String>,
@@ -5817,6 +5865,7 @@ pub struct GroupWriteRequest {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub auto_enroll_new_microsoft_users: bool,
+    pub agent_token_issuance: AgentTokenIssuanceMode,
     pub created_by: String,
 }
 
@@ -5827,6 +5876,7 @@ pub struct GroupPatchRequest {
     pub description: Option<Option<String>>,
     pub status: Option<String>,
     pub auto_enroll_new_microsoft_users: Option<bool>,
+    pub agent_token_issuance: Option<AgentTokenIssuanceMode>,
     pub updated_by: String,
 }
 
@@ -5840,6 +5890,7 @@ pub struct GroupAutoEnrollmentChange {
 pub struct GroupMutationResult {
     pub group: GroupRecord,
     pub auto_enrollment_change: Option<GroupAutoEnrollmentChange>,
+    pub agent_token_issuance_change: Option<GroupAgentTokenIssuanceChange>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -5862,6 +5913,8 @@ pub struct PrincipalWriteRequest {
     #[serde(default)]
     pub role: PrincipalRole,
     pub self_service_enabled: Option<bool>,
+    #[serde(default)]
+    pub agent_token_issuance: PrincipalAgentTokenIssuance,
     pub principal_id: String,
     pub kind: String,
     pub display_name: Option<String>,
@@ -5918,6 +5971,8 @@ pub struct SelfAgentTokenIssueRequest {
 pub struct IssuedBrokerToken {
     pub token: String,
     pub record: BrokerTokenRecord,
+    #[serde(skip)]
+    pub issuance_policy: Option<AgentTokenIssuancePolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -6448,9 +6503,10 @@ fn validate_group_patch_request(request: &GroupPatchRequest) -> Result<(), Manag
         && request.description.is_none()
         && request.status.is_none()
         && request.auto_enroll_new_microsoft_users.is_none()
+        && request.agent_token_issuance.is_none()
     {
         return Err(input_invalid(
-            "at least one of displayName, description, status, or autoEnrollNewMicrosoftUsers is required",
+            "at least one of displayName, description, status, autoEnrollNewMicrosoftUsers, or agentTokenIssuance is required",
         ));
     }
     validate_group_metadata(
@@ -6766,6 +6822,14 @@ fn validate_broker_token_issue_request(
     if request.token_class == BrokerTokenClass::AgentInvoke {
         AgentInvokeTokenCaveats::parse_issuance_structure(&request.scopes)
             .map_err(|error| input_invalid(error.to_string()))?;
+    } else if request
+        .scopes
+        .as_object()
+        .is_some_and(|scopes| scopes.contains_key("readOnly"))
+    {
+        return Err(input_invalid(
+            "readOnly is only valid for agent_invoke tokens",
+        ));
     }
     Ok(())
 }
@@ -7427,7 +7491,7 @@ fn principal_by_id_without_groups(
     let mut principal = conn
         .query_row(
             "SELECT principal_id, kind, display_name, email, external_subject, status,
-                created_at, updated_at, disabled_at, created_by, role, self_service_enabled
+                created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance
          FROM principals
          WHERE principal_id = ?1",
             params![principal_id],
@@ -7463,6 +7527,9 @@ fn principal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PrincipalReco
             rusqlite::Error::FromSqlConversionFailure(10, Type::Text, Box::new(error))
         })?,
         self_service_enabled: row.get(11)?,
+        agent_token_issuance: row.get::<_, String>(12)?.parse().map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(12, Type::Text, Box::new(error))
+        })?,
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
         disabled_at: row.get(8)?,
@@ -8019,13 +8086,13 @@ fn group_by_id(conn: &Connection, group_id: &str) -> Result<GroupRecord, Managed
          )
          SELECT g.group_id, g.display_name, g.description, g.status, g.created_at,
                 g.created_by, g.updated_at, g.updated_by, g.disabled_at,
-                COUNT(e.principal_id) AS member_count, g.auto_enroll_new_microsoft_users
+                COUNT(e.principal_id) AS member_count, g.auto_enroll_new_microsoft_users, g.agent_token_issuance
          FROM groups g
          LEFT JOIN effective e ON e.group_id = g.group_id
          WHERE g.group_id = ?1
          GROUP BY g.group_id, g.display_name, g.description, g.status, g.created_at,
                   g.created_by, g.updated_at, g.updated_by, g.disabled_at,
-                  g.auto_enroll_new_microsoft_users",
+                  g.auto_enroll_new_microsoft_users, g.agent_token_issuance",
         params![group_id, resolved_at],
         group_from_row,
     )
@@ -8060,6 +8127,9 @@ fn group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRecord> {
         disabled_at: row.get(8)?,
         member_count: member_count as u64,
         auto_enroll_new_microsoft_users: row.get(10)?,
+        agent_token_issuance: row.get::<_, String>(11)?.parse().map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(11, Type::Text, Box::new(error))
+        })?,
     })
 }
 
@@ -9530,6 +9600,7 @@ mod tests {
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/group_auto_enrollment_tests.rs");
+    include!("managed_store/agent_token_issuance_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
@@ -9629,6 +9700,7 @@ mod tests {
     fn create_alice(store: &ManagedStore) {
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -9671,6 +9743,7 @@ mod tests {
     fn create_test_group(store: &ManagedStore, group_id: &str) {
         store
             .create_group(GroupWriteRequest {
+                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
                 auto_enroll_new_microsoft_users: false,
                 group_id: group_id.to_string(),
                 display_name: None,
@@ -9799,6 +9872,7 @@ mod tests {
 
         let group = store
             .create_group(GroupWriteRequest {
+                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
                 auto_enroll_new_microsoft_users: false,
                 group_id: "users".to_string(),
                 display_name: Some("Users".to_string()),
@@ -9814,6 +9888,7 @@ mod tests {
         assert!(matches!(
             store
                 .create_group(GroupWriteRequest {
+                    agent_token_issuance: AgentTokenIssuanceMode::Disabled,
                     auto_enroll_new_microsoft_users: false,
                     group_id: "users".to_string(),
                     display_name: None,
@@ -9842,7 +9917,7 @@ mod tests {
                     principal_id: "alice".to_string(),
                     name: "alice token".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".to_string(),
                 },
@@ -9855,6 +9930,7 @@ mod tests {
 
         let disabled = store
             .patch_group(GroupPatchRequest {
+                agent_token_issuance: None,
                 auto_enroll_new_microsoft_users: None,
                 group_id: "users".to_string(),
                 display_name: Some(None),
@@ -9886,6 +9962,7 @@ mod tests {
 
         let error = store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "anonymous".to_string(),
@@ -9911,6 +9988,7 @@ mod tests {
         create_alice(&store);
         store
             .create_group(GroupWriteRequest {
+                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
                 auto_enroll_new_microsoft_users: false,
                 group_id: "users".to_string(),
                 display_name: None,
@@ -9953,6 +10031,7 @@ mod tests {
         assert!(matches!(
             store
                 .create_group(GroupWriteRequest {
+                    agent_token_issuance: AgentTokenIssuanceMode::Disabled,
                     auto_enroll_new_microsoft_users: false,
                     group_id: "anonymous".to_string(),
                     display_name: None,
@@ -10124,6 +10203,7 @@ mod tests {
         )
         .unwrap();
         let selection = json!({"resourceIds": ["repo"], "resourceGroupIds": ["group"]});
+        // This schema-015 row predates the required token ceiling in migration 033.
         let token_scopes = json!({
             "allowedServices": ["gitlab"],
             "allowedExecutionContexts": ["default"],
@@ -10175,7 +10255,9 @@ mod tests {
         assert_eq!(grant.resources.resource_ids, vec!["repo"]);
         assert_eq!(grant.resources.resource_group_ids, vec!["group"]);
         let token = store.broker_token(&token_id).unwrap();
-        assert_eq!(token.scopes, token_scopes);
+        let mut expected_token_scopes = token_scopes;
+        expected_token_scopes["readOnly"] = json!(false);
+        assert_eq!(token.scopes, expected_token_scopes);
         AgentInvokeTokenCaveats::parse_stored(&token.scopes).unwrap();
         validate_token_resource_references(&store.connection.lock().unwrap(), &token.scopes, None)
             .unwrap();
@@ -10843,6 +10925,7 @@ mod tests {
         ));
         store
             .patch_principal_access(PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: "alice".into(),
                 role: Some(PrincipalRole::ServicePolicyManager),
                 self_service_enabled: None,
@@ -11599,7 +11682,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".into(),
                     name: "existing agent".into(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".into(),
                 },
@@ -11660,6 +11743,7 @@ PRAGMA foreign_keys = ON;
         create_alice(&store);
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".into(),
@@ -12351,6 +12435,7 @@ PRAGMA foreign_keys = ON;
         let token_hasher = broker_token_hasher_for_test(72);
         let service_account = store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "svc-reporter".to_string(),
@@ -12387,6 +12472,7 @@ PRAGMA foreign_keys = ON;
         ));
         assert!(matches!(
             store.patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("svc-reporter").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -12433,7 +12519,7 @@ PRAGMA foreign_keys = ON;
                     token_class: BrokerTokenClass::AgentInvoke,
                     scopes: json!({
                         "allowedServices": ["fake"],
-                        "allowedExecutionContexts": ["internal"],
+                        "readOnly": false, "allowedExecutionContexts": ["internal"],
                         "serviceRestrictions": {
                             "fake": {
                                 "actions": ["echo"],
@@ -12464,6 +12550,7 @@ PRAGMA foreign_keys = ON;
 
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "legacy-service".to_string(),
@@ -12489,6 +12576,7 @@ PRAGMA foreign_keys = ON;
             .method;
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("legacy-service").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -12533,6 +12621,7 @@ PRAGMA foreign_keys = ON;
             .unwrap();
         assert!(matches!(
             store.create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "legacy-service".to_string(),
@@ -12700,6 +12789,7 @@ PRAGMA foreign_keys = ON;
         create_alice(&store);
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("alice").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -12727,6 +12817,7 @@ PRAGMA foreign_keys = ON;
         assert!(matches!(
             store
                 .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
                     principal_id: ("alice").into(),
                     role: Some(crate::PrincipalRole::User),
                     self_service_enabled: None,
@@ -12742,6 +12833,7 @@ PRAGMA foreign_keys = ON;
 
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".to_string(),
@@ -12754,6 +12846,7 @@ PRAGMA foreign_keys = ON;
             .unwrap();
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("bob").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -12837,6 +12930,7 @@ PRAGMA foreign_keys = ON;
         );
         reloaded
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".to_string(),
@@ -13100,6 +13194,7 @@ PRAGMA foreign_keys = ON;
         .unwrap();
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -13126,6 +13221,7 @@ PRAGMA foreign_keys = ON;
         ));
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("alice").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -13137,6 +13233,7 @@ PRAGMA foreign_keys = ON;
 
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".to_string(),
@@ -13181,15 +13278,24 @@ PRAGMA foreign_keys = ON;
             ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
         let hasher = broker_token_hasher_for_test(41);
         create_alice(&store);
+        store
+            .patch_principal_access(PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
+                actor: "admin".into(),
+            })
+            .unwrap();
 
         for scopes in [
             json!({}),
             json!({"allowedServices": ["jira"]}),
-            json!({"allowedExecutionContexts": null}),
-            json!({"allowedExecutionContexts": []}),
-            json!({"allowedExecutionContexts": ["External"]}),
-            json!({"allowedExecutionContexts": ["default", "default"]}),
-            json!({"allowedExecutionContexts": ["default"], "unknownCaveat": true}),
+            json!({"readOnly": false, "allowedExecutionContexts": null}),
+            json!({"readOnly": false, "allowedExecutionContexts": []}),
+            json!({"readOnly": false, "allowedExecutionContexts": ["External"]}),
+            json!({"readOnly": false, "allowedExecutionContexts": ["default", "default"]}),
+            json!({"readOnly": false, "allowedExecutionContexts": ["default"], "unknownCaveat": true}),
         ] {
             let error = store
                 .issue_broker_token(
@@ -13216,7 +13322,7 @@ PRAGMA foreign_keys = ON;
                     token_class: BrokerTokenClass::AgentInvoke,
                     scopes: json!({
                         "allowedServices": ["jira"],
-                        "allowedExecutionContexts": ["workstation", "external"]
+                        "readOnly": false, "allowedExecutionContexts": ["workstation", "external"]
                     }),
                     expires_at: None,
                     created_by: "admin".to_string(),
@@ -13227,11 +13333,14 @@ PRAGMA foreign_keys = ON;
             administrative.record.scopes,
             json!({
                 "allowedServices": ["jira"],
-                "allowedExecutionContexts": ["workstation", "external"]
+                "readOnly": false, "allowedExecutionContexts": ["workstation", "external"]
             })
         );
 
-        for scopes in [json!({}), json!({"allowedExecutionContexts": []})] {
+        for scopes in [
+            json!({}),
+            json!({"readOnly": false, "allowedExecutionContexts": []}),
+        ] {
             let error = store
                 .issue_self_agent_token(
                     &hasher,
@@ -13242,6 +13351,7 @@ PRAGMA foreign_keys = ON;
                         expires_at: None,
                         created_by: "alice".to_string(),
                     },
+                    AgentTokenIssuanceAuthority::Managed,
                 )
                 .unwrap_err();
             assert!(matches!(error, ManagedStoreError::InputInvalid(_)));
@@ -13253,16 +13363,17 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "multi-context self token".to_string(),
                     scopes: json!({
-                        "allowedExecutionContexts": ["workstation", "external"]
+                        "readOnly": false, "allowedExecutionContexts": ["workstation", "external"]
                     }),
                     expires_at: None,
                     created_by: "alice".to_string(),
                 },
+                AgentTokenIssuanceAuthority::Managed,
             )
             .unwrap();
         assert_eq!(
             self_issued.record.scopes,
-            json!({"allowedExecutionContexts": ["workstation", "external"]})
+            json!({"readOnly": false, "allowedExecutionContexts": ["workstation", "external"]})
         );
 
         let management = store
@@ -13292,16 +13403,26 @@ PRAGMA foreign_keys = ON;
             ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
         let hasher = broker_token_hasher_for_test(43);
         create_alice(&store);
+        store
+            .patch_principal_access(PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
+                actor: "admin".into(),
+            })
+            .unwrap();
         let issued = store
             .issue_self_agent_token(
                 &hasher,
                 SelfAgentTokenIssueRequest {
                     principal_id: "alice".to_string(),
                     name: "supervised agent".to_string(),
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "alice".to_string(),
                 },
+                AgentTokenIssuanceAuthority::Managed,
             )
             .unwrap();
 
@@ -13361,6 +13482,7 @@ PRAGMA foreign_keys = ON;
         create_alice(&store);
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".to_string(),
@@ -13378,7 +13500,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "agent".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".to_string(),
                 },
@@ -13440,7 +13562,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "expired".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: Some("2020-01-01T00:00:00Z".to_string()),
                     created_by: "admin".to_string(),
                 },
@@ -13467,7 +13589,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "race".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".to_string(),
                 },
@@ -13525,7 +13647,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "agent".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".to_string(),
                 },
@@ -13561,7 +13683,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "agent".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".to_string(),
                 },
@@ -13583,7 +13705,10 @@ PRAGMA foreign_keys = ON;
             let conn = store.connection.lock().unwrap();
             conn.execute(
                 "UPDATE broker_tokens SET scopes_json = ?2 WHERE token_id = ?1",
-                params![issued.record.token_id, r#"{"allowedExecutionContexts":[]}"#],
+                params![
+                    issued.record.token_id,
+                    r#"{"readOnly": false, "allowedExecutionContexts":[]}"#
+                ],
             )
             .unwrap();
         }
@@ -13610,6 +13735,7 @@ PRAGMA foreign_keys = ON;
         .unwrap();
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -13629,7 +13755,7 @@ PRAGMA foreign_keys = ON;
                     token_class: BrokerTokenClass::AgentInvoke,
                     scopes: json!({
                         "allowedServices": ["jira"],
-                        "allowedExecutionContexts": ["default"]
+                        "readOnly": false, "allowedExecutionContexts": ["default"]
                     }),
                     expires_at: None,
                     created_by: "admin".to_string(),
@@ -13658,7 +13784,7 @@ PRAGMA foreign_keys = ON;
                     principal_id: "alice".to_string(),
                     name: "agent2".to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts": ["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                     expires_at: None,
                     created_by: "admin".to_string(),
                 },
@@ -13693,6 +13819,7 @@ PRAGMA foreign_keys = ON;
         let ring = key_ring("k1");
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -13748,6 +13875,7 @@ PRAGMA foreign_keys = ON;
         let ring = key_ring("k1");
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -14000,6 +14128,7 @@ PRAGMA foreign_keys = ON;
         let alice = put_alice_jira_credential(&store, &ring, "alice-pat");
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".to_string(),
@@ -14391,6 +14520,7 @@ PRAGMA foreign_keys = ON;
         let ring = key_ring("k1");
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -15018,6 +15148,7 @@ PRAGMA foreign_keys = ON;
         create_alice(&store);
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".to_string(),

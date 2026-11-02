@@ -1,10 +1,11 @@
+import { AGENT_TOKEN_ISSUANCE_LABELS, PRINCIPAL_TOKEN_ISSUANCE_OPTIONS, agentTokenIssuanceDescription } from "../../lib/token-issuance-policy";
 import { AdminForm, AdminButton } from "../../components/admin-access";
 import { canWriteAdmin, ROLE_LABELS } from "../../lib/capabilities";
 import { AdminOnly } from "../../components/admin-access";
-import { useConfigStatus, usePolicyCatalog, useServicePolicyManagers } from "../../data/queries";
+import { useAdminGroups, useConfigStatus, usePolicyCatalog, useServicePolicyManagers } from "../../data/queries";
 import { usePolicyActions } from "../../mutations/policy";
 import { useModal } from "../../app/modal";
-import type { PrincipalRole } from "../../types";
+import type { PrincipalAgentTokenIssuance, PrincipalRole } from "../../types";
 // User page › Overview: profile, status and role, sign-in methods, identity token.
 import { LOCAL_SIGN_IN_EXPLANATION, LOCAL_SIGN_IN_ACKNOWLEDGMENT } from "./sign-in-methods";
 import { useEffect, useState } from "react";
@@ -53,7 +54,7 @@ export function PrincipalOverview({
         <SettingsSection title="Sign-in" description="Service accounts are noninteractive.">
           <p className="pt-prose">
             Service accounts cannot use passwords, Microsoft sign-in, browser sessions, setup tokens, or admin tokens. Administrators assign grants,
-            credentials, groups, and agent-token boundaries on the other tabs.
+            credentials, groups, and agent-token boundaries on the other tabs. Self-issuance is unavailable for service accounts.
           </p>
         </SettingsSection>
       ) : (
@@ -137,6 +138,9 @@ function RoleSection({ principal }: { principal: PrincipalDetail }) {
   const assignmentsAvailable = configQuery.data?.identityAuthority === "managed" && configQuery.data.policyAuthority === "managed";
   const assignmentsQuery = useServicePolicyManagers(assignmentsAvailable && principal.role === "service_policy_manager");
   const assignments = assignmentsQuery.data ?? [];
+  const groups = useAdminGroups().data ?? [];
+  const [agentTokenIssuance, setAgentTokenIssuance] = useState(principal.agentTokenIssuance);
+  useEffect(() => { setAgentTokenIssuance(principal.agentTokenIssuance); }, [principal.agentTokenIssuance]);
   const [role, setRole] = useState(principal.role);
   const [selfServiceEnabled, setSelfServiceEnabled] = useState(principal.selfServiceEnabled);
   useEffect(() => { setRole(principal.role); setSelfServiceEnabled(principal.selfServiceEnabled); }, [principal.role, principal.selfServiceEnabled]);
@@ -152,9 +156,9 @@ function RoleSection({ principal }: { principal: PrincipalDetail }) {
     : " Any stored direct management assignments will be removed. Assignment names are unavailable while policy is file-owned.";
   const save = () => confirm({
     title: "Update account access?",
-    body: `${principal.principalId} will have the ${ROLE_LABELS[role]} role and self-service ${selfServiceEnabled ? "enabled" : "disabled"}.${changedRole ? " All administrative API tokens for this account will be revoked." : ""}${scopeWarning}`,
+    body: `${principal.principalId} will have the ${ROLE_LABELS[role]} role and self-service ${selfServiceEnabled ? "enabled" : "disabled"}, with agent token issuance set to ${AGENT_TOKEN_ISSUANCE_LABELS[agentTokenIssuance]}. Existing token restrictions stay unchanged.${changedRole ? " All administrative API tokens for this account will be revoked." : ""}${scopeWarning}`,
     confirmLabel: "Update access", tone: "primary",
-    onConfirm: () => principals.setAccess(principal.principalId, { role, selfServiceEnabled })
+    onConfirm: () => principals.setAccess(principal.principalId, { role, selfServiceEnabled, agentTokenIssuance })
   });
   return (
     <SettingsSection title="Account access" description="One administrative role, with independent access to personal tokens, credentials and connections.">
@@ -164,9 +168,12 @@ function RoleSection({ principal }: { principal: PrincipalDetail }) {
       <SettingsRow label="Self-service">
         {writable ? <Checkbox label="Self-service enabled" checked={selfServiceEnabled} onChange={(event) => setSelfServiceEnabled(event.target.checked)} /> : <span>{principal.selfServiceEnabled ? "Enabled" : "Disabled"}</span>}
       </SettingsRow>
+      <SettingsRow label="Agent token issuance" help={agentTokenIssuanceDescription(principal.agentTokenIssuancePolicy, groups)}>
+        {writable ? <Select aria-label="Agent token issuance" value={agentTokenIssuance} onChange={(event) => setAgentTokenIssuance(event.target.value as PrincipalAgentTokenIssuance)} options={PRINCIPAL_TOKEN_ISSUANCE_OPTIONS} /> : <span>{AGENT_TOKEN_ISSUANCE_LABELS[principal.agentTokenIssuance]}</span>}
+      </SettingsRow>
       {leavingManager && configQuery.isError ? <ErrorState error={configQuery.error} onRetry={() => void configQuery.refetch()} retrying={configQuery.isFetching} /> : null}
       {leavingManager && assignmentsAvailable && assignmentsQuery.isError ? <ErrorState error={assignmentsQuery.error} onRetry={() => void assignmentsQuery.refetch()} retrying={assignmentsQuery.isFetching} /> : null}
-      <AdminOnly><div className="wb-settings-actions"><AdminButton disabled={(!changedRole && selfServiceEnabled === principal.selfServiceEnabled) || (leavingManager && !scopePreviewReady)} onClick={save}>Save access</AdminButton></div></AdminOnly>
+      <AdminOnly><div className="wb-settings-actions"><AdminButton disabled={(!changedRole && selfServiceEnabled === principal.selfServiceEnabled && agentTokenIssuance === principal.agentTokenIssuance) || (leavingManager && !scopePreviewReady)} onClick={save}>Save access</AdminButton></div></AdminOnly>
     </SettingsSection>
   );
 }

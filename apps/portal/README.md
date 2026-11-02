@@ -7,6 +7,17 @@ with read-only controls. Service policy managers work within their assigned
 services. Personal tokens, credentials and connections require the account's
 independent self-service setting.
 
+Administrators configure **Agent token issuance** under a user's **Account
+access** or a managed group's **Token issuance** section. Users start with
+**Inherit from groups** and groups with **Disabled**. Explicit account settings
+override inherited group permission. Every agent-token form starts with
+**Read-only** checked, independently of **Follow current grants** or selected
+restrictions. Read-only issuers cannot clear that restriction. A policy change
+keeps the draft and requires explicit acceptance of a newly required restriction.
+Existing tokens keep their stored restriction, shown as quiet **Read-only** text
+or a **Write-capable** warning. Disabling issuance leaves their previews and
+lifecycle controls available.
+
 On a managed group's Overview, administrators can select **Automatically add
 new Microsoft users**. Every enabled group with this setting receives new
 accounts created through Microsoft sign-in after the existing group admission

@@ -6,7 +6,7 @@ import { buildAgentTokenBoundary, buildAgentTokenIssuance, createAgentTokenDraft
 
 const ttlPolicy: TokenTtlPolicy = { defaultTtl: "8h", maxTtl: "30d", options: ["1h", "8h", "30d", "never"] };
 const options: AgentTokenOptions = {
-  policyGeneration: 1,
+  policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] },
   executionContexts: ["internal", "external"],
   resources: [], resourceGroups: [], mcp: null,
   services: [
@@ -26,6 +26,31 @@ const options: AgentTokenOptions = {
 };
 
 describe("token boundary construction", () => {
+  test("read-only is an independent, explicit ceiling for inherited previews and issuance", () => {
+    const initial = createAgentTokenDraft(options, ttlPolicy);
+    expect(initial.readOnly).toBe(true);
+    expect(initial.accessMode).toBe("policy");
+    for (const readOnly of [true, false]) {
+      const draft = { ...initial, name: "inherited", readOnly };
+      expect(buildAgentTokenBoundary(draft, options)).toEqual({ valid: true, boundary: { readOnly, allowedExecutionContexts: ["internal", "external"] } });
+      expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: true, body: { readOnly, name: "inherited", ttl: "8h", allowedExecutionContexts: ["internal", "external"] } });
+    }
+  });
+
+  test("retains reclassified writes for preview but rejects them for new read-only issuance", () => {
+    const draft = { ...createAgentTokenDraft(options, ttlPolicy, ["jira"]), name: "retained" };
+    const changed = { ...options, services: options.services.map((service) => ({ ...service, actions: service.actions.map((action) => ({ ...action, readOnly: action.action === "issue.view" ? false : action.readOnly })) })) };
+    const original = structuredClone(draft);
+    expect(buildAgentTokenBoundary(draft, changed).valid).toBe(true);
+    expect(buildAgentTokenIssuance(draft, changed, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "service:jira", message: "Remove write actions from the read-only token: issue.view." }] });
+    expect(buildAgentTokenIssuance({ ...draft, readOnly: false }, changed, ttlPolicy).valid).toBe(true);
+    expect(draft).toEqual(original);
+  });
+
+  test("read-only inherited tokens need no currently usable read action", () => {
+    const writeOnlyOptions = { ...options, services: [{ ...options.services[0], actions: options.services[0].actions.filter((action) => !action.readOnly) }] };
+    expect(buildAgentTokenIssuance({ ...createAgentTokenDraft(writeOnlyOptions, ttlPolicy), name: "future-reads" }, writeOnlyOptions, ttlPolicy).valid).toBe(true);
+  });
   test("a manually selected constructor service has no inherited actions or resource restriction", () => {
     const namedOptions = { ...options, services: [{ ...options.services[0], service: "constructor" }] };
     const draft = { ...createAgentTokenDraft(namedOptions, ttlPolicy), name: "agent", accessMode: "restricted" as const, selectedServices: ["constructor"] };
@@ -35,23 +60,23 @@ describe("token boundary construction", () => {
     expect(buildAgentTokenIssuance(draft, namedOptions, ttlPolicy).valid).toBe(false);
     const selected = { ...draft, selectedActions: { ...draft.selectedActions, constructor: ["issue.view"] } };
     expect(buildAgentTokenIssuance(selected, namedOptions, ttlPolicy)).toEqual({ valid: true, body: {
-      name: "agent", ttl: "8h", allowedExecutionContexts: ["internal", "external"], allowedServices: ["constructor"], serviceRestrictions: { constructor: { actions: ["issue.view"] } },
+      name: "agent", ttl: "8h", readOnly: true, allowedExecutionContexts: ["internal", "external"], allowedServices: ["constructor"], serviceRestrictions: { constructor: { actions: ["issue.view"] } },
     } });
   });
 
   test("service prefills and explicit empty resources work for constructor", () => {
     const namedOptions = { ...options, services: [{ ...options.services[0], service: "constructor" }] };
     const draft = createAgentTokenDraft(namedOptions, ttlPolicy, ["constructor"]);
-    expect(agentTokenSelectedActions(draft.selectedActions, "constructor")).toEqual(["issue.view", "issue.search", "issue.update"]);
+    expect(agentTokenSelectedActions(draft.selectedActions, "constructor")).toEqual(["issue.view", "issue.search"]);
     const boundary = buildAgentTokenBoundary({ ...draft, resourceSelections: { constructor: { resourceIds: [], resourceGroupIds: [] } } }, namedOptions);
     expect(boundary).toEqual({ valid: true, boundary: {
-      allowedExecutionContexts: ["internal", "external"], allowedServices: ["constructor"], serviceRestrictions: { constructor: { actions: ["issue.search", "issue.update", "issue.view"], resources: { resourceIds: [], resourceGroupIds: [] } } },
+      readOnly: true, allowedExecutionContexts: ["internal", "external"], allowedServices: ["constructor"], serviceRestrictions: { constructor: { actions: ["issue.search", "issue.view"], resources: { resourceIds: [], resourceGroupIds: [] } } },
     } });
   });
 
-  test("prefills every action of requested services and copies the initial options", () => {
+  test("prefills read actions of requested services and copies the initial options", () => {
     const draft = createAgentTokenDraft(options, ttlPolicy, ["jira"]);
-    expect(draft).toMatchObject({ name: "", lifetime: "8h", accessMode: "restricted", selectedServices: ["jira"], selectedActions: { jira: ["issue.view", "issue.search", "issue.update"] } });
+    expect(draft).toMatchObject({ name: "", lifetime: "8h", accessMode: "restricted", selectedServices: ["jira"], selectedActions: { jira: ["issue.view", "issue.search"] } });
     expect(draft.selectedExecutionContexts).toEqual(options.executionContexts);
     expect(draft.selectedExecutionContexts).not.toBe(options.executionContexts);
     expect(draft).not.toHaveProperty("options");
@@ -77,12 +102,12 @@ describe("token boundary construction", () => {
 
   test("name and lifetime affect issuance but never the access preview", () => {
     const draft = createAgentTokenDraft(options, ttlPolicy);
-    const boundary = { valid: true, boundary: { allowedExecutionContexts: ["internal", "external"] } };
+    const boundary = { valid: true, boundary: { readOnly: true, allowedExecutionContexts: ["internal", "external"] } };
     expect(buildAgentTokenBoundary(draft, options)).toEqual(boundary);
     expect(buildAgentTokenBoundary({ ...draft, name: "agent", lifetime: "removed-choice" }, options)).toEqual(boundary);
     expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "name", message: "Enter a token name." }] });
     expect(buildAgentTokenIssuance({ ...draft, name: "agent", lifetime: "removed-choice" }, options, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "lifetime", message: "Choose an available token lifetime." }] });
-    expect(buildAgentTokenIssuance({ ...draft, name: "  agent  " }, options, ttlPolicy)).toEqual({ valid: true, body: { name: "agent", ttl: "8h", allowedExecutionContexts: ["internal", "external"] } });
+    expect(buildAgentTokenIssuance({ ...draft, name: "  agent  " }, options, ttlPolicy)).toEqual({ valid: true, body: { name: "agent", ttl: "8h", readOnly: true, allowedExecutionContexts: ["internal", "external"] } });
   });
 
   test("uses exactly the same explicit boundary for preview and issuance", () => {
@@ -92,7 +117,7 @@ describe("token boundary construction", () => {
     if (!preview.valid) throw new Error("Expected a complete boundary");
     expect(buildAgentTokenIssuance(draft, options, ttlPolicy)).toEqual({ valid: true, body: { ...preview.boundary, name: "agent", never: true } });
     expect(preview.boundary.serviceRestrictions).toEqual({
-      jira: { actions: ["issue.search", "issue.update", "issue.view"], resources: { resourceIds: ["eng", "ops"], resourceGroupIds: ["docs"] } },
+      jira: { actions: ["issue.search", "issue.view"], resources: { resourceIds: ["eng", "ops"], resourceGroupIds: ["docs"] } },
       mail: { actions: ["message.view"] },
     });
   });
@@ -102,15 +127,15 @@ describe("token boundary construction", () => {
     const preview = buildAgentTokenBoundary(draft, options);
     expect(preview).toMatchObject({ valid: true, boundary: { allowedServices: ["jira"], serviceRestrictions: { jira: { resources: { resourceIds: [], resourceGroupIds: [] } } } } });
     expect(buildAgentTokenIssuance(draft, options, ttlPolicy).valid).toBe(true);
-    expect(buildAgentTokenBoundary({ ...draft, resourceSelections: {} }, options)).toMatchObject({ valid: true, boundary: { serviceRestrictions: { jira: { actions: ["issue.search", "issue.update", "issue.view"] } } } });
+    expect(buildAgentTokenBoundary({ ...draft, resourceSelections: {} }, options)).toMatchObject({ valid: true, boundary: { serviceRestrictions: { jira: { actions: ["issue.search", "issue.view"] } } } });
     const follow = buildAgentTokenBoundary({ ...draft, accessMode: "policy" }, options);
-    expect(follow).toEqual({ valid: true, boundary: { allowedExecutionContexts: ["internal", "external"] } });
+    expect(follow).toEqual({ valid: true, boundary: { readOnly: true, allowedExecutionContexts: ["internal", "external"] } });
   });
 
   test("live option refreshes retain selected references without broadening their boundary", () => {
     const draft = { ...createAgentTokenDraft(options, ttlPolicy, ["jira"]), name: "agent", resourceSelections: { jira: { resourceIds: [], resourceGroupIds: ["docs"] } } };
     const initial = structuredClone(draft);
-    const refreshed: AgentTokenOptions = { ...options, policyGeneration: 2, executionContexts: [], services: [] };
+    const refreshed: AgentTokenOptions = { ...options, policyGeneration: 2, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, executionContexts: [], services: [] };
     expect(buildAgentTokenBoundary(draft, refreshed)).toEqual(buildAgentTokenBoundary(draft, options));
     expect(buildAgentTokenIssuance(draft, refreshed, ttlPolicy).valid).toBe(true);
     expect(draft).toEqual(initial);
@@ -123,11 +148,16 @@ describe("token boundary construction", () => {
     const preview = buildAgentTokenBoundary(draft, options);
     expect(preview).toMatchObject({ valid: true, boundary: { serviceRestrictions: { mail: { actions: ["message.view", "retired.resource.read"], resources: { resourceIds: [], resourceGroupIds: ["mailboxes"] } } } } });
     const currentOnly = buildAgentTokenBoundary({ ...draft, selectedActions: { mail: ["message.view"] } }, options);
-    expect(currentOnly).toEqual({ valid: true, boundary: { allowedExecutionContexts: ["internal", "external"], allowedServices: ["mail"], serviceRestrictions: { mail: { actions: ["message.view"] } } } });
+    expect(currentOnly).toEqual({ valid: true, boundary: { readOnly: true, allowedExecutionContexts: ["internal", "external"], allowedServices: ["mail"], serviceRestrictions: { mail: { actions: ["message.view"] } } } });
   });
 });
 
 describe("token action choices", () => {
+  test("read-only disables new writes while retaining selected writes for removal", () => {
+    const choices = tokenActionChoices(options, "jira", ["internal", "external"], ["issue.update"], true);
+    expect(choices.find((action) => action.action === "issue.view")?.available).toBe(true);
+    expect(choices.find((action) => action.action === "issue.update")).toMatchObject({ available: false, readOnly: false, unavailableReason: "Not allowed by the token’s read-only restriction" });
+  });
   test("retains selected context-ineligible metadata without showing unselected ineligible actions", () => {
     const choices = tokenActionChoices(options, "jira", ["external"], ["issue.view"]);
     expect(choices.map((choice) => choice.action)).toEqual(["issue.view", "issue.update"]);

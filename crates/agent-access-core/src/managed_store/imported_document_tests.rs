@@ -242,7 +242,12 @@ fn uploaded_document_schema_031_upgrade_preserves_durable_rows() {
         require_registered_principal_for_invocation: false,
     };
     let previous = ManagedStoreMigrationCatalog {
-        migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS.len() - 1],
+        migrations: &MANAGED_STORE_MIGRATIONS[..=MANAGED_STORE_MIGRATIONS
+            .iter()
+            .position(|migration| {
+                migration.version == MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION
+            })
+            .unwrap()],
     };
     let old =
         ManagedStore::open_with_catalog(&config, ManagedStoreOpenMode::Startup, previous).unwrap();

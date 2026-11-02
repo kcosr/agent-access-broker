@@ -1,3 +1,4 @@
+import { tokenIssuanceBlocker } from "../lib/token-issuance-policy";
 import { canWriteSubject } from "../lib/capabilities";
 // Agent token mutations for the signed-in user or an administered principal,
 // and administrators' management (setup/admin) tokens. Mutations reject on
@@ -14,8 +15,8 @@ import { useModal } from "../app/modal";
 import type { AccountSubject } from "../app/active-route";
 import { usePortalInvalidation } from "../data/invalidation";
 
-export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions: AgentTokenOptions | null) {
-  const { session, attempt } = useSession();
+export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions: AgentTokenOptions | null, optionsFailed = false) {
+  const { session, attempt, sessionRefreshError } = useSession();
   const toast = useToast();
   const { confirm } = useModal();
   const invalidate = usePortalInvalidation();
@@ -35,15 +36,16 @@ export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions:
       if (!canWriteSubject(session, subject)) return "You do not have permission to issue tokens here.";
       if (administered && !owner.data) return "The token owner is unavailable. Refresh the portal and try again.";
       if (administered && owner.data?.status !== "active") return "Tokens cannot be issued for a disabled principal.";
-      const ttlPolicy = administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
-      if (!ttlPolicy) return "Token issuance policy is unavailable. Refresh the portal and try again.";
+      if (optionsFailed || sessionRefreshError) return "Token issuance policy is unavailable.";
+      const policyBlocker = tokenIssuanceBlocker(session, administered, agentTokenOptions);
+      if (policyBlocker) return policyBlocker;
       if (!agentTokenOptions) return "Token options are unavailable. Refresh the portal and try again.";
       if (agentTokenOptions.executionContexts.length === 0) return `${administered ? "This principal needs" : "You need"} an active policy grant before an execution-context-bound token can be issued.`;
       if (!principalId) return "The token owner is unavailable. Refresh the portal and try again.";
       return null;
     }
 
-    /** Opens the creation page; selected services prefill all currently granted actions. */
+    /** Opens the creation page; selected services prefill currently granted read actions. */
     function openIssuePage(services: string[] = []) {
       const blocker = issueBlocker();
       if (blocker) {
@@ -91,7 +93,7 @@ export function useAgentTokenActions(subject: AccountSubject, agentTokenOptions:
     }
 
     return { writable: canWriteSubject(session, subject), issueBlocker, openIssuePage, setPaused, revoke, confirmRevoke };
-  }, [administered, principalId, agentTokenOptions, session, attempt, toast, confirm, invalidate, owner.data, navigate, location.pathname, location.search, location.hash]);
+  }, [administered, principalId, agentTokenOptions, optionsFailed, sessionRefreshError, session, attempt, toast, confirm, invalidate, owner.data, navigate, location.pathname, location.search, location.hash]);
 }
 
 export function useManagementTokenActions() {

@@ -1828,9 +1828,11 @@ The decisions each reason allows are in the
 the decision is fixed at construction. `ReasonCode::permits_provider_failure`,
 `permits_provider_allow` and `permits_late_stream` answer the same questions in
 tests. Every other standard reason, such as caller authentication, Broker rate
-limits or management failures, is reported only by the host. A listed hook does
-not authorize upstream work in that hook, and lookup failures keep their
-concealment.
+limits or management failures, is reported only by the host.
+`ReasonCode::TokenIssuanceDenied` is the host-only HTTP 403
+`token_issuance_denied` reason for personal token issuance policy; it is never
+a provider-emittable reason. A listed hook does not authorize upstream work
+in that hook, and lookup failures keep their concealment.
 
 `upstream_rate_limited` must carry the upstream rate-limit result that
 `upstream_rate_limited(service, retry_after)` builds, naming the invoked service.

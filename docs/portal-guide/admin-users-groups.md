@@ -22,7 +22,10 @@ an administrator. See [account roles](../roles.md).
 3. Keep **Role** set to **User** for an ordinary user and select
    **Self-service enabled** so they can manage their own credentials, tokens,
    connections, and activity. A role and the self-service setting do not grant
-   upstream service access; [grants](admin-grants.md) provide that access.
+   upstream service access; [grants](admin-grants.md) provide that access. Choose
+   **Read-only** under **Agent token issuance** for this example. The default,
+   **Inherit from groups**, permits no issuance until an active group contributes
+   permission. An explicit user setting overrides every group.
 4. Choose the sign-in method. For the local-password example, select
    **Enable local password sign-in** and its acknowledgement. Then select
    **Create user**. The portal displays a fresh temporary password once;
@@ -47,7 +50,8 @@ as **Groups renew automatically**, **Renewal blocked** with its reason, or
 explains each one.
 
 **Expected outcome:** the new user opens on its account page. Confirm the
-principal ID, role, self-service setting, sign-in method, and **Groups** tab.
+principal ID, role, self-service setting, token issuance setting and resolved
+mode, sign-in method, and **Groups** tab.
 The account is ready for a [resource and grant review](admin-grants.md), followed
 by the [user's credential setup](user.md). Creating the account does not provision an
 upstream Jira account or credential.
@@ -80,7 +84,9 @@ policy-management assignment. Review the user's **Access** tab and the
 1. Select **Admin > Principals > Groups > Create group**.
 2. Enter a stable **Group ID**, a **Display name**, and a useful **Description**.
    For example, use `project-readers`, **Project Readers**, and a description
-   explaining which project and operations members need.
+   explaining which project and operations members need. Set **Agent token
+   issuance** to **Read-only** to let inheriting members issue read-only tokens;
+   its default is Disabled.
    Select **Automatically add new Microsoft users** only if new accounts
    admitted through Microsoft should receive persistent local membership.
 3. Select **Create group**, then use **Members** to add existing accounts.
@@ -92,6 +98,22 @@ policy-management assignment. Review the user's **Access** tab and the
 list. A new group starts without members or invocation grants unless you add
 them. Principal groups are distinct from **Catalog > Resource groups**:
 principal groups collect accounts; resource groups collect selectable scopes.
+
+## Review token issuance permission
+
+On a user's **Overview > Account access**, choose **Inherit from groups**,
+**Disabled**, **Read-only**, or **Write-capable** and review the resolved mode
+and source. On a managed group's **Overview > Token issuance**, choose one of
+the three group modes. The most permissive active effective group contributes;
+a Disabled group does not veto another group, while an explicit user Disabled
+setting does. A disabled group retains its setting without contributing it.
+TOML identity groups cannot supply issuance permission.
+
+Both existing and newly created accounts need explicit permission. Read-only
+permission still allows **Follow current grants**, including future reads while
+blocking writes. Changing permission leaves all existing tokens unchanged.
+Administrators can issue either token type from a principal's Tokens tab under
+their separate administrative authority; service accounts always use that path.
 
 ## Automatically add new Microsoft users
 

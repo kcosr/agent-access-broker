@@ -34,6 +34,53 @@ other accounts, or an administrator's own account, remain governed by the role.
 Existing invocation tokens, stored credentials, and OAuth refresh continue to
 work for authorized invocation. Disabling self-service does not revoke them.
 
+## Agent token issuance
+
+`agentTokenIssuance` is a separate administrator-owned setting for new personal
+`agent_invoke` tokens. It does not change role, self-service, invocation grants,
+or any existing token. New and existing accounts start at `inherit`; managed
+groups start at `disabled`. An administrator must explicitly permit self-issuance,
+including for administrator accounts. Existing tokens keep their restrictions,
+expiry and lifecycle state.
+
+| Account setting | Effect on new personal tokens |
+| --- | --- |
+| `inherit` (Inherit from groups) | Use the most permissive active effective group; no contribution means Disabled |
+| `disabled` (Disabled) | Refuse personal issuance regardless of group settings |
+| `read_only` (Read-only) | Require the token's stored `readOnly: true` restriction |
+| `write_capable` (Write-capable) | Permit either `readOnly: true` or `false` |
+
+Groups accept the three modes without `inherit`. Their contributions combine as
+Disabled < Read-only < Write-capable: a Disabled group does not veto another
+group's permission. Any explicit account setting overrides all groups. Disabled
+groups and expired Microsoft membership evidence do not contribute; a current
+local membership can still contribute. Under TOML identity authority, groups
+contribute nothing and `inherit` resolves to Disabled; only an explicit managed
+account override can permit issuance. There is no TOML group issuance setting.
+
+```bash
+agent-access admin groups create engineering-readers --agent-token-issuance read_only
+agent-access admin principals groups add alice engineering-readers
+agent-access admin principals access set alice --agent-token-issuance inherit
+agent-access admin principals access set bob --agent-token-issuance write_capable
+```
+
+Active-account, self-service, personal-management authority, grant, context,
+lifetime and resource-reference checks still apply. Eligible `system` principals
+use the same rule; service accounts cannot self-issue. An administrator using
+`POST /v1/tokens` follows this personal rule. Administrative issuance through
+`/v1/admin/principals/{principal}/agent-tokens` or the generic `/tokens` route
+uses administrator write authority independently of the owner's issuance mode
+or self-service flag. Auditors and service policy managers cannot use that bypass
+or change issuance settings.
+
+A read-only token may **Follow current grants**: later reads become usable while
+writes remain blocked. `readOnly: false` removes only that extra ceiling; it
+creates no grant. Restrictions are immutable; issue a replacement to change them.
+Disabling issuance keeps token lists, inspection, previews, pause, resume and
+revocation available under their existing permissions. Other personal management
+is unaffected. See [token creation](end-user-guide.md#issue-a-token-for-the-agent).
+
 ## Assign service policy managers
 
 Set the account's role to `service_policy_manager`, then assign one or more
@@ -64,10 +111,18 @@ agent-access admin principals access set reviewer --self-service-enabled false
 ```
 
 The corresponding endpoint is
-`PATCH /v1/admin/principals/{principal}/access`. Its JSON body accepts `role`
-and/or `selfServiceEnabled`. At least one field is required; null and unknown
+`PATCH /v1/admin/principals/{principal}/access`. Its JSON body accepts `role`,
+`selfServiceEnabled`, and/or `agentTokenIssuance`. Any one field satisfies the
+minimum, including issuance alone. At least one field is required; null and unknown
 fields are rejected. Omitted fields stay unchanged. Principal and browser
 session responses always expose singular `role` and `selfServiceEnabled`.
+Principal records include configured `agentTokenIssuance`; principal detail and
+token options also include the resolved `agentTokenIssuancePolicy`. Creating an
+existing principal again is refused with HTTP 409 and changes no settings.
+Internal onboarding upserts also preserve existing issuance overrides; only
+this access PATCH changes them. An unchanged issuance
+setting is a no-op, and a policy-only edit never revokes tokens or removes
+service-manager assignments.
 
 A real role change revokes all of the account's `admin` tokens, including a token
 used for the change itself. This prevents a previously issued auditor token from

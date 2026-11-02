@@ -693,6 +693,7 @@ async fn jira_issue_links_require_universal_token_authority_and_preserve_absence
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
             role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "agent-one".to_string(),
@@ -730,6 +731,7 @@ async fn jira_issue_links_require_universal_token_authority_and_preserve_absence
                     name: name.to_string(),
                     token_class: BrokerTokenClass::AgentInvoke,
                     scopes: json!({
+                        "readOnly": false,
                         "allowedExecutionContexts": ["default"],
                         "allowedServices": ["jira"],
                         "serviceRestrictions": {"jira": restriction}

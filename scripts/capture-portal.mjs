@@ -29,7 +29,7 @@ const accounts = {
 };
 if (section === 'all') accounts.admin = [process.env.AAB_DEMO_ADMIN_PRINCIPAL, process.env.AAB_DEMO_ADMIN_PASSWORD];
 if (section === 'all' && (stream === 'all' || stream === 'guide')) {
-  const guideAccounts = JSON.parse(await readFile(process.env.AAB_GUIDE_ACCOUNT_FILE ?? '/tmp/agent-access-broker-demo/guide-accounts.json', 'utf8'));
+  const guideAccounts = JSON.parse(await readFile(process.env.AAB_GUIDE_ACCOUNT_FILE ?? path.join(process.env.AAB_DEMO_BASE ?? '/tmp/agent-access-broker-demo', 'guide-accounts.json'), 'utf8'));
   if (guideAccounts.origin !== origin) throw new Error('Guide account origin differs from the capture origin');
   for (const persona of ['auditor', 'onboarding']) accounts[persona] = [guideAccounts[persona]?.principal, guideAccounts[persona]?.password];
 }
@@ -71,6 +71,11 @@ async function session(persona, theme, work) {
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await page.getByRole('button', { name: 'Account', exact: true }).waitFor();
     await ready(page);
+    if (persona === 'alice') {
+      const response = await page.request.get(`${origin}/v1/auth/session`);
+      const state = (await response.json()).result;
+      if (state.tokenIssuancePolicy?.selfAgentInvoke?.access?.mode !== 'write_capable') throw new Error('Alice captures require explicit write-capable personal issuance permission from the demo seed');
+    }
     if (persona === 'auditor') {
       const response = await page.request.get(`${origin}/v1/auth/session`);
       const state = (await response.json()).result;
@@ -169,12 +174,15 @@ async function adminDialogs(page) {
   await dialog.getByLabel('Principal ID', { exact: true }).fill('morgan@example.test');
   await dialog.getByLabel('Display name').fill('Morgan Demo User');
   await dialog.getByLabel('Email').fill('morgan@example.test');
+  await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('inherit');
+  await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
   await dialog.getByRole('combobox', { name: /^Groups/ }).fill('jira-users');
   await page.getByRole('option', { name: /^jira-users - Jira Users/ }).click();
   await dialog.getByRole('combobox', { name: /^Groups/ }).press('Escape');
   await dialog.getByRole('checkbox', { name: 'Enable local password sign-in', exact: true }).check();
   await dialog.getByRole('checkbox', { name: 'I authorize local password sign-in for this user independently of Microsoft sign-in.', exact: true }).check();
-  await capture(page, 'guide', 'admin-create-user-light', 'light', 'Draft user enrollment, group selection, independent local password sign-in, and self-service');
+  await dialog.getByRole('checkbox', { name: 'Self-service enabled', exact: true }).scrollIntoViewIfNeeded();
+  await capture(page, 'guide', 'admin-create-user-light', 'light', 'Draft user enrollment with explicit read-only token issuance, group selection, independent local password sign-in, and self-service');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   await visit(page, '/ui/admin/principals?kind=groups', '/v1/admin/groups');
@@ -183,7 +191,9 @@ async function adminDialogs(page) {
   await dialog.getByLabel('Group ID', { exact: true }).fill('project-readers');
   await dialog.getByLabel('Display name').fill('Project Readers');
   await dialog.getByLabel('Description').fill('People and workloads allowed to read the demo project.');
-  await capture(page, 'guide', 'admin-create-group-light', 'light', 'Draft policy group with a stable identifier and human-readable purpose');
+  await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('disabled');
+  await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
+  await capture(page, 'guide', 'admin-create-group-light', 'light', 'Draft policy group with a stable identifier, human-readable purpose and explicit read-only token issuance contribution');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   await visit(page, '/ui/admin/principals?kind=service-accounts', '/v1/admin/principals');
@@ -261,7 +271,8 @@ async function guideAdministration(page) {
   await page.getByRole('heading', { name: 'Account access', exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByLabel('Role', { exact: true })).toHaveValue('auditor');
   await expect(page.getByRole('checkbox', { name: /Self-service enabled$/ })).not.toBeChecked();
-  await capture(page, 'guide', 'admin-account-access-light', 'light', 'Administrator viewing a real documentation auditor role with personal self-service disabled');
+  await expect(page.getByLabel('Agent token issuance', { exact: true })).toHaveValue('disabled');
+  await capture(page, 'guide', 'admin-account-access-light', 'light', 'Administrator viewing a real documentation auditor role with personal self-service and agent token issuance disabled');
 
   await visit(page, '/ui/admin/principals/bob%40example.test', '/v1/admin/principals/bob%40example.test');
   await page.getByRole('button', { name: 'Disable user', exact: true }).click();
@@ -349,15 +360,21 @@ async function credentialGuide(page) {
 
 async function tokenCreation(page, destination, theme) {
   await visit(page, '/ui/tokens', '/v1/tokens');
-  if (destination === 'guide' && section === 'all') await capture(page, destination, 'user-tokens-light', theme, 'User invocation token inventory and lifecycle status');
+  if (destination === 'guide') {
+    await expect(page.getByText('Write-capable', { exact: true }).first()).toBeVisible();
+    await capture(page, destination, 'user-tokens-light', theme, 'User invocation token inventory with a stored write-capable ceiling badge and lifecycle status');
+  }
   await page.getByRole('button', { name: 'Issue token', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Issue agent token', exact: true })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Read-only', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'Read-only', exact: true })).toBeEnabled();
   await page.getByLabel('Name', { exact: true }).fill('demo-jira-reader');
   await page.getByRole('group', { name: 'Access', exact: true }).getByRole('button', { name: 'Restrict to selected', exact: true }).click();
-  await capture(page, destination, `user-token-details-${theme}`, theme, 'Synthetic unsubmitted token creation page with explicit lifetime, contexts, and restricted access');
+  await capture(page, destination, `user-token-details-${theme}`, theme, 'Synthetic unsubmitted read-only token creation page with explicit lifetime, contexts, and restricted access');
   await page.getByRole('checkbox', { name: 'jira', exact: true }).check();
   const jira = page.getByRole('group', { name: 'jira token access', exact: true });
   await jira.getByRole('checkbox', { name: 'issue.view', exact: true }).check();
+  await expect(jira.getByRole('checkbox', { name: 'issue.update', exact: true })).toBeDisabled();
   await jira.evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
   await expect(jira.getByRole('group', { name: 'Read-only', exact: true })).toBeVisible();
   await expect(jira.getByRole('group', { name: 'Write-capable', exact: true })).toBeVisible();
@@ -367,8 +384,9 @@ async function tokenCreation(page, destination, theme) {
     await page.locator('.wb-check').filter({ hasText: 'Jira project' }).getByRole('checkbox', { name: 'DEMO', exact: true }).check();
     await page.getByRole('group', { name: 'Resources and resource groups', exact: true }).evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }));
     await capture(page, destination, 'user-token-resources-light', theme, 'Synthetic unsubmitted Jira token selecting only the exact DEMO Jira project resource');
-    await page.getByRole('heading', { name: 'Issue agent token', exact: true }).evaluate(element => element.scrollIntoView({ block: 'start', behavior: 'instant' }));
-    await capture(page, destination, 'user-token-boundary-light', theme, 'Synthetic unsubmitted token page with the live summary rail and Effective access preview; no token is issued');
+    await page.getByRole('button', { name: 'Collapse Jira', exact: true }).click();
+    await page.getByRole('heading', { name: 'Effective access', exact: true }).scrollIntoViewIfNeeded();
+    await capture(page, destination, 'user-token-boundary-light', theme, 'Synthetic unsubmitted read-only token with the live summary rail and Effective access preview; action selection is collapsed and no token is issued');
   }
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   const discard = page.getByRole('alertdialog', { name: 'Discard changes?', exact: true });
@@ -440,7 +458,7 @@ try {
         .filter(entry => {
           if (stream !== 'all' && !entry.file.startsWith(`${stream}/`)) return true;
           if (section === 'all') return false;
-          return !/^\w+\/user-token-(?:details|access|resources|review|boundary)-(?:light|dark)\.png$/.test(entry.file);
+          return !/^\w+\/user-(?:tokens|token-(?:details|access|resources|review|boundary))-(?:light|dark)\.png$/.test(entry.file);
         });
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;

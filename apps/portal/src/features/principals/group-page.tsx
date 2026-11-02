@@ -1,3 +1,5 @@
+import { GROUP_TOKEN_ISSUANCE_OPTIONS } from "../../lib/token-issuance-policy";
+import type { AgentTokenIssuanceMode, GroupRecord } from "../../types";
 import { AdminButton, AdminForm, AdminIconButton } from "../../components/admin-access";
 // Admin › Principals › a group: header and URL-driven tabs (Overview,
 // Members, Grants, and Microsoft mappings when Microsoft sign-in is configured).
@@ -27,6 +29,7 @@ import {
   Main,
   PageHeader,
   plural,
+  Select,
   SettingsPage,
   SettingsRow,
   SettingsSection,
@@ -238,6 +241,7 @@ function OverviewTab(props: TabProps) {
             </div>
           </AdminForm>
         </SettingsSection>
+        <GroupTokenIssuance group={group} enabled={groupWritesEnabled} identityAuthority={identityAuthority} />
         <SettingsSection title="History">
           <KeyValue
             items={[
@@ -559,4 +563,25 @@ function MicrosoftTab(props: TabProps) {
       </List>
     </GroupFrame>
   );
+}
+
+function GroupTokenIssuance({ group, enabled, identityAuthority }: { group: GroupRecord; enabled: boolean; identityAuthority: string }) {
+  const actions = useGroupActions();
+  const [mode, setMode] = useState(group.agentTokenIssuance);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setMode(group.agentTokenIssuance); }, [group.groupId, group.agentTokenIssuance]);
+  return <SettingsSection title="Token issuance" description="Disabled does not override permission from another group. A user’s explicit setting wins.">
+    {enabled ? <AdminForm onSubmit={async (event) => {
+      event.preventDefault(); setPending(true); setError(null);
+      try { await actions.patch(group.groupId, { agentTokenIssuance: mode }); }
+      catch (failure) { setError(errorMessage(failure)); } finally { setPending(false); }
+    }}>
+      <SettingsRow label="Agent token issuance" help={group.status !== "active" ? "This group’s contribution is inactive while the group is disabled. Its setting is retained." : "The most permissive active group contributes the inherited permission."}>
+        <Select aria-label="Agent token issuance" value={mode} onChange={(event) => setMode(event.target.value as AgentTokenIssuanceMode)} options={GROUP_TOKEN_ISSUANCE_OPTIONS} disabled={pending} />
+      </SettingsRow>
+      <FormError error={error} />
+      <div className="wb-settings-actions"><AdminButton type="submit" variant="primary" pending={pending} disabled={mode === group.agentTokenIssuance}>Save token issuance</AdminButton></div>
+    </AdminForm> : <p className="pt-prose">Group token issuance is unavailable under {identityAuthority} identity authority.</p>}
+  </SettingsSection>;
 }

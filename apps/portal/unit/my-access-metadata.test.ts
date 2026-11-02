@@ -25,7 +25,7 @@ const action = (name: string, readOnly: boolean) => ({
 
 // Grants only in `internal`; the session's default context has none.
 const options: AgentTokenOptions = {
-  policyGeneration: 3,
+  policyGeneration: 3, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] },
   resources: [],
   resourceGroups: [],
   executionContexts: ["default", "internal"],

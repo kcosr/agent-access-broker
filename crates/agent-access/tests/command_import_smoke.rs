@@ -227,6 +227,7 @@ fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
     for (principal, display_name) in [("admin", None), ("avery", Some("Avery Example"))] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -240,6 +241,7 @@ fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
     }
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "admin".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -248,6 +250,7 @@ fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
         .unwrap();
     store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
             group_id: "engineering".into(),
             display_name: None,
             description: None,
@@ -280,7 +283,7 @@ fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
     let agent = issue(
         "avery",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts": ["default"]}),
+        json!({"allowedExecutionContexts": ["default"], "readOnly": false}),
     );
     Seeded {
         admin,
@@ -1056,6 +1059,8 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
             "admin",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "avery",
             "--name",
             "ops only",
@@ -1114,6 +1119,77 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
             "ticketing_project_list",
             "ticketing_whoami"
         ]
+    );
+
+    // A follow-grants read-only token excludes command writes across the real
+    // CLI invoke/send and HTTP paths while retaining permitted command reads.
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let readonly = run(
+        &admin,
+        &[
+            "admin",
+            "tokens",
+            "issue",
+            "avery",
+            "--name",
+            "read-only command access",
+            "--execution-context",
+            "default",
+            "--expires-at",
+            &expires_at,
+            "--read-only",
+            "true",
+        ],
+    );
+    assert_eq!(
+        readonly["result"]["record"]["scopes"],
+        json!({
+            "allowedExecutionContexts":["default"], "readOnly":true
+        })
+    );
+    let readonly_token = readonly["result"]["token"].as_str().unwrap();
+    let readonly_config = client_config(files, "readonly", &base, readonly_token);
+    invoke(&readonly_config, "issue.search", json!({"query":""}));
+    let inputs = json!({"project":"OPS", "summary":"read-only must refuse"});
+    let denied = run_failing(
+        &readonly_config,
+        &[
+            "invoke",
+            "ticketing.issue.create",
+            "--input-json",
+            &inputs.to_string(),
+        ],
+    );
+    assert_eq!(denied["reasonCode"], "service_action_denied");
+    assert_eq!(denied["error"]["message"], "broker token is read-only");
+    let request = write_file(
+        files,
+        "readonly-send.json",
+        json!({
+            "version":"agent-access.send.v1", "kind":"invoke", "service":"ticketing",
+            "action":"issue.create", "inputs":inputs
+        })
+        .to_string(),
+    );
+    let denied = cli(&readonly_config)
+        .args(["send", "--request-file", &request])
+        .output()
+        .unwrap();
+    assert!(!denied.status.success());
+    assert!(
+        String::from_utf8_lossy(&denied.stderr)
+            .contains("runtime catalog does not expose action ticketing.issue.create")
+    );
+    let (status, _, denied) = http_invoke(&base, readonly_token, "issue.create", inputs).await;
+    assert_eq!(status, 403);
+    assert_eq!(denied["error"]["message"], "broker token is read-only");
+    let actions = catalog_actions(&base, readonly_token).await;
+    assert!(actions.contains(&"issue.search".to_owned()));
+    assert!(!actions.contains(&"issue.create".to_owned()));
+    assert!(
+        !mcp_tool_names(&base, readonly_token)
+            .await
+            .contains(&"ticketing_issue_create".to_owned())
     );
 
     // Upgrading the command to drop one attribute, then the last one: each

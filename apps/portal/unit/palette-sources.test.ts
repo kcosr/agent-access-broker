@@ -26,7 +26,7 @@ const connection: CredentialConnection = {
 function fixture(session = admin): PaletteEntities {
   return {
     session, types: indexResourceTypes(RESOURCE_TYPES), principals: [],
-    groups: [{ groupId: "ops-id", displayName: "Platform Crew", description: "Night shift responders", status: "disabled", autoEnrollNewMicrosoftUsers: false, memberCount: 2 }],
+    groups: [{ groupId: "ops-id", displayName: "Platform Crew", description: "Night shift responders", status: "disabled", autoEnrollNewMicrosoftUsers: false, agentTokenIssuance: "disabled", memberCount: 2 }],
     catalog: { resources: [], resourceGroups: [], services: [service], executionContexts: { allowedValues: ["default"], contextRequired: false }, subjects: { users: [], groups: [{ groupId: "ops-id", displayName: "Platform Crew", status: "disabled" }], anonymous: false } },
     grants: [{ grantRef: "read-platform", subjects: ["group:ops-id"], service: "jira", actions: ["issue.view"], executionContexts: ["default"], resources: { resourceIds: [], resourceGroupIds: [] }, credentialMode: "per_user", status: "active", writable: true }],
     resources: [
@@ -35,7 +35,7 @@ function fixture(session = admin): PaletteEntities {
     ],
     resourceGroups: [{ id: "project-group", name: "Delivery projects", includedResourceIds: ["main-project"], excludedResourceIds: ["secret-project", "missing-id"], version: 1 }],
     imports: [imported("jira", "enabled"), imported("metrics", "draft")],
-    tokenOptions: { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], executionContexts: ["default"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} }] }], mcp: null },
+    tokenOptions: { policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{ service: "jira", displayName: "Issue Tracker", brokerHosts: [], executionContexts: ["default"], actions: [{ action: "issue.view", description: "Read issue details", readOnly: true, requiredScopeTypes: ["jira_project"], executionContexts: ["default"], resourceType: "jira_project", effectiveAccessByExecutionContext: {} }] }], mcp: null },
     tokens: [{ tokenId: "token-123", principalId: "alice", name: "My Agent", tokenClass: "agent", scopes: {}, createdAt: "", createdBy: "" }], credentials: { connections: [connection], retained: [] }
   };
 }

@@ -6,8 +6,16 @@ export type TokenTtlPolicy = {
   options: string[];
 };
 
+export type AgentTokenIssuanceMode = "disabled" | "read_only" | "write_capable";
+export type PrincipalAgentTokenIssuance = AgentTokenIssuanceMode | "inherit";
+export type AgentTokenIssuancePolicy = {
+  mode: AgentTokenIssuanceMode;
+  source: "user" | "groups" | "default";
+  groupIds: string[];
+};
+
 export type TokenIssuancePolicy = {
-  selfAgentInvoke: TokenTtlPolicy;
+  selfAgentInvoke?: TokenTtlPolicy & { access: AgentTokenIssuancePolicy };
   administered?: {
     agentInvoke: TokenTtlPolicy;
     userManage: TokenTtlPolicy;
@@ -107,6 +115,7 @@ export type ResourceWriteBody = Omit<ResourceRecord, "id" | "version" | "configu
 export type ResourceGroupWriteBody = Omit<ResourceGroupRecord, "id" | "version" | keyof CatalogStamp> & { id?: string; expectedVersion?: number };
 
 export type AgentTokenOptions = {
+  agentTokenIssuancePolicy: AgentTokenIssuancePolicy;
   policyGeneration: number;
   resources: ResourceDefinition[];
   resourceGroups: ResourceGroupSummary[];
@@ -114,7 +123,7 @@ export type AgentTokenOptions = {
   services: AgentTokenServiceOption[];
   /**
    * The HTTP MCP endpoint that accepts an issued token as `Authorization:
-   * Bearer`; null when there is none, or for callers that cannot issue one.
+   * Bearer`; null when no suitable endpoint is configured.
    */
   mcp: AgentTokenMcpEndpoint | null;
 };
@@ -139,7 +148,7 @@ export type EffectiveResourceAccess = { resourceType: ResourceType; clauses: Eff
 export type EffectiveAccessItem = { service: string; action: string; executionContext: string; resourceType: ResourceType | null; clauses: EffectiveAccessClause[] };
 export type EffectiveAccessResult = { policyGeneration: number; access: EffectiveAccessItem[] };
 export type GrantEffectiveAccessBody = { service: string; actions: string[]; executionContexts: string[]; resources: ResourceSelection };
-export type TokenEffectiveAccessBody = Pick<AgentTokenIssueBody, "allowedServices" | "allowedExecutionContexts" | "serviceRestrictions">;
+export type TokenEffectiveAccessBody = Pick<AgentTokenIssueBody, "readOnly" | "allowedServices" | "allowedExecutionContexts" | "serviceRestrictions">;
 export type ResourceUsage = { kind: string; id: string; service?: string | null; principalId?: string | null; viaGroupId?: string | null; effect?: string | null };
 export type ResourceUsedBy = ResourceUsage[];
 
@@ -160,6 +169,7 @@ export type AgentTokenServiceRestriction = {
 };
 
 export type AgentTokenIssueBody = {
+  readOnly: boolean;
   name: string;
   ttl?: string;
   never?: boolean;
@@ -318,6 +328,8 @@ export type BrokerTokenRecord = {
   name: string;
   tokenClass: string;
   scopes: {
+    /** Explicit on valid agent-token scopes; absent on management or retained invalid scopes. */
+    readOnly?: boolean;
     allowedServices?: string[];
     allowedExecutionContexts?: string[];
     serviceRestrictions?: Record<string, AgentTokenServiceRestriction>;
@@ -352,6 +364,7 @@ export type PrincipalRecord = {
   groups: string[];
   role: PrincipalRole;
   selfServiceEnabled: boolean;
+  agentTokenIssuance: PrincipalAgentTokenIssuance;
   createdAt: string;
   updatedAt: string;
   disabledAt?: string | null;
@@ -359,6 +372,7 @@ export type PrincipalRecord = {
 };
 
 export type GroupRecord = {
+  agentTokenIssuance: AgentTokenIssuanceMode;
   groupId: string;
   displayName?: string | null;
   description?: string | null;
@@ -444,6 +458,7 @@ export type GroupDetail = GroupRecord & {
 };
 
 export type PrincipalDetail = PrincipalRecord & {
+  agentTokenIssuancePolicy: AgentTokenIssuancePolicy;
   groupMemberships: GroupMembershipProvenance[];
   activePolicyGroupSubjects: string[];
   policyReferenceSections: PolicyReferenceSection[];
@@ -492,6 +507,8 @@ export type IdentitySummary = {
   authenticated: boolean;
   /** Present for a trusted fingerprint identity: whether its access path is read-only. */
   readOnlyAccess?: boolean;
+  /** Present for a parsed issued agent token; independent of trusted access paths. */
+  brokerToken?: { readOnly: boolean };
 };
 
 /** The limit a caller sees for one visible service on `/v1/me`; no default/override distinction. */

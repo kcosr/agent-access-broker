@@ -1,3 +1,5 @@
+import { agentTokenIssuanceDescription, selfTokenIssuanceMode, tokenIssuanceBlocker } from "../../lib/token-issuance-policy";
+import { TokenEffect } from "./token-effect";
 // A local token draft shares boundary validation between preview and issuance.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useBlocker, useNavigate, useParams, useSearchParams } from "react-router";
@@ -9,7 +11,7 @@ import { buildAgentTokenBoundary, buildAgentTokenIssuance, createAgentTokenDraft
 import { Banner, Button, Card, Checkbox, EmptyState, ErrorState, Field, Icon, Input, KeyValue, List, Main, PageHeader, Seg, Select, SkeletonBlock } from "../../workbench";
 import { DiscardChangesDialog } from "../../components/discard-changes-dialog";
 import { EffectiveAccessPanel } from "../../components/effective-access";
-import { ACTION_COLUMNS_HINT, GrantActionSelector, WriteCapability } from "../../components/grant-actions";
+import { ACTION_COLUMNS_HINT, GrantActionSelector } from "../../components/grant-actions";
 import { ResourcePicker } from "../../components/resource-picker";
 import { ServiceLabel } from "../../components/service-label";
 import { FieldGroup, FormError } from "../../components/form";
@@ -32,12 +34,14 @@ export function TokenEditorPage() {
   const { principalId } = useParams();
   const [params] = useSearchParams();
   const subject: AccountSubject = { administered: principalId !== undefined, principalId: principalId ?? session.principal ?? "" };
+  const invalidate = usePortalInvalidation();
+  useEffect(() => { void invalidate.session(); }, [invalidate]);
   const initializedOwner = useRef<string | null>(null);
   const ownerKey = `${subject.administered}:${subject.principalId}:${params.toString()}`;
   const initialized = initializedOwner.current === ownerKey;
   const owner = useAdminPrincipal(subject.principalId, subject.administered);
   const ownerActive = !subject.administered || owner.data?.status === "active";
-  const { query, options } = useAgentTokenOptions(subject, ownerActive);
+  const { query, options } = useAgentTokenOptions(subject, ownerActive, true);
   const ttlPolicy = subject.administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
   const explicitReturn = portalReturnTo(params.get("returnTo"));
   const returnTo = explicitReturn ?? tokenListPath(subject);
@@ -56,12 +60,12 @@ export function TokenEditorPage() {
   } else if (!canWriteSubject(session, subject) || !subject.principalId) {
     state = <EmptyState icon="lock" title="Token issuance unavailable">You do not have permission to issue tokens here.</EmptyState>;
   } else if ((!ttlPolicy || ttlPolicy.options.length === 0) && !initialized) {
-    state = <EmptyState icon="key" title="Token issuance unavailable">Token issuance policy is unavailable. Refresh the portal and try again.</EmptyState>;
+    state = <EmptyState icon="key" title="Token issuance unavailable">Token issuance policy is unavailable.</EmptyState>;
   } else if (!options || (options.executionContexts.length === 0 && !initialized)) {
     state = <EmptyState icon="shield" title="No active grants">{subject.administered ? "This principal needs" : "You need"} an active policy grant before an execution-context-bound token can be issued.</EmptyState>;
   } else {
     initializedOwner.current = ownerKey;
-    return <TokenEditor key={ownerKey} subject={subject} options={options} ttlPolicy={ttlPolicy ?? null} services={params.getAll("service")} returnTo={returnTo} header={<PageHeader title="Issue agent token" back={back} meta={meta} />} optionsError={query.error} retryOptions={() => { void query.refetch(); }} />;
+    return <TokenEditor key={ownerKey} subject={subject} options={options} ttlPolicy={ttlPolicy ?? null} services={params.getAll("service")} returnTo={returnTo} header={<PageHeader title="Issue agent token" back={back} meta={meta} />} optionsError={query.error} optionsRefreshing={query.isFetching} retryOptions={() => { void query.refetch(); }} />;
   }
   // A blocking state unmounts the editor, so its next initialization must
   // again require a complete issuance policy and initial grant options.
@@ -69,7 +73,7 @@ export function TokenEditorPage() {
   return <PortalPage><Main label="Issue agent token"><PageHeader title="Issue agent token" back={back} meta={meta} /><List>{state}</List></Main></PortalPage>;
 }
 
-function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, optionsError, retryOptions }: {
+function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, optionsError, optionsRefreshing, retryOptions }: {
   subject: AccountSubject;
   options: AgentTokenOptions;
   ttlPolicy: TokenTtlPolicy | null;
@@ -77,6 +81,7 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   returnTo: string;
   header: ReactNode;
   optionsError: unknown;
+  optionsRefreshing: boolean;
   retryOptions: () => void;
 }) {
   const [initial] = useState(() => createAgentTokenDraft(options, ttlPolicy!, services));
@@ -87,7 +92,7 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   const saved = useRef(false);
   const submitting = useRef(false);
   const mounted = useRef(true);
-  const { session, getSession } = useSession();
+  const { session, getSession, sessionRefreshError, retryingSession, retrySession } = useSession();
   const { setModal } = useModal();
   const issuance = useTokenIssuance();
   const invalidate = usePortalInvalidation();
@@ -95,11 +100,17 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   const pending = issuance.pending(subject);
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   const boundary = buildAgentTokenBoundary(draft, options);
-  const currentBlocker = !ttlPolicy || ttlPolicy.options.length === 0
-    ? "Token issuance policy is unavailable. Refresh the portal and try again."
-    : options.executionContexts.length === 0
-      ? `${subject.administered ? "This principal needs" : "You need"} an active policy grant before a token can be issued.`
-      : null;
+  const policyBlocker = tokenIssuanceBlocker(session, subject.administered, options);
+  const readOnlyRequired = !subject.administered && selfTokenIssuanceMode(session, options) === "read_only";
+  const currentBlocker = optionsError || sessionRefreshError
+    ? "Token issuance policy could not be refreshed."
+    : optionsRefreshing || retryingSession
+      ? "Refreshing token issuance policy."
+      : policyBlocker ?? (readOnlyRequired && !draft.readOnly
+        ? "Your account now requires read-only tokens. Apply the read-only restriction to continue."
+        : options.executionContexts.length === 0
+          ? `${subject.administered ? "This principal needs" : "You need"} an active policy grant before a token can be issued.`
+          : null);
   const request = ttlPolicy ? buildAgentTokenIssuance(draft, options, ttlPolicy) : { valid: false as const, issues: [] };
   const permitted = canWriteSubject(session, subject);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => {
@@ -174,6 +185,7 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
       navigate(tokenListPath(subject, issued.record.tokenId), { replace: true });
     } catch (failure) {
       invalidate.agentTokenOptions();
+      void invalidate.session();
       if (mounted.current) setError(errorMessage(failure));
     } finally {
       submitting.current = false;
@@ -211,8 +223,16 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
         <div className="pt-editor pt-token-editor">
           <div className="pt-token-form">
             {optionsError ? <ErrorState compact title="Couldn’t refresh token options" error={optionsError} onRetry={retryOptions} /> : null}
+            {sessionRefreshError ? <ErrorState compact title="Couldn’t refresh token issuance policy" error={sessionRefreshError} onRetry={retrySession} /> : null}
             {currentBlocker ? <Banner tone="warning" slim>{currentBlocker}</Banner> : null}
             <TokenDetails draft={draft} options={options} ttlPolicy={ttlPolicy} disabled={pending} update={update} />
+            <Card title="Token restriction">
+              <div className="pt-card-body">
+                <Checkbox label="Read-only" checked={draft.readOnly} disabled={pending || readOnlyRequired || Boolean(policyBlocker)} onChange={(event) => update({ ...draft, readOnly: event.target.checked })} description={readOnlyRequired ? "Required by your account's token issuance policy" : "Allow only actions the current catalog classifies as reads. Write grants remain blocked."} />
+                {readOnlyRequired && !draft.readOnly ? <Button disabled={pending} onClick={() => update({ ...draft, readOnly: true })}>Apply read-only restriction</Button> : null}
+                {subject.administered ? <p className="pt-prose">Owner’s self-issuance policy: {agentTokenIssuanceDescription(options.agentTokenIssuancePolicy)}. Administrative issuance can choose either restriction.</p> : null}
+              </div>
+            </Card>
             <TokenAccess subject={subject} draft={draft} options={options} disabled={pending} update={update} collapsed={collapsed} setServiceOpen={setServiceOpen} />
             <FormError error={error} />
           </div>
@@ -283,7 +303,7 @@ function serviceResourceTypes(options: AgentTokenOptions, service: string): Reso
 /** A selected service's action and resource counts for its card and the summary. */
 function serviceSelection(draft: AgentTokenDraft, options: AgentTokenOptions, service: string) {
   const selected = agentTokenSelectedActions(draft.selectedActions, service);
-  const actions = tokenActionChoices(options, service, draft.selectedExecutionContexts, selected);
+  const actions = tokenActionChoices(options, service, draft.selectedExecutionContexts, selected, draft.readOnly);
   const resourceScoped = agentTokenServiceHasResources(options, service, selected);
   const selection = resourceScoped ? agentTokenResourceSelection(draft.resourceSelections, service) : undefined;
   const chosen = selection ? [selection.resourceIds.length ? plural(selection.resourceIds.length, "resource") : null, selection.resourceGroupIds.length ? plural(selection.resourceGroupIds.length, "group") : null].filter(Boolean).join(", ") : "";
@@ -320,7 +340,7 @@ function TokenAccess({ subject, draft, options, disabled, update, collapsed, set
         <div className="pt-card-body">
           <Seg className="self-start" label="Access" value={draft.accessMode} onChange={(accessMode) => update({ ...draft, accessMode })} options={[{ value: "policy", label: "Follow current grants", disabled }, { value: "restricted", label: "Restrict to selected", disabled }]} />
           {draft.accessMode === "policy" ? (
-            <p className="pt-prose">{draft.selectedExecutionContexts.length ? `The token can use everything ${subject.administered ? "this principal is" : "you are"} granted in ${draft.selectedExecutionContexts.join(", ")}, including later grant changes in those contexts.` : "Select at least one execution context."}</p>
+            <p className="pt-prose">{draft.selectedExecutionContexts.length ? `The token can use ${draft.readOnly ? "read actions" : "everything"} ${subject.administered ? "this principal is" : "you are"} granted in ${draft.selectedExecutionContexts.join(", ")}, including later grant changes in those contexts.` : "Select at least one execution context."}</p>
           ) : (
             <fieldset className="pt-fieldset pt-fieldset--plain" id={fieldElementId("services")} disabled={disabled}>
               <legend>Services</legend>
@@ -371,7 +391,6 @@ function TokenServiceCard({ service, name, draft, options, disabled, update, ope
       subtitle={summary}
       actions={
         <>
-          <WriteCapability available={actions} selected={selected} />
           <Button size="sm" variant="ghost" icon={open ? "chevron-up" : "chevron-down"} aria-expanded={open} aria-controls={bodyId} aria-label={`${open ? "Collapse" : "Expand"} ${name ?? service}`} onClick={() => setOpen(!open)}>{open ? "Collapse" : "Expand"}</Button>
         </>
       }
@@ -401,6 +420,7 @@ function TokenSummary({ draft, options, reveal }: { draft: AgentTokenDraft; opti
   return (
     <div className="pt-card-body">
       <KeyValue labelWidth={84} items={[
+        { label: "Restriction", value: <TokenEffect readOnly={draft.readOnly} quiet /> },
         { label: "Name", value: draft.name.trim() || muted("Not named yet") },
         { label: "Lifetime", value: draft.lifetime ? lifetimeLabel(draft.lifetime) : muted("Not selected") },
         { label: "Contexts", value: draft.selectedExecutionContexts.length ? <span className="wb-mono">{draft.selectedExecutionContexts.join(", ")}</span> : muted("None selected") },
@@ -409,12 +429,11 @@ function TokenSummary({ draft, options, reveal }: { draft: AgentTokenDraft; opti
       {restricted && draft.selectedServices.length ? (
         <ul className="pt-token-summary-services">
           {draft.selectedServices.map((service) => {
-            const { selected, actions, summary } = serviceSelection(draft, options, service);
+            const { selected, summary } = serviceSelection(draft, options, service);
             return (
               <li key={service}>
                 <button type="button" className="pt-token-summary-service" onClick={() => reveal(`service:${service}`)}>
                   <span className="pt-token-summary-name">{names.get(service) ?? service}</span>
-                  <WriteCapability available={actions} selected={selected} />
                   <Icon name="chevron-right" />
                   <span className={selected.length ? "pt-token-summary-detail" : "pt-token-summary-detail is-invalid"}>{summary}</span>
                 </button>

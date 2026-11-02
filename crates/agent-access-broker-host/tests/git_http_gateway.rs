@@ -412,6 +412,7 @@ upload_spool_dir = {spool}
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "git-tester".into(),
@@ -429,7 +430,7 @@ upload_spool_dir = {spool}
     .unwrap();
     let token = store.issue_broker_token(&hasher, BrokerTokenIssueRequest {
         principal_id: "git-tester".into(), name: "test token".into(), token_class: BrokerTokenClass::AgentInvoke,
-        scopes: json!({"allowedServices": ["git"], "allowedExecutionContexts": ["default"]}),
+        scopes: json!({"allowedServices": ["git"], "readOnly":false,"allowedExecutionContexts": ["default"]}),
         expires_at: None, created_by: "test".into(),
     }).unwrap().token;
     (path, token)

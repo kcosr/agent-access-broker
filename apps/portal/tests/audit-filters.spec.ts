@@ -119,10 +119,10 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     } else if (endpoint === "/v1/resource-types") {
       body = { resourceTypes: options.resourceRecords ? RESOURCE_TYPES : [] };
     } else if (endpoint === "/v1/tokens") {
-      body = envelope([{ tokenId: TOKEN_ID, principalId: "alice", name: "agent-one", tokenClass: "agent_invoke", scopes: {}, createdAt: new Date().toISOString(), createdBy: "alice" }]);
+      body = envelope([{ tokenId: TOKEN_ID, principalId: "alice", name: "agent-one", tokenClass: "agent_invoke", scopes: { readOnly: false }, createdAt: new Date().toISOString(), createdBy: "alice" }]);
     } else if (endpoint === "/v1/tokens/options") {
       // Activity suggests the caller's granted services and actions from the token options.
-      body = envelope({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
+      body = envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
         service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["default"],
         actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [], resourceType: null, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }]
       }] });

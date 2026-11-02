@@ -36,6 +36,7 @@ fn fixture() -> Fixture {
     let store = initial.managed_store().unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
             principal_id: "admin".into(),
             kind: "user".into(),
             role: PrincipalRole::Admin,

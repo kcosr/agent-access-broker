@@ -261,6 +261,7 @@ async fn fixture() -> Fixture {
     ] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 principal_id: principal.into(),
                 kind: "user".into(),
                 role,
@@ -300,7 +301,7 @@ async fn fixture() -> Fixture {
     let agent_token = issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts": ["default"]}),
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     let admin_token = issue("admin", BrokerTokenClass::Admin, json!({}));
     drop(bootstrap);

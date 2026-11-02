@@ -1,5 +1,6 @@
+import { PRINCIPAL_TOKEN_ISSUANCE_OPTIONS, GROUP_TOKEN_ISSUANCE_OPTIONS } from "../../lib/token-issuance-policy";
 import { AdminButton } from "../../components/admin-access";
-import type { PrincipalRole } from "../../types";
+import type { AgentTokenIssuanceMode, PrincipalAgentTokenIssuance, PrincipalRole } from "../../types";
 import { ROLE_LABELS } from "../../lib/capabilities";
 // Short create forms: user or service account, and group.
 import { LOCAL_SIGN_IN_EXPLANATION, LOCAL_SIGN_IN_ACKNOWLEDGMENT } from "./sign-in-methods";
@@ -23,6 +24,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
   const [email, setEmail] = useState("");
   const [memberOf, setMemberOf] = useState<string[]>([]);
   const [role, setRole] = useState<PrincipalRole>("user");
+  const [agentTokenIssuance, setAgentTokenIssuance] = useState<PrincipalAgentTokenIssuance>("inherit");
   const [selfServiceEnabled, setSelfServiceEnabled] = useState(!serviceAccount);
   const [enableLocalPassword, setEnableLocalPassword] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -34,7 +36,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
     setPending(true);
     setError(null);
     try {
-      await principals.create({ kind, principalId, displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, enableLocalPassword });
+      await principals.create({ kind, principalId, displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, agentTokenIssuance, enableLocalPassword });
     } catch (failure) {
       setError(errorMessage(failure));
       setPending(false);
@@ -94,9 +96,11 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
         {!serviceAccount ? (
           <>
             <Field label="Role"><Select value={role} onChange={(event) => setRole(event.target.value as PrincipalRole)} options={Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label }))} /></Field>
+            <Field label="Agent token issuance"><Select value={agentTokenIssuance} onChange={(event) => setAgentTokenIssuance(event.target.value as PrincipalAgentTokenIssuance)} options={PRINCIPAL_TOKEN_ISSUANCE_OPTIONS} /></Field>
             <Checkbox label="Self-service enabled" description="Manage personal tokens, credentials, connections and activity." checked={selfServiceEnabled} onChange={(event) => setSelfServiceEnabled(event.target.checked)} />
           </>
         ) : null}
+        {serviceAccount ? <p className="pt-prose">Self-issuance is unavailable for service accounts. Administrators can issue their agent tokens.</p> : null}
         <FormError error={error} />
       </div>
     </Modal>
@@ -109,6 +113,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
   const [groupId, setGroupId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [agentTokenIssuance, setAgentTokenIssuance] = useState<AgentTokenIssuanceMode>("disabled");
   const [autoEnrollNewMicrosoftUsers, setAutoEnrollNewMicrosoftUsers] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,7 +128,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         setPending(true);
         setError(null);
         try {
-          await groups.create({ groupId, displayName, description, autoEnrollNewMicrosoftUsers });
+          await groups.create({ groupId, displayName, description, autoEnrollNewMicrosoftUsers, agentTokenIssuance });
         } catch (failure) {
           setError(errorMessage(failure));
           setPending(false);
@@ -155,6 +160,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         <Field label="Description" optional>
           <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
         </Field>
+        {groupWritesEnabled ? <Field label="Agent token issuance" hint="Disabled does not override another group’s permission. An explicit account setting wins."><Select value={agentTokenIssuance} onChange={(event) => setAgentTokenIssuance(event.target.value as AgentTokenIssuanceMode)} options={GROUP_TOKEN_ISSUANCE_OPTIONS} /></Field> : <p className="pt-prose">Group token issuance is unavailable under {identityAuthority} identity authority.</p>}
         <GroupEnrollmentCheckbox checked={autoEnrollNewMicrosoftUsers} onChange={(event) => setAutoEnrollNewMicrosoftUsers(event.target.checked)} disabled={!groupWritesEnabled} />
         <FormError error={error} />
       </div>
