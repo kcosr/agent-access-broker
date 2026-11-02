@@ -312,7 +312,9 @@ All notable changes to this project are documented in this file.
   on every page, token tables span the pane, the Users table hides an empty
   Email column and shows principal IDs in full, the audit table no longer
   scrolls sideways at 1024 pixels, and principal headers and credential drawers
-  no longer repeat the role or status.
+  no longer repeat the role or status. Grant and user drawers keep their main
+  actions in one row and move the rest to a More actions menu, and monospace
+  table cells sit on the row's text baseline.
 
 - Import-review fields use compact labels and responsive rows so long operation
   names do not overlap adjacent controls. Portal primary actions and information

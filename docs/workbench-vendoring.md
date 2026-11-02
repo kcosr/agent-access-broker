@@ -11,7 +11,7 @@ named `workbench-ui` or `workbench-ui-kit`.
 [`VENDORED.md`](../apps/portal/src/workbench/VENDORED.md) records the upstream
 commit, and [`VENDORED.json`](../apps/portal/src/workbench/VENDORED.json) records
 the copied file hashes. The current pin is
-`f6e0735a25a29ac2bfeb48ef9cf9604724f5ec6c`. The copied components, helpers and
+`e3a45539778987dd99e9a8e4520b6fa46e27f82a`. The copied components, helpers and
 styles originated in `kcosr/gh-dash` and were extracted into the shared kit.
 The snapshot also includes the kit's MIT `LICENSE`, local fonts and a portable
 verifier.

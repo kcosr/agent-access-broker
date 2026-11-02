@@ -432,12 +432,6 @@ function PrincipalDrawer({ principal, onClose, returnFocus }: { principal: Princ
           <Button variant="primary" icon="external" href={paths.principal(principal.principalId)}>
             Open
           </Button>
-          <Button icon="shield" href={paths.principal(principal.principalId, "grants")}>
-            Grants
-          </Button>
-          <Button icon="key" href={paths.principal(principal.principalId, "tokens")}>
-            Tokens
-          </Button>
           {session.auditQueryable ? (
             <Button variant="ghost" icon="history" href={auditListPath("admin", { principal: principal.principalId })}>
               View audit
@@ -445,6 +439,10 @@ function PrincipalDrawer({ principal, onClose, returnFocus }: { principal: Princ
           ) : null}
         </>
       }
+      secondaryActions={[
+        { id: "grants", label: "Grants", icon: "shield", href: paths.principal(principal.principalId, "grants") },
+        { id: "tokens", label: "Tokens", icon: "key", href: paths.principal(principal.principalId, "tokens") }
+      ]}
     >
       <DrawerSection title="Details">
         <KeyValue

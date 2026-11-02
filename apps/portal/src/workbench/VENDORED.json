@@ -1,5 +1,5 @@
 {
-  "commit": "f6e0735a25a29ac2bfeb48ef9cf9604724f5ec6c",
+  "commit": "e3a45539778987dd99e9a8e4520b6fa46e27f82a",
   "files": {
     ".gitattributes": "b204f987d9c4231fe20681f6c0c36db0f558a3ff0b4e9a1072881864c43ade29",
     "components/AppShell.tsx": "51bda1415ba64ed285a6204bc7a8179b6abdb72c7648013aa2d11a205f163a22",
@@ -8,7 +8,7 @@
     "components/Combobox.tsx": "0aaf55fd0b13b1ec80532dfd9afdc01531f64931a1f21d21bcb88a4021b20e06",
     "components/CommandPalette.tsx": "119af3a96cbae758a9121fbef9299db3ebec0aece303f6871c477db654f8ebc2",
     "components/CopyBlock.tsx": "286aac649b6206d56b7561bee811bf56367c973b29aeab8908ec717bfed4fe48",
-    "components/Drawer.tsx": "4b81945cbfa506e6b3328bda0e4d7a27e371d77460285f31703897e06b5562f1",
+    "components/Drawer.tsx": "aa0c8a2ff64f6aee92a660c003fa27978414a648dd736ffed4e20ca40154ee22",
     "components/ExpandableTextarea.tsx": "de7e10a4a99859327c97210ea1f3b313a9c6e932e0a02e275d4807ffbcdd12ef",
     "components/FilterInput.tsx": "601e9c43a2a7f97d20f024661fd4ba71124d66ba908a100a18a03b325090eaab",
     "components/Form.tsx": "b9b4f765b5b0141f321ed7b22af15dfdbc66fb0a4c2b014cc70da770e4913353",
@@ -111,11 +111,11 @@
     "styles/media-frame.css": "deb3a888f2b717f500566241c9f6bda305c5ba86543c4ba1096d9dc7217af7fe",
     "styles/overlays.css": "956cf15bbdb5ce5cf6370299bfd4015fcdcc9f971f4bc20c09a7b84047a271e1",
     "styles/pages.css": "d701d321c30485972ca84f77fe9b88410759b9638089b32e12932eb24be2081f",
-    "styles/quiet.css": "60afc57a041e8287cae200afcd9869f3c1275a68fc45dddbbe67e5db2b06dc4a",
+    "styles/quiet.css": "8b17f8990876439554692da94eba35ee0c80e2f685ef2998424db5167a829ac8",
     "styles/shell.css": "491255d1350567b3ba25dc563947816091d589f3dca419fade3df334b953a6d5",
     "styles/states.css": "0cb6a035db68db2d5145569f8eed2c002690964763f5d5bc688bb6dcaf0859c6",
     "styles/status.css": "fad936ad6214b714e06b7a8e5639749ab62deee159907c1891a5730a9c1b31d2",
-    "styles/table.css": "021e5efdfcfec7629b32a4a4f956409fdb661f3b366af946a663a49b06922ca6",
+    "styles/table.css": "91ea433277e9bf49964ab4f3437b079a941dab333c2cf0f00f600b49afe543c3",
     "styles/tokens.css": "ff7d557cf8e8bac4aff54bdae72b7f34ac33c9f8f24b1ac34fed72b27bb8d6c9",
     "styles/utilities.css": "e7853fec875f68d79564f1e26ed1524f2232e8748421d392a61b8a02f0bbdd24",
     "verify-vendor.mjs": "1d33ce0f47b632719953b45545bf8988609f369f0fba0c82a11e5e8eafb4d763"

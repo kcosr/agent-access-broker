@@ -361,11 +361,13 @@
     letter-spacing: 0;
     text-transform: none;
   }
-  /* one-line rows are 42px whatever they hold (a switch, row actions) */
+  /* one-line rows are 42px whatever they hold (a switch, row actions);
+     the padding centres a line of text, as baseline cells take no share
+     of the row's height */
   [data-wb-style="quiet"] .wb-table td,
   [data-wb-style="quiet"] .wb-table tbody th[scope="row"] {
     height: 42px;
-    padding-block: 6px;
+    padding-block: calc((42px - 1lh) / 2) 6px;
   }
   [data-wb-style="quiet"] .wb-table--compact {
     --wb-table-head-h: 30px;
@@ -377,6 +379,17 @@
   [data-wb-style="quiet"] .wb-table--compact td,
   [data-wb-style="quiet"] .wb-table--compact tbody th[scope="row"] {
     height: 32px;
+    padding-block: calc((32px - 1lh) / 2) 3px;
+  }
+  /* centred cells keep even padding */
+  [data-wb-style="quiet"]
+    .wb-table
+    :is(td, tbody th[scope="row"]):has(svg, .wb-avatar) {
+    padding-block: 6px;
+  }
+  [data-wb-style="quiet"]
+    .wb-table--compact
+    :is(td, tbody th[scope="row"]):has(svg, .wb-avatar) {
     padding-block: 3px;
   }
   [data-wb-style="quiet"] .wb-table tbody tr.is-selected,

@@ -1041,6 +1041,16 @@ test("local browser login supports administration, self-service credentials, tok
     await page.getByRole("main").getByRole("link", { name: "Principals", exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/admin\/principals\?kind=service-accounts$/);
     await expect(tableRow(page, "Reporting Service")).toBeVisible();
+    // The summary drawer keeps Open as a button; its section links sit in the More actions menu.
+    await tableRow(page, "Reporting Service").getByRole("link", { name: "Reporting Service", exact: true }).click();
+    const accountDrawer = drawer("Reporting Service");
+    await expect(accountDrawer.getByRole("link", { name: "Open", exact: true })).toBeVisible();
+    await accountDrawer.getByRole("button", { name: "More actions", exact: true }).click();
+    await expect(page.getByRole("menu", { name: "More actions", exact: true }).getByRole("menuitem")).toHaveText(["Grants", "Tokens"]);
+    await page.keyboard.press("Escape");
+    await expect(accountDrawer.getByRole("button", { name: "More actions", exact: true })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(accountDrawer).toHaveCount(0);
 
     await sidebar.getByRole("button", { name: /^Users/ }).click();
     await page.getByRole("button", { name: "Create user", exact: true }).click();
@@ -1457,6 +1467,11 @@ test("local browser login supports administration, self-service credentials, tok
     const grantRow = tableRow(page, grantRef);
     await expect(await columnCell(grantRow, "Subjects")).toHaveText("User Access, Alice Updated");
     await expect(grantRow.getByRole("link", { name: `Edit ${grantRef}`, exact: true })).toBeAttached();
+    // Edit stays a button; the grant's other actions sit in the drawer's More actions menu.
+    await grantDrawer.getByRole("button", { name: "More actions", exact: true }).click();
+    await expect(page.getByRole("menu", { name: "More actions", exact: true }).getByRole("menuitem")).toHaveText(["Duplicate", "Disable", "Delete"]);
+    await page.keyboard.press("Escape");
+    await expect(grantDrawer.getByRole("button", { name: "More actions", exact: true })).toBeFocused();
 
     await grantDrawer.getByRole("link", { name: "Edit", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/ui/admin/policies/${grantRef}/edit$`));
