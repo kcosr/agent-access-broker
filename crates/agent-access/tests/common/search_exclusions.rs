@@ -7,6 +7,7 @@ use agent_access_core::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::process::Command;
 
 #[derive(Clone, Copy)]
@@ -251,6 +252,63 @@ pub fn denied(value: &Value, reason: &str) {
     assert_eq!(value["reasonCode"], reason, "{value}");
     assert!(value.get("result").is_none(), "{value}");
     assert!(!value.to_string().contains("DENIED_CONTENT"), "{value}");
+    assert!(!value.to_string().contains("PRIVATE_LITERAL"), "{value}");
+}
+
+pub fn negation_audit(
+    broker: &RunningBroker,
+    service: &str,
+    action: &str,
+    query: &Value,
+    version: u64,
+    operands: &[(&str, &str)],
+) {
+    let expected_hashes = json!(
+        operands
+            .iter()
+            .map(|(_, value)| format!("{:x}", Sha256::digest(value.as_bytes())))
+            .collect::<Vec<_>>()
+    );
+    let audit = broker.audit().unwrap();
+    let records = audit.require_action(service, action);
+    let successful = records
+        .into_iter()
+        .filter(|record| {
+            record["decision"] == "allow"
+                && record["auditInputs"].as_array().is_some_and(|inputs| {
+                    inputs
+                        .iter()
+                        .any(|input| input["input"] == "query" && input["value"] == *query)
+                })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !successful.is_empty(),
+        "the configured audit input must retain the caller query"
+    );
+    for record in successful {
+        let provider = &record["providerAudit"];
+        assert_eq!(provider["queryAstVersion"], version, "{record}");
+        assert_eq!(provider["textOperandHashes"], expected_hashes, "{record}");
+        let clauses = provider["queryShape"]["filter"]["children"]
+            .as_array()
+            .unwrap();
+        let mut without_inputs = record.clone();
+        without_inputs
+            .as_object_mut()
+            .unwrap()
+            .remove("auditInputs");
+        let diagnostics = without_inputs.to_string();
+        for (field, value) in operands {
+            assert!(
+                clauses
+                    .iter()
+                    .any(|clause| { clause["field"] == *field && clause["operator"] == "!~" }),
+                "{provider}"
+            );
+            assert!(!diagnostics.contains(value), "{diagnostics}");
+        }
+    }
 }
 
 pub fn documentation(
@@ -282,6 +340,50 @@ pub fn documentation(
             .find(|entry| entry["name"] == *field)
             .unwrap();
         assert_eq!(inventory["operators"], json!(["=", "!=", "IN", "NOT IN"]));
+    }
+    let text_fields: &[&str] = if service == "jira" {
+        &["summary", "description"]
+    } else {
+        &["title", "text"]
+    };
+    let inventory = documentation[grammar]["fields"].as_array().unwrap();
+    for field in text_fields {
+        let entry = inventory
+            .iter()
+            .find(|entry| entry["name"] == *field)
+            .unwrap();
+        assert_eq!(entry["operators"], json!(["~", "!~"]));
+    }
+    for entry in inventory {
+        let name = entry["name"].as_str().unwrap();
+        assert_eq!(
+            entry["operators"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("!~")),
+            text_fields.contains(&name),
+            "{entry}"
+        );
+    }
+    if service == "jira" {
+        assert!(
+            documentation[grammar]["customFields"]["operators"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("!~"))
+        );
+        assert!(
+            entry["description"]
+                .as_str()
+                .unwrap()
+                .contains("text negation")
+        );
+        assert!(
+            entry["inputSchema"]["properties"]["query"]["properties"]["value"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("text negation")
+        );
     }
     let detail = run(
         broker,

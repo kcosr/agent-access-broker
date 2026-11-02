@@ -104,13 +104,17 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **Jira and Confluence search exclusions.** JQL `project` and `key`/`issuekey`,
-  and CQL `space` and `id`/`content.id`, accept `!=` and `NOT IN` within effective
-  access. Jira searchable-field discovery reports those operators when upstream
-  supports them. Exclusion-only Jira queries require a finite project scope or
-  an additional filter. Confluence queries put the fixed positive content type
-  first while preserving policy restrictions and grouped caller filters. See
-  [Jira search](docs/providers-jira.md) and [Confluence search](docs/providers-confluence.md).
+- **Jira and Confluence search exclusions and text negation.** JQL `project`
+  and `key`/`issuekey`, and CQL `space` and `id`/`content.id`, accept `!=` and
+  `NOT IN` within effective access. Jira `summary`, `description`, and compatible
+  custom fields accept `!~`; Confluence `title` and `text` accept it for pages and
+  blogs. Jira searchable-field discovery reports operators only when upstream
+  supports them.
+  Jira queries made only of project/key exclusions and text negation require a
+  finite project scope or an additional filter. Confluence queries put the fixed
+  positive content type first while preserving policy restrictions and grouped
+  caller filters. See [Jira search](docs/providers-jira.md) and
+  [Confluence search](docs/providers-confluence.md).
   ([#94](https://github.com/kcosr/agent-access-broker/pull/94))
 
 - **Jira comment bodies in batches.** `issue.view` accepts `includeComments`

@@ -9,8 +9,8 @@ use wiremock::{
 
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const ROUTE: &str = "/ex/jira/11111111-2222-4333-8444-555555555555/rest/api/3/search/jql";
-const QUERY: &str = "project != PRIVATE AND project NOT IN (ARCHIVE, SANDBOX) AND key != PRIVATE-1 AND issuekey NOT IN (PRIVATE-2, OTHER-2)";
-const CANONICAL: &str = "project != PRIVATE AND project NOT IN (ARCHIVE, SANDBOX) AND key != PRIVATE-1 AND key NOT IN (PRIVATE-2, OTHER-2)";
+const QUERY: &str = "project != PRIVATE AND project NOT IN (ARCHIVE, SANDBOX) AND key != PRIVATE-1 AND issuekey NOT IN (PRIVATE-2, OTHER-2) AND summary !~ \"obsolete\" AND description !~ \"deprecated\" AND cf[12345] !~ \"privateValue\"";
+const CANONICAL: &str = "project != PRIVATE AND project NOT IN (ARCHIVE, SANDBOX) AND key != PRIVATE-1 AND key NOT IN (PRIVATE-2, OTHER-2) AND summary !~ \"obsolete\" AND description !~ \"deprecated\" AND cf[12345] !~ \"privateValue\"";
 
 async fn start(server: &MockServer, shape: GrantShape) -> (RunningBroker, Tokens) {
     let application = IsolatedBroker::new(
@@ -73,10 +73,17 @@ async fn mount(server: &MockServer) -> Arc<Mutex<String>> {
         .and(path(ROUTE))
         .respond_with(move |_: &wiremock::Request| {
             let project = returned.lock().unwrap().clone();
-            ResponseTemplate::new(200).set_body_json(json!({"isLast":true,"issues":[{
-                "id":"60001","key":format!("{project}-1"),"fields":{"project":{"key":project},
-                "summary":if project=="PROJ" {"Visible result"} else {"DENIED_CONTENT"}}
-            }]}))
+            let mut issues = vec![json!({
+                "id":"60001","key":"PROJ-1","fields":{"project":{"key":"PROJ"},
+                "summary":"Visible result"}
+            })];
+            if project != "PROJ" {
+                issues.push(json!({
+                    "id":"60002","key":format!("{project}-2"),
+                    "fields":{"project":{"key":project},"summary":"DENIED_CONTENT"}
+                }));
+            }
+            ResponseTemplate::new(200).set_body_json(json!({"isLast":true,"issues":issues}))
         })
         .mount(server)
         .await;
@@ -155,6 +162,14 @@ async fn jira_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         .find(|tool| tool["_meta"]["agent-access/action"] == "search")
         .unwrap();
     assert!(tool.get("documentation").is_none());
+    assert!(
+        tool["description"]
+            .as_str()
+            .unwrap()
+            .contains("text negation")
+    );
+    assert!(tool["inputSchema"]["properties"]["inputs"]["properties"]["query"]["properties"]["value"]["description"]
+        .as_str().unwrap().contains("text negation"));
     let described = mcp
         .request(
             "tools/call",
@@ -190,8 +205,20 @@ async fn jira_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
             expected
         );
     }
+    access::negation_audit(
+        &broker,
+        "jira",
+        "search",
+        &inputs(QUERY)["query"],
+        4,
+        &[
+            ("summary", "obsolete"),
+            ("description", "deprecated"),
+            ("cf[12345]", "privateValue"),
+        ],
+    );
 
-    let grouped = "project = PRIVATE OR (project != ARCHIVE AND key != PRIVATE-1)";
+    let grouped = "project = PRIVATE OR (summary !~ \"obsolete\" AND key != PRIVATE-1)";
     allowed(&access::invoke(
         &broker,
         &tokens.narrowed,
@@ -228,6 +255,9 @@ async fn jira_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         inputs("project = \"*\""),
         inputs("project = *"),
         inputs("key != \"*\""),
+        inputs("text !~ \"PRIVATE_LITERAL\""),
+        inputs("status !~ \"PRIVATE_LITERAL\""),
+        inputs("cf[12345] !~ PRIVATE_LITERAL"),
     ] {
         access::denied(
             &access::http(&broker, &tokens.narrowed, "jira", "search", &invalid).await,
@@ -237,6 +267,19 @@ async fn jira_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
     for token in [&tokens.disjoint, &tokens.ungranted] {
         access::denied(
             &access::http(&broker, token, "jira", "search", &inputs(QUERY)).await,
+            "service_action_denied",
+        );
+    }
+    for project in ["PRIVATE", "OTHER"] {
+        access::denied(
+            &access::http(
+                &broker,
+                &tokens.narrowed,
+                "jira",
+                "search",
+                &json!({"query":{"type":"jql","value":QUERY},"projects":[project]}),
+            )
+            .await,
             "service_action_denied",
         );
     }
@@ -271,7 +314,7 @@ async fn jira_exclusions_keep_all_except_policy_and_reject_unbounded_dispatch() 
     let returned = mount(&server).await;
     let (broker, tokens) = start(&server, GrantShape::AllExcept).await;
     // Naming/excluding PRIVATE is a filter, not a request to acquire PRIVATE authority.
-    let query = "project = PRIVATE OR (key != PRIVATE-1 AND status = Done)";
+    let query = "project = PRIVATE OR (summary !~ \"obsolete\" AND status = Done)";
     allowed(&access::invoke(
         &broker,
         &tokens.unrestricted,
@@ -285,6 +328,9 @@ async fn jira_exclusions_keep_all_except_policy_and_reject_unbounded_dispatch() 
         "project != PRIVATE",
         "issuekey NOT IN (PRIVATE-1)",
         "project != PRIVATE OR (key != OTHER-1 AND project NOT IN (ARCHIVE))",
+        "summary !~ \"obsolete\"",
+        "description !~ \"deprecated\" AND cf[12345] !~ \"privateValue\"",
+        "summary !~ \"obsolete\" OR (key != OTHER-1 AND description !~ \"deprecated\")",
     ] {
         access::denied(
             &access::invoke(

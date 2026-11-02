@@ -10,9 +10,8 @@ use wiremock::{
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const ROUTE: &str =
     "/ex/confluence/11111111-2222-4333-8444-555555555555/wiki/rest/api/content/search";
-const QUERY: &str = "space != PRIVATE AND space NOT IN (ARCHIVE, SANDBOX) AND id != 999 AND content.id NOT IN (888, 777)";
-const CANONICAL: &str =
-    "space != PRIVATE AND space NOT IN (ARCHIVE, SANDBOX) AND id != 999 AND id NOT IN (888, 777)";
+const QUERY: &str = "space != PRIVATE AND space NOT IN (ARCHIVE, SANDBOX) AND id != 999 AND content.id NOT IN (888, 777) AND title !~ \"obsolete\" AND text !~ \"deprecated\"";
+const CANONICAL: &str = "space != PRIVATE AND space NOT IN (ARCHIVE, SANDBOX) AND id != 999 AND id NOT IN (888, 777) AND title !~ \"obsolete\" AND text !~ \"deprecated\"";
 
 async fn start(server: &MockServer, shape: GrantShape) -> (RunningBroker, Tokens) {
     let application = IsolatedBroker::new(
@@ -74,15 +73,35 @@ async fn start(server: &MockServer, shape: GrantShape) -> (RunningBroker, Tokens
 async fn mount(server: &MockServer) -> Arc<Mutex<String>> {
     let space = Arc::new(Mutex::new("ENG".to_string()));
     let returned = space.clone();
-    Mock::given(method("GET")).and(path(ROUTE)).respond_with(move |request: &wiremock::Request| {
-        let space = returned.lock().unwrap().clone();
-        let cql = request.url.query_pairs().find(|(key,_)|key=="cql").unwrap().1;
-        let kind = if cql.contains("type = blogpost") {"blogpost"} else {"page"};
-        ResponseTemplate::new(200).set_body_json(json!({"results":[{
-            "id":"123456","type":kind,"status":"current","space":{"key":space},
-            "title":if space=="ENG" {"Visible result"} else {"DENIED_CONTENT"},"version":{"number":1}
-        }]}))
-    }).mount(server).await;
+    Mock::given(method("GET"))
+        .and(path(ROUTE))
+        .respond_with(move |request: &wiremock::Request| {
+            let space = returned.lock().unwrap().clone();
+            let cql = request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "cql")
+                .unwrap()
+                .1;
+            let kind = if cql.contains("type = blogpost") {
+                "blogpost"
+            } else {
+                "page"
+            };
+            let mut results = vec![json!({
+                "id":"123456","type":kind,"status":"current","space":{"key":"ENG"},
+                "title":"Visible result","version":{"number":1}
+            })];
+            if space != "ENG" {
+                results.push(json!({
+                    "id":"123457","type":kind,"status":"current","space":{"key":space},
+                    "title":"DENIED_CONTENT","version":{"number":1}
+                }));
+            }
+            ResponseTemplate::new(200).set_body_json(json!({"results":results}))
+        })
+        .mount(server)
+        .await;
     space
 }
 
@@ -209,8 +228,16 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
                 expected
             );
         }
+        access::negation_audit(
+            &broker,
+            "confluence",
+            action,
+            &inputs(QUERY)["query"],
+            3,
+            &[("title", "obsolete"), ("text", "deprecated")],
+        );
 
-        let grouped = "space = PRIVATE OR (space != ARCHIVE AND id != 999)";
+        let grouped = "space = PRIVATE OR (title !~ \"obsolete\" AND text !~ \"deprecated\")";
         allowed(
             &access::invoke(
                 &broker,
@@ -264,6 +291,9 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
             inputs("space = \"*\""),
             inputs("space = *"),
             inputs("id != \"*\""),
+            inputs("space !~ \"PRIVATE_LITERAL\""),
+            inputs("label !~ \"PRIVATE_LITERAL\""),
+            inputs("title !~ PRIVATE_LITERAL"),
         ] {
             access::denied(
                 &access::http(&broker, &tokens.narrowed, "confluence", action, &invalid).await,
@@ -273,6 +303,19 @@ async fn confluence_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         for token in [&tokens.disjoint, &tokens.ungranted] {
             access::denied(
                 &access::http(&broker, token, "confluence", action, &inputs(QUERY)).await,
+                "service_action_denied",
+            );
+        }
+        for space in ["PRIVATE", "OPS"] {
+            access::denied(
+                &access::http(
+                    &broker,
+                    &tokens.narrowed,
+                    "confluence",
+                    action,
+                    &json!({"query":{"type":"cql","value":QUERY},"spaces":[space]}),
+                )
+                .await,
                 "service_action_denied",
             );
         }
@@ -318,7 +361,7 @@ async fn confluence_exclusions_keep_all_except_policy_for_pages_and_blogs() {
             &format!("type = {kind} AND space NOT IN (PRIVATE) AND ({CANONICAL})"),
         )
         .await;
-        let grouped = "space = PRIVATE OR (space != ARCHIVE AND id != 999)";
+        let grouped = "space = PRIVATE OR (title !~ \"obsolete\" AND text !~ \"deprecated\")";
         allowed(
             &access::invoke(
                 &broker,

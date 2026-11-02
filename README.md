@@ -73,11 +73,14 @@ supported operators come from both Jira and Broker's bounded grammar. Project
 view and search have independent grants.
 
 Jira and Confluence searches accept `!=` and `NOT IN` for project/space and
-issue-key/content-ID filters. Omit `projects` or `spaces` to search effective
+issue-key/content-ID filters. Jira supports `!~` text negation on `summary`,
+`description`, and compatible custom fields; Confluence supports it on `title`
+and `text` for pages and blogs. Omit `projects` or `spaces` to search effective
 access, including token restrictions and policy exclusions; wildcard scope
 entries are unsupported. Caller exclusions only filter that authorized search.
-Jira queries containing only project or issue-key exclusions need a finite
-project scope or an additional filter such as `updated >= -7d`. See the
+Jira queries containing only project/issue-key exclusions, text negation, or a
+combination of those clauses need a finite project scope or an additional filter
+such as `updated >= -7d`. See the
 [JQL](docs/providers-jira.md#search-and-jql) and
 [CQL](docs/providers-confluence.md#search-and-cql) contracts.
 

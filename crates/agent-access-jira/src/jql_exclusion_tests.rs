@@ -132,6 +132,13 @@ async fn exclusion_only_searches_require_finite_effective_scope_before_dispatch(
         "project != ARCHIVE AND key NOT IN (PRIVATE-1)",
         "(project != ARCHIVE OR issuekey != PRIVATE-1) AND (key NOT IN (SANDBOX-2) OR project NOT IN (LEGACY)) ORDER BY updated DESC",
         "project != PROJ",
+        "summary !~ 'obsolete'",
+        "description !~ 'deprecated'",
+        "cf[12345] !~ 'legacy'",
+        "summary !~ 'obsolete' AND description !~ 'deprecated'",
+        "summary !~ 'obsolete' OR cf[12345] !~ 'legacy'",
+        "(project != ARCHIVE OR summary !~ 'obsolete') AND (cf[12345] !~ 'legacy' OR key NOT IN (PRIVATE-1)) ORDER BY updated DESC",
+        "description !~ '' AND project != ARCHIVE",
     ] {
         for excluded in [vec![], vec!["PRIVATE".to_string()]] {
             let broad = SearchAuthorizationScope::excluding_exact_values(excluded);
@@ -150,7 +157,7 @@ async fn exclusion_only_searches_require_finite_effective_scope_before_dispatch(
             assert!(
                 error
                     .message
-                    .contains("only project or issue-key exclusions")
+                    .contains("only project/issue-key exclusions or text negation")
             );
             for value in ["ARCHIVE", "SANDBOX", "PRIVATE", "PROJ", "LEGACY"] {
                 assert!(!error.message.contains(value));
@@ -184,6 +191,11 @@ async fn ordinary_clauses_keep_broad_searches_and_grouped_policy_composition() {
         "(project != ARCHIVE OR key != PRIVATE-1) AND updated >= -7d",
         "(key != ARCHIVE-1 AND project != LEGACY) OR project = PRIVATE",
         "key != ARCHIVE-1 AND issuekey = PROJ-1",
+        "status != Done",
+        "summary !~ 'obsolete' AND status != Done",
+        "(summary !~ 'obsolete' OR cf[12345] !~ 'legacy') AND updated >= -7d",
+        "summary !~ 'obsolete' OR updated >= -7d",
+        "project != PRIVATE AND description !~ 'deprecated' AND text ~ 'release'",
     ] {
         for (scope, expected) in [
             (
@@ -257,7 +269,7 @@ async fn exclusion_filters_preserve_full_page_containment_and_current_issue_iden
             );
             let error = provider
                 .invoke(invocation(
-                    json!({"query":{"type":"jql","value":"project != ARCHIVE OR key = PRIVATE-9"}}),
+                    json!({"query":{"type":"jql","value":"(project != ARCHIVE AND summary !~ 'obsolete') OR key = PRIVATE-9"}}),
                     scope.clone(),
                 ))
                 .await

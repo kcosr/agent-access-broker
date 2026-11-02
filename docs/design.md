@@ -1509,16 +1509,24 @@ Caller project/issue-key and space/content-ID exclusions are query filters,
 never sources of authority or resource lookup requests. They do not subtract
 caller-written keys from the authorization boundary; upstream aliases and renames
 still resolve to objects whose actual current project or space must be authorized.
+Text negation (`!~`) likewise filters admitted authority. Jira accepts it for
+`summary`, `description`, and custom-field references, with field/searcher
+compatibility checked upstream; its aggregate `text` field accepts only `~`.
+Confluence accepts `!~` for `title` and `text` in page and blog searches.
+No text operand triggers metadata or content reads, and search remains
+independent of searchable-field discovery.
 
-Jira's enhanced search endpoint requires a bounded query. Empty or ordering-only
-JQL and filters made only of project/issue-key exclusions require finite
-authorized projects, either from policy or an explicit selection. With all or
-all-except access, these queries require explicit authorized `projects` or an
-additional filter such as `updated >= -7d`. Nested `AND`/`OR` groups containing
-only resource exclusions follow the same rule. Other nonempty filters retain
-Jira's endpoint-specific validation. Confluence emits the fixed positive
-page/blog content-type predicate first, then any policy space predicate, then
-the grouped caller filter, including with unrestricted all-space access.
+Jira's enhanced search endpoint requires a bounded query. Broker's local guard
+requires finite authorized projects for empty or ordering-only JQL, and for
+filters whose every clause is a project/issue-key `!=` or `NOT IN` exclusion or
+text negation (`!~`). With all or all-except access, these queries require
+explicit authorized `projects` or an additional filter such as `updated >= -7d`.
+Nested `AND`/`OR` groups containing only those clauses follow the same rule.
+This guard does not implement Jira's complete query-bound analysis; other
+nonempty filters retain Jira's endpoint-specific validation. Confluence emits
+the fixed positive page/blog content-type predicate first, then any policy
+space predicate, then the grouped caller filter, including with unrestricted
+all-space access.
 Empty text-mode queries remain invalid. Malformed syntax, unsupported grammar,
 and query complexity limits use
 `input_invalid` with safe syntax guidance; authorization and returned-resource

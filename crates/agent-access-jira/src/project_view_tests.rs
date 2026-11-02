@@ -176,7 +176,7 @@ async fn identity_is_checked_before_field_discovery_and_no_raw_payload_is_releas
     );
     assert_eq!(
         response.result["fields"]["items"][0]["operators"],
-        json!(["IS EMPTY", "IS NOT EMPTY", "~"])
+        json!(["IS EMPTY", "IS NOT EMPTY", "~", "!~"])
     );
     assert_eq!(response.result["fields"]["truncated"], false);
     assert!(response.result.get("versions").is_none());
@@ -305,7 +305,45 @@ fn fields_filter_unsupported_operators_and_preserve_stable_custom_identity() {
     assert_eq!(items[1]["id"], "fixVersions");
     assert_eq!(items[1]["jqlReference"], "fixVersion");
     assert_eq!(items[1]["operators"], json!(["=", "IN"]));
-    assert_eq!(items[2]["operators"], json!(["~"]));
+    assert_eq!(items[2]["operators"], json!(["~", "!~"]));
+}
+
+#[test]
+fn text_negation_discovery_requires_a_reported_operator_not_a_type_name() {
+    for reference in ["summary", "description", "cf[12345]"] {
+        for (reported, expected) in [
+            (json!(["~", "!~", "unknown"]), json!(["~", "!~"])),
+            (json!(["~"]), json!(["~"])),
+            (json!([" !~ "]), json!(["!~"])),
+            (json!([]), json!([])),
+        ] {
+            // Java type names are opaque upstream metadata. The configured
+            // searcher's reported operators determine discovery capabilities.
+            for type_name in ["java.lang.String", "vendor.CustomField"] {
+                let value = json!({"visibleFieldNames":[{
+                    "value":reference,"displayName":"Field",
+                    "types":[type_name],"operators":reported
+                }]});
+                let items = searchable_fields(&value).unwrap();
+                if expected == json!([]) {
+                    assert!(items.is_empty());
+                } else {
+                    assert_eq!(items.len(), 1);
+                    assert_eq!(items[0]["jqlReference"], reference);
+                    assert_eq!(items[0]["operators"], expected);
+                    assert_eq!(items[0]["types"], json!([type_name]));
+                }
+            }
+        }
+    }
+    for reference in ["project", "key", "text", "status", "fixVersion"] {
+        let items = searchable_fields(&json!({"visibleFieldNames":[{
+            "value":reference,"displayName":"Field",
+            "types":["java.lang.String"],"operators":["!~"]
+        }]}))
+        .unwrap();
+        assert!(items.is_empty(), "{reference}");
+    }
 }
 
 #[test]

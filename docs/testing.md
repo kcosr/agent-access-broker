@@ -1308,6 +1308,12 @@ operators, quoted text operands, bounded lists, canonicalization, and project
 scope composition. Malformed IDs, field-name aliases, custom-field functions,
 and sorting are rejected. Project-view fixtures intersect upstream operators
 with that grammar and distinguish omitted, empty and truncated metadata sections.
+Text-negation cases cover `summary`, `description`, and `cf[ID]` `!~`, reject
+aggregate `text !~`, and preserve quoted operands, diagnostic hashes and the
+narrow exclusion-only guard. Search fixtures verify that custom-field searches
+need no metadata lookup and preserve `upstream_failed` for an incompatible
+searcher. Continuation cases reject changed text polarity or operands before
+dispatch and separately cover changes to the composed authorization constraint.
 
 Jira descriptor completeness tests enumerate every declared issue-description
 and comment-body result path, including mutation readbacks, and the issue-view
@@ -1949,20 +1955,22 @@ that real Confluence Cloud accepts the broker-emitted CQL field/operator subset
 through the public CLI and broker surface.
 
 Coverage includes `space` and `id`/`content.id` inequality and list exclusions,
-including negative-leading caller clauses and nested groups. These cases expect
-successful upstream acceptance of the broker's type-first composition. The
-existing `parent IN` case separately records its documented upstream limitation;
-do not mark the new exclusion cases as expected failures.
+plus `title` and `text` negation (`!~`), including negative-leading caller clauses
+and nested groups. These cases expect successful upstream acceptance of the
+broker's type-first composition. The existing `parent IN` case separately records
+its documented upstream limitation; do not mark the exclusion or text-negation
+cases as expected failures.
 
 This live harness invokes page search with explicit spaces. The ordinary
 `jira_smoke::search_exclusions` and `confluence_smoke::search_exclusions` suites
 exercise the production providers against synthetic HTTP servers through real
 Broker startup, typed CLI, generic invoke, JSON send, HTTP and stdio MCP. They
 cover omitted scopes, grant/token intersection, all-except grants, grouped `OR`,
-wildcard text versus invalid wildcard scope keys, local no-dispatch denials,
-and whole-response containment rejection. Confluence's offline fixtures cover
-both pages and blogs. These deterministic checks do not establish live upstream
-compatibility, and a skipped live harness is not passing conformance evidence.
+text negation, wildcard text versus invalid wildcard scope keys, local
+no-dispatch denials, and whole-response containment rejection. Confluence's
+offline fixtures cover both pages and blogs. These deterministic checks do not
+establish live upstream compatibility, and a skipped live harness is not passing
+conformance evidence.
 
 The checked-in example manifest is shape documentation only:
 
@@ -1972,6 +1980,11 @@ crates/agent-access/tests/fixtures/confluence-cql-conformance.example.json
 
 Copy that file outside the repository, replace fake values with stable tenant
 fixtures, and keep the live manifest outside git.
+External manifests must declare all current required coverage tags, including
+the title/text negation cases and negative-leading groups. Add those cases to
+an existing manifest before running it with this version; missing coverage fails
+validation before a live search. The checked-in example and its non-ignored
+self-check track the required tags together.
 
 ```bash
 AGENT_ACCESS_RUN_CONFORMANCE_SMOKE=1 \

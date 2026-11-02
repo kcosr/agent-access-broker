@@ -10,9 +10,9 @@ use super::list_mcp;
 
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const API: &str = "/ex/jira/11111111-2222-4333-8444-555555555555/rest/api/3";
-const QUERY: &str = r#"cf[12345] ~ "EXT-4812" AND fixVersion = "2.4""#;
+const QUERY: &str = r#"cf[12345] !~ "EXT-4812" AND fixVersion = "2.4""#;
 const CONSTRAINED_QUERY: &str =
-    r#"(cf[12345] ~ "EXT-4812" AND fixVersion = 2.4) AND project IN (PROJ)"#;
+    r#"(cf[12345] !~ "EXT-4812" AND fixVersion = 2.4) AND project IN (PROJ)"#;
 
 async fn start(server: &MockServer, access: JiraAccess, actions: &[&str]) -> RunningBroker {
     let application = IsolatedBroker::new(
@@ -265,7 +265,7 @@ async fn jira_project_view_discovers_then_searches_across_cli_http_and_mcp() {
             .unwrap();
         assert_eq!(custom["name"], "External ticket number");
         assert_eq!(custom["jqlReference"], "cf[12345]");
-        assert_eq!(custom["operators"], json!(["~"]));
+        assert_eq!(custom["operators"], json!(["~", "!~"]));
         let fields = result["fields"]["items"].as_array().unwrap();
         assert_eq!(
             fields
@@ -470,6 +470,37 @@ async fn jira_project_view_discovers_then_searches_across_cli_http_and_mcp() {
         assert_eq!(
             http_called["result"]["structuredContent"]["result"],
             *result
+        );
+        let search_tool = http_listing["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["_meta"]["agent-access/action"] == "search")
+            .unwrap();
+        let search_called = rpc_body(
+            rpc(
+                json!({
+                    "jsonrpc":"2.0", "id":4, "method":"tools/call", "params":{
+                        "name":search_tool["name"], "arguments":{
+                            "inputs":{"query":{"type":"jql","value":QUERY}}
+                        }
+                    }
+                }),
+                Some(&session),
+            )
+            .send()
+            .await
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(search_called["result"]["isError"], false, "{search_called}");
+        assert_eq!(
+            search_called["result"]["structuredContent"]["decision"],
+            "allow"
+        );
+        assert_eq!(
+            search_called["result"]["structuredContent"]["result"]["issues"][0]["key"],
+            "PROJ-1"
         );
         assert!(
             client

@@ -1150,6 +1150,73 @@ fn finite(spaces: &[&str]) -> SearchAuthorizationScope {
 }
 
 #[tokio::test]
+async fn search_text_negation_continuations_bind_each_operand_and_polarity() {
+    for action in ["search", "blog.search"] {
+        let backend = Arc::new(SearchBackend::default());
+        let provider =
+            ConfluenceProvider::with_backend(config(), ProviderLimits::default(), backend.clone());
+        let query = json!({"query": {
+            "type": "cql",
+            "value": "title !~ \"obsolete\" AND text !~ \"deprecated\""
+        }});
+        let first = provider
+            .invoke(search_invocation(action, finite(&["ENG"]), query.clone()))
+            .await
+            .unwrap();
+        let token = first.result["nextPageToken"].as_str().unwrap().to_string();
+        let mut next = query;
+        next["nextPageToken"] = json!(token);
+
+        for changed_query in [
+            "title ~ \"obsolete\" AND text !~ \"deprecated\"",
+            "title !~ \"obsolete\" AND text ~ \"deprecated\"",
+            "title !~ \"archived\" AND text !~ \"deprecated\"",
+            "title !~ \"obsolete\" AND text !~ \"replaced\"",
+        ] {
+            let mut changed = next.clone();
+            changed["query"]["value"] = json!(changed_query);
+            let error = provider
+                .invoke(search_invocation(action, finite(&["ENG"]), changed))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+            assert!(
+                error
+                    .message
+                    .contains("nextPageToken is invalid or expired")
+            );
+        }
+        let error = provider
+            .invoke(search_invocation(
+                action,
+                finite(&["ENG", "OPS"]),
+                next.clone(),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert!(error.message.contains("space scope changed"));
+        assert_eq!(
+            backend.cursors(),
+            vec![None],
+            "invalid continuations must not dispatch"
+        );
+
+        // Canonical case and quote normalization do not change the query.
+        next["query"]["value"] = json!("TITLE !~ 'obsolete' and TEXT !~ 'deprecated'");
+        let second = provider
+            .invoke(search_invocation(action, finite(&["ENG"]), next))
+            .await
+            .unwrap();
+        assert!(second.result["nextPageToken"].is_null());
+        assert_eq!(
+            backend.cursors(),
+            vec![None, Some("upstream-cursor-2".to_string())]
+        );
+    }
+}
+
+#[tokio::test]
 async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page() {
     for action in ["search", "blog.search"] {
         let backend = Arc::new(SearchBackend::default());

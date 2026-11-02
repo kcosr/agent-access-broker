@@ -831,11 +831,20 @@ Accepted CQL fields: `space`, `type`, `id`/`content.id`, `title`, `text`,
 - `id` and its `content.id` alias accept `=`, `!=`, `IN`, and `NOT IN` with
   numeric content IDs for both page and blog searches.
 - `ancestor` and `parent` accept `=` and `IN` with page IDs in page search.
-- `title` and `text` accept only `~` with a quoted string.
+- `title` and `text` accept `~` and `!~` with a quoted string for both page and
+  blog search.
 - `label`/`labels` accept `=`, `!=`, `IN`, and `NOT IN`.
 - `creator` and `contributor` accept `=`, `!=`, `IN`, and `NOT IN`.
 - `mention` accepts `=` and `IN`.
 - `created` and `lastModified` accept `=`, `!=`, `<`, `<=`, `>`, and `>=`.
+
+`~` and `!~` use Confluence's indexed text-search semantics, including word,
+phrase, and wildcard matching. `text` searches across title, body, and labels.
+Negation remains within the same authorized space and content-type boundary;
+it does not fetch bodies to calculate a local complement. Missing and empty
+values follow Confluence's matching behavior. The broker does not add an
+implicit empty-value branch, and quoted empty text remains subject to upstream
+validation.
 
 CQL functions and `IS EMPTY`/`IS NOT EMPTY` are not supported. Date values must
 be valid dates in `YYYY-MM-DD` or `YYYY/MM/DD` form, optionally with `HH:MM`;
@@ -886,6 +895,7 @@ Examples with a finite space scope of `ENG`:
 | `--text runbook` | `type = page AND space IN (ENG) AND (title ~ "runbook")` |
 | `--cql 'title ~ "runbook"'` | `type = page AND space IN (ENG) AND (title ~ "runbook")` |
 | `--cql 'text ~ "deploy"'` | `type = page AND space IN (ENG) AND (text ~ "deploy")` |
+| `--cql 'title !~ "obsolete" AND text !~ "deprecated"'` | `type = page AND space IN (ENG) AND (title !~ "obsolete" AND text !~ "deprecated")` |
 | `--cql 'space != ARCHIVE AND content.id NOT IN (12345, 67890)'` | `type = page AND space IN (ENG) AND (space != ARCHIVE AND id NOT IN (12345, 67890))` |
 | `--cql 'labels NOT IN (security, "needs triage")'` | `type = page AND space IN (ENG) AND (label NOT IN (security, "needs triage"))` |
 | `--cql 'creator = "abc:123" AND contributor != alice'` | `type = page AND space IN (ENG) AND (creator = "abc:123" AND contributor != "alice")` |
@@ -894,7 +904,7 @@ Examples with a finite space scope of `ENG`:
 | `--cql 'created >= 2024/01/31 AND lastmodified < "2024-02-01 12:30" ORDER BY lastModified DESC, title'` | `type = page AND space IN (ENG) AND (created >= "2024-01-31" AND lastModified < "2024-02-01 12:30") ORDER BY lastModified DESC, title ASC` |
 
 Examples rejected by page search include `type = blogpost`, `space = "*"`,
-`title !~ "runbook"`, `currentUser()`, `content.property.foo = bar`,
+`space !~ "ENG"`, `label !~ "obsolete"`, `currentUser()`, `content.property.foo = bar`,
 `label IS EMPTY`, `created >= 2024-01-01T12:30:00Z`, and mixed `AND`/`OR`
 without explicit parentheses.
 
@@ -1214,7 +1224,8 @@ string; when enabled it also backs normalized Markdown and plain-text writes.
 `blog.search` has the same input shape, authorization planning, and
 [pagination](#search-pagination) as page search. It starts the composed query
 with `type = blogpost` and supports `id`/`content.id` equality, inclusion and
-exclusion filters for blog content IDs. It rejects the page hierarchy fields
+exclusion filters for blog content IDs, plus `~` and `!~` on `title` and `text`.
+It rejects the page hierarchy fields
 `ancestor` and `parent`. It uses the v1
 `content/search` endpoint with `expand=space,version,history`, an optional
 cursor, and validates that every result is a current blog post in an authorized
@@ -1226,6 +1237,7 @@ Examples with a finite space scope of `ENG`:
 | --- | --- |
 | `--text release` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
 | `--cql 'title ~ "release"'` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
+| `--cql 'title !~ "obsolete" AND text !~ "deprecated"'` | `type = blogpost AND space IN (ENG) AND (title !~ "obsolete" AND text !~ "deprecated")` |
 | `--cql 'space NOT IN (ARCHIVE, SANDBOX) AND id != 12345'` | `type = blogpost AND space IN (ENG) AND (space NOT IN (ARCHIVE, SANDBOX) AND id != 12345)` |
 | `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `type = blogpost AND space IN (ENG) AND (label IN (release, llm)) ORDER BY created DESC` |
 

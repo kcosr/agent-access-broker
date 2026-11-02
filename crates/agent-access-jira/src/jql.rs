@@ -30,7 +30,7 @@ pub(crate) const MAX_JIRA_QUERY_TOKENS: usize = 512;
 pub(crate) const MAX_JIRA_IN_LIST_VALUES: usize = 100;
 pub(crate) const MAX_JIRA_STRING_LITERAL_BYTES: usize = 512;
 pub(crate) const MAX_JIRA_ORDER_TERMS: usize = 5;
-pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 3;
+pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 4;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,7 +51,7 @@ pub(crate) fn jql_documentation() -> Value {
             "customFields": {
                 "reference": "cf[ID], where ID is a positive u64 decimal integer without leading zeros; field names and customfield_ID aliases are unsupported",
                 "operators": JqlField::Custom(1).operator_names(),
-                "values": "Use scalar values, quoted strings, or bounded IN lists. The ~ operator requires a quoted string. Functions and custom-field ORDER BY are unsupported. Jira validates field type and operator compatibility; project.view returns the intersection of Jira and Broker capabilities."
+                "values": "Use scalar values, quoted strings, or bounded IN lists. The ~ and !~ operators require a quoted string. Functions and custom-field ORDER BY are unsupported. Jira validates field type and operator compatibility; project.view returns the intersection of Jira and Broker capabilities."
             },
             "functions": JqlFunctionName::ALL.iter().map(|function| json!({
                 "name": function.canonical(),
@@ -60,13 +60,14 @@ pub(crate) fn jql_documentation() -> Value {
                 "credentialModes": if matches!(function, JqlFunctionName::CurrentUser) { vec!["per_user"] } else { vec!["service", "per_user"] },
             })).collect::<Vec<_>>(),
             "orderBy": {"fields": JqlSortField::ALL.iter().map(|field| field.canonical()).collect::<Vec<_>>(), "aliases": JqlSortField::alias_documentation(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_JIRA_ORDER_TERMS},
-            "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, text negation, and nested functions are unsupported.",
+            "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, and nested functions are unsupported. Text negation (!~) is supported on summary, description, and cf[ID], but not on aggregate text.",
             "values": "Text operands must be quoted. Bare identifiers use ASCII letters, digits, underscore, hyphen, or dot; quote other values. Single or double quotes delimit ASCII strings, with only the matching quote and backslash escapable; non-ASCII and control characters are rejected. Dates accept YYYY-MM-DD or quoted YYYY/MM/DD, optionally with HH:mm in a quoted string; relative dates use a sign, positive integer, and m/h/d/w, e.g. -7d. Function offsets must be unquoted. Project and issue keys must be canonical uppercase keys; project keys may contain underscores, e.g. OPS_TOOLS and OPS_TOOLS-12345.",
-            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access; wildcard project entries are unsupported. Project and issue-key exclusions are query filters, never sources of authority. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
-            "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, empty JQL, ORDER BY-only JQL, and filters containing only project or issue-key exclusions require explicit authorized projects or an additional filter such as updated >= -7d. This includes nested AND/OR groups containing only those exclusions. Finite scopes provide the bound. Other nonempty filters retain Jira endpoint validation.",
+            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access; wildcard project entries are unsupported. Project/issue-key exclusions and text negation are query filters, never sources of authority. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
+            "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, empty JQL, ORDER BY-only JQL, and filters containing only project/issue-key exclusions or text negation (!~) require explicit authorized projects or an additional filter such as updated >= -7d. This includes any mixture of those clauses inside nested AND/OR groups. Finite scopes provide the bound. This is a narrow Broker rule, not a complete query-bound analysis; other nonempty filters retain Jira endpoint validation.",
             "limits": {"rawQueryBytes": MAX_JIRA_RAW_QUERY_BYTES, "tokens": MAX_JIRA_QUERY_TOKENS, "depth": MAX_JIRA_QUERY_DEPTH, "inListValues": MAX_JIRA_IN_LIST_VALUES, "stringLiteralBytes": MAX_JIRA_STRING_LITERAL_BYTES, "textQueryBytes": MAX_JIRA_TEXT_QUERY_BYTES},
-            "errors": "Invalid syntax, unsupported grammar, and query caps return input_invalid. Parser diagnostics report token positions and supported choices without echoing query literals. Scope authorization and returned-issue containment errors remain distinct."
+            "errors": "Invalid syntax, unsupported grammar, and query caps return input_invalid. Parser diagnostics report token positions and supported choices without echoing query literals. Scope authorization and returned-issue containment errors remain distinct. Jira HTTP 400 responses, including incompatible custom-field searchers and query-bound rejections, remain upstream_failed with a generic non-success message; field discovery is not a prerequisite for search."
         },
+        "textNegation": "The !~ operator uses Jira text-search matching, including its term, phrase, stemming and wildcard behavior; it is not literal substring or whole-value inequality. Empty or absent values retain Jira semantics without implicit IS EMPTY clauses. Description IS EMPTY is unsupported; custom-field IS EMPTY remains supported. Quoted empty operands retain the same acceptance as ~ and are validated by Jira.",
         "text": "A nonempty text query becomes key = value for a valid issue key, otherwise text ~ quoted-value; it uses the same authorization containment. Quoted text wildcards follow Jira matching rules and never grant project access.",
         "pagination": "maxResults is a positive integer capped by broker configuration. nextPageToken is an opaque broker-signed continuation: pass it back unchanged with the same query, projects, and maxResults in the same execution context. It is bound to the principal, credential mode, and Jira configuration, and expires after 15 minutes or when the broker reloads. Effective authorization is checked on every request; if the effective project scope changed since the token was issued, repeat the search without nextPageToken.",
         "examples": [
@@ -75,6 +76,7 @@ pub(crate) fn jql_documentation() -> Value {
             {"query": {"type": "jql", "value": "status = Done ORDER BY updated DESC"}},
             {"query": {"type": "jql", "value": "updated >= startOfDay(-7d) ORDER BY updated DESC, key"}},
             {"query": {"type": "jql", "value": "cf[12345] ~ \"EXT-4812\" AND fixVersion = \"2.4\""}, "projects": ["PROJ"]},
+            {"query": {"type": "jql", "value": "summary !~ \"obsolete\" AND description !~ \"deprecated\""}, "projects": ["PROJ"]},
             {"query": {"type": "text", "value": "release notes"}, "maxResults": 10}
         ]
     })
@@ -247,13 +249,10 @@ pub(crate) fn build_jira_search_query(
         ));
     }
     if matches!(effective_scope, EffectiveSearchScope::AllExcept(_))
-        && ast
-            .filter
-            .as_ref()
-            .is_some_and(JqlExpr::is_resource_exclusion_only)
+        && ast.filter.as_ref().is_some_and(JqlExpr::is_exclusion_only)
     {
         return Err(jql_input_invalid(
-            "Jira search requires explicit projects or an additional filter when the query contains only project or issue-key exclusions and access covers all projects; use projects or a filter such as updated >= -7d",
+            "Jira search requires explicit projects or an additional filter when the query contains only project/issue-key exclusions or text negation and access covers all projects; use projects or a filter such as updated >= -7d",
         ));
     }
     let filter_jql = ast.filter.as_ref().map(JqlExpr::emit);
@@ -536,15 +535,17 @@ pub(crate) enum JqlExpr {
 
 impl JqlExpr {
     /// A narrow local bound check, not Jira's complete query-bound analysis.
-    /// Negative resource operands are filters and never positive scope selections.
-    fn is_resource_exclusion_only(&self) -> bool {
+    /// Resource exclusions and text negation are not considered positive bounds
+    /// by this local guard.
+    fn is_exclusion_only(&self) -> bool {
         match self {
             Self::Clause(clause) => {
-                matches!(clause.field, JqlField::Project | JqlField::Key)
-                    && matches!(clause.operator, JqlOperator::NotEq | JqlOperator::NotIn)
+                clause.operator == JqlOperator::NotContains
+                    || (matches!(clause.field, JqlField::Project | JqlField::Key)
+                        && matches!(clause.operator, JqlOperator::NotEq | JqlOperator::NotIn))
             }
             Self::And(children) | Self::Or(children) => {
-                children.iter().all(Self::is_resource_exclusion_only)
+                children.iter().all(Self::is_exclusion_only)
             }
         }
     }
@@ -678,8 +679,10 @@ impl JqlClause {
     }
 
     pub(crate) fn collect_text_operand_hashes(&self, hashes: &mut Vec<String>) {
-        if self.operator == JqlOperator::Contains
-            && let JqlOperand::Single(JqlValue::String(value)) = &self.operand
+        if matches!(
+            self.operator,
+            JqlOperator::Contains | JqlOperator::NotContains
+        ) && let JqlOperand::Single(JqlValue::String(value)) = &self.operand
         {
             hashes.push(sha256_hex(value.as_bytes()));
         }
@@ -858,7 +861,10 @@ impl JqlField {
                     | JqlOperator::Gt
                     | JqlOperator::Gte
             ),
-            Self::Summary | Self::Description | Self::Text => operator == JqlOperator::Contains,
+            Self::Summary | Self::Description => {
+                matches!(operator, JqlOperator::Contains | JqlOperator::NotContains)
+            }
+            Self::Text => operator == JqlOperator::Contains,
             Self::Custom(_) => matches!(
                 operator,
                 JqlOperator::Eq
@@ -872,6 +878,7 @@ impl JqlField {
                     | JqlOperator::IsEmpty
                     | JqlOperator::IsNotEmpty
                     | JqlOperator::Contains
+                    | JqlOperator::NotContains
             ),
         }
     }
@@ -934,6 +941,7 @@ jql_inventory! {
         IsEmpty,
         IsNotEmpty,
         Contains,
+        NotContains,
     }
 }
 
@@ -951,6 +959,7 @@ impl JqlOperator {
             Self::IsEmpty => "IS EMPTY",
             Self::IsNotEmpty => "IS NOT EMPTY",
             Self::Contains => "~",
+            Self::NotContains => "!~",
         }
     }
 
@@ -1002,7 +1011,7 @@ impl JqlValue {
             Self::String(value)
                 if field.is_text()
                     || matches!(field, JqlField::Custom(_))
-                    || operator == JqlOperator::Contains =>
+                    || matches!(operator, JqlOperator::Contains | JqlOperator::NotContains) =>
             {
                 jql_string_literal(value)
             }
@@ -1326,7 +1335,10 @@ impl JqlParser {
                 JqlOperand::Single(self.next_text_value()?),
             )
         } else if self.consume(&JqlToken::NotTilde) {
-            return Err("JQL text negation is unsupported".to_string());
+            (
+                JqlOperator::NotContains,
+                JqlOperand::Single(self.next_text_value()?),
+            )
         } else {
             let Some(operator) = self.next_word() else {
                 return Err("JQL clause is missing an operator".to_string());
@@ -1595,14 +1607,19 @@ impl JqlParser {
                 | JqlOperator::Lte
                 | JqlOperator::Gt
                 | JqlOperator::Gte
-                | JqlOperator::Contains,
+                | JqlOperator::Contains
+                | JqlOperator::NotContains,
                 JqlOperand::Single(_),
             )
             | (JqlOperator::In | JqlOperator::NotIn, JqlOperand::List(_))
             | (JqlOperator::IsEmpty | JqlOperator::IsNotEmpty, JqlOperand::Empty) => {}
             _ => return Err("JQL clause operand is invalid".to_string()),
         }
-        if field.is_text() && operator != JqlOperator::Contains {
+        if field.is_text()
+            && operator != JqlOperator::Contains
+            && !(operator == JqlOperator::NotContains
+                && matches!(field, JqlField::Summary | JqlField::Description))
+        {
             return Err("JQL text field operator is unsupported".to_string());
         }
         Ok(())
