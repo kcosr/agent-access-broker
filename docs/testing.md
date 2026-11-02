@@ -1948,6 +1948,22 @@ The Confluence CQL conformance smoke is read-only and manifest-driven. It proves
 that real Confluence Cloud accepts the broker-emitted CQL field/operator subset
 through the public CLI and broker surface.
 
+Coverage includes `space` and `id`/`content.id` inequality and list exclusions,
+including negative-leading caller clauses and nested groups. These cases expect
+successful upstream acceptance of the broker's type-first composition. The
+existing `parent IN` case separately records its documented upstream limitation;
+do not mark the new exclusion cases as expected failures.
+
+This live harness invokes page search with explicit spaces. The ordinary
+`jira_smoke::search_exclusions` and `confluence_smoke::search_exclusions` suites
+exercise the production providers against synthetic HTTP servers through real
+Broker startup, typed CLI, generic invoke, JSON send, HTTP and stdio MCP. They
+cover omitted scopes, grant/token intersection, all-except grants, grouped `OR`,
+wildcard text versus invalid wildcard scope keys, local no-dispatch denials,
+and whole-response containment rejection. Confluence's offline fixtures cover
+both pages and blogs. These deterministic checks do not establish live upstream
+compatibility, and a skipped live harness is not passing conformance evidence.
+
 The checked-in example manifest is shape documentation only:
 
 ```text

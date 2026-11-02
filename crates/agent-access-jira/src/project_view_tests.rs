@@ -309,6 +309,30 @@ fn fields_filter_unsupported_operators_and_preserve_stable_custom_identity() {
 }
 
 #[test]
+fn project_and_issue_key_discovery_intersects_exclusions_with_upstream_operators() {
+    for (field, id) in [("project", "project"), ("key", "issuekey")] {
+        for (reported, expected) in [
+            (
+                json!(["=", "!=", "in", " not in ", ">", "is", "!~"]),
+                json!(["=", "!=", "IN", "NOT IN"]),
+            ),
+            (json!(["=", "in"]), json!(["=", "IN"])),
+            (json!(["!="]), json!(["!="])),
+            (json!(["not in", "was"]), json!(["NOT IN"])),
+        ] {
+            let value = json!({"visibleFieldNames":[{
+                "value":field,"displayName":field,"types":["Resource"],"operators":reported
+            }]});
+            let items = searchable_fields(&value).unwrap();
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0]["id"], id);
+            assert_eq!(items[0]["jqlReference"], field);
+            assert_eq!(items[0]["operators"], expected);
+        }
+    }
+}
+
+#[test]
 fn system_alias_rows_do_not_conflict_with_canonical_field_metadata() {
     let value = json!({"visibleFieldNames":[
         {"value":"type","displayName":"type","types":["IssueType"],"operators":["="]},

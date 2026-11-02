@@ -567,7 +567,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                         "additionalProperties": false
                     },
                     "spaces": {
-                        "description": "Optional narrowing to authorized space keys; omit to search all effective broker-authorized spaces.",
+                        "description": "Optional narrowing to authorized space keys; omit to search all effective broker-authorized spaces. Wildcard space keys are unsupported.",
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1
@@ -758,7 +758,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                         "additionalProperties": false
                     },
                     "spaces": {
-                        "description": "Optional narrowing to authorized space keys; omit to search all effective broker-authorized spaces.",
+                        "description": "Optional narrowing to authorized space keys; omit to search all effective broker-authorized spaces. Wildcard space keys are unsupported.",
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1

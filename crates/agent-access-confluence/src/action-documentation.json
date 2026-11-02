@@ -441,7 +441,7 @@
   "blog.search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; a grant change that changes the composed query rejects continuation. On a rejected continuation, repeat the search without the token. The token also binds execution context, principal, credential mode/method and the service route.",
     "results": "Searches current blog posts only and returns metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied. Whole-result formatting does not fetch bodies.",
-    "spaceKeys": "Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
+    "spaceKeys": "Omit spaces to search effective authorized access; explicit keys only narrow it and wildcard keys are unsupported. Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
     "inputExamples": [
       {
         "label": "Search by text",
@@ -466,6 +466,15 @@
           "spaces": [
             "~alice"
           ]
+        }
+      },
+      {
+        "label": "Exclude spaces and content IDs within authorized access",
+        "inputs": {
+          "query": {
+            "type": "cql",
+            "value": "space != ARCHIVE AND content.id NOT IN (12345, 67890)"
+          }
         }
       }
     ],
@@ -946,7 +955,7 @@
   "search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; a grant change that changes the composed query rejects continuation. On a rejected continuation, repeat the search without the token. The token also binds execution context, principal, credential mode/method and the service route.",
     "results": "Searches current pages only and returns metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied. Whole-result formatting does not fetch bodies.",
-    "spaceKeys": "Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
+    "spaceKeys": "Omit spaces to search effective authorized access; explicit keys only narrow it and wildcard keys are unsupported. Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
     "inputExamples": [
       {
         "label": "Search by text",
@@ -971,6 +980,15 @@
           "spaces": [
             "~alice"
           ]
+        }
+      },
+      {
+        "label": "Exclude spaces and content IDs within authorized access",
+        "inputs": {
+          "query": {
+            "type": "cql",
+            "value": "space NOT IN (ARCHIVE, SANDBOX) AND id != 12345"
+          }
         }
       }
     ],

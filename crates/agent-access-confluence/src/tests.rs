@@ -13,6 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod documentation;
 mod personal_spaces;
 mod plain_inputs;
+mod search_exclusions;
 mod space_aliases;
 mod space_keys;
 
@@ -2425,7 +2426,7 @@ fn raw_cql_is_reemitted_and_rejects_unsafe_literals() {
     .unwrap();
     assert_eq!(
         query.cql,
-        r#"((space IN (ENG) AND title ~ "runbook") OR id = 123456) AND space IN (ENG) AND type = page"#
+        r#"type = page AND space IN (ENG) AND ((space IN (ENG) AND title ~ "runbook") OR id = 123456)"#
     );
 
     for raw in [
@@ -2442,7 +2443,9 @@ fn raw_cql_is_reemitted_and_rejects_unsafe_literals() {
 fn raw_cql_rejects_unsupported_fields_operators_and_functions() {
     for raw in [
         "type = blogpost",
-        "space != OPS",
+        "space ~ \"OPS\"",
+        "ancestor != 123456",
+        "parent NOT IN (123456)",
         "title !~ \"x\"",
         "currentUser()",
         "filter = 123",
@@ -2474,7 +2477,7 @@ fn blog_cql_composes_blogpost_type_and_rejects_page_hierarchy_fields() {
     .unwrap();
     assert_eq!(
         query.cql,
-        r#"(space = ENG AND type = blogpost AND title ~ "release") AND space IN (ENG) AND type = blogpost"#
+        r#"type = blogpost AND space IN (ENG) AND (space = ENG AND type = blogpost AND title ~ "release")"#
     );
     assert_eq!(query.injected_type_predicate, "type_blogpost");
 
@@ -2505,7 +2508,7 @@ fn all_except_cql_preserves_caller_grouping_and_exclusions() {
     .unwrap();
     assert_eq!(
         query.cql,
-        "(space = PRIVATE OR title ~ \"runbook\") AND space NOT IN (\"IN\", PRIVATE) AND type = page ORDER BY title ASC"
+        "type = page AND space NOT IN (\"IN\", PRIVATE) AND (space = PRIVATE OR title ~ \"runbook\") ORDER BY title ASC"
     );
     assert_eq!(query.injected_space_predicate, "space_not_in");
     assert!(!boundary.authorizes_value("PRIVATE"));
@@ -2523,12 +2526,9 @@ fn all_except_cql_preserves_caller_grouping_and_exclusions() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert!(
-        narrowed
-            .cql
-            .ends_with(") AND space NOT IN (\"IN\", PRIVATE) AND type = page"),
-        "{}",
-        narrowed.cql
+    assert_eq!(
+        narrowed.cql,
+        "type = page AND space NOT IN (\"IN\", PRIVATE) AND (space IN (PRIVATE, ENG))"
     );
     let blog = build_confluence_blog_search_query(
         &ConfluenceSearchQueryInput::Cql {
@@ -2538,9 +2538,9 @@ fn all_except_cql_preserves_caller_grouping_and_exclusions() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert!(
-        blog.cql
-            .contains("space NOT IN (\"IN\", PRIVATE) AND type = blogpost")
+    assert_eq!(
+        blog.cql,
+        "type = blogpost AND space NOT IN (\"IN\", PRIVATE) AND (title ~ \"runbook\")"
     );
     let authorization = SearchAuthorization::new(
         "space".to_string(),
@@ -2672,7 +2672,7 @@ fn wildcard_cql_space_predicates_narrow_the_query_not_containment() {
     .unwrap();
     assert_eq!(
         narrowed.cql,
-        r#"(space = ENG AND title ~ "runbook") AND type = page"#
+        r#"type = page AND (space = ENG AND title ~ "runbook")"#
     );
     // Returned content is checked against the authorization boundary, not
     // against the space the caller named.
@@ -5455,7 +5455,7 @@ async fn http_backend_search_requests_bounded_page_metadata() {
         .and(path("/wiki/rest/api/content/search"))
         .and(query_param(
             "cql",
-            r#"(title ~ "runbook") AND space IN (ENG) AND type = page"#,
+            r#"type = page AND space IN (ENG) AND (title ~ "runbook")"#,
         ))
         .and(query_param("limit", "2"))
         .and(query_param("expand", "space,version,history"))
@@ -5483,7 +5483,7 @@ async fn http_backend_search_requests_bounded_page_metadata() {
         crate::CorrelationContext::for_tests(),
         backend.search(
             ConfluenceSearchRequest {
-                cql: r#"(title ~ "runbook") AND space IN (ENG) AND type = page"#.to_string(),
+                cql: r#"type = page AND space IN (ENG) AND (title ~ "runbook")"#.to_string(),
                 spaces: vec!["ENG".to_string()],
                 max_results: 2,
                 next_page_token: None,
@@ -10125,14 +10125,14 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
         ConfluenceSearchContentKind::Page,
         ConfluenceSearchContentKind::BlogPost,
     ] {
-        for (scope, prefix) in [
+        for (scope, predicate) in [
             (
                 EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-                "space IN (ENG) AND ",
+                " AND space IN (ENG)",
             ),
             (
                 EffectiveSearchScope::AllExcept(BTreeSet::from(["PRIVATE".to_string()])),
-                "space NOT IN (PRIVATE) AND ",
+                " AND space NOT IN (PRIVATE)",
             ),
             (EffectiveSearchScope::AllExcept(BTreeSet::new()), ""),
         ] {
@@ -10152,7 +10152,7 @@ fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
                 .unwrap();
                 assert_eq!(
                     query.cql,
-                    format!("{prefix}type = {}{suffix}", kind.cql_type())
+                    format!("type = {}{predicate}{suffix}", kind.cql_type())
                 );
                 assert!(query.query_shape["filter"].is_null());
                 assert!(query.text_operand_hashes.is_empty());
@@ -10188,7 +10188,7 @@ fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
     let query =
         build_confluence_search_query(&inputs.query, &scope, &SearchLimitsConfig::default())
             .unwrap();
-    assert_eq!(query.cql, "space IN (ENG, OPS) AND type = page");
+    assert_eq!(query.cql, "type = page AND space IN (ENG, OPS)");
     assert_eq!(
         effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()]))
             .unwrap_err()

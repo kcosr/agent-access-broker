@@ -543,6 +543,21 @@ async fn search_naming_previous_keys_returns_current_issues_inside_the_boundary(
             finite_projects(["NEW"]),
             "(key = OLD-123) AND project IN (NEW)",
         ),
+        (
+            json!({"query": {"type": "jql", "value": "project = OLD AND key != OTHER-1"}}),
+            finite_projects(["NEW"]),
+            "(project = OLD AND key != OTHER-1) AND project IN (NEW)",
+        ),
+        (
+            json!({"query": {"type": "jql", "value": "key = OLD-123 AND project NOT IN (PRIVATE, ARCHIVE)"}}),
+            all_projects_except(["PRIVATE"]),
+            "(key = OLD-123 AND project NOT IN (PRIVATE, ARCHIVE)) AND project NOT IN (PRIVATE)",
+        ),
+        (
+            json!({"query": {"type": "jql", "value": "issuekey NOT IN (OLD-456)"}, "projects": ["OLD"]}),
+            all_projects_except(["PRIVATE"]),
+            "(key NOT IN (OLD-456)) AND project IN (OLD)",
+        ),
     ] {
         let (provider, backend) = renamed_provider();
         *backend.search_page.lock().unwrap() = Some(renamed_search_page());
@@ -567,6 +582,14 @@ async fn search_still_rejects_renamed_projects_outside_the_boundary() {
         (
             json!({"query": {"type": "jql", "value": "project = OLD"}}),
             finite_projects(["OLD"]),
+        ),
+        (
+            json!({"query": {"type": "jql", "value": "key = OLD-123 AND project != ARCHIVE"}}),
+            finite_projects(["OLD"]),
+        ),
+        (
+            json!({"query": {"type": "jql", "value": "project = OLD AND issuekey NOT IN (OLD-456)"}}),
+            all_projects_except(["NEW"]),
         ),
         // An exclusion of the current key holds however the caller names it.
         (

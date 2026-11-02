@@ -345,7 +345,7 @@ async fn oauth_searches_a_personal_space_through_the_gateway() {
     let route = format!("{GATEWAY}/rest/api/content/search");
     Mock::given(method("GET"))
         .and(path(route.as_str()))
-        .and(query_param("cql", "space IN (\"~alice\") AND type = page"))
+        .and(query_param("cql", "type = page AND space IN (\"~alice\")"))
         .and(header("authorization", "Bearer oauth-1"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({ "results": [page("~alice")] })),

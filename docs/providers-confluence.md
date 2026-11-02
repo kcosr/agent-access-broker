@@ -773,6 +773,11 @@ caller filter. The broker always adds the authorized space constraint when
 needed and `type = page` (`type = blogpost` for `blog.search`). Empty `text`
 queries remain invalid.
 
+Space selections are literal keys: `spaces: ["*"]`, `space = "*"`, and wildcard
+space-key patterns are invalid. Omit `spaces` for a search across effective
+access. Wildcards in quoted text operands follow upstream text-search rules
+within the same authorized boundary; they never grant access to other spaces.
+
 Request action details through your client's available discovery tools with
 canonical service `confluence` and action `search` or `blog.search`. Use the tool
 name exposed by your client. The returned `documentation.cql` block contains the
@@ -819,11 +824,13 @@ Accepted CQL fields: `space`, `type`, `id`/`content.id`, `title`, `text`,
 `label`/`labels`, `creator`, `contributor`, `mention`, `ancestor`, `parent`,
 `created`, and `lastModified`. Supported operators are field-specific:
 
-- `space` accepts `=` and `IN`. Quote personal-space keys, for example
+- `space` accepts `=`, `!=`, `IN`, and `NOT IN`. Quote personal-space keys, for example
   `space = "~alice"` or `space IN (ENG, "~alice")`.
-- `type` accepts only `= page`; other content types such as `blogpost` are
-  rejected.
-- `id`, `content.id`, `ancestor`, and `parent` accept `=` and `IN` with page IDs.
+- `type` accepts only the action's fixed content type: `= page` for `search`
+  and `= blogpost` for `blog.search`.
+- `id` and its `content.id` alias accept `=`, `!=`, `IN`, and `NOT IN` with
+  numeric content IDs for both page and blog searches.
+- `ancestor` and `parent` accept `=` and `IN` with page IDs in page search.
 - `title` and `text` accept only `~` with a quoted string.
 - `label`/`labels` accept `=`, `!=`, `IN`, and `NOT IN`.
 - `creator` and `contributor` accept `=`, `!=`, `IN`, and `NOT IN`.
@@ -844,10 +851,14 @@ Confluence Cloud `/wiki/rest/api/content/search` has been observed returning an
 upstream error for `parent IN (...)`; the conformance smoke records that as an
 expected upstream incompatibility when present.
 
-Scope composition adds `space IN (...)` for finite space coverage or
-`space NOT IN (...)` for all-except coverage, grouped with the caller query,
-and always injects `type = page`. Explicit `spaces` and caller space predicates
-narrow the query without losing all-except exclusions. Every returned page is
+Scope composition emits the fixed positive `type = page` predicate first,
+then `space IN (...)` for finite space coverage or `space NOT IN (...)` for
+all-except coverage, followed by the entire caller filter in parentheses.
+`ORDER BY` follows the complete expression. This keeps negative caller filters
+after a positive first clause. Explicit `spaces` and caller space predicates
+narrow the query without losing all-except exclusions. Space and content-ID
+exclusions are filters: they do not request access, trigger metadata lookups,
+or become local subtraction from the authorization boundary. Every returned page is
 validated against the authorization boundary, the granted space keys or the
 all-except exclusions, not against the space names the caller wrote: Confluence
 may resolve a [space URL alias](#space-url-aliases) to its key, so a caller who
@@ -864,24 +875,25 @@ results. `spaces` accepts only space keys; with a finite boundary each must be
 a granted key, so an alias there is denied with `service_action_denied`.
 
 Personal-space keys are also quoted in injected scope constraints. For example,
-`--space '~alice' --cql ''` emits `space IN ("~alice") AND type = page`.
+`--space '~alice' --cql ''` emits `type = page AND space IN ("~alice")`.
 
 Examples with a finite space scope of `ENG`:
 
 | Input | Composed CQL sent upstream |
 | --- | --- |
-| `--cql ''` | `space IN (ENG) AND type = page` |
-| `--cql 'ORDER BY lastModified DESC'` | `space IN (ENG) AND type = page ORDER BY lastModified DESC` |
-| `--text runbook` | `(title ~ "runbook") AND space IN (ENG) AND type = page` |
-| `--cql 'title ~ "runbook"'` | `(title ~ "runbook") AND space IN (ENG) AND type = page` |
-| `--cql 'text ~ "deploy"'` | `(text ~ "deploy") AND space IN (ENG) AND type = page` |
-| `--cql 'labels NOT IN (security, "needs triage")'` | `(label NOT IN (security, "needs triage")) AND space IN (ENG) AND type = page` |
-| `--cql 'creator = "abc:123" AND contributor != alice'` | `(creator = "abc:123" AND contributor != "alice") AND space IN (ENG) AND type = page` |
-| `--cql 'mention IN ("abc:123")'` | `(mention IN ("abc:123")) AND space IN (ENG) AND type = page` |
-| `--cql 'ancestor IN (123456, 234567) AND parent = 345678'` | `(ancestor IN (123456, 234567) AND parent = 345678) AND space IN (ENG) AND type = page` |
-| `--cql 'created >= 2024/01/31 AND lastmodified < "2024-02-01 12:30" ORDER BY lastModified DESC, title'` | `(created >= "2024-01-31" AND lastModified < "2024-02-01 12:30") AND space IN (ENG) AND type = page ORDER BY lastModified DESC, title ASC` |
+| `--cql ''` | `type = page AND space IN (ENG)` |
+| `--cql 'ORDER BY lastModified DESC'` | `type = page AND space IN (ENG) ORDER BY lastModified DESC` |
+| `--text runbook` | `type = page AND space IN (ENG) AND (title ~ "runbook")` |
+| `--cql 'title ~ "runbook"'` | `type = page AND space IN (ENG) AND (title ~ "runbook")` |
+| `--cql 'text ~ "deploy"'` | `type = page AND space IN (ENG) AND (text ~ "deploy")` |
+| `--cql 'space != ARCHIVE AND content.id NOT IN (12345, 67890)'` | `type = page AND space IN (ENG) AND (space != ARCHIVE AND id NOT IN (12345, 67890))` |
+| `--cql 'labels NOT IN (security, "needs triage")'` | `type = page AND space IN (ENG) AND (label NOT IN (security, "needs triage"))` |
+| `--cql 'creator = "abc:123" AND contributor != alice'` | `type = page AND space IN (ENG) AND (creator = "abc:123" AND contributor != "alice")` |
+| `--cql 'mention IN ("abc:123")'` | `type = page AND space IN (ENG) AND (mention IN ("abc:123"))` |
+| `--cql 'ancestor IN (123456, 234567) AND parent = 345678'` | `type = page AND space IN (ENG) AND (ancestor IN (123456, 234567) AND parent = 345678)` |
+| `--cql 'created >= 2024/01/31 AND lastmodified < "2024-02-01 12:30" ORDER BY lastModified DESC, title'` | `type = page AND space IN (ENG) AND (created >= "2024-01-31" AND lastModified < "2024-02-01 12:30") ORDER BY lastModified DESC, title ASC` |
 
-Examples rejected by the broker include `type = blogpost`, `space != OPS`,
+Examples rejected by page search include `type = blogpost`, `space = "*"`,
 `title !~ "runbook"`, `currentUser()`, `content.property.foo = bar`,
 `label IS EMPTY`, `created >= 2024-01-01T12:30:00Z`, and mixed `AND`/`OR`
 without explicit parentheses.
@@ -1200,8 +1212,10 @@ Blog native format support is controlled by
 string; when enabled it also backs normalized Markdown and plain-text writes.
 
 `blog.search` has the same input shape, authorization planning, and
-[pagination](#search-pagination) as page search, but it composes `type = blogpost` and rejects page hierarchy predicates
-(`id`, `content.id`, `ancestor`, and `parent`). It uses the v1
+[pagination](#search-pagination) as page search. It starts the composed query
+with `type = blogpost` and supports `id`/`content.id` equality, inclusion and
+exclusion filters for blog content IDs. It rejects the page hierarchy fields
+`ancestor` and `parent`. It uses the v1
 `content/search` endpoint with `expand=space,version,history`, an optional
 cursor, and validates that every result is a current blog post in an authorized
 space.
@@ -1210,9 +1224,10 @@ Examples with a finite space scope of `ENG`:
 
 | Input | Composed CQL sent upstream |
 | --- | --- |
-| `--text release` | `(title ~ "release") AND space IN (ENG) AND type = blogpost` |
-| `--cql 'title ~ "release"'` | `(title ~ "release") AND space IN (ENG) AND type = blogpost` |
-| `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `(label IN (release, "llm")) AND space IN (ENG) AND type = blogpost ORDER BY created DESC` |
+| `--text release` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
+| `--cql 'title ~ "release"'` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
+| `--cql 'space NOT IN (ARCHIVE, SANDBOX) AND id != 12345'` | `type = blogpost AND space IN (ENG) AND (space NOT IN (ARCHIVE, SANDBOX) AND id != 12345)` |
+| `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `type = blogpost AND space IN (ENG) AND (label IN (release, "llm")) ORDER BY created DESC` |
 
 Blog metadata, create, update, and attachment listing use Confluence REST API v2.
 Blog attachment upload/download use the v1 content attachment endpoints.

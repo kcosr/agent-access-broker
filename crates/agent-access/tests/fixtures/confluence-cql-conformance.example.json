@@ -24,6 +24,36 @@
       "covers": ["space-in"]
     },
     {
+      "id": "space-exclusion",
+      "description": "Checks a negative-leading caller space clause after the broker's positive page type and authorized-space predicates.",
+      "cql": "space != OPS",
+      "covers": ["space-neq", "negative-leading-clause"]
+    },
+    {
+      "id": "space-list-exclusion",
+      "description": "Checks space NOT IN within the explicitly selected authorized spaces.",
+      "cql": "space NOT IN (OPS, ARCHIVE)",
+      "covers": ["space-not-in"]
+    },
+    {
+      "id": "content-id-exclusions",
+      "description": "Checks numeric content ID inequality and content.id list exclusion, canonically emitted as id.",
+      "cql": "id != 234567 AND content.id NOT IN (234567, 345678)",
+      "covers": ["id-neq", "content-id-not-in"]
+    },
+    {
+      "id": "content-id-exclusion-aliases",
+      "description": "Checks the alternate field spelling for each content ID exclusion operator.",
+      "cql": "content.id != 234567 AND id NOT IN (234567, 345678)",
+      "covers": ["content-id-neq", "id-not-in"]
+    },
+    {
+      "id": "negative-leading-group",
+      "description": "Checks nested negative-leading caller groups after the broker's positive type and authorized-space predicates.",
+      "cql": "(space != OPS AND id != 234567) OR (space NOT IN (ARCHIVE) AND content.id NOT IN (345678))",
+      "covers": ["negative-leading-group"]
+    },
+    {
       "id": "title-text-and-escaping",
       "description": "Proves Confluence accepts title and text contains clauses with escaped string literal content.",
       "cql": "title ~ \"runbook (draft)\" AND text ~ \"deploy \\\"quoted\\\" steps\"",

@@ -614,3 +614,85 @@ async fn the_upstream_response_cap_bounds_jira_tokens_before_sealing() {
     assert!(error.result.is_none());
     assert!(!error.message.contains("tttt"));
 }
+
+#[tokio::test]
+async fn resource_exclusion_continuations_bind_filters_context_and_current_authority() {
+    let inputs = |query: &str| json!({"query":{"type":"jql","value":query}});
+    let query = "project != ARCHIVE AND issuekey NOT IN (PRIVATE-1, PRIVATE-2) AND status = Done";
+    let canonical = "project != ARCHIVE AND key NOT IN (PRIVATE-1, PRIVATE-2) AND status = Done";
+    for scope in [
+        finite(&["PROJ", "OTHER"]),
+        all_except(&[]),
+        all_except(&["PRIVATE"]),
+    ] {
+        let harness = Harness::new();
+        let token = harness
+            .first_page(search(inputs(query), scope.clone(), None).build())
+            .await;
+        let equivalent =
+            "project != 'ARCHIVE' AND KEY not in ('PRIVATE-1', \"PRIVATE-2\") AND status = Done";
+        harness
+            .provider
+            .invoke(search(inputs(equivalent), scope.clone(), Some(&token)).build())
+            .await
+            .unwrap();
+        assert_eq!(
+            harness.last_search().next_page_token.as_deref(),
+            Some(UPSTREAM)
+        );
+        let searches = harness.upstream_searches();
+        for changed in [
+            "project != LEGACY AND key NOT IN (PRIVATE-1, PRIVATE-2) AND status = Done",
+            "project != ARCHIVE AND key NOT IN (PRIVATE-1, PRIVATE-3) AND status = Done",
+            "project != ARCHIVE AND key NOT IN (PRIVATE-1) AND status = Done",
+            "project = ARCHIVE AND key NOT IN (PRIVATE-1, PRIVATE-2) AND status = Done",
+        ] {
+            let error = harness
+                .provider
+                .invoke(search(inputs(changed), scope.clone(), Some(&token)).build())
+                .await
+                .unwrap_err();
+            assert_rejected_token(error);
+        }
+        let error = harness
+            .provider
+            .invoke(
+                search(inputs(canonical), scope.clone(), Some(&token))
+                    .execution_context("external")
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_rejected_token(error);
+        assert_eq!(harness.upstream_searches(), searches);
+
+        let narrowed = scope.intersection(&finite(&["PROJ"]));
+        let error = harness
+            .provider
+            .invoke(search(inputs(canonical), narrowed, Some(&token)).build())
+            .await
+            .unwrap_err();
+        assert_scope_changed(error);
+        assert_eq!(harness.upstream_searches(), searches);
+
+        // A moved issue on a continued page must be authorized by its current
+        // project, never the old key prefix or the caller's negative operands.
+        let mut moved = page_with_upstream_token(UPSTREAM);
+        moved.issues[0].key = "PRIVATE-9".into();
+        moved.issues[0].project = "PRIVATE".into();
+        moved.issues[0].summary = Some("private-moved-issue".into());
+        *harness.backend.search_page.lock().unwrap() = Some(moved);
+        let result = harness
+            .provider
+            .invoke(search(inputs(canonical), scope.clone(), Some(&token)).build())
+            .await;
+        if scope.matches("PRIVATE") {
+            assert_eq!(result.unwrap().result["issues"][0]["project"], "PRIVATE");
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+            assert!(error.result.is_none());
+            assert!(!format!("{error:?}").contains("private-moved-issue"));
+        }
+    }
+}

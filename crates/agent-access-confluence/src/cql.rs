@@ -78,7 +78,7 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
             "unsupported": ["IS EMPTY", "IS NOT EMPTY", "!~", "prefix NOT"],
             "orderBy": {"fields": cql_sort_names(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_CONFLUENCE_ORDER_TERMS},
             "emptyFilter": "Empty or whitespace-only CQL and ORDER BY alone search the effective authorized spaces; the broker always adds the action content type.",
-            "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it. The broker groups caller filters and injects space inclusion/exclusion and content type predicates, then checks returned content against the authorized space keys, not against named spaces: Confluence may resolve a space URL alias to its key.",
+            "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it; wildcard space keys are unsupported. Space and content-ID exclusions are filters and never grant access. The broker emits the fixed content type, authorized space inclusion/exclusion, then the grouped caller filter. Returned content is checked against authorized space keys, not named spaces: Confluence may resolve a space URL alias to its key.",
             "contentType": kind.cql_type(),
             "limits": {
                 "queryBytes": MAX_CONFLUENCE_RAW_QUERY_BYTES,
@@ -94,6 +94,7 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
                 {"query": {"type": "cql", "value": "ORDER BY lastModified DESC"}},
                 {"query": {"type": "cql", "value": ""}},
                 {"query": {"type": "cql", "value": "title ~ \"runbook\" ORDER BY created DESC"}, "spaces": ["ENG"]},
+                {"query": {"type": "cql", "value": "space NOT IN (ARCHIVE, SANDBOX) AND content.id != 12345"}},
                 {"query": {"type": "text", "value": "runbook"}}
             ]
         }
@@ -302,15 +303,16 @@ pub(crate) fn build_confluence_search_query_for_kind(
             "space_not_in",
         ),
     };
-    let mut clauses = ast
-        .filter
-        .iter()
-        .map(|filter| format!("({})", filter.emit()))
-        .collect::<Vec<_>>();
+    // Keep a positive clause first: Confluence does not support a negative
+    // expression as the first CQL clause. Caller filters stay grouped so OR
+    // cannot escape either the action's content type or the authorized spaces.
+    let mut clauses = vec![format!("type = {}", content_kind.cql_type())];
     if let Some(predicate) = space_predicate {
         clauses.push(predicate);
     }
-    clauses.push(format!("type = {}", content_kind.cql_type()));
+    if let Some(filter) = &ast.filter {
+        clauses.push(format!("({})", filter.emit()));
+    }
     let mut cql = clauses.join(" AND ");
     if !order_by_cql.is_empty() {
         cql.push(' ');
@@ -733,9 +735,12 @@ impl CqlField {
 
     pub(crate) fn allows_operator(self, operator: CqlOperator) -> bool {
         match self {
-            Self::Space => matches!(operator, CqlOperator::Eq | CqlOperator::In),
+            Self::Space | Self::Id => matches!(
+                operator,
+                CqlOperator::Eq | CqlOperator::NotEq | CqlOperator::In | CqlOperator::NotIn
+            ),
             Self::Type => operator == CqlOperator::Eq,
-            Self::Id | Self::Ancestor | Self::Parent => {
+            Self::Ancestor | Self::Parent => {
                 matches!(operator, CqlOperator::Eq | CqlOperator::In)
             }
             Self::Title | Self::Text => operator == CqlOperator::Contains,

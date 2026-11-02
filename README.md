@@ -72,6 +72,15 @@ stable JQL references, such as `cf[12345]`, in the existing issue search action;
 supported operators come from both Jira and Broker's bounded grammar. Project
 view and search have independent grants.
 
+Jira and Confluence searches accept `!=` and `NOT IN` for project/space and
+issue-key/content-ID filters. Omit `projects` or `spaces` to search effective
+access, including token restrictions and policy exclusions; wildcard scope
+entries are unsupported. Caller exclusions only filter that authorized search.
+Jira queries containing only project or issue-key exclusions need a finite
+project scope or an additional filter such as `updated >= -7d`. See the
+[JQL](docs/providers-jira.md#search-and-jql) and
+[CQL](docs/providers-confluence.md#search-and-cql) contracts.
+
 Native action schemas expose input fields directly. Field descriptions explain
 locator alternatives, paired content fields, content
 formats and mode requirements, and provider denials name the fields that need
