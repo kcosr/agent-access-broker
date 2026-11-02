@@ -1615,13 +1615,6 @@ impl JqlParser {
             | (JqlOperator::IsEmpty | JqlOperator::IsNotEmpty, JqlOperand::Empty) => {}
             _ => return Err("JQL clause operand is invalid".to_string()),
         }
-        if field.is_text()
-            && operator != JqlOperator::Contains
-            && !(operator == JqlOperator::NotContains
-                && matches!(field, JqlField::Summary | JqlField::Description))
-        {
-            return Err("JQL text field operator is unsupported".to_string());
-        }
         Ok(())
     }
 
