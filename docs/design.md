@@ -1505,12 +1505,22 @@ resources. Finite boundaries inject an inclusion predicate, all-except retains
 an exclusion predicate, and unrestricted all adds no resource predicate. Caller
 filters remain grouped and ordering follows all injected predicates.
 
+Caller project/issue-key and space/content-ID exclusions are query filters,
+never sources of authority or resource lookup requests. They do not subtract
+caller-written keys from the authorization boundary; upstream aliases and renames
+still resolve to objects whose actual current project or space must be authorized.
+
 Jira's enhanced search endpoint requires a bounded query. Empty or ordering-only
-JQL therefore requires finite authorized projects, either from policy or an
-explicit selection; all/all-except access requires explicit projects or a caller
-filter. Confluence always retains the action's page/blog content-type predicate,
-including with unrestricted all-space access. Empty text-mode queries remain
-invalid. Malformed syntax, unsupported grammar, and query complexity limits use
+JQL and filters made only of project/issue-key exclusions require finite
+authorized projects, either from policy or an explicit selection. With all or
+all-except access, these queries require explicit authorized `projects` or an
+additional filter such as `updated >= -7d`. Nested `AND`/`OR` groups containing
+only resource exclusions follow the same rule. Other nonempty filters retain
+Jira's endpoint-specific validation. Confluence emits the fixed positive
+page/blog content-type predicate first, then any policy space predicate, then
+the grouped caller filter, including with unrestricted all-space access.
+Empty text-mode queries remain invalid. Malformed syntax, unsupported grammar,
+and query complexity limits use
 `input_invalid` with safe syntax guidance; authorization and returned-resource
 containment failures retain their existing classifications.
 
