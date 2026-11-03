@@ -152,17 +152,20 @@ async fn fixture_with(
             let store = runtime.managed_store().unwrap();
             for principal in ["alice", "bob"] {
                 store
-                    .create_principal(PrincipalWriteRequest {
-                        agent_token_issuance: Default::default(),
-                        principal_id: principal.into(),
-                        kind: "user".into(),
-                        role: PrincipalRole::User,
-                        self_service_enabled: None,
-                        display_name: None,
-                        email: None,
-                        external_subject: None,
-                        created_by: "fixture".into(),
-                    })
+                    .create_principal(
+                        PrincipalWriteRequest {
+                            agent_token_issuance: Default::default(),
+                            principal_id: principal.into(),
+                            kind: "user".into(),
+                            role: PrincipalRole::User,
+                            self_service_enabled: None,
+                            display_name: None,
+                            email: None,
+                            external_subject: None,
+                            created_by: "fixture".into(),
+                        },
+                        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+                    )
                     .unwrap();
                 store
                     .create_username_binding(principal, "linux", principal, false, "fixture")

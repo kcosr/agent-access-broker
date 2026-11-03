@@ -465,6 +465,7 @@ pub(crate) fn test_fixture() -> (tempfile::TempDir, ManagedStore, CredentialKeyR
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();

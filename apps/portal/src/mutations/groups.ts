@@ -8,10 +8,10 @@ import { paths } from "../app/paths";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
 import { usePortalInvalidation } from "../data/invalidation";
-import type { AgentTokenIssuanceMode, GroupRecord } from "../types";
+import type { GroupAgentTokenIssuanceSetting, GroupRecord } from "../types";
 
-export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: AgentTokenIssuanceMode };
-export type NewGroup = { groupId: string; displayName: string; description: string; autoEnrollNewMicrosoftUsers: boolean; agentTokenIssuance: AgentTokenIssuanceMode };
+export type GroupPatch = { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting };
+export type NewGroup = { groupId: string; displayName: string; description: string; autoEnrollNewMicrosoftUsers: boolean; agentTokenIssuance: GroupAgentTokenIssuanceSetting };
 
 export function groupProfilePatch(group: Pick<GroupRecord, "displayName" | "description" | "autoEnrollNewMicrosoftUsers">, draft: Omit<NewGroup, "groupId" | "agentTokenIssuance">): GroupPatch {
   const patch: GroupPatch = {};
@@ -49,14 +49,15 @@ export function useGroupActions() {
       );
       toast("Group created", { tone: "success" });
       setModal(null);
-      invalidate.admin();
+      refreshMembership();
       navigate(paths.group(groupId));
     }
 
     async function patch(groupId: string, change: GroupPatch) {
-      await attempt((current) => brokerApi.adminPatchGroup(current, groupId, change));
+      const saved = await attempt((current) => brokerApi.adminPatchGroup(current, groupId, change));
       toast(change.status === "disabled" ? "Group disabled" : change.status === "active" ? "Group enabled" : "Group saved", { tone: "success" });
       refreshMembership();
+      return saved;
     }
 
     function confirmDisable(groupId: string) {

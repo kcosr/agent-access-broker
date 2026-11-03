@@ -226,7 +226,7 @@ test("Swagger Basic onboarding and form calls preserve separate discovery, share
   await expect(page.getByRole("alertdialog")).not.toBeVisible();
   await grant(page, "admin", "service", ["search"]);
   await grant(page, "admin", "per_user", ["erase"]);
-  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: "write_capable" } });
+  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: { mode: "write_capable", allowedExecutionContexts: ["internal"] } } });
   const admin = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { readOnly: false, name: "swagger-admin", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const beforeSearch = apiRequests.length;
   const response = await invoke(admin.token, "search", { body: { query: "open items", ids: "123,456", page: 2 } });

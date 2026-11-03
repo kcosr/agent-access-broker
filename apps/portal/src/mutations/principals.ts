@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { brokerApi } from "../api";
-import type { PrincipalRecord, PrincipalRole, PrincipalAgentTokenIssuance } from "../types";
+import type { PrincipalRecord, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
 import { generateTemporaryPassword } from "../lib/helpers";
 import { useToast } from "../workbench";
 import { paths } from "../app/paths";
@@ -21,7 +21,7 @@ export type NewPrincipal = {
   groups: string[];
   role: PrincipalRole;
   selfServiceEnabled: boolean;
-  agentTokenIssuance: PrincipalAgentTokenIssuance;
+  agentTokenIssuance: PrincipalAgentTokenIssuanceSetting;
   enableLocalPassword: boolean;
 };
 
@@ -98,13 +98,14 @@ export function usePrincipalActions() {
       refreshMembership();
     }
 
-    async function setAccess(principalId: string, change: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuance }) {
-      await attempt((current) => brokerApi.adminSetAccess(current, principalId, change));
+    async function setAccess(principalId: string, change: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }) {
+      const saved = await attempt((current) => brokerApi.adminSetAccess(current, principalId, change));
       toast("Account access updated", { tone: "success" });
       invalidate.admin();
       invalidate.agentTokenOptions();
-      if (principalId === session.principal) await invalidate.session();
+      await invalidate.session();
       invalidate.oauthConnections();
+      return saved;
     }
 
     async function addGroup(principalId: string, group: string) {

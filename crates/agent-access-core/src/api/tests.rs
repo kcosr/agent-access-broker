@@ -1968,18 +1968,58 @@ fn issuance_policy_schemas_keep_user_inheritance_distinct_from_group_contributio
             jsonschema::validator_for(spec.request_body_schema.as_ref().unwrap()).unwrap();
         for mode in ["inherit", "disabled", "read_only", "write_capable"] {
             let mut body = base.clone();
-            body["agentTokenIssuance"] = json!(mode);
+            let contexts = if matches!(mode, "inherit" | "disabled") {
+                vec![]
+            } else {
+                vec!["internal", "external"]
+            };
+            body["agentTokenIssuance"] = json!({"mode":mode, "allowedExecutionContexts":contexts});
             assert_eq!(
                 validator.is_valid(&body),
                 allow_inherit || mode != "inherit",
                 "{method} {route}: {body}"
             );
         }
-        for value in [json!(null), json!(true), json!("unknown")] {
+        for value in [
+            json!(null),
+            json!(true),
+            json!("inherit"),
+            json!("disabled"),
+            json!("read_only"),
+            json!("write_capable"),
+            json!({}),
+            json!({"mode":"disabled"}),
+            json!({"allowedExecutionContexts":[]}),
+            json!({"mode":"unknown", "allowedExecutionContexts":[]}),
+            json!({"mode":"disabled", "allowedExecutionContexts":["internal"]}),
+            json!({"mode":"inherit", "allowedExecutionContexts":["internal"]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":[]}),
+            json!({"mode":"write_capable", "allowedExecutionContexts":[]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":null}),
+            json!({"mode":"read_only", "allowedExecutionContexts":"internal"}),
+            json!({"mode":"read_only", "allowedExecutionContexts":["internal", "internal"]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":["Internal"]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":[""]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":[7]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":["a".repeat(65)]}),
+            json!({"mode":"read_only", "allowedExecutionContexts":(0..65).map(|n| format!("context_{n}")).collect::<Vec<_>>()}),
+            json!({"mode":"disabled", "allowedExecutionContexts":[], "extra":true}),
+        ] {
             let mut body = base.clone();
             body["agentTokenIssuance"] = value;
             assert!(!validator.is_valid(&body), "{method} {route}: {body}");
         }
+        let mut body = base.clone();
+        body["agentTokenIssuance"] = json!({
+            "mode":"read_only", "allowedExecutionContexts":
+                (0..64).map(|n| format!("context_{n}")).collect::<Vec<_>>()
+        });
+        assert!(validator.is_valid(&body), "{method} {route}: {body}");
+        assert_eq!(
+            validator.is_valid(&base),
+            method == "POST",
+            "{method} {route}: empty PATCH or omitted creation field"
+        );
     }
 }
 

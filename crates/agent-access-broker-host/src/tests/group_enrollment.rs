@@ -153,14 +153,17 @@ async fn group_enrollment_rejects_null_and_non_boolean_settings() {
         .runtime
         .managed_store()
         .unwrap()
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "onboarding".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "onboarding".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     for value in [Value::Null, json!("true"), json!(1), json!([]), json!({})] {
         for method in [Method::POST, Method::PATCH] {
@@ -206,23 +209,29 @@ async fn group_enrollment_requires_admin_write_authority() {
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "onboarding".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "onboarding".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "carol".into(),
-            role: Some(PrincipalRole::Auditor),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "carol".into(),
+                role: Some(PrincipalRole::Auditor),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let auditor = store
         .issue_broker_token(
@@ -272,13 +281,16 @@ async fn group_enrollment_browser_edits_require_csrf() {
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "alice".into(),
-            role: Some(PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "alice".into(),
+                role: Some(PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     for (method, path, body) in [
         (
@@ -353,14 +365,17 @@ async fn group_enrollment_preflight_failure_prevents_write_and_completion_failur
             let is_create = operation == "admin.groups.create";
             if !is_create {
                 store
-                    .create_group(GroupWriteRequest {
-                        agent_token_issuance: Default::default(),
-                        group_id: "onboarding".into(),
-                        display_name: None,
-                        description: None,
-                        auto_enroll_new_microsoft_users: false,
-                        created_by: "test".into(),
-                    })
+                    .create_group(
+                        GroupWriteRequest {
+                            agent_token_issuance: Default::default(),
+                            group_id: "onboarding".into(),
+                            display_name: None,
+                            description: None,
+                            auto_enroll_new_microsoft_users: false,
+                            created_by: "test".into(),
+                        },
+                        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+                    )
                     .unwrap();
             }
             let connection =
@@ -457,18 +472,28 @@ async fn group_enrollment_mutation_owner_completes_audit_after_waiter_cancellati
     let (committed_tx, committed_rx) = tokio::sync::oneshot::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let waiter = tokio::spawn(committed_group_mutation(
+        crate::state::AppState {
+            reloadable: fixture.state.clone(),
+        },
         context,
         operation,
         target,
-        move |store| {
-            let result = store.create_group_with_effect(GroupWriteRequest {
-                agent_token_issuance: Default::default(),
-                group_id: "onboarding".into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: true,
-                created_by: "admin".into(),
-            })?;
+        move |store, environment| {
+            let result = store.create_group_with_effect(
+                GroupWriteRequest {
+                    agent_token_issuance: agent_access_core::GroupAgentTokenIssuanceSetting::new(
+                        agent_access_core::AgentTokenIssuanceMode::ReadOnly,
+                        vec!["default".into()],
+                    )
+                    .unwrap(),
+                    group_id: "onboarding".into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: true,
+                    created_by: "admin".into(),
+                },
+                environment.contexts(),
+            )?;
             committed_tx.send(()).unwrap();
             release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
             Ok(result)
@@ -477,6 +502,25 @@ async fn group_enrollment_mutation_owner_completes_audit_after_waiter_cancellati
     committed_rx.await.unwrap();
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
+    let runtime = fixture.broker.runtime();
+    runtime
+        .managed_store()
+        .unwrap()
+        .patch_group(
+            agent_access_core::GroupPatchRequest {
+                group_id: "onboarding".into(),
+                display_name: None,
+                description: None,
+                status: None,
+                auto_enroll_new_microsoft_users: None,
+                agent_token_issuance: Some(
+                    agent_access_core::GroupAgentTokenIssuanceSetting::default(),
+                ),
+                updated_by: "admin".into(),
+            },
+            runtime.execution_context_registry(),
+        )
+        .unwrap();
     release_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -488,7 +532,33 @@ async fn group_enrollment_mutation_owner_completes_audit_after_waiter_cancellati
     })
     .await
     .unwrap();
-    assert_change(&fixture, "enrollment-cancelled", false, true);
+    let audit = events(&fixture, "enrollment-cancelled");
+    assert_eq!(audit.len(), 2);
+    assert_eq!(audit[0]["brokerRequestId"], audit[1]["brokerRequestId"]);
+    assert_eq!(
+        audit[0]["providerAudit"]["management"]["phase"],
+        "preflight"
+    );
+    assert_eq!(
+        audit[0]["providerAudit"]["management"]["target"],
+        json!({
+            "group":"onboarding", "autoEnrollNewMicrosoftUsers":true,
+        })
+    );
+    let success = audit
+        .iter()
+        .find(|event| event["providerAudit"]["management"]["phase"] == "success")
+        .unwrap();
+    assert_eq!(
+        success["providerAudit"]["management"]["target"],
+        json!({
+            "group":"onboarding", "autoEnrollNewMicrosoftUsers":{"previous":false,"current":true},
+            "agentTokenIssuance":{
+                "previous":{"mode":"disabled","allowedExecutionContexts":[]},
+                "current":{"mode":"read_only","allowedExecutionContexts":["default"]},
+            },
+        })
+    );
 }
 
 #[tokio::test]
@@ -534,14 +604,21 @@ async fn group_enrollment_toml_projection_is_false_and_flag_writes_are_rejected(
     let snapshot = broker.state().current();
     let store = snapshot.runtime.managed_store().unwrap();
     store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::WriteCapable,
-            group_id: "onboarding".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: agent_access_core::GroupAgentTokenIssuanceSetting::new(
+                    agent_access_core::AgentTokenIssuanceMode::WriteCapable,
+                    vec!["default".into()],
+                )
+                .unwrap(),
+                group_id: "onboarding".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     for (path, is_list) in [
         ("/v1/admin/groups", true),
@@ -569,7 +646,8 @@ async fn group_enrollment_toml_projection_is_false_and_flag_writes_are_rejected(
         assert_eq!(group["groupId"], "onboarding");
         assert_eq!(group["autoEnrollNewMicrosoftUsers"], false);
         assert_eq!(
-            group["agentTokenIssuance"], "disabled",
+            group["agentTokenIssuance"],
+            json!({"mode":"disabled","allowedExecutionContexts":[]}),
             "TOML groups never contribute dormant managed issuance authority"
         );
         assert_eq!(group["memberCount"], 1, "project the TOML membership");
@@ -578,14 +656,14 @@ async fn group_enrollment_toml_projection_is_false_and_flag_writes_are_rejected(
         (
             Method::POST,
             "/v1/admin/groups",
-            r#"{"groupId":"new-default","autoEnrollNewMicrosoftUsers":true,"agentTokenIssuance":"read_only"}"#,
+            r#"{"groupId":"new-default","autoEnrollNewMicrosoftUsers":true,"agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["default"]}}"#,
             "enrollment-toml-create",
             "new-default",
         ),
         (
             Method::PATCH,
             "/v1/admin/groups/onboarding",
-            r#"{"autoEnrollNewMicrosoftUsers":true,"agentTokenIssuance":"read_only"}"#,
+            r#"{"autoEnrollNewMicrosoftUsers":true,"agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["default"]}}"#,
             "enrollment-toml-patch",
             "onboarding",
         ),

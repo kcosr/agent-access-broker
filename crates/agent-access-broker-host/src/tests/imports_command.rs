@@ -1297,14 +1297,17 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
     let store = runtime.managed_store().unwrap();
     for group in ["eng", "ops"] {
         store
-            .create_group(agent_access_core::GroupWriteRequest {
-                agent_token_issuance: Default::default(),
-                group_id: group.into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                agent_access_core::GroupWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    group_id: group.into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    created_by: "admin".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     for (principal, groups) in [

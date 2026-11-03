@@ -241,15 +241,35 @@ enrollment and setting-change audit details.
 
 ## Agent token issuance
 
-Account `agentTokenIssuance` defaults to `inherit`; group settings default to
-`disabled`. Resolve the explicit account override first, otherwise the most
-permissive active effective managed group at transaction time. TOML identity
-supplies no group contributions. Principal HTTP creation is create-only and
-refuses duplicates with 409. The internal `create_or_update_principal` upsert
-preserves an existing override; only access PATCH changes it. Personal issuance
-checks this policy inside the insertion transaction, after existing prerequisites. Administrative routes use
+Account `agentTokenIssuance` defaults to `{mode: inherit,
+allowedExecutionContexts: []}`; group defaults use Disabled and an empty list.
+Use only the complete object. Enabled modes require explicit nonempty configured
+sets. An account override replaces group permission; otherwise resolve the most
+permissive active effective managed group separately in each context, with
+winning group provenance per row. TOML identity supplies no group contributions.
+Principal HTTP creation is create-only and refuses duplicates with 409. Internal
+upserts preserve existing pairs. Personal issuance checks every requested
+context and the token Boolean inside the insertion transaction after existing
+prerequisites; never trim, split or coerce a request. Administrative routes use
 their admitted write authority independently. Policy changes never alter existing
-tokens, invocation admission, identity proofs or MCP owners.
+tokens, invocation admission/limiter state, identity proofs or MCP owners.
+
+Migration `034_agent_token_issuance_contexts` atomically snapshots the validated
+configured registry into enabled existing policies, including inactive owners,
+and never reseeds. Carry the trusted registry and identity authority through
+store reads/writes, login projection and token insertion. Fence context-bearing
+writes against reload. Startup/reload checks every principal reference and checks
+managed group references only under managed identity, including disabled groups;
+retain dormant TOML group integrity without blocking context retirement. Preserve
+the staged default transition and authority-switch recovery in the operator guide.
+
+API/CLI policy replacement is last-writer-wins. Portal editors retain edited
+fields across refetch, rebase unedited fields, require explicit conflict handling,
+and send only changed top-level fields with the complete issuance pair. Fresh
+personal token drafts wait for current session and options refreshes; later
+refreshes never silently change selected contexts or readOnly. Personal forms
+intersect grants and both per-context policy projections. Administrative forms
+use owner policy only for display.
 
 Require explicit `readOnly` on every issued agent token and effective-access
 request. Follow current grants remains available for read-only tokens. Reject

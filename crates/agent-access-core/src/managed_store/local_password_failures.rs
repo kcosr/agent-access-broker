@@ -284,7 +284,12 @@ mod tests {
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         };
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         (config, store)
     }
 
@@ -292,17 +297,22 @@ mod tests {
         let temp = tempfile::TempDir::new().unwrap();
         let (_, store) = store_at(&temp, "store.sqlite");
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let hasher = LocalPasswordHasher {
             verification_hook: None,
@@ -843,6 +853,7 @@ mod tests {
         );
         let previous = ManagedStore::open_with_catalog(
             &config,
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &MANAGED_STORE_MIGRATIONS[..previous_len],
@@ -875,11 +886,20 @@ mod tests {
             .unwrap();
         drop(previous);
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Reload),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            ),
             Err(ManagedStoreError::MigrationRequired)
         ));
 
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert!(store.migration_applied_this_open(MANAGED_STORE_LOCAL_PASSWORD_FAILURES_VERSION));
         {
             let conn = store.connection.lock().unwrap();
@@ -908,6 +928,11 @@ mod tests {
             )
             .unwrap();
         drop(store);
-        ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
     }
 }

@@ -214,6 +214,8 @@ struct Seeded {
 /// Seeds the principals, Avery's `engineering` group and the admin and agent
 /// tokens, before the broker opens and locks the store.
 fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
+    let issuance_contexts =
+        agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap();
     let store = ManagedStore::open(
         &ManagedStoreConfig {
             kind: "sqlite".into(),
@@ -221,42 +223,52 @@ fn seed(directory: &FixtureDir, hash: &Path) -> Seeded {
             auto_migrate: true,
             require_registered_principal_for_invocation: true,
         },
+        &issuance_contexts,
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     for (principal, display_name) in [("admin", None), ("avery", Some("Avery Example"))] {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-                role: PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.into(),
-                kind: "user".into(),
-                display_name: display_name.map(str::to_owned),
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.into(),
+                    kind: "user".into(),
+                    display_name: display_name.map(str::to_owned),
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
     }
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "admin".into(),
-            role: Some(PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "admin".into(),
+                role: Some(PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
-            group_id: "engineering".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "admin".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "engineering".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "admin".into(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     store.add_group("avery", "engineering", "admin").unwrap();
     let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {

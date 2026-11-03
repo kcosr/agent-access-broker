@@ -131,7 +131,8 @@ false, only for an issued `agent_invoke` token with a token ID. Trusted paths
 omit `brokerToken` even though they use synthetic agent-invoke caveats; their
 `readOnlyAccess` remains path-only. Browser and management sessions omit both.
 Changing [issuance permission](roles.md#agent-token-issuance) changes only who
-may issue the next token, not existing token or path authority.
+may issue the next token, in which contexts, and with which read-only restriction;
+it does not change existing token or path authority.
 Without `X-Agent-Access-User`, an explicit Broker token sent alongside a
 fingerprint keeps precedence, so the token's authority applies rather than the
 identity token's settings. With the user header, competing credentials are

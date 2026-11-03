@@ -25,15 +25,15 @@
       "file": "guide/admin-create-user-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft user enrollment with explicit read-only token issuance, group selection, independent local password sign-in, and self-service",
-      "sha256": "d1825574b03a0223b7181db0fb6dc893e07519f14068af11162ec7520054a6b8"
+      "description": "Synthetic unsubmitted user draft with Read-only personal token issuance in explicitly selected default and internal contexts, group selection, independent local password sign-in and self-service.",
+      "sha256": "66acac5b4bd0479b285d2320451b8d3c9c3ce3d79d7b14794833ee2a9fe6430c"
     },
     {
       "file": "guide/admin-create-group-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Draft policy group with a stable identifier, human-readable purpose and explicit read-only token issuance contribution",
-      "sha256": "c7e77d364f1dd447dc030836a32b7819be92a4144891fcf2fdf5ab5c2abba34c"
+      "description": "Synthetic unsubmitted policy-group draft with Read-only token issuance in the explicitly selected external context.",
+      "sha256": "a6b9ac11d8f9248201c66be43681d3cb339f9f042c4bfea4fe0a98433758e6c0"
     },
     {
       "file": "guide/admin-create-service-account-light.png",
@@ -102,8 +102,8 @@
       "file": "guide/admin-account-access-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Administrator viewing a real documentation auditor role with personal self-service and agent token issuance disabled",
-      "sha256": "1a4885c53129054c38def84e37c3d10c05051a270ad0a15dedd992c282a87493"
+      "description": "Synthetic auditor account with independent role and self-service controls, Disabled personal token issuance and its current saved explicit account override.",
+      "sha256": "7caa43240ef6e0ced7f49986082e80de2c7e2a88836e45aa6da742b40d14d119"
     },
     {
       "file": "guide/admin-disable-user-light.png",
@@ -235,29 +235,29 @@
       "file": "guide/user-token-details-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Synthetic unsubmitted read-only token creation page with explicit lifetime, contexts, and restricted access",
-      "sha256": "248d1a710c824764a3c3cad3c89deb2345514f99a5c492f535cd06eaa82c7c18"
+      "description": "Synthetic unsubmitted read-only token draft with the default context admitted by both current grants and personal issuance policy; the enabled policy permits write-capable issuance so Read-only is selectable.",
+      "sha256": "b3ccecc7f303f87d8de23e0cf7e7b749e82a98b1189144874bf7fcba8a5b704b"
     },
     {
       "file": "guide/user-token-access-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Synthetic unsubmitted token restricted to Jira issue.view using the shared read-only and write-capable action columns",
-      "sha256": "cee425c19b651d8ce219fa95d8eef9ec51bfec4c1e842a8b44b276c047d2dadb"
+      "description": "Synthetic unsubmitted read-only token restricted to Jira issue.view; write-capable actions remain unavailable despite granted authority.",
+      "sha256": "6da6038314fb4046720a49dd32c50d160fd4694badad4c83c96e476b4b4d8964"
     },
     {
       "file": "guide/user-token-resources-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Synthetic unsubmitted Jira token selecting only the exact DEMO Jira project resource",
-      "sha256": "71802365283d63d55b4c0a8d0d33a2d6a044bc4a9fd5758ee00bca4d2e7f1aed"
+      "description": "Synthetic unsubmitted read-only Jira token selecting only the exact DEMO Jira project resource in default.",
+      "sha256": "471eba5bff5d9df809a30bd52d5dbd43b2c0052d12f0f665eecc9dd36761028e"
     },
     {
       "file": "guide/user-token-boundary-light.png",
       "theme": "light",
       "viewport": "1440x960",
-      "description": "Synthetic unsubmitted read-only token with the live summary rail and Effective access preview; action selection is collapsed and no token is issued",
-      "sha256": "5dafed2462e33462ba542377402ed0e0ca0dc0b4526a268d8dbed7ad034063f7"
+      "description": "Synthetic unsubmitted read-only token with its current effective access and summary; action selection is collapsed and no token is issued.",
+      "sha256": "3a84d5c023bf075a932dc5c9bf5f9062a3b09982cec8ad15aaf3c3b9e1459528"
     },
     {
       "file": "guide/user-token-revoke-light.png",

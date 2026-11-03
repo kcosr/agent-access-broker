@@ -415,6 +415,7 @@ mod tests {
                 auto_migrate: true,
                 require_registered_principal_for_invocation: false,
             },
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -804,6 +805,7 @@ mod tests {
                 auto_migrate: false,
                 require_registered_principal_for_invocation: false,
             },
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Reload,
         )
         .unwrap();
@@ -856,6 +858,7 @@ mod tests {
         };
         let previous = ManagedStore::open_with_catalog(
             &config,
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &MANAGED_STORE_MIGRATIONS[..6],
@@ -867,10 +870,19 @@ mod tests {
         ).unwrap();
         drop(previous);
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Reload),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            ),
             Err(ManagedStoreError::MigrationRequired)
         ));
-        let upgraded = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let upgraded = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert_eq!(upgraded.resource("saved").unwrap().version, 4);
         assert!(
             upgraded

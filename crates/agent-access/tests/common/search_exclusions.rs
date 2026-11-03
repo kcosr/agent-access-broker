@@ -120,20 +120,30 @@ pub fn configure(
         "resourceGroups":[]
     }))
     .unwrap();
-    let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
+    let issuance_contexts =
+        agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap();
+    let store = ManagedStore::open(
+        &store_config,
+        &issuance_contexts,
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     for principal in ["search-user", "ungranted-user"] {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-                principal_id: principal.into(),
-                kind: "user".into(),
-                role: PrincipalRole::User,
-                display_name: None,
-                email: None,
-                external_subject: None,
-                self_service_enabled: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    principal_id: principal.into(),
+                    kind: "user".into(),
+                    role: PrincipalRole::User,
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    self_service_enabled: None,
+                    created_by: "test".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
     }
     let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {

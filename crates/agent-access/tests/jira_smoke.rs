@@ -681,6 +681,8 @@ async fn jira_issue_links_require_universal_token_authority_and_preserve_absence
         )
         .unwrap();
     let store_path = directory.join("tokens.sqlite");
+    let issuance_contexts =
+        agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap();
     let store = ManagedStore::open(
         &ManagedStoreConfig {
             kind: "sqlite".to_string(),
@@ -688,21 +690,25 @@ async fn jira_issue_links_require_universal_token_authority_and_preserve_absence
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         },
+        &issuance_contexts,
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-            role: PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "agent-one".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "agent-one".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
         hash_key_ref: format!("file:{}", key.display()),

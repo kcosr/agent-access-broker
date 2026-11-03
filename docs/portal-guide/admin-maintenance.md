@@ -13,7 +13,9 @@ local demonstration accounts and policy.
 1. Open **Admin > Principals** and review users, service accounts, and groups.
    Confirm who owns each workload and which accounts still need access.
 2. Open a principal's **Overview** and inspect **Account access**: its **Role**
-   and **Self-service enabled** setting. Review sign-in methods separately.
+   and **Self-service enabled** setting, plus the token issuance mode, explicit
+   context list and current saved effective permissions. Review sign-in methods
+   separately.
 3. Inspect **Access**, **Grants**, and **Groups**. Follow grant references to
    **Policies** to review actions, contexts, credential modes, and resources.
 4. Review **Tokens**, including expiry, last use, paused/revoked status, and
@@ -54,7 +56,15 @@ Expected result: the account receives the selected administrative authority and
 personal-management setting. Roles do not grant service invocation. A role change
 revokes that account's administrative API tokens; leaving the service policy
 manager role also removes its direct management assignments. A self-service-only
-change does not revoke invocation tokens or stored credentials.
+change does not revoke invocation tokens or stored credentials. To change new
+personal token permission, use the independent issuance mode and context checklist
+described in [users and groups](admin-users-groups.md#review-token-issuance-permission).
+A policy-only edit leaves existing tokens unchanged.
+
+If another administrator changes an edited field, the form retains your draft
+and requires **Discard draft** or **Keep my draft** before saving. Unedited fields
+follow the latest saved values. Confirm any role-change warning against that
+latest value; changing only contexts must not submit an older role.
 
 The portal prevents changing your own role here. The broker protects the last
 active human administrator from demotion or disable. See [account roles](../roles.md)
@@ -87,7 +97,9 @@ Review the breadth of the delegation before saving it. Use the
 2. To create an agent token, choose **Issue token**. The creation page shows
    the account as the fixed owner and uses the same action columns, boundary
    summary, and access preview as [personal token creation](user.md#5-issue-a-token-with-the-smallest-useful-boundary).
-   Only administrators can issue for another account; disabled accounts cannot
+   The form uses the owner's grants independently of personal issuance mode or
+   context limits, with an optional Read-only restriction. Only administrators
+   can issue for another account; disabled accounts cannot
    receive new tokens. After issuance, save the one-time secret before closing
    **Token created**.
 3. Select an agent token to inspect its ceiling. Use **Pause token** for a

@@ -1069,6 +1069,62 @@ enum GroupAgentTokenIssuanceArg {
     WriteCapable,
 }
 
+impl From<GroupAgentTokenIssuanceArg> for PrincipalAgentTokenIssuanceArg {
+    fn from(mode: GroupAgentTokenIssuanceArg) -> Self {
+        match mode {
+            GroupAgentTokenIssuanceArg::Disabled => Self::Disabled,
+            GroupAgentTokenIssuanceArg::ReadOnly => Self::ReadOnly,
+            GroupAgentTokenIssuanceArg::WriteCapable => Self::WriteCapable,
+        }
+    }
+}
+
+fn parse_agent_token_issuance_context(value: &str) -> Result<String, String> {
+    agent_access_core::ExecutionContext::new(value)
+        .map(|context| context.to_string())
+        .map_err(|_| "issuance contexts must match [a-z][a-z0-9_-]{0,63}".to_string())
+}
+
+fn agent_token_issuance_body(
+    mode: Option<PrincipalAgentTokenIssuanceArg>,
+    contexts: &[String],
+) -> Result<Option<serde_json::Value>> {
+    let Some(mode) = mode else {
+        anyhow::ensure!(
+            contexts.is_empty(),
+            "--agent-token-issuance-context requires --agent-token-issuance"
+        );
+        return Ok(None);
+    };
+    match mode {
+        PrincipalAgentTokenIssuanceArg::Inherit | PrincipalAgentTokenIssuanceArg::Disabled => {
+            anyhow::ensure!(
+                contexts.is_empty(),
+                "inherit and disabled reject --agent-token-issuance-context"
+            );
+        }
+        PrincipalAgentTokenIssuanceArg::ReadOnly | PrincipalAgentTokenIssuanceArg::WriteCapable => {
+            anyhow::ensure!(
+                !contexts.is_empty(),
+                "read_only and write_capable require --agent-token-issuance-context"
+            );
+        }
+    }
+    anyhow::ensure!(
+        contexts.len() <= 64,
+        "at most 64 issuance contexts are allowed"
+    );
+    let mut sorted = BTreeSet::new();
+    for context in contexts {
+        parse_agent_token_issuance_context(context).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(sorted.insert(context), "issuance contexts must be unique");
+    }
+    Ok(Some(serde_json::json!({
+        "mode": mode,
+        "allowedExecutionContexts": sorted,
+    })))
+}
+
 #[derive(Debug, Subcommand)]
 enum AdminPrincipalsCommand {
     List,
@@ -1092,6 +1148,15 @@ enum AdminPrincipalsCommand {
         /// Permission to issue personal agent tokens; inherit uses active groups.
         #[arg(long, value_enum)]
         agent_token_issuance: Option<PrincipalAgentTokenIssuanceArg>,
+        /// Replace the issuance policy's contexts; repeat for each permitted context.
+        /// Required for read_only/write_capable; unavailable for inherit/disabled.
+        #[arg(
+            long = "agent-token-issuance-context",
+            requires = "agent_token_issuance",
+            required_if_eq_any = [("agent_token_issuance", "read_only"), ("agent_token_issuance", "write_capable")],
+            value_parser = parse_agent_token_issuance_context
+        )]
+        agent_token_issuance_contexts: Vec<String>,
     },
     Update {
         principal: String,
@@ -1293,6 +1358,15 @@ enum AdminGroupsCommand {
         /// This group's contribution to personal agent token issuance permission.
         #[arg(long, value_enum)]
         agent_token_issuance: Option<GroupAgentTokenIssuanceArg>,
+        /// Replace the issuance policy's contexts; repeat for each permitted context.
+        /// Required for read_only/write_capable; unavailable for inherit/disabled.
+        #[arg(
+            long = "agent-token-issuance-context",
+            requires = "agent_token_issuance",
+            required_if_eq_any = [("agent_token_issuance", "read_only"), ("agent_token_issuance", "write_capable")],
+            value_parser = parse_agent_token_issuance_context
+        )]
+        agent_token_issuance_contexts: Vec<String>,
     },
     Update {
         group: String,
@@ -1310,6 +1384,15 @@ enum AdminGroupsCommand {
         /// This group's contribution to personal agent token issuance permission.
         #[arg(long, value_enum)]
         agent_token_issuance: Option<GroupAgentTokenIssuanceArg>,
+        /// Replace the issuance policy's contexts; repeat for each permitted context.
+        /// Required for read_only/write_capable; unavailable for inherit/disabled.
+        #[arg(
+            long = "agent-token-issuance-context",
+            requires = "agent_token_issuance",
+            required_if_eq_any = [("agent_token_issuance", "read_only"), ("agent_token_issuance", "write_capable")],
+            value_parser = parse_agent_token_issuance_context
+        )]
+        agent_token_issuance_contexts: Vec<String>,
     },
     Enable {
         group: String,
@@ -1373,6 +1456,15 @@ enum AdminPrincipalAccessCommand {
         /// Permission to issue personal agent tokens; inherit uses active groups.
         #[arg(long, value_enum)]
         agent_token_issuance: Option<PrincipalAgentTokenIssuanceArg>,
+        /// Replace the issuance policy's contexts; repeat for each permitted context.
+        /// Required for read_only/write_capable; unavailable for inherit/disabled.
+        #[arg(
+            long = "agent-token-issuance-context",
+            requires = "agent_token_issuance",
+            required_if_eq_any = [("agent_token_issuance", "read_only"), ("agent_token_issuance", "write_capable")],
+            value_parser = parse_agent_token_issuance_context
+        )]
+        agent_token_issuance_contexts: Vec<String>,
     },
 }
 
@@ -12573,6 +12665,7 @@ async fn run_admin_principals_command(
             role,
             self_service_enabled,
             agent_token_issuance,
+            agent_token_issuance_contexts,
         } => {
             let mut body = serde_json::json!({
                 "principalId": principal,
@@ -12583,8 +12676,11 @@ async fn run_admin_principals_command(
                     "role": role,
                     "selfServiceEnabled": self_service_enabled.unwrap_or(kind != "service_account"),
             });
-            if let Some(setting) = agent_token_issuance {
-                body["agentTokenIssuance"] = serde_json::json!(setting);
+            if let Some(setting) = require_cli_input(agent_token_issuance_body(
+                *agent_token_issuance,
+                agent_token_issuance_contexts,
+            )) {
+                body["agentTokenIssuance"] = setting;
             }
             run_broker_json_method(
                 ctx,
@@ -12637,6 +12733,7 @@ async fn run_admin_principals_command(
                 role,
                 self_service_enabled,
                 agent_token_issuance,
+                agent_token_issuance_contexts,
             } => {
                 let mut body = serde_json::Map::new();
                 if let Some(role) = role {
@@ -12645,8 +12742,11 @@ async fn run_admin_principals_command(
                 if let Some(enabled) = self_service_enabled {
                     body.insert("selfServiceEnabled".into(), serde_json::json!(enabled));
                 }
-                if let Some(setting) = agent_token_issuance {
-                    body.insert("agentTokenIssuance".into(), serde_json::json!(setting));
+                if let Some(setting) = require_cli_input(agent_token_issuance_body(
+                    *agent_token_issuance,
+                    agent_token_issuance_contexts,
+                )) {
+                    body.insert("agentTokenIssuance".into(), setting);
                 }
                 if body.is_empty() {
                     require_cli_input::<()>(Err(anyhow::anyhow!(
@@ -12828,6 +12928,7 @@ async fn run_admin_groups_command(
             description,
             auto_enroll_new_microsoft_users,
             agent_token_issuance,
+            agent_token_issuance_contexts,
         } => {
             let mut body = serde_json::json!({
                 "groupId": group,
@@ -12835,8 +12936,11 @@ async fn run_admin_groups_command(
                 "description": description,
                 "autoEnrollNewMicrosoftUsers": auto_enroll_new_microsoft_users,
             });
-            if let Some(setting) = agent_token_issuance {
-                body["agentTokenIssuance"] = serde_json::json!(setting);
+            if let Some(setting) = require_cli_input(agent_token_issuance_body(
+                agent_token_issuance.map(Into::into),
+                agent_token_issuance_contexts,
+            )) {
+                body["agentTokenIssuance"] = setting;
             }
             run_broker_json_method(ctx, reqwest::Method::POST, "/v1/admin/groups", Some(body)).await
         }
@@ -12848,6 +12952,7 @@ async fn run_admin_groups_command(
             clear_description,
             auto_enroll_new_microsoft_users,
             agent_token_issuance,
+            agent_token_issuance_contexts,
         } => {
             let mut body = serde_json::Map::new();
             if *clear_display_name {
@@ -12866,8 +12971,11 @@ async fn run_admin_groups_command(
                     serde_json::json!(enabled),
                 );
             }
-            if let Some(setting) = agent_token_issuance {
-                body.insert("agentTokenIssuance".into(), serde_json::json!(setting));
+            if let Some(setting) = require_cli_input(agent_token_issuance_body(
+                agent_token_issuance.map(Into::into),
+                agent_token_issuance_contexts,
+            )) {
+                body.insert("agentTokenIssuance".into(), setting);
             }
             if body.is_empty() {
                 require_cli_input::<()>(Err(anyhow::anyhow!(

@@ -95,6 +95,59 @@ fn namespace(value: &str) -> ResourceSelector {
 }
 
 #[test]
+fn configured_execution_context_registry_is_validated_and_preserves_order() {
+    let absent = ConfiguredExecutionContexts::from_config(None).unwrap();
+    assert_eq!(absent.allowed_values(), &["default"]);
+    assert_eq!(absent.default_context(), Some("default"));
+    assert!(!absent.context_required());
+    assert!(absent.contains("default"));
+    assert!(!absent.contains("external"));
+
+    let config = ExecutionContextConfig {
+        allowed_values: vec!["sandbox".into(), "production".into()],
+        default_context: None,
+    };
+    let ordered = ConfiguredExecutionContexts::from_config(Some(&config)).unwrap();
+    assert_eq!(
+        ordered.iter().collect::<Vec<_>>(),
+        ["sandbox", "production"]
+    );
+    assert!(ordered.context_required());
+    assert_eq!(ordered.default_context(), None);
+    let mut reordered = config.clone();
+    reordered.allowed_values.reverse();
+    reordered.default_context = Some("production".into());
+    let reordered = ConfiguredExecutionContexts::from_config(Some(&reordered)).unwrap();
+    assert!(ordered.has_same_membership(&reordered));
+    assert!(!ordered.has_same_membership(&absent));
+
+    for invalid in [
+        ExecutionContextConfig {
+            allowed_values: vec![],
+            default_context: None,
+        },
+        ExecutionContextConfig {
+            allowed_values: vec!["UPPERCASE".into()],
+            default_context: None,
+        },
+        ExecutionContextConfig {
+            allowed_values: vec!["repeat".into(), "repeat".into()],
+            default_context: None,
+        },
+        ExecutionContextConfig {
+            allowed_values: vec!["known".into()],
+            default_context: Some("missing".into()),
+        },
+        ExecutionContextConfig {
+            allowed_values: (0..65).map(|i| format!("context-{i}")).collect(),
+            default_context: None,
+        },
+    ] {
+        assert!(ConfiguredExecutionContexts::from_config(Some(&invalid)).is_err());
+    }
+}
+
+#[test]
 fn home_expansion_helper_expands_only_current_user_forms() {
     let home = Path::new("home-dir");
 

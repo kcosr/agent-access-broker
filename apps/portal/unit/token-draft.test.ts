@@ -6,7 +6,7 @@ import { buildAgentTokenBoundary, buildAgentTokenIssuance, createAgentTokenDraft
 
 const ttlPolicy: TokenTtlPolicy = { defaultTtl: "8h", maxTtl: "30d", options: ["1h", "8h", "30d", "never"] };
 const options: AgentTokenOptions = {
-  policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] },
+  policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] },
   executionContexts: ["internal", "external"],
   resources: [], resourceGroups: [], mcp: null,
   services: [
@@ -135,12 +135,12 @@ describe("token boundary construction", () => {
   test("live option refreshes retain selected references without broadening their boundary", () => {
     const draft = { ...createAgentTokenDraft(options, ttlPolicy, ["jira"]), name: "agent", resourceSelections: { jira: { resourceIds: [], resourceGroupIds: ["docs"] } } };
     const initial = structuredClone(draft);
-    const refreshed: AgentTokenOptions = { ...options, policyGeneration: 2, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, executionContexts: [], services: [] };
+    const refreshed: AgentTokenOptions = { ...options, policyGeneration: 2, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, executionContexts: [], services: [] };
     expect(buildAgentTokenBoundary(draft, refreshed)).toEqual(buildAgentTokenBoundary(draft, options));
-    expect(buildAgentTokenIssuance(draft, refreshed, ttlPolicy).valid).toBe(true);
+    expect(buildAgentTokenIssuance(draft, refreshed, ttlPolicy)).toEqual({ valid: false, issues: [{ field: "contexts", message: "Remove execution contexts that are no longer granted." }] });
     expect(draft).toEqual(initial);
     const newPolicy = { ...ttlPolicy, options: ["1h"] };
-    expect(buildAgentTokenIssuance(draft, refreshed, newPolicy)).toEqual({ valid: false, issues: [{ field: "lifetime", message: "Choose an available token lifetime." }] });
+    expect(buildAgentTokenIssuance(draft, refreshed, newPolicy)).toEqual({ valid: false, issues: [{ field: "lifetime", message: "Choose an available token lifetime." }, { field: "contexts", message: "Remove execution contexts that are no longer granted." }] });
   });
 
   test("retains resource restrictions for stale actions even when remaining granted actions need no resources", () => {
@@ -180,4 +180,16 @@ describe("token lifetime labels", () => {
       "1 hour", "8 hours", "30 days", "1 day", "15 minutes", "90 seconds", "Never expires", "P1D",
     ]);
   });
+});
+
+
+test("initial service selections contain only reads available in eligible contexts", () => {
+  const narrow = { ...options, services: [{ ...options.services[0]!, actions: [
+    { ...options.services[0]!.actions[0]!, action: "inside", readOnly: true, executionContexts: ["internal"] },
+    { ...options.services[0]!.actions[0]!, action: "outside", readOnly: true, executionContexts: ["external"] },
+  ] }] };
+  const draft = createAgentTokenDraft(narrow, ttlPolicy, [narrow.services[0]!.service], ["external"]);
+  expect(draft.selectedExecutionContexts).toEqual(["external"]);
+  expect(draft.selectedActions[narrow.services[0]!.service]).toEqual(["outside"]);
+  expect(narrow.executionContexts).toEqual(options.executionContexts);
 });

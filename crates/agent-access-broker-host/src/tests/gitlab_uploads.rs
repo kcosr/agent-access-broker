@@ -243,21 +243,25 @@ async fn project_upload_token_repository_denial_precedes_upload_and_file_validat
     }];
     let store = agent_access_core::ManagedStore::open(
         &store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "upload-user".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "upload-user".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let hasher =
         agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();

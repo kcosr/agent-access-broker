@@ -3879,21 +3879,25 @@ mod tests {
         configure(&mut config);
         let store = agent_access_core::ManagedStore::open(
             &managed_store_config,
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
             agent_access_core::ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "gateway-user".to_string(),
-                kind: "user".to_string(),
-                display_name: Some("Gateway User".to_string()),
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "gateway-user".to_string(),
+                    kind: "user".to_string(),
+                    display_name: Some("Gateway User".to_string()),
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         let hasher =
             agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap())
@@ -4454,21 +4458,25 @@ mod tests {
 
         let store = agent_access_core::ManagedStore::open(
             &managed_store_config,
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
             agent_access_core::ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "gateway-user".to_string(),
-                kind: "user".to_string(),
-                display_name: Some("Gateway User".to_string()),
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "gateway-user".to_string(),
+                    kind: "user".to_string(),
+                    display_name: Some("Gateway User".to_string()),
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         let hasher =
             agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap())
@@ -5452,6 +5460,7 @@ mod tests {
         gateway.allowed_upstream_hosts = vec![format!("https://{upstream_addr}/**")];
         let store = agent_access_core::ManagedStore::open(
             &store_config,
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
             agent_access_core::ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -5461,17 +5470,20 @@ mod tests {
         let mut tokens = Vec::new();
         for principal in ["gateway-user", "denied-user"] {
             store
-                .create_principal(agent_access_core::PrincipalWriteRequest {
-                    agent_token_issuance: Default::default(),
-                    role: agent_access_core::PrincipalRole::User,
-                    self_service_enabled: None,
-                    principal_id: principal.into(),
-                    kind: "user".into(),
-                    display_name: None,
-                    email: None,
-                    external_subject: None,
-                    created_by: "test".into(),
-                })
+                .create_principal(
+                    agent_access_core::PrincipalWriteRequest {
+                        agent_token_issuance: Default::default(),
+                        role: agent_access_core::PrincipalRole::User,
+                        self_service_enabled: None,
+                        principal_id: principal.into(),
+                        kind: "user".into(),
+                        display_name: None,
+                        email: None,
+                        external_subject: None,
+                        created_by: "test".into(),
+                    },
+                    &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+                )
                 .unwrap();
             tokens.push(store.issue_broker_token(&hasher, agent_access_core::BrokerTokenIssueRequest { principal_id: principal.into(), name: "cache test".into(), token_class: agent_access_core::BrokerTokenClass::AgentInvoke, scopes: json!({"allowedServices":["gitlab_git"], "readOnly": false, "allowedExecutionContexts":["default"]}), expires_at: None, created_by: "test".into() }).unwrap().token);
         }
@@ -6621,21 +6633,25 @@ mod tests {
         config.policy.grants[0].credential_mode = "per_user".to_string();
         let store = agent_access_core::ManagedStore::open(
             &store_config,
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
             agent_access_core::ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "gateway-user".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "gateway-user".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         drop(store);
         let runtime = BrokerRuntime::new(config).unwrap();
@@ -6824,21 +6840,25 @@ mod tests {
         config.policy.grants.push(rest_grant);
         let store = agent_access_core::ManagedStore::open(
             &store_config,
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
             agent_access_core::ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "gateway-user".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "gateway-user".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         drop(store);
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

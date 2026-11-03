@@ -132,7 +132,8 @@ where
     let owner_target = target.clone();
     let owner = tokio::spawn(async move {
         let context = owner_context;
-        match management_token_store_call(&state, &context, move |store, _| mutate(store)).await {
+        match management_token_store_call(&state, &context, move |store, _, _| mutate(store)).await
+        {
             Ok((result, completion)) => {
                 management_committed_write_audit_completion(&context, operation, Some(completion))
                     .await;

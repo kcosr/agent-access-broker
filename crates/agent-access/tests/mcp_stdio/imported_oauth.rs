@@ -480,6 +480,8 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         deadline_case.is_some(),
     );
     // Seed the managed store before the broker opens and locks it.
+    let issuance_contexts =
+        agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap();
     let store = ManagedStore::open(
         &ManagedStoreConfig {
             kind: "sqlite".into(),
@@ -487,43 +489,53 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &issuance_contexts,
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "alice".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "alice".into(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "alice".into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "alice".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "alice".into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: "alice".into(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-            role: PrincipalRole::Admin,
-            self_service_enabled: None,
-            principal_id: "admin".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "alice".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: PrincipalRole::Admin,
+                self_service_enabled: None,
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "alice".into(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     let definition = ImportedServiceDefinition {
         service: "metrics".into(),
@@ -635,14 +647,17 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         .unwrap();
     if group_grant {
         store
-            .create_group(GroupWriteRequest {
-                agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
-                group_id: "metrics-readers".into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    group_id: "metrics-readers".into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    created_by: "admin".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
         store
             .add_group("alice", "metrics-readers", "admin")
@@ -652,13 +667,16 @@ async fn exercise_oauth_fixture(options: FixtureOptions) {
         // The regular setup/invocation cases exercise an ordinary human. The
         // protocol-switch cases retain administrator discovery coverage below.
         store
-            .patch_principal_access(PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: "alice".into(),
-                role: Some(PrincipalRole::User),
-                self_service_enabled: None,
-                actor: "admin".into(),
-            })
+            .patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: "alice".into(),
+                    role: Some(PrincipalRole::User),
+                    self_service_enabled: None,
+                    actor: "admin".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
     }
     store

@@ -409,27 +409,33 @@ fn grant(
 fn avery(runtime: &BrokerRuntime, config: &BrokerConfig, services: &[&str]) -> (String, String) {
     let store = runtime.managed_store().unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "avery".into(),
-            kind: "user".into(),
-            display_name: Some("Avery Example".into()),
-            email: Some("avery@example.com".into()),
-            external_subject: None,
-            created_by: "admin".into(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "avery".into(),
+                kind: "user".into(),
+                display_name: Some("Avery Example".into()),
+                email: Some("avery@example.com".into()),
+                external_subject: None,
+                created_by: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_group(agent_access_core::GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "engineering".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "admin".into(),
-        })
+        .create_group(
+            agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "engineering".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store.add_group("avery", "engineering", "admin").unwrap();
     personal_credential(runtime, PERSONAL_TOKEN);
@@ -2585,17 +2591,20 @@ async fn personal_mode_added_after_acceptance_is_provisioned_and_verified_from_a
     let accepted = import(&app, &token, "tickets", "tickets", &["service"]).await;
     let store = broker.runtime().managed_store().unwrap().clone();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "avery".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".into(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "avery".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let user = store
         .issue_broker_token(

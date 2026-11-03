@@ -1,5 +1,8 @@
-import { GROUP_TOKEN_ISSUANCE_OPTIONS } from "../../lib/token-issuance-policy";
-import type { AgentTokenIssuanceMode, GroupRecord } from "../../types";
+import { issuanceSettingBlocker } from "../../lib/token-issuance-policy";
+import { accessDraftPatch } from "../../lib/access-draft";
+import { useAccessDraft } from "./use-access-draft";
+import { AccessDraftConflict, TokenIssuanceControls, useIssuanceRegistry } from "./token-issuance-controls";
+import type { GroupAgentTokenIssuanceSetting, GroupRecord } from "../../types";
 import { AdminButton, AdminForm, AdminIconButton } from "../../components/admin-access";
 // Admin › Principals › a group: header and URL-driven tabs (Overview,
 // Members, Grants, and Microsoft mappings when Microsoft sign-in is configured).
@@ -29,7 +32,6 @@ import {
   Main,
   PageHeader,
   plural,
-  Select,
   SettingsPage,
   SettingsRow,
   SettingsSection,
@@ -72,7 +74,7 @@ export function GroupPage() {
   const microsoft = Boolean(session.loginOptions?.microsoft?.enabled);
   const tabs: GroupTab[] = ["overview", "members", "grants", ...(microsoft ? (["microsoft"] as const) : [])];
   if (!tabs.includes(tab as GroupTab)) return <NotFoundPage />;
-  if (query.isPending || query.isError || !query.data) {
+  if (query.isPending || !query.data || (query.isError && tab !== "overview")) {
     return (
       <PortalPage>
         <Main label="Group">
@@ -241,7 +243,7 @@ function OverviewTab(props: TabProps) {
             </div>
           </AdminForm>
         </SettingsSection>
-        <GroupTokenIssuance group={group} enabled={groupWritesEnabled} identityAuthority={identityAuthority} />
+        <GroupTokenIssuance key={group.groupId} group={group} enabled={groupWritesEnabled} identityAuthority={identityAuthority} />
         <SettingsSection title="History">
           <KeyValue
             items={[
@@ -567,21 +569,38 @@ function MicrosoftTab(props: TabProps) {
 
 function GroupTokenIssuance({ group, enabled, identityAuthority }: { group: GroupRecord; enabled: boolean; identityAuthority: string }) {
   const actions = useGroupActions();
-  const [mode, setMode] = useState(group.agentTokenIssuance);
+  const draft = useAccessDraft({ agentTokenIssuance: group.agentTokenIssuance });
+  const record = useAdminGroup(group.groupId);
+  const registry = useIssuanceRegistry();
+  const policyError = issuanceSettingBlocker(draft.value.agentTokenIssuance, registry.contexts);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { setMode(group.agentTokenIssuance); }, [group.groupId, group.agentTokenIssuance]);
+
   return <SettingsSection title="Token issuance" description="Disabled does not override permission from another group. A user’s explicit setting wins.">
     {enabled ? <AdminForm onSubmit={async (event) => {
-      event.preventDefault(); setPending(true); setError(null);
-      try { await actions.patch(group.groupId, { agentTokenIssuance: mode }); }
-      catch (failure) { setError(errorMessage(failure)); } finally { setPending(false); }
+      event.preventDefault();
+      if (pending || policyError || draft.conflicts.length || !draft.changed) return;
+      setPending(true); setError(null);
+      try {
+        const refreshed = await record.refetch({ throwOnError: true });
+        if (!refreshed.data) throw new Error("Current group settings are unavailable.");
+        const current = draft.refresh({ agentTokenIssuance: refreshed.data.agentTokenIssuance });
+        if (current.conflicts.length) throw new Error("Review the changed saved settings before saving.");
+        const patch = accessDraftPatch(current);
+        if (Object.keys(patch).length) {
+          const saved = await actions.patch(group.groupId, patch);
+          draft.committed({ agentTokenIssuance: saved.agentTokenIssuance });
+        }
+      }
+      catch (failure) { setError(errorMessage(failure)); void registry.query.refetch(); void record.refetch(); } finally { setPending(false); }
     }}>
-      <SettingsRow label="Agent token issuance" help={group.status !== "active" ? "This group’s contribution is inactive while the group is disabled. Its setting is retained." : "The most permissive active group contributes the inherited permission."}>
-        <Select aria-label="Agent token issuance" value={mode} onChange={(event) => setMode(event.target.value as AgentTokenIssuanceMode)} options={GROUP_TOKEN_ISSUANCE_OPTIONS} disabled={pending} />
+      <SettingsRow label="Agent token issuance" alignTop help={group.status !== "active" ? "This group’s contribution is inactive while the group is disabled. Its setting is retained." : "The most permissive active group contributes the inherited permission."}>
+        <TokenIssuanceControls group value={draft.value.agentTokenIssuance} registry={registry} disabled={pending} onChange={(value) => draft.edit({ agentTokenIssuance: value as GroupAgentTokenIssuanceSetting })} />
       </SettingsRow>
+      <AccessDraftConflict conflict={draft.conflicts.length > 0} kept={draft.kept} discard={() => { draft.discard(); setError(null); }} keep={() => { draft.keep(); setError(null); }} />
+      {record.isError ? <ErrorState compact title="Couldn’t refresh saved group settings" error={record.error} onRetry={() => void record.refetch()} /> : null}
       <FormError error={error} />
-      <div className="wb-settings-actions"><AdminButton type="submit" variant="primary" pending={pending} disabled={mode === group.agentTokenIssuance}>Save token issuance</AdminButton></div>
+      <div className="wb-settings-actions"><AdminButton type="submit" variant="primary" pending={pending} disabled={!draft.changed || draft.conflicts.length > 0 || Boolean(policyError)}>Save token issuance</AdminButton></div>
     </AdminForm> : <p className="pt-prose">Group token issuance is unavailable under {identityAuthority} identity authority.</p>}
   </SettingsSection>;
 }

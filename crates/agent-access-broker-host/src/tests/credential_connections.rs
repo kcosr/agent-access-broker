@@ -182,6 +182,7 @@ async fn fixture(jira: &str) -> Fixture {
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -195,17 +196,20 @@ async fn fixture(jira: &str) -> Fixture {
         ("idle", "service_account"),
     ] {
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.to_string(),
-                kind: kind.to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.to_string(),
+                    kind: kind.to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     for (principal, role) in [
@@ -213,13 +217,16 @@ async fn fixture(jira: &str) -> Fixture {
         ("auditor", PrincipalRole::Auditor),
     ] {
         store
-            .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: principal.into(),
-                role: Some(role),
-                self_service_enabled: None,
-                actor: "test".into(),
-            })
+            .patch_principal_access(
+                agent_access_core::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: principal.into(),
+                    role: Some(role),
+                    self_service_enabled: None,
+                    actor: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     let hasher =
@@ -735,13 +742,16 @@ async fn owners_keep_cleanup_after_grant_loss_but_cannot_set_up_or_verify() {
         .await;
     fixture
         .store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "bob".into(),
-            role: None,
-            self_service_enabled: Some(false),
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "bob".into(),
+                role: None,
+                self_service_enabled: Some(false),
+                actor: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let (status, denied) = fixture
         .request(&fixture.bob, Method::DELETE, &fixture.connection(), None)
@@ -1206,17 +1216,20 @@ async fn classless_fixture() -> ClasslessFixture {
     let broker = TestBroker::start_with_providers(&config, vec![Arc::clone(&probe)]).await;
     let store = broker.runtime().managed_store().unwrap().clone();
     store
-        .create_or_update_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_or_update_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     ClasslessFixture {
         app: broker.app(),

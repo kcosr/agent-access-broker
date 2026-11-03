@@ -2,33 +2,39 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import type { AgentTokenIssuancePolicy, AgentTokenOptions, Session } from "../src/types";
-import { agentTokenIssuanceDescription, isAgentTokenIssuancePolicy, selfTokenIssuanceMode, tokenIssuanceBlocker } from "../src/lib/token-issuance-policy";
+import { agentTokenIssuanceDescription, eligibleTokenContexts, isAgentTokenIssuancePolicy, selfTokenIssuanceContexts, tokenIssuanceBlocker, issuanceSettingBlocker, issuanceSettingEqual } from "../src/lib/token-issuance-policy";
 import { TokenEffect, TokenReadOnlyControl } from "../src/features/tokens/token-effect";
 
-const policy: AgentTokenIssuancePolicy = { mode: "write_capable", source: "user", groupIds: [] };
+const row = { executionContext: "internal", mode: "write_capable" as const, groupIds: [] };
+const policy: AgentTokenIssuancePolicy = { source: "user", contexts: [row] };
 const ttl = { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] };
 const session: Session = { authenticated: true, tokenIssuancePolicy: { selfAgentInvoke: { ...ttl, access: policy }, administered: { agentInvoke: ttl, admin: ttl, userManage: ttl } } };
-const options: AgentTokenOptions = { policyGeneration: 1, agentTokenIssuancePolicy: policy, resources: [], resourceGroups: [], executionContexts: ["default"], services: [], mcp: null };
+const options: AgentTokenOptions = { policyGeneration: 1, agentTokenIssuancePolicy: policy, resources: [], resourceGroups: [], executionContexts: ["internal", "external"], services: [], mcp: null };
+const invalidPolicies = [undefined, null, {}, { mode: "write_capable", source: "user", groupIds: [] }, { ...policy, mode: "read_only" }, { ...policy, contexts: null }, { ...policy, contexts: [row, row] }, { ...policy, contexts: [{ ...row, mode: "disabled" }] }, { ...policy, contexts: [{ ...row, executionContext: "Bad name" }] }, { ...policy, contexts: [{ ...row, groupIds: [3] }] }, { ...policy, contexts: [{ ...row, extra: 3 }] }, { ...policy, source: "groups" }, { ...policy, source: "missing" }, { ...policy, source: "default" }, { source: "groups", contexts: [] }, { source: "groups", contexts: [{ ...row, groupIds: ["one", "one"] }] }];
 
-test.each([undefined, null, {}, { ...policy, mode: "inherit" }, { ...policy, mode: "unknown" }, { ...policy, groupIds: null }, { ...policy, groupIds: [3] }, { ...policy, source: "groups" }, { ...policy, source: "missing" }, { ...policy, source: "default" }, { ...policy, source: "groups", groupIds: ["one", "one"] }])("invalid policy %j never enables issuance", (invalid) => {
+test.each(invalidPolicies)("invalid policy %j never enables personal issuance but does not gate administrative issuance", (invalid) => {
   expect(isAgentTokenIssuancePolicy(invalid)).toBe(false);
-  expect(tokenIssuanceBlocker(session, false, { ...options, agentTokenIssuancePolicy: invalid } as AgentTokenOptions)).toBe("Token issuance policy is unavailable.");
+  const malformed = { ...options, agentTokenIssuancePolicy: invalid } as AgentTokenOptions;
+  expect(tokenIssuanceBlocker(session, false, malformed)).toBe("Token issuance policy is unavailable.");
+  expect(tokenIssuanceBlocker(session, true, malformed)).toBeNull();
 });
 
-test("an intentionally absent self policy is unavailable even with valid options", () => {
-  expect(tokenIssuanceBlocker({ authenticated: true, tokenIssuancePolicy: {} }, false, options)).toBe("Token issuance policy is unavailable.");
+test("missing TTL and target options still block administrators", () => {
+  expect(tokenIssuanceBlocker({ authenticated: true, tokenIssuancePolicy: {} }, true, options)).toBe("Token issuance policy is unavailable.");
+  expect(tokenIssuanceBlocker(session, true, null)).toBe("Token issuance policy is unavailable.");
+  expect(tokenIssuanceBlocker(session, true, { ...options, executionContexts: [] })).toContain("active policy grant");
 });
 
 test("disabled creation has no effect on administrator issuance", () => {
-  const disabled = { ...options, agentTokenIssuancePolicy: { ...policy, mode: "disabled" as const } };
-  expect(tokenIssuanceBlocker(session, false, disabled)).toBe("Agent token issuance is disabled for this account.");
+  const disabled = { ...options, agentTokenIssuancePolicy: { source: "user" as const, contexts: [] } };
+  expect(tokenIssuanceBlocker(session, false, disabled)).toBe("No granted execution contexts permit personal agent token issuance.");
   expect(tokenIssuanceBlocker(session, true, disabled)).toBeNull();
 });
 
-test("policy labels distinguish overrides, named contributing groups and default", () => {
-  expect(agentTokenIssuanceDescription(policy)).toBe("Write-capable, explicit account override");
-  expect(agentTokenIssuanceDescription({ mode: "read_only", source: "groups", groupIds: ["readers"] }, [{ groupId: "readers", displayName: "Engineering readers" }])).toBe("Read-only, inherited from Engineering readers");
-  expect(agentTokenIssuanceDescription({ mode: "disabled", source: "default", groupIds: [] })).toBe("Disabled, no contributing groups");
+test("policy labels retain per-context provenance", () => {
+  expect(agentTokenIssuanceDescription(policy)).toBe("internal: Write-capable, explicit account override");
+  expect(agentTokenIssuanceDescription({ source: "groups", contexts: [{ ...row, mode: "read_only", groupIds: ["readers"] }, { executionContext: "external", mode: "write_capable", groupIds: ["writers"] }] }, [{ groupId: "readers", displayName: "Engineering readers" }])).toBe("internal: Read-only, inherited from Engineering readers; external: Write-capable, inherited from writers");
+  expect(agentTokenIssuanceDescription({ source: "default", contexts: [] })).toBe("Disabled, no contributing groups");
 });
 
 test("token warnings describe only an explicit stored false; missing values never guess", () => {
@@ -55,13 +61,19 @@ test.each([true, false])("selectable read-only control preserves the draft Boole
   expect(markup).toContain('type="checkbox"');
   expect(markup.includes('checked=""')).toBe(readOnly);
   expect(markup).not.toContain("Required by your account");
-  expect(markup).not.toContain("Apply read-only restriction");
 });
 
+test("independent refreshes intersect rows conservatively by name and preserve grant order", () => {
+  const refreshed: Session = { ...session, tokenIssuancePolicy: { selfAgentInvoke: { ...ttl, access: { source: "user", contexts: [{ ...row, mode: "read_only" }, { ...row, executionContext: "external" }, { ...row, executionContext: "other" }] } } } };
+  const owner: AgentTokenOptions = { ...options, executionContexts: ["external", "internal", "missing"], agentTokenIssuancePolicy: { source: "user", contexts: [row, { ...row, executionContext: "external", mode: "read_only" }] } };
+  expect([...selfTokenIssuanceContexts(refreshed, owner)!]).toEqual([["internal", "read_only"], ["external", "read_only"]]);
+  expect(eligibleTokenContexts(refreshed, false, owner)).toEqual(["external", "internal"]);
+  expect(eligibleTokenContexts(refreshed, true, owner)).toEqual(["external", "internal", "missing"]);
+});
 
-test("an independent refresh never relaxes the other projection's restriction", () => {
-  const refreshed = { ...session, tokenIssuancePolicy: { ...session.tokenIssuancePolicy, selfAgentInvoke: { ...ttl, access: { ...policy, mode: "read_only" as const } } } };
-  expect(selfTokenIssuanceMode(refreshed, options)).toBe("read_only");
-  const disabled = { ...options, agentTokenIssuancePolicy: { ...policy, mode: "disabled" as const } };
-  expect(selfTokenIssuanceMode(refreshed, disabled)).toBe("disabled");
+test("authoring requires explicit configured selections and treats reorder as a no-op", () => {
+  expect(issuanceSettingBlocker({ mode: "read_only", allowedExecutionContexts: [] }, ["default"])).toContain("Select at least one");
+  expect(issuanceSettingBlocker({ mode: "read_only", allowedExecutionContexts: ["removed"] }, ["default"])).toContain("no longer configured");
+  expect(issuanceSettingBlocker({ mode: "read_only", allowedExecutionContexts: ["default"] }, undefined)).toContain("unavailable");
+  expect(issuanceSettingEqual({ mode: "read_only", allowedExecutionContexts: ["a", "b"] }, { mode: "read_only", allowedExecutionContexts: ["b", "a"] })).toBe(true);
 });

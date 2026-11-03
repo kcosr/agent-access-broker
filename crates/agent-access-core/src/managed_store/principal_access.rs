@@ -98,7 +98,7 @@ pub struct PrincipalAccessPatchRequest {
     pub principal_id: String,
     pub role: Option<PrincipalRole>,
     pub self_service_enabled: Option<bool>,
-    pub agent_token_issuance: Option<PrincipalAgentTokenIssuance>,
+    pub agent_token_issuance: Option<PrincipalAgentTokenIssuanceSetting>,
     pub actor: String,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -107,7 +107,7 @@ pub struct PrincipalAccessChange {
     pub principal: PrincipalRecord,
     pub previous_role: PrincipalRole,
     pub previous_self_service_enabled: bool,
-    pub previous_agent_token_issuance: PrincipalAgentTokenIssuance,
+    pub previous_agent_token_issuance: PrincipalAgentTokenIssuanceSetting,
     pub removed_services: Vec<String>,
     pub revoked_admin_token_ids: Vec<String>,
 }
@@ -249,7 +249,14 @@ impl ManagedStore {
     pub fn patch_principal_access(
         &self,
         request: PrincipalAccessPatchRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<PrincipalAccessChange, ManagedStoreError> {
+        let mut request = request;
+        request.agent_token_issuance = request
+            .agent_token_issuance
+            .as_ref()
+            .map(|setting| setting.canonicalized(registry))
+            .transpose()?;
         validate_principal_id(&request.principal_id)?;
         validate_actor(&request.actor)?;
         if request.role.is_none()
@@ -270,7 +277,7 @@ impl ManagedStore {
         validate_principal_access(&principal.kind, role, self_service_enabled)?;
         let agent_token_issuance = request
             .agent_token_issuance
-            .unwrap_or(principal.agent_token_issuance);
+            .unwrap_or_else(|| principal.agent_token_issuance.clone());
         let role_changed = role != principal.role;
         if role_changed
             && principal_is_active_admin(&tx, &request.principal_id)?
@@ -305,7 +312,15 @@ impl ManagedStore {
             || self_service_enabled != principal.self_service_enabled
             || agent_token_issuance != principal.agent_token_issuance
         {
-            tx.execute("UPDATE principals SET role=?2,self_service_enabled=?3,agent_token_issuance=?4,updated_at=?5 WHERE principal_id=?1",params![request.principal_id,role.as_str(),self_service_enabled,agent_token_issuance.as_str(),now]).map_err(sql_unavailable)?;
+            tx.execute("UPDATE principals SET role=?2,self_service_enabled=?3,agent_token_issuance=?4,updated_at=?5 WHERE principal_id=?1",params![request.principal_id,role.as_str(),self_service_enabled,agent_token_issuance.mode.as_str(),now]).map_err(sql_unavailable)?;
+        }
+        if agent_token_issuance != principal.agent_token_issuance {
+            agent_token_issuance::replace_contexts(
+                &tx,
+                true,
+                &request.principal_id,
+                &agent_token_issuance.allowed_execution_contexts,
+            )?;
         }
         let result = PrincipalAccessChange {
             principal: principal_by_id(&tx, &request.principal_id)?,

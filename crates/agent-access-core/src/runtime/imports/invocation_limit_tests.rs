@@ -38,17 +38,20 @@ fn fixture() -> Fixture {
     let initial = BrokerRuntime::new(config.clone()).unwrap();
     let store = initial.managed_store().unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-            principal_id: "admin".into(),
-            kind: "user".into(),
-            role: PrincipalRole::Admin,
-            self_service_enabled: None,
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "fixture".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                role: PrincipalRole::Admin,
+                self_service_enabled: None,
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "fixture".into(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     // Retained imports load even when their adapter and operator gate are no
     // longer available. No provider build or upstream connection is needed.

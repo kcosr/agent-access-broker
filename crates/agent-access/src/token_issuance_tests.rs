@@ -12,6 +12,9 @@ fn token_issuance_permission_flags_accept_only_the_canonical_modes() {
             let mut args = vec!["agent-access"];
             args.extend(command.iter().copied());
             args.extend(["--agent-token-issuance", value]);
+            if matches!(value, "read_only" | "write_capable") {
+                args.extend(["--agent-token-issuance-context", "arbitrary_context-1"]);
+            }
             assert_eq!(
                 Cli::try_parse_from(args).is_ok(),
                 value != "inherit" || command[1] == "principals",
@@ -25,6 +28,90 @@ fn token_issuance_permission_flags_accept_only_the_canonical_modes() {
             assert!(Cli::try_parse_from(args).is_err(), "{command:?} {value}");
         }
     }
+}
+
+#[test]
+fn issuance_context_flags_require_a_mode_and_enabled_modes_require_contexts() {
+    for command in [
+        vec!["admin", "principals", "create", "alice"],
+        vec!["admin", "principals", "access", "set", "alice"],
+        vec!["admin", "groups", "create", "readers"],
+        vec!["admin", "groups", "update", "readers"],
+    ] {
+        let mut base = vec!["agent-access"];
+        base.extend(command);
+        for args in [
+            vec!["--agent-token-issuance-context", "external"],
+            vec!["--agent-token-issuance", "read_only"],
+            vec!["--agent-token-issuance", "write_capable"],
+        ] {
+            assert!(Cli::try_parse_from(base.iter().copied().chain(args)).is_err());
+        }
+        for name in ["", "ALL", "a,b", "has space", "*", "-internal", "1internal"] {
+            assert!(
+                Cli::try_parse_from(base.iter().copied().chain([
+                    "--agent-token-issuance",
+                    "read_only",
+                    "--agent-token-issuance-context",
+                    name,
+                ]))
+                .is_err()
+            );
+        }
+        assert!(
+            Cli::try_parse_from(base.iter().copied().chain([
+                "--agent-token-issuance",
+                "write_capable",
+                "--agent-token-issuance-context",
+                "internal",
+                "--agent-token-issuance-context",
+                "external",
+            ]))
+            .is_ok()
+        );
+    }
+}
+
+#[test]
+fn issuance_policy_payloads_are_complete_sorted_replacements_or_omitted() {
+    use PrincipalAgentTokenIssuanceArg::*;
+    assert_eq!(agent_token_issuance_body(None, &[]).unwrap(), None);
+    for (mode, name) in [(Inherit, "inherit"), (Disabled, "disabled")] {
+        assert_eq!(
+            agent_token_issuance_body(Some(mode), &[]).unwrap(),
+            Some(serde_json::json!({
+                "mode": name, "allowedExecutionContexts": [],
+            }))
+        );
+        assert!(agent_token_issuance_body(Some(mode), &["internal".into()]).is_err());
+    }
+    for (mode, name) in [(ReadOnly, "read_only"), (WriteCapable, "write_capable")] {
+        assert!(agent_token_issuance_body(Some(mode), &[]).is_err());
+        assert_eq!(
+            agent_token_issuance_body(Some(mode), &["internal".into(), "external".into()]).unwrap(),
+            Some(serde_json::json!({
+                "mode": name, "allowedExecutionContexts": ["external", "internal"],
+            }))
+        );
+    }
+    assert!(agent_token_issuance_body(None, &["internal".into()]).is_err());
+    for contexts in [
+        vec!["internal".into(), "internal".into()],
+        vec!["*".into()],
+        vec!["x".repeat(65)],
+        (0..65).map(|index| format!("context-{index}")).collect(),
+    ] {
+        assert!(agent_token_issuance_body(Some(ReadOnly), &contexts).is_err());
+    }
+    assert!(
+        agent_token_issuance_body(
+            Some(ReadOnly),
+            &(0..64)
+                .map(|index| format!("context-{index}"))
+                .collect::<Vec<_>>()
+        )
+        .is_ok()
+    );
 }
 
 #[test]

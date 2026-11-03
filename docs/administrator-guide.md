@@ -195,19 +195,40 @@ credentials, connections, tokens, and activity; turning it off preserves existin
 invocation tokens and credentials. See [roles](roles.md).
 
 In **Overview > Account access**, **Agent token issuance** defaults to **Inherit
-from groups**. On a managed group's Overview, **Token issuance** defaults to
-**Disabled**. Configure Read-only or Write-capable for an intended group, or set
-an explicit account override. The most permissive active group wins; an explicit
-account setting, including Disabled, overrides every group. Disabled groups do
-not contribute, and TOML identity groups cannot supply issuance permission.
-Both new and existing accounts need an explicit permission after upgrade.
+from groups**. A managed group's **Token issuance** defaults to **Disabled**.
+Select Read-only or Write-capable, then explicitly check at least one configured
+execution context. The checklist follows the configured registry order; newly
+added contexts are never selected automatically. Inherit and Disabled clear the
+list. Account overrides remain editable under TOML identity or policy authority;
+group writes require managed identity. If the context registry is loading or
+unavailable, context-dependent saves remain disabled until it loads.
+
+An account override replaces group permission completely. With Inherit, the most
+permissive active effective group wins separately in each context. Review the
+current saved context/mode summaries and contributing groups. Switching an
+unsaved override to Inherit does not preview the inherited result; that appears
+after save and refresh. Disabled groups and TOML identity groups do not contribute.
+For example, internal Write-capable and external Read-only permission allows a
+writable internal-only token, while a token covering both contexts must be read-only.
+
+A context removed from configuration remains visible in an open draft as **No
+longer configured** until you deselect it. A failed save preserves the draft.
+If the saved value of an edited field changes, choose **Discard draft** to load
+saved settings or **Keep my draft** to keep your edits against the new saved base.
+Neither choice saves automatically. Unedited role/self-service fields adopt the
+latest saved values; a contexts-only save does not resubmit an old role. The form
+checks again before saving and sends only changed fields. API/CLI writes remain
+last-writer-wins, so an edit after that final check can still replace the submitted
+fields.
 
 Read-only permission still allows **Follow current grants** tokens that inherit
 future reads while blocking writes. Permission changes affect only new personal
 tokens. Administrators can issue either token type from a principal's Tokens tab
-regardless of the owner's personal permission; those forms start with Read-only
-checked. Service accounts require this administrative path. See
-[issuance rules](roles.md#agent-token-issuance).
+regardless of the owner's personal mode or context limits; those forms use target
+grants and start with Read-only checked. Missing owner-policy display data alone
+does not block administrative issuance, but valid lifetime/permission metadata
+and target options are required. Service accounts require this administrative
+path. See [issuance rules](roles.md#agent-token-issuance).
 
 Create a group before adding members. For local login, enable a temporary password
 in the user's **Overview > Sign-in methods**, deliver it securely, and require
@@ -227,14 +248,15 @@ agent-access --url https://broker.example \
 ```
 
 The following examples assume your administrator CLI config selects that HTTPS
-URL, Authorization Bearer identity, and token file. Management commands reject
+URL, Authorization Bearer identity, and token file, and that `default` is a
+configured execution context. Management commands reject
 literal `--token-value`; use a file or environment source.
 
 ```bash
 agent-access admin principals create alice \
   --kind user --display-name "Alice Example" --email alice@example.com
 agent-access admin groups create agent-users --display-name "Agent users" \
-  --agent-token-issuance read_only
+  --agent-token-issuance read_only --agent-token-issuance-context default
 agent-access admin principals groups add alice agent-users
 agent-access admin principals password enable alice \
   --acknowledge-separate-sign-in --password-stdin

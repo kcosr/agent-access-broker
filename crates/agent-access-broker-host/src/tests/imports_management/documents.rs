@@ -390,13 +390,16 @@ async fn upload_requires_admin_and_browser_csrf_before_publication() {
         .runtime
         .managed_store()
         .unwrap()
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "bob".into(),
-            role: Some(PrincipalRole::Auditor),
-            self_service_enabled: None,
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "bob".into(),
+                role: Some(PrincipalRole::Auditor),
+                self_service_enabled: None,
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let token = admin_token(&fixture);
     let auditor = admin_token_for(&fixture, "bob");

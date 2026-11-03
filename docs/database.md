@@ -61,8 +61,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `025_principal_access`, `026_trusted_user_identity`,
 `027_command_imports`, `028_oauth_revocations`,
 `029_identity_access_path_controls`, `030_group_auto_enrollment`,
-`031_oidc_membership_renewal`, `032_imported_source_documents`, and
-`033_agent_token_issuance` in order. The
+`031_oidc_membership_renewal`, `032_imported_source_documents`,
+`033_agent_token_issuance`, and `034_agent_token_issuance_contexts` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -78,6 +78,8 @@ erDiagram
     GROUPS ||--o{ PRINCIPAL_GROUPS : has
     PRINCIPALS ||--o{ PRINCIPAL_GROUPS : has
     PRINCIPALS ||--o{ BROKER_TOKENS : owns
+    PRINCIPALS ||--o{ PRINCIPAL_AGENT_TOKEN_ISSUANCE_CONTEXTS : permits
+    GROUPS ||--o{ GROUP_AGENT_TOKEN_ISSUANCE_CONTEXTS : permits
     PRINCIPALS ||--o| PRINCIPAL_IDENTITY_ACCESS : gates
     PRINCIPALS ||--o{ PRINCIPAL_USERNAME_BINDINGS : binds
     PRINCIPALS ||--o| PRINCIPAL_IDENTITY_TOKENS : inventories
@@ -113,6 +115,8 @@ erDiagram
 | --- | --- | --- |
 | `schema_migrations` | Append-only catalog migration ledger. | `version`, per-migration `checksum`, `applied_at` |
 | `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `agent_token_issuance`, `status`, `display_name`, `email`, `external_subject`, timestamps |
+| `principal_agent_token_issuance_contexts` | Explicit issuance contexts paired with the principal's mode; cascades on principal deletion. | `principal_id`, `execution_context` (composite primary key) |
+| `group_agent_token_issuance_contexts` | Explicit issuance contexts paired with the group's mode; cascades on group deletion. | `group_id`, `execution_context` (composite primary key) |
 | `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, `auto_enroll_new_microsoft_users`, `agent_token_issuance`, timestamps, actor metadata |
 | `principal_groups` | Group membership for managed principals. | `principal_id`, `group_id`, creator metadata |
 | `broker_tokens` | HMAC-hashed broker-issued tokens. | `token_id`, `token_hash`, `principal_id`, `token_class`, `scopes_json`, expiry/revocation fields |
@@ -306,11 +310,12 @@ path as finite tokens.
 ### Agent token issuance storage and upgrade
 
 Migration `033_agent_token_issuance` adds checked `agent_token_issuance` TEXT
-columns: principals default to `inherit`, groups to `disabled`. These defaults
-apply to existing and new accounts; explicit administrator permission is required
-for personal issuance. The current policy is resolved from the explicit account
-setting or active effective managed memberships inside the issuance transaction.
-No issuance policy is consulted when an existing token is used.
+columns: principals default to `inherit`, groups to `disabled`. Migration 034
+pairs these modes with explicit context rows as described below. New accounts
+use Inherit with an empty context list, and new groups use Disabled with an empty
+list. The current policy is resolved per context from the explicit account pair
+or active effective managed memberships inside the issuance transaction. No
+issuance policy is consulted when an existing token is used.
 
 The one-time transactional seed adds `readOnly: false` to old `agent_invoke`
 scopes objects, preserving existing behavior and every other member, token ID,
@@ -329,10 +334,37 @@ ledger advance commit together; failure leaves schema 032 unchanged. Current
 schema opens never repeat the rewrite. Do not edit stored JSON or the ledger.
 
 A pre-upgrade backup is required. Follow the exact
-[collision recovery procedure](operator-guide.md#agent-token-issuance-upgrade)
+[collision recovery procedure](operator-guide.md#read-only-token-backfill-and-collision-recovery)
 using the previous binary on the unchanged schema-032 store, revoke the named
 token IDs, back up again and retry. Rollback after successful upgrade requires
 the matching pre-upgrade backup and binary.
+
+Migration `034_agent_token_issuance_contexts` adds the two context tables, each
+with an owner foreign key, cascade deletion, and a composite primary key. The
+one-time seed copies every context from the validated startup configuration into
+each existing Read-only or Write-capable account/group policy, including disabled
+owners and owners without grants. Inherit and Disabled have no rows. An absent
+`[execution_context]` means the one real context `default`. Apply this migration
+with the unchanged pre-upgrade registry; it snapshots the configuration supplied
+to the first successful migration, not an earlier configuration stored elsewhere.
+
+SQL, seed, row/foreign-key validation and ledger advance commit atomically.
+Concurrent initializers recheck the ledger under the write lock; only one seeds.
+A failed 034 transaction leaves schema 033 intact. Reopens, reloads and later
+context additions never reseed. Migration 034 preserves modes, timestamps,
+roles, memberships, grants and all token bytes, including hashes and scopes.
+Pending migration requires startup with `auto_migrate = true`; reload and
+`auto_migrate = false` refuse it. Older binaries refuse schema 034, and rollback
+requires the matching pre-upgrade backup and binary.
+
+All stored policies enforce mode/list invariants, unique canonical names and
+at most 64 contexts. There is no persisted effective-policy cache or copy of the
+registry. The managed store requires the validated registry explicitly.
+Configuration-membership admission separately checks every principal's saved
+references under either identity authority, and every group's references under
+managed identity. Under TOML identity, dormant group rows retain structural
+validation but cannot block retirement. See [context retirement and recovery](operator-guide.md#issuance-context-retirement-and-recovery)
+for default-registry staging and switching back to managed identity.
 
 ## Admin Roles And Browser Login State
 

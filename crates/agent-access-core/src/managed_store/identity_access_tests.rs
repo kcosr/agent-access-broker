@@ -1,6 +1,6 @@
 fn identity_user_request(id: &str) -> PrincipalWriteRequest {
     PrincipalWriteRequest {
-        agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
+        agent_token_issuance: test_principal_issuance(PrincipalAgentTokenIssuance::Inherit),
         role: PrincipalRole::User,
         self_service_enabled: None,
         principal_id: id.into(),
@@ -15,7 +15,7 @@ fn identity_user_request(id: &str) -> PrincipalWriteRequest {
 fn identity_test_store() -> (TempDir, ManagedStore) {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(
-        &store_config(&temp.path().join("store.sqlite")),
+        &store_config(&temp.path().join("store.sqlite")), &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -44,10 +44,10 @@ fn identity_test_pause(
 fn identity_username_enrollment_is_exact_scoped_and_inventory_independent() {
     let (_temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     store
-        .create_principal(identity_user_request("bob"))
+        .create_principal(identity_user_request("bob"), &test_execution_contexts())
         .unwrap();
     let gate = store.identity_access("alice").unwrap();
     assert!(!gate.paused);
@@ -123,7 +123,7 @@ fn identity_binding_uniqueness_ownership_and_versions_are_atomic() {
     let (_temp, store) = identity_test_store();
     for principal in ["alice", "bob"] {
         store
-            .create_principal(identity_user_request(principal))
+            .create_principal(identity_user_request(principal), &test_execution_contexts())
             .unwrap();
     }
     let binding = store
@@ -223,7 +223,7 @@ fn identity_shared_pause_and_inventory_revision_have_separate_lifetimes() {
     let ring = key_ring("k1");
     store.configure_identity_token_encryption(Some(ring.clone()));
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     store
         .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -299,7 +299,7 @@ fn identity_shared_pause_and_inventory_revision_have_separate_lifetimes() {
 fn identity_pause_does_not_pause_issued_broker_tokens_and_reverse() {
     let (_temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     store
         .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -350,7 +350,7 @@ fn identity_proofs_reject_every_status_aba_and_reassignment() {
         let (_temp, store) = identity_test_store();
         for principal in ["alice", "bob"] {
             store
-                .create_principal(identity_user_request(principal))
+                .create_principal(identity_user_request(principal), &test_execution_contexts())
                 .unwrap();
         }
         let binding = store
@@ -380,7 +380,7 @@ fn identity_proofs_reject_every_status_aba_and_reassignment() {
             "upsert" => {
                 store.set_principal_enabled("alice", false).unwrap();
                 store
-                    .create_or_update_principal(identity_user_request("alice"))
+                    .create_or_update_principal(identity_user_request("alice"), &test_execution_contexts())
                     .unwrap();
             }
             "pause" => {
@@ -458,7 +458,7 @@ fn identity_proofs_reject_every_status_aba_and_reassignment() {
                     .execute("DELETE FROM principals WHERE principal_id='alice'", [])
                     .unwrap();
                 store
-                    .create_principal(identity_user_request("alice"))
+                    .create_principal(identity_user_request("alice"), &test_execution_contexts())
                     .unwrap();
                 store
                     .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -495,7 +495,7 @@ fn identity_proofs_reject_every_status_aba_and_reassignment() {
 fn identity_noop_and_profile_updates_preserve_proof_but_missing_gate_is_unavailable() {
     let (_temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     store
         .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -515,7 +515,7 @@ fn identity_noop_and_profile_updates_preserve_proof_but_missing_gate_is_unavaila
         })
         .unwrap();
     store
-        .create_or_update_principal(identity_user_request("alice"))
+        .create_or_update_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     assert!(store.revalidate_attested_identity(&proof).is_ok());
     assert!(matches!(
@@ -566,13 +566,13 @@ fn identity_noop_and_profile_updates_preserve_proof_but_missing_gate_is_unavaila
 fn identity_human_kind_and_creation_invariants_are_transactional() {
     let (_temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     for kind in ["system", "service_account"] {
         let mut request = identity_user_request(kind);
         request.kind = kind.into();
         request.self_service_enabled = Some(false);
-        store.create_principal(request).unwrap();
+        store.create_principal(request, &test_execution_contexts()).unwrap();
         assert!(store.identity_access(kind).is_err());
         assert!(
             store
@@ -581,20 +581,20 @@ fn identity_human_kind_and_creation_invariants_are_transactional() {
         );
         assert!(
             store
-                .create_or_update_principal(identity_user_request(kind))
+                .create_or_update_principal(identity_user_request(kind), &test_execution_contexts())
                 .is_err()
         );
         assert_eq!(store.principal(kind).unwrap().kind, kind);
         let mut request = identity_user_request("alice");
         request.kind = kind.into();
         request.self_service_enabled = Some(false);
-        assert!(store.create_or_update_principal(request).is_err());
+        assert!(store.create_or_update_principal(request, &test_execution_contexts()).is_err());
         assert_eq!(store.principal("alice").unwrap().kind, "user");
     }
     store.connection.lock().unwrap().execute_batch("CREATE TRIGGER fail_identity_gate BEFORE INSERT ON principal_identity_access WHEN NEW.principal_id='rejected' BEGIN SELECT RAISE(ABORT, 'test gate failure'); END;").unwrap();
     assert!(
         store
-            .create_principal(identity_user_request("rejected"))
+            .create_principal(identity_user_request("rejected"), &test_execution_contexts())
             .is_err()
     );
     assert!(matches!(
@@ -603,7 +603,7 @@ fn identity_human_kind_and_creation_invariants_are_transactional() {
     ));
     assert!(
         store
-            .create_or_update_principal(identity_user_request("rejected"))
+            .create_or_update_principal(identity_user_request("rejected"), &test_execution_contexts())
             .is_err()
     );
     assert!(matches!(
@@ -616,7 +616,7 @@ fn identity_human_kind_and_creation_invariants_are_transactional() {
 fn identity_revalidation_refreshes_membership_without_rebinding_identity() {
     let (_temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     store
         .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -714,7 +714,7 @@ fn identity_migration_preserves_encrypted_inventory_and_missing_or_removed_pause
     let ring = key_ring("k1");
     fixture.configure_identity_token_encryption(Some(ring.clone()));
     fixture
-        .create_principal(identity_user_request("retained"))
+        .create_principal(identity_user_request("retained"), &test_execution_contexts())
         .unwrap();
     let token = fixture.reveal_identity_token("retained", &ring).unwrap();
     let inventory: (String, String, Vec<u8>, Vec<u8>, String) = fixture.connection.lock().unwrap().query_row(
@@ -724,7 +724,7 @@ fn identity_migration_preserves_encrypted_inventory_and_missing_or_removed_pause
     let temp = TempDir::new().unwrap();
     let config = store_config(&temp.path().join("previous.sqlite"));
     let previous = ManagedStore::open_with_catalog(
-        &config,
+        &config, &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         ManagedStoreMigrationCatalog {
             migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS
@@ -743,7 +743,7 @@ fn identity_migration_preserves_encrypted_inventory_and_missing_or_removed_pause
         conn.execute("INSERT INTO principal_identity_tokens(principal_id,paused,updated_at) VALUES('removed',1,?1)", [normalized_now_string()]).unwrap();
     }
     drop(previous);
-    let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+    let store = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     for (principal, paused) in [("retained", true), ("removed", true), ("absent", false)] {
         let access = store.identity_access(principal).unwrap();
         assert_eq!(access.paused, paused);
@@ -827,7 +827,7 @@ fn identity_migration_rejects_prior_schema_drift_without_modification() {
         let path = temp.path().join(format!("{name}.sqlite"));
         let config = store_config(&path);
         let previous = ManagedStore::open_with_catalog(
-            &config,
+            &config, &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS
@@ -855,7 +855,7 @@ fn identity_migration_rejects_prior_schema_drift_without_modification() {
         let before_ledger = migration_rows(&path);
         let before_file = fs::read(&path).unwrap();
 
-        let error = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap_err();
+        let error = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap_err();
         assert!(
             matches!(error, ManagedStoreError::SchemaInvalid(_)),
             "{name}: {error}"
@@ -875,7 +875,7 @@ fn identity_failed_migration_restores_the_old_schema_and_ledger() {
     let path = temp.path().join("previous.sqlite");
     let config = store_config(&path);
     let previous = ManagedStore::open_with_catalog(
-        &config,
+        &config, &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         ManagedStoreMigrationCatalog {
             migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS
@@ -890,7 +890,7 @@ fn identity_failed_migration_restores_the_old_schema_and_ledger() {
     drop(previous);
     let ledger = migration_rows(&path);
     assert!(matches!(
-        ManagedStore::open(&config, ManagedStoreOpenMode::Startup),
+        ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup),
         Err(ManagedStoreError::SchemaInvalid(_))
     ));
     assert_eq!(migration_rows(&path), ledger);
@@ -972,7 +972,7 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
     let ring = key_ring("k1");
     fixture.configure_identity_token_encryption(Some(ring.clone()));
     fixture
-        .create_principal(identity_user_request("configured"))
+        .create_principal(identity_user_request("configured"), &test_execution_contexts())
         .unwrap();
     let token = fixture.reveal_identity_token("configured", &ring).unwrap();
     let fingerprint = format!("sha256:{}", sha256_hex(token.as_bytes()));
@@ -986,7 +986,7 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
         let path = temp.path().join("previous.sqlite");
         let config = store_config(&path);
         let previous = ManagedStore::open_with_catalog(
-            &config,
+            &config, &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             identity_test_catalog_through(version),
         )
@@ -1040,7 +1040,7 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
         drop(previous);
         drop(
             ManagedStore::open_with_catalog(
-                &config,
+                &config, &test_execution_contexts(),
                 ManagedStoreOpenMode::Reload,
                 identity_test_catalog_through(version),
             )
@@ -1048,7 +1048,7 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
         );
         let ledger = migration_rows(&path);
 
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
         assert!(
             store.migration_applied_this_open(MANAGED_STORE_IDENTITY_ACCESS_PATH_CONTROLS_VERSION),
             "{version}"
@@ -1116,7 +1116,7 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
         assert_eq!(resolved.principal.principal_id, "configured");
         assert!(!resolved.read_only());
         drop(store);
-        drop(ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap());
+        drop(ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Reload).unwrap());
     }
 }
 
@@ -1124,7 +1124,7 @@ fn identity_path_controls_migration_backfills_one_token_row_per_human() {
 fn identity_latest_readiness_and_admission_reject_a_missing_token_row() {
     let (temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     store.check_ready(None).unwrap();
     store
@@ -1146,7 +1146,7 @@ fn identity_latest_readiness_and_admission_reject_a_missing_token_row() {
     drop(store);
     let config = store_config(&temp.path().join("store.sqlite"));
     for mode in [ManagedStoreOpenMode::Startup, ManagedStoreOpenMode::Reload] {
-        assert!(identity_test_missing_row(ManagedStore::open(&config, mode)));
+        assert!(identity_test_missing_row(ManagedStore::open(&config, &test_execution_contexts(), mode)));
     }
 }
 
@@ -1156,7 +1156,7 @@ fn identity_token_operations_fail_on_a_missing_row_without_recreating_it() {
     let (_temp, store) = identity_test_store();
     let ring = key_ring("k1");
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     let rows = |store: &ManagedStore| identity_test_token_rows(&store.connection.lock().unwrap());
     store
@@ -1211,10 +1211,10 @@ fn identity_token_operations_fail_on_a_missing_row_without_recreating_it() {
     for configured_ring in [None, Some(ring.clone())] {
         store.configure_identity_token_encryption(configured_ring);
         assert!(identity_test_missing_row(
-            store.create_principal(identity_user_request("bob"))
+            store.create_principal(identity_user_request("bob"), &test_execution_contexts())
         ));
         assert!(identity_test_missing_row(
-            store.create_or_update_principal(identity_user_request("bob"))
+            store.create_or_update_principal(identity_user_request("bob"), &test_execution_contexts())
         ));
         assert!(matches!(
             store.principal("bob"),
@@ -1247,10 +1247,10 @@ fn identity_token_rows_follow_every_human_creation_path() {
             )
             .unwrap();
         store
-            .create_principal(identity_user_request("created"))
+            .create_principal(identity_user_request("created"), &test_execution_contexts())
             .unwrap();
         store
-            .create_or_update_principal(identity_user_request("upserted"))
+            .create_or_update_principal(identity_user_request("upserted"), &test_execution_contexts())
             .unwrap();
         let provider = reconcile_test_oidc_provider(&store, true, 3_600, "identity-token-oidc");
         create_test_group(&store, "engineering");
@@ -1293,7 +1293,7 @@ fn identity_token_rows_follow_every_human_creation_path() {
         let mut robot = identity_user_request("robot");
         robot.kind = "service_account".into();
         robot.self_service_enabled = Some(false);
-        store.create_principal(robot).unwrap();
+        store.create_principal(robot, &test_execution_contexts()).unwrap();
         let humans = ["bootstrap", "created", "direct", "oidc-user", "upserted"];
         assert_eq!(
             identity_test_token_rows(&store.connection.lock().unwrap()),
@@ -1355,7 +1355,7 @@ fn identity_token_settings_survive_secret_writes_and_advance_one_revision() {
     let ring = key_ring("k1");
     store.configure_identity_token_encryption(Some(ring.clone()));
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     let initial = store.identity_token_metadata("alice").unwrap();
     assert!(initial.configured && initial.enabled && !initial.read_only);
@@ -1379,7 +1379,7 @@ fn identity_token_settings_survive_secret_writes_and_advance_one_revision() {
     let mut robot = identity_user_request("robot");
     robot.kind = "service_account".into();
     robot.self_service_enabled = Some(false);
-    store.create_principal(robot).unwrap();
+    store.create_principal(robot, &test_execution_contexts()).unwrap();
     assert!(
         store
             .update_identity_token_settings(
@@ -1486,7 +1486,7 @@ fn identity_token_settings_survive_secret_writes_and_advance_one_revision() {
 fn identity_binding_update_applies_settings_with_one_version() {
     let (_temp, store) = identity_test_store();
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     let binding = store
         .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -1586,7 +1586,7 @@ fn identity_path_settings_fence_only_their_own_path_proofs() {
     let ring = key_ring("k1");
     store.configure_identity_token_encryption(Some(ring.clone()));
     store
-        .create_principal(identity_user_request("alice"))
+        .create_principal(identity_user_request("alice"), &test_execution_contexts())
         .unwrap();
     let binding = store
         .create_username_binding("alice", "linux", "alice", false, "admin")
@@ -1789,7 +1789,7 @@ fn identity_path_controls_migration_rejects_prior_schema_drift_without_modificat
         let path = temp.path().join(format!("{name}.sqlite"));
         let config = store_config(&path);
         let previous = ManagedStore::open_with_catalog(
-            &config,
+            &config, &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             identity_test_catalog_through(MANAGED_STORE_OAUTH_REVOCATIONS_VERSION),
         )
@@ -1808,7 +1808,7 @@ fn identity_path_controls_migration_rejects_prior_schema_drift_without_modificat
         let before_ledger = migration_rows(&path);
         let before_file = fs::read(&path).unwrap();
 
-        let error = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap_err();
+        let error = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap_err();
         assert!(
             matches!(error, ManagedStoreError::SchemaInvalid(_)),
             "{name}: {error}"
@@ -1838,7 +1838,7 @@ fn identity_path_controls_failed_migration_restores_the_old_schema_and_ledger() 
     let path = temp.path().join("previous.sqlite");
     let config = store_config(&path);
     let previous = ManagedStore::open_with_catalog(
-        &config,
+        &config, &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         identity_test_catalog_through(MANAGED_STORE_OAUTH_REVOCATIONS_VERSION),
     )
@@ -1860,7 +1860,7 @@ fn identity_path_controls_failed_migration_restores_the_old_schema_and_ledger() 
     failing.last_mut().unwrap().structural_validation = identity_test_rejected_validation;
     assert!(matches!(
         ManagedStore::open_with_catalog(
-            &config,
+            &config, &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &failing,
@@ -1880,7 +1880,7 @@ fn identity_path_controls_failed_migration_restores_the_old_schema_and_ledger() 
         assert!(identity_test_token_rows(&conn).is_empty());
     }
 
-    let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+    let store = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     assert_eq!(
         identity_test_token_rows(&store.connection.lock().unwrap()),
         ["absent"]
@@ -1888,7 +1888,7 @@ fn identity_path_controls_failed_migration_restores_the_old_schema_and_ledger() 
     drop(store);
     let migrated = fs::read(&path).unwrap();
     let error = ManagedStore::open_with_catalog(
-        &config,
+        &config, &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         identity_test_catalog_through(MANAGED_STORE_OAUTH_REVOCATIONS_VERSION),
     )

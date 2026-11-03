@@ -1062,13 +1062,16 @@ async fn personal_discovery_rotation_invalidates_preview_without_service_edit() 
         .runtime
         .managed_store()
         .unwrap()
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("alice").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("admin").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("alice").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("admin").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let other_admin = admin_token_for(&fixture, "alice");
     let current = detail(&app, &other_admin, "observability").await;

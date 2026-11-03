@@ -1373,23 +1373,55 @@ and [database invariants](database.md#managed-identity-access-and-bindings).
 ## Agent token issuance and read-only tokens
 
 Issuance permission is administrator-owned state on principals and managed
-groups. Principals default to `inherit`, groups to `disabled`, including existing
-accounts after migration `033_agent_token_issuance`. Explicit principal values
-(`disabled`, `read_only`, `write_capable`) override groups; otherwise the most
-permissive active effective managed group wins, with no contribution resolving
-to Disabled. TOML identity contributes no groups. Principal HTTP creation is
-create-only and refuses duplicates with 409. The internal
-`ManagedStore::create_or_update_principal` upsert applies this field only on
-insert and preserves existing overrides; access PATCH is the change path.
+groups. Each configured object pairs `mode` with explicit
+`allowedExecutionContexts`. New principals default to Inherit with no contexts;
+new groups default to Disabled with no contexts. Enabled modes require a
+nonempty configured set. Account overrides replace group authority completely.
+Otherwise, the most permissive active effective managed group wins separately
+for each context in its own list. TOML identity contributes no managed groups.
+The effective projection is `{source, contexts}`; enabled context rows carry the
+mode and only the groups tied at that context's winning mode. Explicit account
+rows have no group IDs. Missing rows mean Disabled.
 
-Personal issuance resolves membership and permission inside the immediate token
-insertion transaction, using current authority mode and one timestamp, after
-ordinary validation, audit preflight and active-account/self-service checks.
-It checks the requested Boolean without coercion. The existing runtime snapshot
-publication fence prevents stale-snapshot insertion. Administrative issuance
-uses admitted administrator write authority independently of personal permission.
-Policy-only changes do not edit or revoke tokens, change role assignments,
-participate in invocation admission or enter identity/MCP owner proofs.
+Principal HTTP creation is create-only and refuses duplicates with 409. The
+internal `ManagedStore::create_or_update_principal` upsert applies the pair only
+on insert and preserves existing overrides. Access PATCH replaces a supplied
+complete pair atomically, while omission preserves it. Equivalent reordered
+context sets are no-ops. API/CLI writes are last-writer-wins, without a version
+precondition. Status changes preserve the pair.
+
+A validated ordered context registry comes from the runtime configuration; absent
+`[execution_context]` means exactly `default`. Store operations receive this
+registry with trusted identity authority, never from request JSON. Migration
+`034_agent_token_issuance_contexts` adds owner/context child tables and atomically
+seeds enabled existing policies with all contexts in the startup configuration.
+It preserves token bytes, seeds only once, and does not grant future contexts.
+Structural validation enforces every pair's invariants. Separate configuration
+membership validation checks every principal and, under managed identity, every
+group, including inactive owners. Dormant TOML groups cannot block context
+retirement; switching back validates them before publication. See
+[retirement and recovery](operator-guide.md#issuance-context-retirement-and-recovery).
+
+Personal issuance resolves one current membership and the complete context policy
+inside the immediate insertion transaction after obtaining its write lock and
+after ordinary validation, audit preflight and active-account/self-service checks.
+Every requested context must permit issuance; false `readOnly` requires all of
+them to permit writes. It never coerces the Boolean, trims the set or splits the
+token. Unrequested contexts do not affect the decision. The runtime snapshot and
+policy-mutation fence serialize registry reload with context-bearing writes,
+including group mutations. Administrative issuance uses admitted administrator
+write authority independently of personal mode, contexts or read-only limits;
+it retains current target-grant and ordinary token checks. An administrator using
+the personal endpoint follows personal policy.
+
+Local login and both password-change paths capture their optional policy
+projection inside the authentication transaction before successful state changes,
+then render that captured result. Policy-only changes do not edit or revoke
+tokens, change role assignments, enter identity/MCP owner proofs, publish a
+runtime epoch or touch invocation limiter capacity/history. A failed registry
+reload preserves the active runtime and shared invocation policy. Grant options
+remain a preflight check; transaction-current issuance permission does not create
+a stronger transaction-atomic grant-validation contract.
 
 Every issued `agent_invoke` token stores required `readOnly` alongside contexts
 and optional service restrictions. The shared action-ceiling rule checks it
@@ -1403,13 +1435,19 @@ manager's login path or owner's current issuance mode.
 Token refusals use `service_action_denied`, message `broker token is read-only`,
 and `brokerToken` audit provenance. Issuance-policy refusals use host-only SDK
 `ReasonCode::TokenIssuanceDenied` (`token_issuance_denied`, HTTP 403), with
-`disabled` or `read_only_required` details. Identity summaries expose
+`disabled`, `context_not_allowed`, or `read_only_required` details in that
+precedence order. Identity summaries expose
 `brokerToken: {readOnly: boolean}` only for admitted issued agent tokens with a
 present token ID. Trusted-path `readOnlyAccess` remains separate; synthetic
 trusted-path scopes contain false but never populate `brokerToken`.
 
-The mutation owner retains token insertion, transaction-captured decision and
-completion audit after disconnect. Completion failure retains the committed row
+The mutation owner retains token insertion, transaction-captured full policy and
+completion audit after disconnect. Policy-edit receipts capture previous/current
+complete pairs in their mutation transaction; principal creation captures its
+initial pair, including defaults. Account access and group edits keep the
+best-effort completion attempt in the same cancellation-resistant owner as the
+mutation. These management receipts are globally scoped; context names do not
+supply a service scope. Completion failure retains the committed row
 and returns the existing audit-unavailable error without the secret; issuance
 is never retried automatically. See [storage and recovery](database.md#agent-token-issuance-storage-and-upgrade)
 and [account settings](roles.md#agent-token-issuance).
@@ -1454,8 +1492,14 @@ services, actions, resource availability, and execution contexts without
 creating a grant. It also names each configured service (display name and
 gateway broker hosts) and classifies each action as reviewed read-only or not;
 those properties of the configured service never depend on the caller's
-execution context or grants. The portal uses it for **My access > Access** and selects all current
-contexts by default when opening issuance. Simple issuance omits service,
+execution context or grants. The portal keeps the raw options for **My access >
+Access**, existing-token details and previews. Fresh personal issuance waits for
+both current session and token-options refreshes, then selects all eligible
+contexts from their conservative per-context policy intersection with grant
+options. Later refreshes preserve the draft and require explicit correction of
+stale contexts or a writable draft that now needs Read-only. Administrative forms
+use target grant options and treat owner issuance policy as display-only. Simple
+issuance omits service,
 action, and resource caveats and therefore follows later policy changes inside
 the selected context ceiling. Advanced issuance deliberately adds those
 immutable caveats and requires an explicit review before the token is revealed.

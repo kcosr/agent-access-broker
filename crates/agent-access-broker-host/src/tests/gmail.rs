@@ -163,17 +163,20 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
         let runtime = runtime(&f);
         let store = runtime.managed_store().unwrap();
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         let token = store
             .issue_broker_token(

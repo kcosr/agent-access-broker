@@ -213,18 +213,22 @@ async fn fixture_configured(
 
     let store = ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "microsoft-users".to_string(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".to_string(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "microsoft-users".to_string(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .create_external_group_binding(ExternalGroupBindingCreateRequest {
@@ -938,17 +942,20 @@ async fn attempts_keep_their_interval_across_reload_and_sign_in() {
     // has not; a reload keeps the durable interval.
     f.clock.advance_seconds(40);
     f.store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::Admin,
-            self_service_enabled: None,
-            principal_id: "admin".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::Admin,
+                self_service_enabled: None,
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     f.broker.reload_config(&f.config).await;
     assert_eq!(
@@ -1713,17 +1720,20 @@ async fn sign_in_reload_and_unlink_during_a_renewal_supersede_it() {
     f.clock.advance_seconds(61);
     f.expire(&method);
     f.store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::Admin,
-            self_service_enabled: None,
-            principal_id: "admin".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::Admin,
+                self_service_enabled: None,
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let waiting = while_redeeming(
         &f,
@@ -2148,17 +2158,20 @@ impl Fixture {
     /// An administrator's Broker token.
     fn admin_token(&self) -> String {
         self.store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::Admin,
-                self_service_enabled: None,
-                principal_id: "admin".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::Admin,
+                    self_service_enabled: None,
+                    principal_id: "admin".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         self.store
             .issue_broker_token(

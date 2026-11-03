@@ -37,9 +37,13 @@ disable each trusted identity path or limit it to read actions without changing
 the person's grants; see [managed workspace identity](docs/managed-identity.md).
 
 Administrators separately control [agent token issuance](docs/roles.md#agent-token-issuance)
-for accounts and groups: Disabled, Read-only, or Write-capable. New and existing
-accounts require explicit permission to self-issue. A read-only token can
-**Follow current grants**, including future reads, while its stored restriction
+for accounts and groups with a mode and explicit execution-context choices.
+Accounts can inherit group permission, resolved separately in each context, or
+use a Disabled, Read-only, or Write-capable override. Personal tokens require
+permission in every selected context; a mixed Read-only/Write-capable selection
+must be read-only. New contexts never expand saved permission automatically.
+A read-only token can **Follow current grants**, including future reads, while
+its stored restriction
 blocks writes. Changing issuance permission leaves existing tokens unchanged.
 
 The portal supports local account sign-in or optional

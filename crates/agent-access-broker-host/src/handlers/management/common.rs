@@ -508,6 +508,7 @@ where
     F: FnOnce(
             agent_access_core::ManagedStore,
             Option<agent_access_core::ManagedResourceCatalog>,
+            agent_access_core::AgentTokenIssuanceEnvironment,
         ) -> Result<T, agent_access_core::ManagedStoreError>
         + Send
         + 'static,
@@ -522,28 +523,18 @@ where
             })?;
             let catalog = (runtime.config().policy.authority != "managed")
                 .then(|| runtime.policy_resource_catalog_for_scope(&PolicyReadScope::Global));
-            operation(store, catalog)
+            operation(store, catalog, runtime.agent_token_issuance_environment())
         })
         .await
-}
-
-pub(crate) fn agent_token_issuance_authority(
-    config: &BrokerConfig,
-) -> agent_access_core::AgentTokenIssuanceAuthority {
-    if config.identity.authority == "managed" {
-        agent_access_core::AgentTokenIssuanceAuthority::Managed
-    } else {
-        agent_access_core::AgentTokenIssuanceAuthority::Toml
-    }
 }
 
 pub(super) async fn agent_token_issuance_policy(
     context: &ManagementContext,
     principal: String,
 ) -> Result<agent_access_core::AgentTokenIssuancePolicy, agent_access_core::ManagedStoreError> {
-    let authority = agent_token_issuance_authority(context.snapshot.runtime.config());
+    let environment = context.snapshot.runtime.agent_token_issuance_environment();
     management_store_call(context, move |store| {
-        store.agent_token_issuance_policy(&principal, authority)
+        store.agent_token_issuance_policy(&principal, &environment)
     })
     .await
 }
@@ -563,6 +554,7 @@ where
     F: FnOnce(
             agent_access_core::ManagedStore,
             Option<agent_access_core::ManagedResourceCatalog>,
+            agent_access_core::AgentTokenIssuanceEnvironment,
         )
             -> Result<agent_access_core::IssuedBrokerToken, agent_access_core::ManagedStoreError>
         + Send

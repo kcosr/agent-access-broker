@@ -153,6 +153,7 @@ pub(super) fn open_audit_database(
         AUDIT_MIGRATIONS,
         AUDIT_DATABASE_LABEL,
         mode == AuditOpenMode::Startup,
+        &(),
     )
     .map_err(|error| admission_message(error, mode))?;
     check_database_settings(&conn)?;
@@ -209,7 +210,7 @@ pub(super) fn restrict_files(path: &Path) -> Result<(), String> {
     })
 }
 
-fn seed_database_id(conn: &Connection) -> Result<(), SqliteAdmissionError> {
+fn seed_database_id(conn: &Connection, _: &()) -> Result<(), SqliteAdmissionError> {
     conn.execute(
         "INSERT INTO audit_meta(key, value) VALUES (?1, ?2)",
         params![DATABASE_ID_KEY, Uuid::new_v4().to_string()],
@@ -348,7 +349,7 @@ pub fn verify_sqlite_audit_database(path: &Path) -> Result<AuditVerifyReport, St
 
     let mut schema_problems = Vec::new();
     if let Err(error) =
-        sqlite_support::admit_schema(&conn, AUDIT_MIGRATIONS, AUDIT_DATABASE_LABEL, false)
+        sqlite_support::admit_schema(&conn, AUDIT_MIGRATIONS, AUDIT_DATABASE_LABEL, false, &())
     {
         schema_problems.push(admission_message(error, AuditOpenMode::Reload));
     }

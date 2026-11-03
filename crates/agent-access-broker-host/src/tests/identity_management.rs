@@ -101,13 +101,16 @@ fn auditor(fixture: &AuditFixture) -> String {
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "carol".into(),
-            role: Some(PrincipalRole::Auditor),
-            self_service_enabled: None,
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "carol".into(),
+                role: Some(PrincipalRole::Auditor),
+                self_service_enabled: None,
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .issue_broker_token(
@@ -506,13 +509,16 @@ async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in
         .runtime
         .managed_store()
         .unwrap()
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "alice".into(),
-            role: Some(PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "alice".into(),
+                role: Some(PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let inventory = || {
         fixture
@@ -587,13 +593,16 @@ async fn identity_management_browser_reads_need_no_csrf() {
         .runtime
         .managed_store()
         .unwrap()
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "alice".into(),
-            role: Some(PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "alice".into(),
+                role: Some(PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let request = |method: Method, uri: &str, body: Option<&str>, csrf: Option<&str>| {
         let mut request = Request::builder()

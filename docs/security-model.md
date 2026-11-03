@@ -496,12 +496,23 @@ security-relevant properties are:
   work, but an already-admitted request may finish. Resume restores the same
   secret under current groups and grants. Use permanent revocation when the
   secret may have been disclosed; revocation wins concurrent transitions.
-- **Issuance permission governs creation only.** An explicit account setting
-  overrides groups; otherwise the most permissive active effective managed group
-  applies. New/existing accounts require explicit permission. The decision runs
-  in the insertion transaction after normal prerequisites; administrative
-  issuance is independently authorized. Permission changes do not alter issued
-  tokens, invocation checks or existing MCP sessions.
+- **Issuance permission governs creation only.** Each enabled account/group
+  policy names explicit configured contexts. An account override replaces group
+  authority completely; inheritance resolves the most permissive active effective
+  managed group separately in each context. Every requested context must permit
+  personal issuance, and any selected Read-only context requires a read-only
+  token. The decision uses current membership inside the insertion transaction
+  after normal prerequisites, with the registry fenced against reload. New
+  contexts never expand saved permission. Administrative issuance independently
+  bypasses personal mode, context-list and read-only limits while retaining target
+  grants and ordinary token checks. Permission edits do not alter existing tokens,
+  invocation checks, limiter state or MCP sessions. Registry removal is different:
+  a token referencing a removed configured context fails authentication.
+- **Issuance metadata does not grant invocation.** Personal projections disclose
+  assigned enabled issuance contexts even without current grants there, but no
+  unrelated registry names or disabled rows. Group provenance is per context.
+  Session/options refresh failure blocks personal issuance; this metadata never
+  becomes identity proof. The full registry requires policy-read authority.
 - **Token boundaries are caveats, not grants.** Required `readOnly: true`
   limits a token to current reviewed reads even when it follows future grants;
   false gives no additional permission. Optional per-service action and
@@ -548,7 +559,7 @@ security-relevant properties are:
 - **Management authority is not invocation authority.** A manager may use their
   whole-service authority to grant themselves access, but the assignment itself
   never authorizes invocation. They retain normal self-service token issuance;
-  issuing an `agent_invoke` token still requires explicit issuance permission
+  issuing an `agent_invoke` token still requires permission in each selected context
   and an effective invocation grant,
   so dormant bearer tokens cannot be created from an assignment alone.
 - **Microsoft failure is provider-scoped.** Discovery, key, or token endpoint

@@ -841,15 +841,54 @@ trusted header by provider and Git gateway transports.
 
 ### Agent-token issuance and read-only matrix
 
-For agent-token issuance changes, exercise account override/group precedence,
-managed versus TOML membership, expired evidence, transactional downgrade races,
-administrative independence, explicit Boolean validation, and read-only Follow
-current grants. Verify discovery/invocation/Git refusal before credential or
-provider work, stored-token previews after reclassification, distinct identity
-provenance, cancellation-owned completion, and unchanged existing tokens after
-permission edits. Migration `033` checks must use a real schema-032 store and
-cover false backfill, invalid-row preservation, all unrevoked collisions,
-rollback, previous-binary revocation recovery and revoked-collision preservation.
+For agent-token issuance changes, verify the configured object and per-context
+projection across the store, HTTP catalog/OpenAPI/send schemas, CLI, sessions and
+portal. Exercise mixed-group policies, explicit overrides, winning group
+provenance, disabled groups, expired evidence and TOML identity. Cover empty,
+duplicate, malformed, unknown, wrong-type and invalid mode/list combinations;
+whole-object replacement, omission/defaults, set-reordering no-ops and upserts
+that preserve existing pairs.
+
+Use real schema-033 upgrade fixtures for migration 034. Verify configured-order
+registries, the absent-registry `default`, inactive owners, grants absent, byte
+preservation of all token rows, atomic seed failure, concurrent initializers and
+no reseeding. Retain migration 033 coverage with real schema-032 fixtures for
+false backfill, invalid rows, unrevoked collisions, rollback, previous-binary
+revocation recovery and revoked-collision preservation. Test staged introduction
+of an explicit registry; retirement must check all principals and, under managed
+identity, disabled as well as active groups. TOML dormant groups must not block
+retirement. Switching back must reject both startup and reload until the
+restore-context/switch/edit/retire recovery succeeds; failed reload retains the
+active runtime and aggregate limiter policy/history.
+
+Exercise all three issuance routes, transaction-current membership/policy races,
+registry fencing, ordered refusal categories and unchanged prerequisite errors.
+Administrative issuance bypasses all personal policy limits; administrator use
+of the personal route does not. Verify authentication projection failures roll
+back successful-login/password/session changes. Check captured creation and
+edit receipts, cancellation ownership, no-op reporting and completion failures.
+Policy-only writes must preserve existing token bytes, MCP owners, grants-based
+invocation, preview/lifecycle behavior and queued/shared invocation capacity.
+Retain explicit Boolean validation, read-only Follow current grants, denial
+before credentials/provider work and distinct identity provenance.
+
+Run real Broker/CLI and JSON-send policy/issuance journeys. Portal coverage must
+include dynamic registry order, unchecked additions, retained removed selections,
+empty-set validation, TOML account overrides and disabled TOML group writes.
+Check dirty drafts across changed-record refetch, Keep/Discard and pre-save
+comparison. During a contexts-only edit, a concurrent role/self-service change
+must update unedited fields and remain absent from PATCH, with no accidental
+revocation or assignment removal. Role warnings use the latest saved role.
+
+For personal forms, control both initial refresh orders: no cached or placeholder
+metadata may initialize a fresh draft. Check conservative per-context session/
+options intersection, mixed selections, single-context text, required Read-only
+text, explicit stale-Boolean correction and stale-context removal. Refresh errors
+and refusals preserve name/TTL/resources and one-time secret custody. Existing
+tokens and My Access remain usable after policy denial. Admin forms ignore owner
+policy validity as a ceiling but still require valid lifetime/permission metadata
+and target options. Use real local Broker browser fixtures for mixed policy and
+reload journeys alongside focused mocked contracts, and identify those scopes.
 Run the updated demo/capture flow against fresh Broker and portal artifacts.
 
 ### Broker-token pause matrix

@@ -143,27 +143,33 @@ pub(super) fn fixture() -> Fixture {
     let ring = initial.credential_key_ring().unwrap();
     for principal in ["admin", "alice", "bob", "charlie"] {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let draft = store
         .create_imported_service(definition(), "admin", |_| Ok(()))

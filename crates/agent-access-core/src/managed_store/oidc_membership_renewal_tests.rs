@@ -88,8 +88,13 @@ fn store_at(path: &Path, through: Option<&str>) -> ManagedStore {
         Some(version) => catalog_through(version),
         None => production_migration_catalog(),
     };
-    ManagedStore::open_with_catalog(&config_at(path), ManagedStoreOpenMode::Startup, catalog)
-        .unwrap()
+    ManagedStore::open_with_catalog(
+        &config_at(path),
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+        catalog,
+    )
+    .unwrap()
 }
 
 fn sql(store: &ManagedStore, statements: &str) {
@@ -189,7 +194,12 @@ fn rejected_validation(_: &Connection) -> Result<(), ManagedStoreError> {
 }
 
 fn assert_schema_invalid(path: &Path, case: &str) {
-    let error = ManagedStore::open(&config_at(path), ManagedStoreOpenMode::Startup).unwrap_err();
+    let error = ManagedStore::open(
+        &config_at(path),
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap_err();
     assert!(
         matches!(error, ManagedStoreError::SchemaInvalid(_)),
         "{case}: {error}"
@@ -438,11 +448,11 @@ fn schema_030_upgrades_to_031_with_rows_unchanged() {
     store.check_ready(None).unwrap();
     assert_eq!(
         store.principal("alice").unwrap().agent_token_issuance,
-        PrincipalAgentTokenIssuance::Inherit
+        test_principal_issuance(PrincipalAgentTokenIssuance::Inherit)
     );
     assert_eq!(
         store.group("defaults").unwrap().agent_token_issuance,
-        AgentTokenIssuanceMode::Disabled
+        test_group_issuance(AgentTokenIssuanceMode::Disabled)
     );
     let conn = store.connection.lock().unwrap();
     assert_eq!(projected_table_rows(&conn, &prior_columns), before);
@@ -579,7 +589,7 @@ fn failed_migration_keeps_the_old_schema_and_ledger() {
     last.structural_validation = rejected_validation;
     assert!(matches!(
         ManagedStore::open_with_catalog(
-            &config_at(&path),
+            &config_at(&path), &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &failing,
@@ -600,6 +610,7 @@ fn failed_migration_keeps_the_old_schema_and_ledger() {
     let migrated = fs::read(&path).unwrap();
     let error = ManagedStore::open_with_catalog(
         &config_at(&path),
+        &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         catalog_through(MANAGED_STORE_GROUP_AUTO_ENROLLMENT_VERSION),
     )
@@ -735,14 +746,17 @@ fn fixture(membership_renewal: bool) -> Fixture {
     let provider = reconcile(&store, true, membership_renewal, CLIENT, "fixture", 3_600);
     for (group, external) in [("team-a", GROUP_A), ("team-b", GROUP_B)] {
         store
-            .create_group(GroupWriteRequest {
-                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-                group_id: group.into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                    group_id: group.into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
             .create_external_group_binding(ExternalGroupBindingCreateRequest {
@@ -991,14 +1005,17 @@ fn jit_sign_in_records_the_renewal_row_with_group_enrollment_in_one_transaction(
     let fixture = fixture(true);
     fixture
         .store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-            group_id: "defaults".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: true,
-            created_by: "admin".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                group_id: "defaults".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: true,
+                created_by: "admin".into(),
+            },
+            &test_execution_contexts(),
+        )
         .unwrap();
     sql(
         &fixture.store,
@@ -2180,14 +2197,17 @@ fn renewal_never_runs_group_auto_enrollment() {
     let method = renewable_alice(&fixture, -2800);
     fixture
         .store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-            group_id: "defaults".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: true,
-            created_by: "admin".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                group_id: "defaults".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: true,
+                created_by: "admin".into(),
+            },
+            &test_execution_contexts(),
+        )
         .unwrap();
     let start = fixture.start(&method, 0);
     let done = committed(fixture.commit(
@@ -2714,17 +2734,20 @@ fn renewal_status_and_microsoft_membership_report_each_state() {
     );
     fixture
         .store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-            principal_id: "carol".into(),
-            kind: "user".into(),
-            role: PrincipalRole::User,
-            self_service_enabled: None,
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: test_principal_issuance(PrincipalAgentTokenIssuance::Inherit),
+                principal_id: "carol".into(),
+                kind: "user".into(),
+                role: PrincipalRole::User,
+                self_service_enabled: None,
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert_eq!(fixture.store.microsoft_membership("carol").unwrap(), None);
 }

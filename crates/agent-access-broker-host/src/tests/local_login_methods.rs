@@ -109,17 +109,20 @@ async fn local_password_admin_requires_explicit_enrollment_and_audits_previous_s
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "bob".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "bob".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let path = "/v1/admin/principals/bob/login-methods/local-password";
     let enable = format!("{path}/enable");
@@ -324,6 +327,188 @@ async fn hybrid_password_change_preserves_microsoft_session_and_revokes_only_loc
 }
 
 #[tokio::test]
+async fn login_admitted_before_registry_reload_reports_conflict_without_mutating_auth_state() {
+    use axum::Json;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, HeaderValue};
+    use axum::response::IntoResponse;
+
+    for group_policy in [false, true] {
+        let fixture = browser_rate_fixture(test_limits()).await;
+        if group_policy {
+            let created = admin(
+                &fixture,
+                Method::POST,
+                "/v1/admin/groups",
+                Some(json!({"groupId":"issuers"})),
+            )
+            .await;
+            assert_eq!(created.status(), StatusCode::OK);
+            let joined = admin(
+                &fixture,
+                Method::PUT,
+                "/v1/admin/groups/issuers/members/alice",
+                None,
+            )
+            .await;
+            assert_eq!(joined.status(), StatusCode::OK);
+        }
+        let failed = browser(
+            &fixture,
+            Method::POST,
+            "/v1/auth/local/login",
+            "",
+            None,
+            Some(json!({"principalId":"alice","password":"incorrect-password"})),
+        )
+        .await;
+        assert_eq!(failed.status(), StatusCode::UNAUTHORIZED);
+
+        let old_snapshot = fixture.state.current();
+        let old_store = old_snapshot.runtime.managed_store().unwrap().clone();
+        let before_tokens = old_store
+            .list_broker_tokens_for_principal("alice")
+            .unwrap()
+            .into_iter()
+            .map(|token| token.token_id)
+            .collect::<Vec<_>>();
+        let db = rusqlite::Connection::open(&fixture.store_path).unwrap();
+        let auth_state = || {
+            let password: String = db.query_row(
+                "SELECT password_hash_phc FROM principal_login_methods WHERE principal_id = 'alice' AND method = 'local_password'",
+                [], |row| row.get(0),
+            ).unwrap();
+            let failures = db.prepare("SELECT source, failed_attempts, last_failed_at, locked_until FROM local_password_failures WHERE principal_id = 'alice' ORDER BY source").unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?))).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap();
+            (password, failures)
+        };
+        let before_auth = auth_state();
+        assert_eq!(before_auth.1.len(), 1);
+
+        // This existing validation API holds the old connection mutex in a
+        // read-only transaction. New runtime connections can still write WAL.
+        // No timing assumption or production test hook is needed to hold the
+        // admitted login before its first store read.
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let blocked_store = old_store.clone();
+        let blocker = tokio::task::spawn_blocking(move || {
+            let mut held_tx = Some(held_tx);
+            blocked_store.validate_policy_grant_create(
+                agent_access_core::ManagedPolicyGrantCreateRequest {
+                    grant_id: None,
+                    subjects: vec!["user:alice".into()],
+                    execution_contexts: vec!["default".into()],
+                    service: "fake".into(),
+                    actions: vec!["echo".into()],
+                    resources: ResourceSelection::default(),
+                    credential_mode: "service".into(),
+                    priority: None,
+                    status: None,
+                    description: None,
+                    created_by: "test".into(),
+                },
+                |_, _, _, _| {
+                    held_tx.take().unwrap().send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+                    Ok(())
+                },
+            )
+        });
+        held_rx.await.unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            REQUEST_ID_HEADER,
+            HeaderValue::from_static("stale-registry-login"),
+        );
+        headers.insert("Host", HeaderValue::from_static("localhost"));
+        headers.insert("Origin", HeaderValue::from_static("http://localhost"));
+        let body =
+            serde_json::from_value(json!({"principalId":"alice","password":"alice-password"}))
+                .unwrap();
+        let mut login = Box::pin(crate::handlers::auth::auth_local_login(
+            State(crate::state::AppState {
+                reloadable: fixture.state.clone(),
+            }),
+            ConnectInfo("127.0.0.1:43109".parse().unwrap()),
+            headers,
+            Json(body),
+        ));
+        assert!(futures_util::poll!(&mut login).is_pending());
+
+        let mut config = old_snapshot.runtime.config().clone();
+        config.execution_context = Some(ExecutionContextConfig {
+            allowed_values: vec!["default".into(), "new-context".into()],
+            default_context: Some("default".into()),
+        });
+        let token_path = fixture
+            ._broker
+            .running()
+            .directory()
+            .secret_file("stale-registry-fake.token", "synthetic-fake-credential")
+            .unwrap();
+        config
+            .credentials
+            .service
+            .get_mut("fake")
+            .unwrap()
+            .token_ref = Some(format!("file:{}", token_path.display()));
+        fixture._broker.reload_config(&config).await;
+        assert!(!Arc::ptr_eq(&old_snapshot, &fixture.state.current()));
+        let path = if group_policy {
+            "/v1/admin/groups/issuers"
+        } else {
+            "/v1/admin/principals/alice/access"
+        };
+        let updated = admin(&fixture, Method::PATCH, path, Some(json!({
+            "agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["new-context"]},
+        }))).await;
+        assert_eq!(updated.status(), StatusCode::OK);
+        release_tx.send(()).unwrap();
+        blocker.await.unwrap().unwrap();
+        let response = login.await.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(response.headers().get("set-cookie").is_none());
+        let response = response_json(response).await;
+        assert_eq!(response["reasonCode"], "version_conflict");
+        assert_eq!(auth_state(), before_auth);
+        assert_eq!(
+            old_store
+                .list_broker_tokens_for_principal("alice")
+                .unwrap()
+                .into_iter()
+                .map(|token| token.token_id)
+                .collect::<Vec<_>>(),
+            before_tokens
+        );
+
+        let expected = json!({"source":if group_policy {"groups"} else {"user"},"contexts":[{
+            "executionContext":"new-context", "mode":"read_only", "groupIds":if group_policy {vec!["issuers"]} else {vec![]},
+        }]});
+        let current_session = session(&fixture, &fixture.cookie).await;
+        assert_eq!(
+            current_session["tokenIssuancePolicy"]["selfAgentInvoke"]["access"],
+            expected
+        );
+        let fresh_login = browser(
+            &fixture,
+            Method::POST,
+            "/v1/auth/local/login",
+            "",
+            None,
+            Some(json!({"principalId":"alice","password":"alice-password"})),
+        )
+        .await;
+        assert_eq!(fresh_login.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(fresh_login).await["result"]["tokenIssuancePolicy"]["selfAgentInvoke"]["access"],
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 async fn auth_policy_projection_failure_preserves_password_and_existing_sessions() {
     for operation in ["login", "local_change", "oidc_change"] {
         let fixture = browser_rate_fixture(test_limits()).await;
@@ -332,14 +517,21 @@ async fn auth_policy_projection_failure_preserves_password_and_existing_sessions
         let snapshot = fixture.state.current();
         let store = snapshot.runtime.managed_store().unwrap();
         store
-            .create_group(agent_access_core::GroupWriteRequest {
-                group_id: "issuers".into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::ReadOnly,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                agent_access_core::GroupWriteRequest {
+                    group_id: "issuers".into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    agent_token_issuance: agent_access_core::GroupAgentTokenIssuanceSetting::new(
+                        agent_access_core::AgentTokenIssuanceMode::ReadOnly,
+                        vec!["default".into()],
+                    )
+                    .unwrap(),
+                    created_by: "admin".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store.add_group("alice", "issuers", "admin").unwrap();
         let before_tokens = store
@@ -351,10 +543,25 @@ async fn auth_policy_projection_failure_preserves_password_and_existing_sessions
             "SELECT password_hash_phc FROM principal_login_methods WHERE principal_id = 'alice' AND method = 'local_password'",
             [], |row| row.get(0),
         ).unwrap();
+        let failed_login = browser(
+            &fixture,
+            Method::POST,
+            "/v1/auth/local/login",
+            "",
+            None,
+            Some(json!({"principalId":"alice","password":"incorrect-password"})),
+        )
+        .await;
+        assert_eq!(failed_login.status(), StatusCode::UNAUTHORIZED);
+        let failure_counters = || {
+            conn.prepare("SELECT source, failed_attempts, last_failed_at, locked_until FROM local_password_failures WHERE principal_id = 'alice' ORDER BY source").unwrap()
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?))).unwrap()
+                .collect::<Result<Vec<_>, _>>().unwrap()
+        };
+        let before_failures = failure_counters();
+        assert_eq!(before_failures.len(), 1);
         conn.execute_batch(
-            "PRAGMA ignore_check_constraints = ON;
-             UPDATE groups SET agent_token_issuance = 'private-invalid-policy' WHERE group_id = 'issuers';
-             PRAGMA ignore_check_constraints = OFF;",
+            "UPDATE group_agent_token_issuance_contexts SET execution_context = 'private-invalid-policy!' WHERE group_id = 'issuers';",
         ).unwrap();
         // Ordinary session reads must still fail closed when current policy is
         // unavailable, while a failed mutation must leave durable auth intact.
@@ -367,7 +574,11 @@ async fn auth_policy_projection_failure_preserves_password_and_existing_sessions
             None,
         )
         .await;
-        assert_eq!(session_error.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(session_error.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response_json(session_error).await["reasonCode"],
+            "managed_store_migration_required"
+        );
         let response = if operation == "login" {
             browser(
                 &fixture,
@@ -423,6 +634,11 @@ async fn auth_policy_projection_failure_preserves_password_and_existing_sessions
             after_hash == before_hash,
             "password changed after {operation} failed"
         );
+        assert_eq!(
+            failure_counters(),
+            before_failures,
+            "projection failure cleared failed-password accounting for {operation}"
+        );
         for cookie in [&fixture.cookie, &oidc_cookie] {
             store
                 .resolve_browser_session(
@@ -432,7 +648,7 @@ async fn auth_policy_projection_failure_preserves_password_and_existing_sessions
                 .unwrap();
         }
         conn.execute(
-            "UPDATE groups SET agent_token_issuance = 'read_only' WHERE group_id = 'issuers'",
+            "UPDATE group_agent_token_issuance_contexts SET execution_context = 'default' WHERE group_id = 'issuers'",
             [],
         )
         .unwrap();
@@ -441,7 +657,7 @@ async fn auth_policy_projection_failure_preserves_password_and_existing_sessions
             assert_eq!(current["authenticated"], true, "{operation}");
             assert_eq!(
                 current["tokenIssuancePolicy"]["selfAgentInvoke"]["access"],
-                json!({"mode":"read_only","source":"groups","groupIds":["issuers"]})
+                json!({"source":"groups","contexts":[{"executionContext":"default","mode":"read_only","groupIds":["issuers"]}]})
             );
         }
     }
@@ -540,17 +756,20 @@ async fn local_password_enable_keeps_committed_success_if_completion_audit_fails
         let snapshot = fixture.state.current();
         let store = snapshot.runtime.managed_store().unwrap();
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         let conn = rusqlite::Connection::open(&fixture.audit_path).unwrap();
         conn.execute_batch(&format!(

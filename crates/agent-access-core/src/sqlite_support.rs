@@ -44,27 +44,30 @@ pub(crate) struct SqliteStoreLabel {
 }
 
 /// One catalog migration. `seed` runs in the migration's transaction after
-/// `sql` (for data such as generated IDs); `structural_validation` runs after
+/// `sql` using the caller's typed seed input; `structural_validation` runs after
 /// it, before advancing from this migration, and whenever a fully migrated
 /// database is admitted.
-pub(crate) struct SqliteMigration<E> {
+pub(crate) struct SqliteMigration<E, C = ()> {
     pub(crate) version: &'static str,
     pub(crate) checksum: &'static str,
     pub(crate) sql: &'static str,
-    pub(crate) seed: Option<SqliteSchemaStep<E>>,
+    pub(crate) seed: Option<SqliteSeedStep<E, C>>,
     pub(crate) structural_validation: SqliteSchemaStep<E>,
 }
 
-/// A migration's seed or structural validation.
+/// A transactional data seed supplied with trusted admission input.
+pub(crate) type SqliteSeedStep<E, C> = fn(&Connection, &C) -> Result<(), E>;
+
+/// Configuration-independent structural validation.
 pub(crate) type SqliteSchemaStep<E> = fn(&Connection) -> Result<(), E>;
 
-impl<E> Clone for SqliteMigration<E> {
+impl<E, C> Clone for SqliteMigration<E, C> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<E> Copy for SqliteMigration<E> {}
+impl<E, C> Copy for SqliteMigration<E, C> {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AppliedMigration {
@@ -91,11 +94,12 @@ enum MigrationApplyResult {
 /// `MigrationRequired`). Validates each applied schema before advancing it and
 /// each resulting schema afterward, including the latest schema on admission.
 /// Returns the versions this call applied.
-pub(crate) fn admit_schema<E: From<SqliteAdmissionError>>(
+pub(crate) fn admit_schema<E: From<SqliteAdmissionError>, C>(
     conn: &Connection,
-    migrations: &[SqliteMigration<E>],
+    migrations: &[SqliteMigration<E, C>],
     label: SqliteStoreLabel,
     allow_migration: bool,
+    seed_input: &C,
 ) -> Result<BTreeSet<String>, E> {
     let latest = migrations.last().ok_or_else(|| {
         SqliteAdmissionError::SchemaInvalid("migration catalog is empty".to_string())
@@ -114,7 +118,7 @@ pub(crate) fn admit_schema<E: From<SqliteAdmissionError>>(
         if !allow_migration {
             return Err(SqliteAdmissionError::MigrationRequired.into());
         }
-        match apply_next_migration(conn, migrations, label, applied_len)? {
+        match apply_next_migration(conn, migrations, label, applied_len, seed_input)? {
             MigrationApplyResult::Applied(version) => {
                 applied_migrations.insert(version);
             }
@@ -135,9 +139,9 @@ pub(crate) fn admit_schema<E: From<SqliteAdmissionError>>(
     }
 }
 
-pub(crate) fn read_validated_ledger<E: From<SqliteAdmissionError>>(
+pub(crate) fn read_validated_ledger<E: From<SqliteAdmissionError>, C>(
     conn: &Connection,
-    migrations: &[SqliteMigration<E>],
+    migrations: &[SqliteMigration<E, C>],
     label: SqliteStoreLabel,
 ) -> Result<ValidatedLedger, E> {
     if !conn.is_autocommit() {
@@ -174,9 +178,9 @@ fn ledger_read_error(error: SqliteAdmissionError, label: SqliteStoreLabel) -> Sq
     }
 }
 
-fn read_validated_ledger_snapshot<E>(
+fn read_validated_ledger_snapshot<E, C>(
     conn: &Connection,
-    migrations: &[SqliteMigration<E>],
+    migrations: &[SqliteMigration<E, C>],
     label: SqliteStoreLabel,
 ) -> Result<ValidatedLedger, SqliteAdmissionError> {
     debug_assert!(!conn.is_autocommit());
@@ -214,11 +218,12 @@ fn incompatible_error(label: SqliteStoreLabel) -> SqliteAdmissionError {
     SqliteAdmissionError::SchemaInvalid(label.incompatible_message.to_string())
 }
 
-fn apply_next_migration<E: From<SqliteAdmissionError>>(
+fn apply_next_migration<E: From<SqliteAdmissionError>, C>(
     conn: &Connection,
-    migrations: &[SqliteMigration<E>],
+    migrations: &[SqliteMigration<E, C>],
     label: SqliteStoreLabel,
     expected_applied_len: usize,
+    seed_input: &C,
 ) -> Result<MigrationApplyResult, E> {
     if let Err(error) = conn.execute_batch("BEGIN IMMEDIATE") {
         if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy) {
@@ -256,7 +261,7 @@ fn apply_next_migration<E: From<SqliteAdmissionError>>(
             SqliteAdmissionError::SchemaInvalid(format!("{} migration failed", label.name))
         })?;
         if let Some(seed) = migration.seed {
-            seed(conn)?;
+            seed(conn, seed_input)?;
         }
         run_foreign_key_check(conn, label)?;
         (migration.structural_validation)(conn)?;
@@ -304,7 +309,7 @@ fn rollback_migration_transaction(conn: &Connection) {
 
 /// The checksum of an ordered catalog: the SHA-256 of its migration
 /// checksums joined by `:`.
-pub(crate) fn catalog_checksum<E>(migrations: &[SqliteMigration<E>]) -> String {
+pub(crate) fn catalog_checksum<E, C>(migrations: &[SqliteMigration<E, C>]) -> String {
     sha256_hex(
         migrations
             .iter()
@@ -814,7 +819,7 @@ mod migration_tests {
         structural_validation: validate_structure,
     }];
 
-    fn seed_and_wait(conn: &Connection) -> Result<(), SqliteAdmissionError> {
+    fn seed_and_wait(conn: &Connection, _: &()) -> Result<(), SqliteAdmissionError> {
         conn.execute("INSERT INTO seeded_items(id) VALUES (1)", [])
             .map_err(sql_unavailable)?;
         SEED_GATE.with(|slot| {
@@ -851,7 +856,7 @@ mod migration_tests {
         let (first_finished, first_done) = channel();
         let first = std::thread::spawn(move || {
             SEED_GATE.with(|slot| *slot.borrow_mut() = Some((seed_entered, seed_released)));
-            let result = admit_schema(&writer, MIGRATIONS, LABEL, true);
+            let result = admit_schema(&writer, MIGRATIONS, LABEL, true, &());
             drop(writer);
             let _ = first_finished.send(());
             result
@@ -877,7 +882,7 @@ mod migration_tests {
                     })
                 }))
                 .unwrap();
-            let result = admit_schema(&waiter, MIGRATIONS, LABEL, true);
+            let result = admit_schema(&waiter, MIGRATIONS, LABEL, true, &());
             drop(waiter);
             let _ = second_finished.send(());
             result

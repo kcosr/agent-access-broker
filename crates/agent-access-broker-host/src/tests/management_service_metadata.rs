@@ -112,22 +112,26 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     for principal in ["alice", "admin", "auditor"] {
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     for (principal, role) in [
@@ -135,13 +139,16 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
         ("auditor", agent_access_core::PrincipalRole::Auditor),
     ] {
         store
-            .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: principal.into(),
-                role: Some(role),
-                self_service_enabled: None,
-                actor: ("test").into(),
-            })
+            .patch_principal_access(
+                agent_access_core::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: principal.into(),
+                    role: Some(role),
+                    self_service_enabled: None,
+                    actor: ("test").into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     let hasher =

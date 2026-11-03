@@ -218,7 +218,12 @@ one eligible body-free Jira search or list with top-level
 whole-result Markdown with a non-native `readContentFormat`.
 
 Also verify `GET /v1/tokens/options`, then exercise self and admin issuance with
-one and with multiple repeated `--execution-context` flags. Exercise a
+one and with multiple repeated `--execution-context` flags. For personal issuance,
+configure explicit policy contexts first. Check that Read-only/Write-capable group
+contributions resolve separately, an unpermitted selected context is refused,
+and a mixed selection requires Read-only. Administrative issuance uses target
+grants independently of this policy. Disable personal issuance after issuing a
+token and verify that the existing token and MCP session still work. Exercise a
 token/context mismatch and record
 `execution_context_denied`; in an isolated strict test path, verify missing and
 malformed ingress produce `execution_context_required` and
@@ -343,7 +348,8 @@ test.
 
 Issue short-lived broker tokens when needed. This administrative route is
 independent of personal issuance permission; a personal `tokens issue` flow
-requires that permission explicitly. The mutation smoke requests a write-capable
+requires that permission explicitly in every selected context; `--read-only false`
+requires Write-capable permission in each. The mutation smoke requests a write-capable
 token below. Replace `default` with a context from the target's agent-token
 options when the deployment uses another context:
 

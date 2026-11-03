@@ -122,7 +122,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       body = envelope([{ tokenId: TOKEN_ID, principalId: "alice", name: "agent-one", tokenClass: "agent_invoke", scopes: { readOnly: false }, createdAt: new Date().toISOString(), createdBy: "alice" }]);
     } else if (endpoint === "/v1/tokens/options") {
       // Activity suggests the caller's granted services and actions from the token options.
-      body = envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
+      body = envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
         service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["default"],
         actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [], resourceType: null, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }]
       }] });

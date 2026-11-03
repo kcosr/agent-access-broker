@@ -108,21 +108,22 @@ async fn execute(
         })
         .await;
     }
-    let result = management_token_store_call(&state, &context, move |store, _catalog| {
-        let require_ring = || {
-            key_ring.as_ref().ok_or_else(|| {
-                ManagedStoreError::EncryptionKeyMissing("identity token key ring".into())
-            })
-        };
-        match action {
-            "inspect" => Ok(json!(store.identity_token_metadata(&principal)?)),
-            "reveal" => {
-                Ok(json!({"token":store.reveal_identity_token(&principal,require_ring()?)?}))
+    let result =
+        management_token_store_call(&state, &context, move |store, _catalog, _environment| {
+            let require_ring = || {
+                key_ring.as_ref().ok_or_else(|| {
+                    ManagedStoreError::EncryptionKeyMissing("identity token key ring".into())
+                })
+            };
+            match action {
+                "inspect" => Ok(json!(store.identity_token_metadata(&principal)?)),
+                "reveal" => {
+                    Ok(json!({"token":store.reveal_identity_token(&principal,require_ring()?)?}))
+                }
+                _ => unreachable!("known inventory operation"),
             }
-            _ => unreachable!("known inventory operation"),
-        }
-    })
-    .await;
+        })
+        .await;
     let mut response = match result {
         Ok(value) if preflight => {
             management_pre_audited_success_response(&context, operation, target, value)

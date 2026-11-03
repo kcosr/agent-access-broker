@@ -8,10 +8,21 @@ export type TokenTtlPolicy = {
 
 export type AgentTokenIssuanceMode = "disabled" | "read_only" | "write_capable";
 export type PrincipalAgentTokenIssuance = AgentTokenIssuanceMode | "inherit";
-export type AgentTokenIssuancePolicy = {
+export type PrincipalAgentTokenIssuanceSetting = {
+  mode: PrincipalAgentTokenIssuance;
+  allowedExecutionContexts: string[];
+};
+export type GroupAgentTokenIssuanceSetting = {
   mode: AgentTokenIssuanceMode;
+  allowedExecutionContexts: string[];
+};
+export type AgentTokenIssuancePolicy = {
   source: "user" | "groups" | "default";
-  groupIds: string[];
+  contexts: {
+    executionContext: string;
+    mode: "read_only" | "write_capable";
+    groupIds: string[];
+  }[];
 };
 
 export type TokenIssuancePolicy = {
@@ -364,7 +375,7 @@ export type PrincipalRecord = {
   groups: string[];
   role: PrincipalRole;
   selfServiceEnabled: boolean;
-  agentTokenIssuance: PrincipalAgentTokenIssuance;
+  agentTokenIssuance: PrincipalAgentTokenIssuanceSetting;
   createdAt: string;
   updatedAt: string;
   disabledAt?: string | null;
@@ -372,7 +383,7 @@ export type PrincipalRecord = {
 };
 
 export type GroupRecord = {
-  agentTokenIssuance: AgentTokenIssuanceMode;
+  agentTokenIssuance: GroupAgentTokenIssuanceSetting;
   groupId: string;
   displayName?: string | null;
   description?: string | null;

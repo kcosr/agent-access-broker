@@ -196,54 +196,67 @@ async fn oauth_fixture_with(
 
     let store = ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "admin".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     if let Some(group) = subject.and_then(|value| value.strip_prefix("group:")) {
         store
-            .create_group(agent_access_core::GroupWriteRequest {
-                agent_token_issuance: Default::default(),
-                group_id: group.into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                created_by: "test".into(),
-            })
+            .create_group(
+                agent_access_core::GroupWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    group_id: group.into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    created_by: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store.add_group("alice", group, "test").unwrap();
     }

@@ -36,6 +36,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 use url::form_urlencoded;
 
 #[derive(Debug, Deserialize)]
@@ -51,7 +53,7 @@ pub(crate) struct PrincipalCreateBody {
     role: PrincipalRole,
     self_service_enabled: Option<bool>,
     #[serde(default)]
-    agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance,
+    agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuanceSetting,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,7 +64,7 @@ pub(crate) struct PrincipalAccessBody {
     #[serde(default, deserialize_with = "deserialize_present")]
     self_service_enabled: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_present")]
-    agent_token_issuance: Option<agent_access_core::PrincipalAgentTokenIssuance>,
+    agent_token_issuance: Option<agent_access_core::PrincipalAgentTokenIssuanceSetting>,
 }
 
 /// Reads an optional field that, when present, must hold a value: an
@@ -98,7 +100,7 @@ pub(crate) struct GroupCreateBody {
     #[serde(default, deserialize_with = "deserialize_present")]
     auto_enroll_new_microsoft_users: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_present")]
-    agent_token_issuance: Option<agent_access_core::AgentTokenIssuanceMode>,
+    agent_token_issuance: Option<agent_access_core::GroupAgentTokenIssuanceSetting>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,7 +114,7 @@ pub(crate) struct GroupPatchBody {
     #[serde(default, deserialize_with = "deserialize_present")]
     auto_enroll_new_microsoft_users: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_present")]
-    agent_token_issuance: Option<agent_access_core::AgentTokenIssuanceMode>,
+    agent_token_issuance: Option<agent_access_core::GroupAgentTokenIssuanceSetting>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -448,7 +450,7 @@ fn toml_group_records(config: &BrokerConfig) -> Vec<GroupRecord> {
             description: None,
             status: group.status.clone(),
             auto_enroll_new_microsoft_users: false,
-            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
+            agent_token_issuance: agent_access_core::GroupAgentTokenIssuanceSetting::default(),
             created_at: None,
             created_by: None,
             updated_at: None,
@@ -1022,6 +1024,7 @@ fn group_write_audit_target(group: &str, auto_enroll: Option<bool>) -> Value {
 /// Keep the committed change and its supplemental audit in one owner task,
 /// even when the HTTP caller stops waiting after the managed-store commit.
 pub(crate) async fn committed_group_mutation<F>(
+    state: AppState,
     context: ManagementContext,
     operation: &'static str,
     target: Option<Value>,
@@ -1030,6 +1033,7 @@ pub(crate) async fn committed_group_mutation<F>(
 where
     F: FnOnce(
             agent_access_core::ManagedStore,
+            agent_access_core::AgentTokenIssuanceEnvironment,
         ) -> Result<agent_access_core::GroupMutationResult, ManagedStoreError>
         + Send
         + 'static,
@@ -1039,7 +1043,11 @@ where
     let owner_target = target.clone();
     let owner = tokio::spawn(async move {
         let context = owner_context;
-        match management_store_call(&context, mutate).await {
+        match management_token_store_call(&state, &context, move |store, _, environment| {
+            mutate(store, environment)
+        })
+        .await
+        {
             Ok(result) => {
                 let mut completion = json!({"group": result.group.group_id});
                 if let Some(change) = result.auto_enrollment_change {
@@ -1126,16 +1134,27 @@ pub(crate) async fn admin_groups_create(
         .await;
     }
     let actor = context.identity.principal.clone();
-    committed_group_mutation(context, operation, target, move |store| {
-        store.create_group_with_effect(GroupWriteRequest {
-            group_id: body.group_id,
-            display_name: body.display_name,
-            description: body.description,
-            auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users.unwrap_or(false),
-            agent_token_issuance: body.agent_token_issuance.unwrap_or_default(),
-            created_by: actor,
-        })
-    })
+    committed_group_mutation(
+        state,
+        context,
+        operation,
+        target,
+        move |store, environment| {
+            store.create_group_with_effect(
+                GroupWriteRequest {
+                    group_id: body.group_id,
+                    display_name: body.display_name,
+                    description: body.description,
+                    auto_enroll_new_microsoft_users: body
+                        .auto_enroll_new_microsoft_users
+                        .unwrap_or(false),
+                    agent_token_issuance: body.agent_token_issuance.unwrap_or_default(),
+                    created_by: actor,
+                },
+                environment.contexts(),
+            )
+        },
+    )
     .await
 }
 
@@ -1181,17 +1200,26 @@ pub(crate) async fn admin_groups_patch(
     }
     let actor = context.identity.principal.clone();
     let group_for_store = group.clone();
-    committed_group_mutation(context, operation, target, move |store| {
-        store.patch_group_with_effect(GroupPatchRequest {
-            group_id: group_for_store,
-            display_name: body.display_name,
-            description: body.description,
-            status: body.status,
-            auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users,
-            agent_token_issuance: body.agent_token_issuance,
-            updated_by: actor,
-        })
-    })
+    committed_group_mutation(
+        state,
+        context,
+        operation,
+        target,
+        move |store, environment| {
+            store.patch_group_with_effect(
+                GroupPatchRequest {
+                    group_id: group_for_store,
+                    display_name: body.display_name,
+                    description: body.description,
+                    status: body.status,
+                    auto_enroll_new_microsoft_users: body.auto_enroll_new_microsoft_users,
+                    agent_token_issuance: body.agent_token_issuance,
+                    updated_by: actor,
+                },
+                environment.contexts(),
+            )
+        },
+    )
     .await
 }
 
@@ -1496,6 +1524,72 @@ pub(crate) async fn admin_external_group_binding_delete(
     }
 }
 
+/// Keep principal creation/access changes and their captured completion receipt
+/// together after the HTTP waiter disconnects. Completion remains best effort.
+pub(crate) async fn committed_principal_mutation<F>(
+    state: AppState,
+    context: ManagementContext,
+    operation: &'static str,
+    target: Option<Value>,
+    mutate: F,
+) -> Response
+where
+    F: FnOnce(
+            agent_access_core::ManagedStore,
+            agent_access_core::AgentTokenIssuanceEnvironment,
+        ) -> Result<(PrincipalRecord, Value), ManagedStoreError>
+        + Send
+        + 'static,
+{
+    let context = Arc::new(context);
+    let owner_context = context.clone();
+    let owner_target = target.clone();
+    let owner = tokio::spawn(
+        async move {
+            let context = owner_context;
+            match management_token_store_call(&state, &context, move |store, _, environment| {
+                mutate(store, environment)
+            })
+            .await
+            {
+                Ok((principal, completion)) => {
+                    management_committed_write_audit_completion(
+                        &context,
+                        operation,
+                        Some(completion),
+                    )
+                    .await;
+                    // Preserve the admitted identity even if an access edit revoked
+                    // the caller's own administrator token.
+                    management_pre_audited_success_response(
+                        &context,
+                        operation,
+                        owner_target,
+                        json!(principal),
+                    )
+                }
+                Err(error) => {
+                    management_store_error_response(&context, operation, owner_target, error).await
+                }
+            }
+        }
+        .in_current_span()
+        .with_current_subscriber(),
+    );
+    match owner.await {
+        Ok(response) => response,
+        Err(_) => {
+            management_store_error_response(
+                &context,
+                operation,
+                target,
+                ManagedStoreError::Unavailable("principal mutation owner failed".into()),
+            )
+            .await
+        }
+    }
+}
+
 pub(crate) async fn admin_principals_create(
     State(state): State<AppState>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -1522,26 +1616,34 @@ pub(crate) async fn admin_principals_create(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    match management_token_store_call(&state, &context, move |store, _catalog| {
-        store.create_principal(PrincipalWriteRequest {
-            principal_id: body.principal_id,
-            kind: body.kind,
-            display_name: body.display_name,
-            email: body.email,
-            external_subject: body.external_subject,
-            role: body.role,
-            self_service_enabled: body.self_service_enabled,
-            agent_token_issuance: body.agent_token_issuance,
-            created_by: actor,
-        })
-    })
+    committed_principal_mutation(
+        state,
+        context,
+        operation,
+        target,
+        move |store, environment| {
+            let principal = store.create_principal(
+                PrincipalWriteRequest {
+                    principal_id: body.principal_id,
+                    kind: body.kind,
+                    display_name: body.display_name,
+                    email: body.email,
+                    external_subject: body.external_subject,
+                    role: body.role,
+                    self_service_enabled: body.self_service_enabled,
+                    agent_token_issuance: body.agent_token_issuance,
+                    created_by: actor,
+                },
+                environment.contexts(),
+            )?;
+            let completion = json!({
+                "principal": principal.principal_id,
+                "agentTokenIssuance": principal.agent_token_issuance,
+            });
+            Ok((principal, completion))
+        },
+    )
     .await
-    {
-        Ok(principal) => {
-            management_pre_audited_success_response(&context, operation, target, json!(principal))
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_principals_get(
@@ -1567,8 +1669,7 @@ pub(crate) async fn admin_principals_get(
     let managed_policy = context.snapshot.runtime.config().policy.authority == "managed";
     let principal_for_store = principal.clone();
     let resolved_at = Utc::now().to_rfc3339();
-    let authority =
-        super::common::agent_token_issuance_authority(context.snapshot.runtime.config());
+    let environment = context.snapshot.runtime.agent_token_issuance_environment();
     match management_store_call(&context, move |store| {
         let mut principal = store.principal(&principal_for_store)?;
         let membership = store.effective_membership_at(&principal_for_store, &resolved_at)?;
@@ -1578,7 +1679,8 @@ pub(crate) async fn admin_principals_get(
         } else {
             Vec::new()
         };
-        let issuance_policy = store.agent_token_issuance_policy(&principal_for_store, authority)?;
+        let issuance_policy =
+            store.agent_token_issuance_policy(&principal_for_store, &environment)?;
         Ok((principal, membership, policy_grants, issuance_policy))
     })
     .await
@@ -1878,41 +1980,37 @@ pub(crate) async fn admin_principal_access_patch(
         return *response;
     }
     let actor = context.identity.principal.clone();
-    match management_token_store_call(&state, &context, move |store, _catalog| {
-        store.patch_principal_access(PrincipalAccessPatchRequest {
-            principal_id: principal,
-            role: body.role,
-            self_service_enabled: body.self_service_enabled,
-            agent_token_issuance: body.agent_token_issuance,
-            actor,
-        })
-    })
+    committed_principal_mutation(
+        state,
+        context,
+        operation,
+        target,
+        move |store, environment| {
+            let change = store.patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    principal_id: principal,
+                    role: body.role,
+                    self_service_enabled: body.self_service_enabled,
+                    agent_token_issuance: body.agent_token_issuance,
+                    actor,
+                },
+                environment.contexts(),
+            )?;
+            let completion = json!({
+                    "principal": change.principal.principal_id,
+                    "previousAgentTokenIssuance": change.previous_agent_token_issuance,
+                    "agentTokenIssuance": change.principal.agent_token_issuance,
+                    "previousRole": change.previous_role,
+                    "role": change.principal.role,
+                    "previousSelfServiceEnabled": change.previous_self_service_enabled,
+                    "selfServiceEnabled": change.principal.self_service_enabled,
+                    "removedServices": change.removed_services,
+                    "revokedAdminTokenIds": change.revoked_admin_token_ids,
+            });
+            Ok((change.principal, completion))
+        },
+    )
     .await
-    {
-        Ok(change) => {
-            let completion_target = Some(json!({
-                "principal": change.principal.principal_id,
-                "previousAgentTokenIssuance": change.previous_agent_token_issuance,
-                "agentTokenIssuance": change.principal.agent_token_issuance,
-                "previousRole": change.previous_role,
-                "role": change.principal.role,
-                "previousSelfServiceEnabled": change.previous_self_service_enabled,
-                "selfServiceEnabled": change.principal.self_service_enabled,
-                "removedServices": change.removed_services,
-                "revokedAdminTokenIds": change.revoked_admin_token_ids,
-            }));
-            management_committed_write_audit_completion(&context, operation, completion_target)
-                .await;
-            // Use the admitted context even when this request revoked its own bearer.
-            management_pre_audited_success_response(
-                &context,
-                operation,
-                target,
-                json!(change.principal),
-            )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
 }
 
 pub(crate) async fn admin_principal_group_add(
@@ -2676,7 +2774,7 @@ pub(crate) async fn admin_principal_token_issue(
         operation,
         target,
         false,
-        move |store, catalog| {
+        move |store, catalog, _environment| {
             let issue_request = BrokerTokenIssueRequest {
                 principal_id: principal,
                 name: body.name,
@@ -2939,7 +3037,7 @@ pub(crate) async fn admin_principal_agent_token_issue(
         operation,
         target,
         false,
-        move |store, catalog| {
+        move |store, catalog, _environment| {
             store.issue_broker_token_with_catalog(
                 &hasher,
                 BrokerTokenIssueRequest {
@@ -3122,15 +3220,19 @@ pub(crate) async fn admin_principal_agent_token_resume(
     let actor = context.identity.principal.clone();
     let principal_for_store = principal.clone();
     let token_id_for_store = token_id.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        store.resume_principal_agent_token_with_catalog(
-            &principal_for_store,
-            &token_id_for_store,
-            &actor,
-            catalog.as_ref(),
-            agent_access_core::AgentTokenManagementPurpose::Administrative,
-        )
-    })
+    match super::common::management_token_store_call(
+        &state,
+        &context,
+        move |store, catalog, _environment| {
+            store.resume_principal_agent_token_with_catalog(
+                &principal_for_store,
+                &token_id_for_store,
+                &actor,
+                catalog.as_ref(),
+                agent_access_core::AgentTokenManagementPurpose::Administrative,
+            )
+        },
+    )
     .await
     {
         Ok(token) => {
@@ -3343,15 +3445,19 @@ pub(crate) async fn admin_token_resume(
     }
     let token_id_for_store = token_id.clone();
     let actor = context.identity.principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        let token = store.resume_broker_token_with_catalog(
-            &token_id_for_store,
-            &actor,
-            catalog.as_ref(),
-        )?;
-        let browser_session = store.broker_token_is_browser_session(&token.token_id)?;
-        Ok(admin_token_record(token, browser_session))
-    })
+    match super::common::management_token_store_call(
+        &state,
+        &context,
+        move |store, catalog, _environment| {
+            let token = store.resume_broker_token_with_catalog(
+                &token_id_for_store,
+                &actor,
+                catalog.as_ref(),
+            )?;
+            let browser_session = store.broker_token_is_browser_session(&token.token_id)?;
+            Ok(admin_token_record(token, browser_session))
+        },
+    )
     .await
     {
         Ok(token) => {

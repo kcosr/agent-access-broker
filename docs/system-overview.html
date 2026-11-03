@@ -971,10 +971,10 @@
         <div>
           <h3>Token properties</h3>
           <ul class="list">
-            <li><b>Access restrictions.</b> Token restrictions limit access within the user's grants. They cannot authorize access beyond those grants.</li>
+            <li><b>Access restrictions.</b> Personal issuance requires permission in every selected context. Any selected Read-only context requires a read-only token. Token restrictions limit access within the user's grants.</li>
             <li><b>Expiration and revocation.</b> Self-issued tokens expire, with a 30-day maximum by default. Tokens can be paused, resumed or revoked at any time. Revocation blocks new admissions; already prepared operations may finish; uploads have a bounded receive deadline.</li>
             <li><b>Token storage.</b> The broker stores a keyed hash of each token. The raw token value is displayed once when issued.</li>
-            <li><b>Policy updates.</b> Changes to grants and resources apply to existing tokens on the next request. A token's own restrictions are fixed when it is issued.</li>
+            <li><b>Policy updates.</b> Changes to grants and resources apply to existing tokens on the next request. A token's own restrictions are fixed when it is issued. Changing issuance permission affects only new tokens.</li>
           </ul>
         </div>
       </div>
@@ -1229,7 +1229,7 @@
           <span class="label">Cannot</span>
           <ul class="cannot">
             <li>Widen access beyond their grants</li>
-            <li>Issue an agent token without explicit issuance permission and an effective grant</li>
+            <li>Issue an agent token without permission in every selected context and an effective grant</li>
           </ul>
         </div>
       </div>

@@ -1013,17 +1013,20 @@ async fn service_accounts_use_their_bearer_token_through_the_gateway_beside_oaut
     let fixture = products_fixture(&atlassian, true).await;
     let store = fixture.runtime.managed_store().unwrap().clone();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "robot".into(),
-            kind: "service_account".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "robot".into(),
+                kind: "service_account".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     fixture.grant_product("robot", "jira", &["issue.view"], "jira-eng");
     let hasher = fixture.runtime.broker_token_hasher().unwrap();

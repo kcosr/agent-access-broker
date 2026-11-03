@@ -61,7 +61,7 @@ export function PrincipalPage() {
       </PortalPage>
     );
   }
-  if (query.isError || !query.data) {
+  if (!query.data || (query.isError && tab !== "overview")) {
     return (
       <PortalPage>
         <Main label="Principal">
@@ -227,7 +227,7 @@ function OverviewTab(props: TabProps) {
   const { groupWritesEnabled } = writeAuthorities(useConfigStatus().data);
   return (
     <PrincipalFrame {...props} tint>
-      {detail.isPending ? <SkeletonBlock lines={5} /> : detail.isError ? <ErrorState error={detail.error} onRetry={() => void detail.refetch()} retrying={detail.isFetching} /> : <PrincipalOverview key={props.principal.principalId} principal={props.principal} loginMethods={detail.data} groupWritesEnabled={groupWritesEnabled} />}
+      {detail.isPending ? <SkeletonBlock lines={5} /> : detail.isError && !detail.data ? <ErrorState error={detail.error} onRetry={() => void detail.refetch()} retrying={detail.isFetching} /> : <PrincipalOverview key={props.principal.principalId} principal={props.principal} loginMethods={detail.data} groupWritesEnabled={groupWritesEnabled} />}
     </PrincipalFrame>
   );
 }

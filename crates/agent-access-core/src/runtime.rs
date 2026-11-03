@@ -1769,6 +1769,7 @@ enum PolicyGrantRef {
 #[derive(Clone)]
 pub struct BrokerRuntime {
     config: Arc<BrokerConfig>,
+    execution_context_registry: crate::ConfiguredExecutionContexts,
     providers: Arc<BTreeMap<String, Arc<dyn Provider>>>,
     /// The command hooks of available command imports, keyed by service.
     /// Each is the same object as the service's entry in `providers`.
@@ -2176,6 +2177,8 @@ impl BrokerRuntime {
     ) -> Result<Self, RuntimeError> {
         Self::reject_disabled_development_provider_injection(&config, &providers)?;
         validate_broker_config(&config)?;
+        let execution_context_registry =
+            crate::ConfiguredExecutionContexts::from_config(config.execution_context.as_ref())?;
         let node_id: Arc<str> = crate::resolve_node_id(&config.deployment)
             .map_err(|error| RuntimeError::NodeId {
                 message: error.to_string(),
@@ -2189,7 +2192,8 @@ impl BrokerRuntime {
         for provider in providers {
             register_service_provider(&mut provider_map, &config, provider)?;
         }
-        let managed_store = load_managed_store(&config, previous.is_some())?;
+        let managed_store =
+            load_managed_store(&config, &execution_context_registry, previous.is_some())?;
         let credential_key_ring = config
             .credential_encryption
             .as_ref()
@@ -2380,6 +2384,7 @@ impl BrokerRuntime {
             audit,
             effective_credentials: Arc::new(config.credentials.clone()),
             config: Arc::new(source_config),
+            execution_context_registry,
             providers: Arc::new(
                 provider_map
                     .into_iter()
@@ -3684,23 +3689,27 @@ impl BrokerRuntime {
     }
 
     fn configured_execution_contexts(&self) -> Vec<ExecutionContext> {
-        self.config.execution_context.as_ref().map_or_else(
-            || {
-                vec![
-                    ExecutionContext::new(DEFAULT_EXECUTION_CONTEXT)
-                        .expect("built-in default execution context is valid"),
-                ]
-            },
-            |config| {
-                config
-                    .allowed_values
-                    .iter()
-                    .map(|value| {
-                        ExecutionContext::new(value.clone())
-                            .expect("validated configured execution context")
-                    })
-                    .collect()
-            },
+        self.execution_context_registry
+            .iter()
+            .map(|value| {
+                ExecutionContext::new(value).expect("validated execution context registry")
+            })
+            .collect()
+    }
+
+    pub fn execution_context_registry(&self) -> &crate::ConfiguredExecutionContexts {
+        &self.execution_context_registry
+    }
+
+    /// Trusted policy inputs pinned to this runtime's admitted configuration.
+    pub fn agent_token_issuance_environment(&self) -> crate::AgentTokenIssuanceEnvironment {
+        crate::AgentTokenIssuanceEnvironment::new(
+            self.config
+                .identity
+                .authority
+                .parse()
+                .expect("validated identity authority"),
+            self.execution_context_registry.clone(),
         )
     }
 
@@ -7401,6 +7410,7 @@ fn prepare_upload_spool(limits: &crate::LimitsConfig) -> Result<(), RuntimeError
 
 fn load_managed_store(
     config: &BrokerConfig,
+    contexts: &crate::ConfiguredExecutionContexts,
     reload: bool,
 ) -> Result<Option<ManagedStore>, RuntimeError> {
     let Some(managed_store) = &config.managed_store else {
@@ -7411,9 +7421,20 @@ fn load_managed_store(
     } else {
         ManagedStoreOpenMode::Startup
     };
-    ManagedStore::open(managed_store, mode)
-        .map(Some)
-        .map_err(runtime_managed_store_error)
+    let store =
+        ManagedStore::open(managed_store, contexts, mode).map_err(runtime_managed_store_error)?;
+    let environment = crate::AgentTokenIssuanceEnvironment::new(
+        config
+            .identity
+            .authority
+            .parse()
+            .expect("validated identity authority"),
+        contexts.clone(),
+    );
+    store
+        .validate_agent_token_issuance_context_references(&environment)
+        .map_err(runtime_managed_store_error)?;
+    Ok(Some(store))
 }
 
 fn prepare_managed_admin_roles(

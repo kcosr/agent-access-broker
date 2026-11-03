@@ -1096,18 +1096,22 @@ async fn oidc_browser_fixture_configured(
 
     let store = ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "microsoft-users".to_string(),
-            display_name: Some("Microsoft users".to_string()),
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".to_string(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "microsoft-users".to_string(),
+                display_name: Some("Microsoft users".to_string()),
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .create_external_group_binding(ExternalGroupBindingCreateRequest {
@@ -1367,39 +1371,48 @@ async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_mem
     for group in ["baseline", "paused"] {
         fixture
             .store
-            .create_group(GroupWriteRequest {
-                agent_token_issuance: Default::default(),
-                group_id: group.into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: true,
-                created_by: "test".into(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    group_id: group.into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: true,
+                    created_by: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     fixture
         .store
-        .patch_group(agent_access_core::GroupPatchRequest {
-            agent_token_issuance: None,
-            group_id: "paused".into(),
-            display_name: None,
-            description: None,
-            status: Some("disabled".into()),
-            auto_enroll_new_microsoft_users: None,
-            updated_by: "test".into(),
-        })
+        .patch_group(
+            agent_access_core::GroupPatchRequest {
+                agent_token_issuance: None,
+                group_id: "paused".into(),
+                display_name: None,
+                description: None,
+                status: Some("disabled".into()),
+                auto_enroll_new_microsoft_users: None,
+                updated_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     fixture
         .store
-        .patch_group(agent_access_core::GroupPatchRequest {
-            agent_token_issuance: None,
-            group_id: "microsoft-users".into(),
-            display_name: None,
-            description: None,
-            status: None,
-            auto_enroll_new_microsoft_users: Some(true),
-            updated_by: "test".into(),
-        })
+        .patch_group(
+            agent_access_core::GroupPatchRequest {
+                agent_token_issuance: None,
+                group_id: "microsoft-users".into(),
+                display_name: None,
+                description: None,
+                status: None,
+                auto_enroll_new_microsoft_users: Some(true),
+                updated_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let pending = start_browser_login(&fixture, None).await;
     let response = finish_browser_login(&fixture, &pending, "oidc-enrollment-new").await;
@@ -1453,14 +1466,17 @@ async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_mem
         .unwrap();
     fixture
         .store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "later-default".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: true,
-            created_by: "test".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "later-default".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: true,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     // Authoritative empty Microsoft evidence removes its contribution. New
     // defaults and manually removed local memberships do not reappear.
@@ -1489,14 +1505,17 @@ async fn microsoft_oidc_browser_audit_failure_does_not_repeat_committed_enrollme
             .await;
     fixture
         .store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "baseline".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: true,
-            created_by: "test".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "baseline".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: true,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let connection = rusqlite::Connection::open(&fixture.audit_path).unwrap();
     connection.execute_batch(&format!(
@@ -1541,14 +1560,17 @@ async fn microsoft_oidc_browser_default_group_does_not_bypass_mapped_group_admis
     let fixture = oidc_browser_fixture(false).await;
     fixture
         .store
-        .create_group(GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "baseline".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: true,
-            created_by: "test".into(),
-        })
+        .create_group(
+            GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "baseline".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: true,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let mut claims = FakeTokenClaims::valid(FIXED_NOW);
     claims.groups = FakeGroupClaims::Empty;
@@ -2324,17 +2346,20 @@ async fn microsoft_oidc_membership_renewal_turned_off_deletes_stored_tokens() {
     // requires an active administrator once principals exist.
     fixture
         .store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::Admin,
-            self_service_enabled: None,
-            principal_id: "admin".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::Admin,
+                self_service_enabled: None,
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let mut config = fixture.config.clone();
     config.browser_auth.oidc.microsoft.membership_renewal = false;

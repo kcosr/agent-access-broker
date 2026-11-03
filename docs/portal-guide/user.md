@@ -202,17 +202,25 @@ in `default`. It does not authorize Jira search or writes.
    keeps the details, access choices, a summary, and an effective-access
    preview together.
 2. In **Details**, give it a descriptive **Name**, such as `demo-jira-reader`.
-   Choose a finite **Lifetime** offered by your broker and select the required
-   **Execution contexts**.
-3. Keep the token **Read-only**. If your account may issue only read-only tokens,
-   the form shows plain **Read-only** text and a note that your issuance policy
-   requires it. With Write-capable issuance permission, leave the **Read-only**
-   checkbox checked. In **Access**, choose **Restrict to selected**.
+   Choose a finite **Lifetime** offered by your broker. The page first refreshes
+   your session and token options, then selects all contexts both granted and
+   permitted for personal issuance. Select the required **Execution contexts**;
+   a single eligible context appears as fixed text.
+3. Keep the token **Read-only**. If any selected context requires Read-only, the
+   form shows plain **Read-only** text and an explanation. If all selected
+   contexts permit writes, leave the **Read-only** checkbox checked. One choice
+   applies to the entire token. In **Access**, choose **Restrict to selected**.
 
 ![Token creation page with details, execution contexts, and access mode](../images/portal/guide-annotated/user-token-details-light.png)
 
 *Synthetic, unsubmitted token draft. Restrict to selected adds a ceiling to your
 current grants. The operator configures the available lifetime choices.*
+
+Later refreshes preserve the draft. A selected context that is no longer granted
+or permitted must be explicitly removed; new choices are never selected for you.
+If a selected context now requires Read-only while the draft allows writes, use
+**Apply read-only restriction** and correct any selected writes. Missing or failed
+permission refreshes block submission without discarding the draft.
 
 4. Select Jira, then select only `issue.view` in its **Read-only** column.
    The same action selector is used in the grant builder. **All** and **None**

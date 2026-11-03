@@ -67,6 +67,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::configured(&["default"], false).await
+    }
+
+    async fn configured(contexts: &[&str], aggregate: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         create_private_dir(directory.path());
         let key = directory.path().join("hash-key");
@@ -110,6 +114,19 @@ impl Fixture {
             resources: vec![],
             resource_groups: vec![],
         };
+        config.execution_context = Some(agent_access_core::ExecutionContextConfig {
+            allowed_values: contexts.iter().map(|context| (*context).into()).collect(),
+            default_context: Some("default".into()),
+        });
+        if aggregate {
+            config.limits.invocations.aggregate.insert(
+                "fake".into(),
+                agent_access_core::AggregateInvocationLimitConfig {
+                    requests: 1,
+                    window: "1h".into(),
+                },
+            );
+        }
         config.mcp.enabled = true;
         config.mcp.public_url = Some("https://broker.example.test/mcp".into());
         let mut gateway = test_git_gateway_config();
@@ -117,6 +134,12 @@ impl Fixture {
         config.gateways.insert("gitlab_git".into(), gateway);
         let upstream_key = directory.path().join("git-key");
         std::fs::write(&upstream_key, "synthetic-gateway-credential").unwrap();
+        config
+            .credentials
+            .service
+            .get_mut("fake")
+            .unwrap()
+            .token_ref = Some(format!("file:{}", upstream_key.display()));
         config.credentials.service.insert(
             "gitlab_git".into(),
             CredentialConfig {
@@ -130,24 +153,48 @@ impl Fixture {
                 profile: None,
             },
         );
+        let registry = agent_access_core::ConfiguredExecutionContexts::from_config(
+            config.execution_context.as_ref(),
+        )
+        .unwrap();
         let store = ManagedStore::open(
             config.managed_store.as_ref().unwrap(),
+            &registry,
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
-        seed_managed_fixture_resources(&store);
+        for resource in fixture_resources(contexts) {
+            store
+                .create_resource(
+                    agent_access_core::CreateResourceRequest {
+                        id: Some(resource.id),
+                        display_name: resource.display_name,
+                        resource_type: resource.resource_type,
+                        selector: resource.selector,
+                        allowed_execution_contexts: resource.allowed_execution_contexts,
+                        enabled: true,
+                        attributes: Default::default(),
+                        created_by: "test".into(),
+                    },
+                    |_, _, _, _| Ok(()),
+                )
+                .unwrap();
+        }
         store
-            .create_principal(PrincipalWriteRequest {
-                principal_id: "admin".into(),
-                kind: "user".into(),
-                role: PrincipalRole::Admin,
-                self_service_enabled: None,
-                agent_token_issuance: Default::default(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    principal_id: "admin".into(),
+                    kind: "user".into(),
+                    role: PrincipalRole::Admin,
+                    self_service_enabled: None,
+                    agent_token_issuance: Default::default(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &registry,
+            )
             .unwrap();
         let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
         let admin = store
@@ -189,7 +236,10 @@ impl Fixture {
                 Some(json!({"principalId":"alice"})),
             )
             .await;
-        assert_eq!(created["result"]["agentTokenIssuance"], "inherit");
+        assert_eq!(
+            created["result"]["agentTokenIssuance"],
+            configured_policy("inherit")
+        );
         let setup = fixture
             .admin_ok(
                 Method::POST,
@@ -241,18 +291,29 @@ impl Fixture {
         self.admin_ok(
             Method::PATCH,
             "/v1/admin/principals/alice/access",
-            Some(json!({"agentTokenIssuance":mode})),
+            Some(json!({"agentTokenIssuance":configured_policy(mode)})),
         )
         .await;
     }
 
     async fn grant(&self, service: &str, actions: &[&str], resource: &str) -> String {
+        self.grant_in(service, actions, resource, &["default"])
+            .await
+    }
+
+    async fn grant_in(
+        &self,
+        service: &str,
+        actions: &[&str],
+        resource: &str,
+        contexts: &[&str],
+    ) -> String {
         let response = self
             .admin_ok(
                 Method::POST,
                 "/v1/admin/policy/grants",
                 Some(json!({
-                    "subjects":["user:alice"], "executionContexts":["default"],
+                    "subjects":["user:alice"], "executionContexts":contexts,
                     "service":service, "actions":actions,
                     "resources":{"resourceIds":[resource],"resourceGroupIds":[]},
                     "credentialMode":"service"
@@ -348,8 +409,396 @@ impl Fixture {
     }
 }
 
+fn configured_policy(mode: &str) -> Value {
+    json!({"mode":mode,"allowedExecutionContexts":if matches!(mode, "read_only" | "write_capable") { vec!["default"] } else { vec![] }})
+}
+
 fn issue_body(read_only: bool) -> Value {
     json!({"name":"inherited access","allowedExecutionContexts":["default"],"readOnly":read_only})
+}
+
+#[tokio::test]
+async fn mixed_context_groups_keep_authority_paired_and_admin_routes_bypass_personal_limits() {
+    let fixture = Fixture::configured(&["external", "internal", "unused", "default"], false).await;
+    fixture
+        .grant_in(
+            "fake",
+            &["echo", "note.write"],
+            "project-test",
+            &["external", "internal", "default"],
+        )
+        .await;
+    for (group, mode, contexts) in [
+        ("external-readers", "read_only", vec!["external"]),
+        ("internal-writers", "write_capable", vec!["internal"]),
+        ("internal-tied", "write_capable", vec!["internal"]),
+        ("internal-readers", "read_only", vec!["internal"]),
+    ] {
+        fixture.admin_ok(Method::POST, "/v1/admin/groups", Some(json!({
+            "groupId":group, "agentTokenIssuance":{"mode":mode,"allowedExecutionContexts":contexts},
+        }))).await;
+        fixture
+            .admin_ok(
+                Method::PUT,
+                &format!("/v1/admin/groups/{group}/members/alice"),
+                None,
+            )
+            .await;
+    }
+    let options = fixture
+        .ok(&fixture.alice, Method::GET, "/v1/tokens/options", None)
+        .await;
+    assert_eq!(
+        options["result"]["agentTokenIssuancePolicy"],
+        json!({"source":"groups","contexts":[
+            {"executionContext":"external","mode":"read_only","groupIds":["external-readers"]},
+            {"executionContext":"internal","mode":"write_capable","groupIds":["internal-tied","internal-writers"]},
+        ]})
+    );
+    for (contexts, read_only, category) in [
+        (vec!["internal"], false, None),
+        (vec!["external", "internal"], true, None),
+        (vec!["external"], false, Some("read_only_required")),
+        (
+            vec!["external", "internal"],
+            false,
+            Some("read_only_required"),
+        ),
+        (
+            vec!["external", "default"],
+            false,
+            Some("context_not_allowed"),
+        ),
+        (vec!["default"], true, Some("context_not_allowed")),
+    ] {
+        let body = json!({"name":"paired context test","allowedExecutionContexts":contexts,"readOnly":read_only});
+        let (status, result) = fixture
+            .request(&fixture.alice, Method::POST, "/v1/tokens", Some(body))
+            .await;
+        if let Some(category) = category {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+            assert_eq!(result["reasonCode"], "token_issuance_denied");
+            assert_eq!(result["details"]["category"], category);
+            let expected = if category == "context_not_allowed" {
+                "Personal agent tokens are not allowed in every requested execution context"
+            } else {
+                "The selected execution contexts require a read-only agent token"
+            };
+            assert!(result.to_string().contains(expected), "{result}");
+        } else {
+            assert_eq!(status, StatusCode::OK, "{result}");
+            assert_eq!(result["result"]["record"]["scopes"]["readOnly"], read_only);
+        }
+    }
+    // Configuration/grant preflight retains precedence over personal policy.
+    for context in ["unknown", "unused"] {
+        let (status, result) = fixture
+            .request(
+                &fixture.alice,
+                Method::POST,
+                "/v1/tokens",
+                Some(json!({
+                    "name":"invalid context", "allowedExecutionContexts":[context], "readOnly":true,
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{result}");
+        assert_eq!(result["reasonCode"], "input_invalid");
+    }
+    for policy in [
+        json!({"mode":"disabled","allowedExecutionContexts":[]}),
+        json!({"mode":"read_only","allowedExecutionContexts":["external"]}),
+        json!({"mode":"write_capable","allowedExecutionContexts":["internal"]}),
+    ] {
+        fixture
+            .admin_ok(
+                Method::PATCH,
+                "/v1/admin/principals/alice/access",
+                Some(json!({"agentTokenIssuance":policy})),
+            )
+            .await;
+        fixture.admin_ok(Method::POST, "/v1/admin/principals/alice/agent-tokens", Some(json!({
+            "name":"admin context bypass", "allowedExecutionContexts":["external","default"], "readOnly":false,
+        }))).await;
+        fixture
+            .admin_ok(
+                Method::POST,
+                "/v1/admin/principals/alice/tokens",
+                Some(json!({
+                    "name":"admin generic context bypass", "tokenClass":"agent_invoke",
+                    "scopes":{"allowedExecutionContexts":["external","default"],"readOnly":false},
+                })),
+            )
+            .await;
+    }
+    // The administrator's role does not waive the personal route's policy.
+    fixture.admin_ok(Method::PATCH, "/v1/admin/principals/alice/access", Some(json!({"role":"admin","agentTokenIssuance":{"mode":"disabled","allowedExecutionContexts":[]}}))).await;
+    let (status, denied) = fixture
+        .request(
+            &fixture.alice,
+            Method::POST,
+            "/v1/tokens",
+            Some(issue_body(true)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{denied}");
+    assert_eq!(denied["details"]["category"], "disabled");
+}
+
+#[tokio::test]
+async fn configured_policy_inputs_reject_legacy_and_partial_shapes_without_mutation() {
+    let fixture = Fixture::new().await;
+    let initial = fixture
+        .admin_ok(Method::GET, "/v1/admin/principals/alice", None)
+        .await;
+    for invalid in [
+        json!("read_only"),
+        Value::Null,
+        json!({"mode":"read_only"}),
+        json!({"allowedExecutionContexts":["default"]}),
+        json!({"mode":"read_only","allowedExecutionContexts":[]}),
+        json!({"mode":"inherit","allowedExecutionContexts":["default"]}),
+        json!({"mode":"disabled","allowedExecutionContexts":["default"]}),
+        json!({"mode":"write_capable","allowedExecutionContexts":["default","default"]}),
+        json!({"mode":"write_capable","allowedExecutionContexts":["unknown"]}),
+        json!({"mode":"write_capable","allowedExecutionContexts":["default"],"extra":true}),
+    ] {
+        let body = json!({"agentTokenIssuance":invalid}).to_string();
+        let response = authed_json_request(
+            fixture.app.clone(),
+            Method::PATCH,
+            "/v1/admin/principals/alice/access",
+            "invalid-policy-shape",
+            "Authorization",
+            format!("Bearer {}", fixture.admin),
+            Some(&body),
+        )
+        .await;
+        assert!(
+            response.status().is_client_error(),
+            "{invalid}: {}",
+            response.status()
+        );
+    }
+    let after = fixture
+        .admin_ok(Method::GET, "/v1/admin/principals/alice", None)
+        .await;
+    assert_eq!(
+        initial["result"]["agentTokenIssuance"],
+        after["result"]["agentTokenIssuance"]
+    );
+    assert_eq!(initial["result"]["updatedAt"], after["result"]["updatedAt"]);
+}
+
+#[tokio::test]
+async fn policy_edits_and_rejected_retirement_preserve_aggregate_history_and_existing_token() {
+    let fixture = Fixture::configured(&["default"], true).await;
+    fixture.grant("fake", &["echo"], "project-test").await;
+    fixture.policy("write_capable").await;
+    let issued = fixture.issue(true).await;
+    let token = issued["token"].as_str().unwrap();
+    let session = fixture.initialize(token).await;
+    assert_eq!(
+        fixture.invoke(token, "echo", "TEST").await.0,
+        StatusCode::OK
+    );
+    let state = fixture.broker.state();
+    let history = state.shared_invocations.state_for_test();
+    assert_eq!(history, vec![("alice".into(), "fake".into(), 1)]);
+    let mut config = fixture.broker.runtime().config().clone();
+    config
+        .execution_context
+        .as_mut()
+        .unwrap()
+        .allowed_values
+        .push("retired".into());
+    fixture.broker.reload_config(&config).await;
+    fixture.admin_ok(Method::POST, "/v1/admin/groups", Some(json!({
+        "groupId":"retained-policy", "agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["retired"]},
+    }))).await;
+    fixture.policy("disabled").await;
+    let before = state.current();
+    for path in ["/v1/tokens/options", "/v1/tokens"] {
+        fixture.ok(&fixture.alice, Method::GET, path, None).await;
+    }
+    let detail = fixture
+        .ok(token, Method::GET, "/v1/services/fake", None)
+        .await;
+    assert_eq!(
+        detail["limits"]["aggregate"],
+        json!({"requests":1,"windowSeconds":3600})
+    );
+    assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 0);
+    assert_eq!(state.shared_invocations.state_for_test(), history);
+    config.execution_context.as_mut().unwrap().allowed_values = vec!["default".into()];
+    config
+        .limits
+        .invocations
+        .aggregate
+        .get_mut("fake")
+        .unwrap()
+        .requests = 5;
+    fixture
+        .broker
+        .running()
+        .rewrite_config(super::broker::ConfigDoc::from_config(&config).render())
+        .unwrap();
+    assert!(
+        !fixture
+            .broker
+            .running()
+            .reload()
+            .await
+            .unwrap()
+            .is_success()
+    );
+    assert!(Arc::ptr_eq(&before, &state.current()));
+    assert_eq!(state.shared_invocations.state_for_test(), history);
+    let detail = fixture
+        .ok(token, Method::GET, "/v1/services/fake", None)
+        .await;
+    assert_eq!(detail["limits"]["aggregate"]["requests"], 1);
+    assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 0);
+    assert_eq!(
+        fixture.invoke(token, "echo", "TEST").await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Policy cleanup permits retirement. The accepted count-only aggregate
+    // change preserves the one charged invocation and makes four slots usable.
+    fixture
+        .admin_ok(
+            Method::PATCH,
+            "/v1/admin/groups/retained-policy",
+            Some(json!({
+                "agentTokenIssuance":{"mode":"disabled","allowedExecutionContexts":[]},
+            })),
+        )
+        .await;
+    assert!(
+        fixture
+            .broker
+            .running()
+            .reload()
+            .await
+            .unwrap()
+            .is_success()
+    );
+    assert_eq!(state.shared_invocations.state_for_test(), history);
+    let detail = fixture
+        .ok(token, Method::GET, "/v1/services/fake", None)
+        .await;
+    assert_eq!(detail["limits"]["aggregate"]["requests"], 5);
+    assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 4);
+    let listed = fixture.rpc(token, &session, "tools/list", json!({})).await;
+    assert!(!listed["result"]["tools"].as_array().unwrap().is_empty());
+    assert_eq!(
+        fixture.invoke(token, "echo", "TEST").await.0,
+        StatusCode::OK
+    );
+    let record = fixture
+        .broker
+        .runtime()
+        .managed_store()
+        .unwrap()
+        .resolve_broker_token(
+            fixture.broker.runtime().broker_token_hasher().unwrap(),
+            token,
+        )
+        .unwrap();
+    assert_eq!(record.token_id, issued["record"]["tokenId"]);
+}
+
+#[tokio::test]
+async fn policy_writes_preserve_an_existing_tokens_queued_invocation_owner() {
+    let fixture = Fixture::configured(&["default"], true).await;
+    fixture.grant("fake", &["echo"], "project-test").await;
+    fixture.policy("read_only").await;
+    let issued = fixture.issue(true).await;
+    let token = issued["token"].as_str().unwrap().to_owned();
+    let mut config = fixture.broker.runtime().config().clone();
+    config
+        .limits
+        .invocations
+        .aggregate
+        .get_mut("fake")
+        .unwrap()
+        .window = "5s".into();
+    config.limits.invocations.services.insert(
+        "fake".into(),
+        agent_access_core::InvocationLimitConfig {
+            requests: 20,
+            window: "1m".into(),
+            max_wait: Some("10s".into()),
+        },
+    );
+    fixture.broker.reload_config(&config).await;
+    assert_eq!(
+        fixture.invoke(&token, "echo", "TEST").await.0,
+        StatusCode::OK
+    );
+    let app = fixture.app.clone();
+    let queued_token = token.clone();
+    let waiting = tokio::spawn(async move {
+        authed_json_request(
+            app,
+            Method::POST,
+            "/v1/invoke/fake/echo",
+            "policy-existing-queue",
+            "Authorization",
+            format!("Bearer {queued_token}"),
+            Some(r#"{"inputs":{"project":"TEST","message":"queued"}}"#),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let detail = fixture
+                .ok(&token, Method::GET, "/v1/services/fake", None)
+                .await;
+            if detail["limits"]["invocations"]["queuedRequests"] == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let state = fixture.broker.state();
+    let before = state.current();
+    let history = state.shared_invocations.state_for_test();
+    fixture
+        .admin_ok(
+            Method::POST,
+            "/v1/admin/groups",
+            Some(json!({"groupId":"policy-only-group"})),
+        )
+        .await;
+    fixture
+        .admin_ok(
+            Method::PATCH,
+            "/v1/admin/groups/policy-only-group",
+            Some(json!({
+                "agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["default"]},
+            })),
+        )
+        .await;
+    fixture.policy("disabled").await;
+    assert!(
+        Arc::ptr_eq(&before, &state.current()),
+        "policy edits must not publish an invocation epoch"
+    );
+    assert_eq!(state.shared_invocations.state_for_test(), history);
+    let detail = fixture
+        .ok(&token, Method::GET, "/v1/services/fake", None)
+        .await;
+    assert_eq!(detail["limits"]["invocations"]["queuedRequests"], 1);
+    assert!(!waiting.is_finished());
+    let response = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(fixture.probe.work(), (2, 2));
 }
 
 #[tokio::test]
@@ -386,7 +835,7 @@ async fn default_denial_and_strict_input_precedence_keep_options_and_admin_issua
         .await;
     assert_eq!(
         options["result"]["agentTokenIssuancePolicy"],
-        json!({"mode":"disabled","source":"default","groupIds":[]})
+        json!({"source":"default","contexts":[]})
     );
     assert_eq!(
         options["result"]["services"][0]["actions"]
@@ -454,7 +903,7 @@ async fn group_maximum_and_user_override_are_live_creation_controls_without_hidi
             .admin_ok(
                 Method::POST,
                 "/v1/admin/groups",
-                Some(json!({"groupId":group,"agentTokenIssuance":mode})),
+                Some(json!({"groupId":group,"agentTokenIssuance":configured_policy(mode)})),
             )
             .await;
         fixture
@@ -470,7 +919,7 @@ async fn group_maximum_and_user_override_are_live_creation_controls_without_hidi
         .await;
     assert_eq!(
         options["result"]["agentTokenIssuancePolicy"],
-        json!({"mode":"write_capable","source":"groups","groupIds":["writers"]})
+        json!({"source":"groups","contexts":[{"executionContext":"default","mode":"write_capable","groupIds":["writers"]}]})
     );
     fixture.policy("read_only").await;
     let (status, denied) = fixture
@@ -485,19 +934,22 @@ async fn group_maximum_and_user_override_are_live_creation_controls_without_hidi
     assert_eq!(denied["details"]["category"], "read_only_required");
     fixture.issue(true).await;
     fixture.policy("disabled").await;
-    let (status, duplicate) = fixture.request(&fixture.admin, Method::POST, "/v1/admin/principals", Some(json!({"principalId":"alice","displayName":"Renamed","agentTokenIssuance":"write_capable"}))).await;
+    let (status, duplicate) = fixture.request(&fixture.admin, Method::POST, "/v1/admin/principals", Some(json!({"principalId":"alice","displayName":"Renamed","agentTokenIssuance":{"mode":"write_capable","allowedExecutionContexts":["default"]}}))).await;
     assert_eq!(status, StatusCode::CONFLICT, "{duplicate}");
     assert_eq!(duplicate["reasonCode"], "version_conflict");
     let account = fixture
         .admin_ok(Method::GET, "/v1/admin/principals/alice", None)
         .await;
-    assert_eq!(account["result"]["agentTokenIssuance"], "disabled");
+    assert_eq!(
+        account["result"]["agentTokenIssuance"],
+        configured_policy("disabled")
+    );
     let options = fixture
         .ok(&fixture.alice, Method::GET, "/v1/tokens/options", None)
         .await;
     assert_eq!(
         options["result"]["agentTokenIssuancePolicy"],
-        json!({"mode":"disabled","source":"user","groupIds":[]})
+        json!({"source":"user","contexts":[]})
     );
     assert_eq!(
         options["result"]["services"][0]["actions"]
@@ -519,19 +971,19 @@ async fn group_maximum_and_user_override_are_live_creation_controls_without_hidi
         .await;
     assert_eq!(
         options["result"]["agentTokenIssuancePolicy"],
-        json!({"mode":"read_only","source":"groups","groupIds":["readers"]})
+        json!({"source":"groups","contexts":[{"executionContext":"default","mode":"read_only","groupIds":["readers"]}]})
     );
 }
 
 #[tokio::test]
 async fn inherited_read_only_token_gains_later_reads_and_preserves_open_mcp_after_policy_edits() {
-    let fixture = Fixture::new().await;
+    let fixture = Fixture::configured(&["default", "other"], false).await;
     fixture.grant("fake", &["echo"], "project-test").await;
     fixture
         .admin_ok(
             Method::POST,
             "/v1/admin/groups",
-            Some(json!({"groupId":"readers","agentTokenIssuance":"read_only"})),
+            Some(json!({"groupId":"readers","agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["default"]}})),
         )
         .await;
     fixture
@@ -539,6 +991,17 @@ async fn inherited_read_only_token_gains_later_reads_and_preserves_open_mcp_afte
         .await;
     let issued = fixture.issue(true).await;
     let token = issued["token"].as_str().unwrap();
+    let token_id = issued["record"]["tokenId"].as_str().unwrap();
+    let token_bytes = || {
+        let runtime = fixture.broker.runtime();
+        let connection =
+            rusqlite::Connection::open(&runtime.config().managed_store.as_ref().unwrap().path)
+                .unwrap();
+        connection.query_row("SELECT token_hash, scopes_json, created_at, expires_at FROM broker_tokens WHERE token_id = ?1", [token_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?))
+        }).unwrap()
+    };
+    let original_bytes = token_bytes();
     assert!(issued["record"]["scopes"].get("allowedServices").is_none());
     assert!(
         issued["record"]["scopes"]
@@ -594,7 +1057,7 @@ async fn inherited_read_only_token_gains_later_reads_and_preserves_open_mcp_afte
         .admin_ok(
             Method::PATCH,
             "/v1/admin/groups/readers",
-            Some(json!({"agentTokenIssuance":"disabled"})),
+            Some(json!({"agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["other"]}})),
         )
         .await;
     let after_group_edit = fixture.rpc(token, &session, "tools/call", json!({"name":read_tool,"arguments":{"inputs":{"project":"OPS","message":"group policy changed"}}})).await;
@@ -625,12 +1088,33 @@ async fn inherited_read_only_token_gains_later_reads_and_preserves_open_mcp_afte
         "{still_open}"
     );
     let me = fixture.ok(token, Method::GET, "/v1/me", None).await;
+    assert_eq!(
+        token_bytes(),
+        original_bytes,
+        "issuance edits must preserve the stored token boundary and secret hash"
+    );
     assert_eq!(me["brokerToken"], json!({"readOnly":true}));
     assert!(me.get("readOnlyAccess").is_none());
     let setup = fixture
         .ok(&fixture.alice, Method::GET, "/v1/me", None)
         .await;
     assert!(setup.get("brokerToken").is_none());
+    fixture
+        .ok(
+            &fixture.alice,
+            Method::GET,
+            &format!("/v1/tokens/{token_id}"),
+            None,
+        )
+        .await;
+    fixture
+        .ok(
+            &fixture.alice,
+            Method::POST,
+            "/v1/tokens/effective-access",
+            Some(json!({"allowedExecutionContexts":["default"], "readOnly":true})),
+        )
+        .await;
     fixture
         .admin_ok(
             Method::POST,
@@ -650,6 +1134,24 @@ async fn inherited_read_only_token_gains_later_reads_and_preserves_open_mcp_afte
             .iter()
             .any(|tool| tool["name"] == read_tool)
     );
+    for action in ["pause", "resume"] {
+        fixture
+            .ok(
+                &fixture.alice,
+                Method::POST,
+                &format!("/v1/tokens/{token_id}/{action}"),
+                None,
+            )
+            .await;
+    }
+    fixture
+        .ok(
+            &fixture.alice,
+            Method::DELETE,
+            &format!("/v1/tokens/{token_id}"),
+            None,
+        )
+        .await;
 }
 
 #[tokio::test]
@@ -682,6 +1184,7 @@ async fn issued_read_only_git_token_denies_push_discovery_and_post_before_pack_p
         .await;
     fixture.policy("read_only").await;
     let issued = fixture.issue(true).await;
+    fixture.policy("disabled").await;
     let authorization = format!(
         "Basic {}",
         BASE64.encode(format!(

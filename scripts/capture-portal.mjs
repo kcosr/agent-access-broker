@@ -74,7 +74,8 @@ async function session(persona, theme, work) {
     if (persona === 'alice') {
       const response = await page.request.get(`${origin}/v1/auth/session`);
       const state = (await response.json()).result;
-      if (state.tokenIssuancePolicy?.selfAgentInvoke?.access?.mode !== 'write_capable') throw new Error('Alice captures require explicit write-capable personal issuance permission from the demo seed');
+      const policy = state.tokenIssuancePolicy?.selfAgentInvoke?.access;
+      if (policy?.source !== 'user' || !policy.contexts?.length || !policy.contexts.every(context => context.mode === 'write_capable')) throw new Error('Alice captures require explicit write-capable personal issuance permission from the demo seed');
     }
     if (persona === 'auditor') {
       const response = await page.request.get(`${origin}/v1/auth/session`);
@@ -176,13 +177,15 @@ async function adminDialogs(page) {
   await dialog.getByLabel('Email').fill('morgan@example.test');
   await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('inherit');
   await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
+  await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'default', exact: true }).check();
+  await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'internal', exact: true }).check();
   await dialog.getByRole('combobox', { name: /^Groups/ }).fill('jira-users');
   await page.getByRole('option', { name: /^jira-users - Jira Users/ }).click();
   await dialog.getByRole('combobox', { name: /^Groups/ }).press('Escape');
   await dialog.getByRole('checkbox', { name: 'Enable local password sign-in', exact: true }).check();
   await dialog.getByRole('checkbox', { name: 'I authorize local password sign-in for this user independently of Microsoft sign-in.', exact: true }).check();
   await dialog.getByRole('checkbox', { name: 'Self-service enabled', exact: true }).scrollIntoViewIfNeeded();
-  await capture(page, 'guide', 'admin-create-user-light', 'light', 'Draft user enrollment with explicit read-only token issuance, group selection, independent local password sign-in, and self-service');
+  await capture(page, 'guide', 'admin-create-user-light', 'light', 'Draft user enrollment with read-only token issuance in default and internal contexts, group selection, independent local password sign-in, and self-service');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   await visit(page, '/ui/admin/principals?kind=groups', '/v1/admin/groups');
@@ -193,7 +196,8 @@ async function adminDialogs(page) {
   await dialog.getByLabel('Description').fill('People and workloads allowed to read the demo project.');
   await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('disabled');
   await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
-  await capture(page, 'guide', 'admin-create-group-light', 'light', 'Draft policy group with a stable identifier, human-readable purpose and explicit read-only token issuance contribution');
+  await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'external', exact: true }).check();
+  await capture(page, 'guide', 'admin-create-group-light', 'light', 'Draft policy group with a stable identifier, human-readable purpose and read-only token issuance in the external context');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   await visit(page, '/ui/admin/principals?kind=service-accounts', '/v1/admin/principals');

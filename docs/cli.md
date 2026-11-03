@@ -632,8 +632,11 @@ subcommands reject `--token-value`.
   — `POST /v1/tokens`. There is no `--token-class` flag; self-service issuance is
   always `agent_invoke` server-side. `--read-only true|false` is required and
   serializes the explicit stored Boolean; it is never inferred from selected
-  actions. Read-only issuers must choose true. Even with true, omitting service
-  restrictions follows current grants and later reads while blocking writes.
+  actions. Every requested context needs personal issuance permission; false
+  requires Write-capable permission in every selected context. Selecting a
+  Read-only context requires true; permission in unselected contexts does not
+  restrict the token. A denied request is never trimmed or split. Even with true,
+  omitting service restrictions follows current grants and later reads while blocking writes.
   An explicit write selection with true is invalid. Inspect current permission
   in `GET /v1/tokens/options` (`agentTokenIssuancePolicy`). Repeatable `--service`
   narrows the issued
@@ -776,20 +779,28 @@ commands described below. All `admin` subcommands reject `--token-value`.
 - `admin store status` — `GET /v1/admin/store/status`.
 - `admin config status | reload` — `GET /v1/admin/config/status` or
   `POST /v1/admin/config/reload`.
-- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
-  `create --kind` defaults to `user`; issuance defaults to `inherit` on creation.
-  Creating an existing principal is refused with HTTP 409 and changes nothing.
-  Change issuance with `access set --agent-token-issuance`; that flag alone is sufficient.
-  `inherit` removes an override, and omission leaves the setting unchanged.
+- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
+  `create --kind` defaults to `user`; issuance defaults to Inherit with an empty
+  context list on creation. Creating an existing principal returns HTTP 409.
+  Change issuance with `access set --agent-token-issuance MODE`, adding repeatable
+  `--agent-token-issuance-context CONTEXT` for an enabled mode. `read_only` and
+  `write_capable` require at least one context; `inherit` and `disabled` reject
+  context flags and send an empty list. Context flags require a mode. Supplying
+  neither flag omits the entire object, preserving the current pair on PATCH.
+  Supplying a mode replaces the complete object atomically. There is no partial
+  context add/remove or GET-merge-write. API/CLI writes are last-writer-wins; reread
+  the current policy before replacing it. `inherit` removes the account override.
   `update` sends only fields selected by
   flags and requires at least one field flag. Microsoft link takes the Entra
   user Object ID, not an email, UPN, tenant ID, or encoded subject. Link returns
   the structured Microsoft login method; unlink revokes its browser sessions
   and external membership but leaves local identity state and independently
   issued broker tokens intact.
-- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] [--agent-token-issuance disabled|read_only|write_capable] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] [--agent-token-issuance disabled|read_only|write_capable] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
-  Group issuance defaults to `disabled`; update omission preserves it. Groups
-  do not accept `inherit`. See [issuance resolution](roles.md#agent-token-issuance).
+- `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
+  Group issuance defaults to Disabled with an empty list. The same mode/context
+  flag pairing and whole-object replacement rules apply; update omission preserves
+  both fields. Groups do not accept `inherit`. See
+  [issuance resolution](roles.md#agent-token-issuance).
   List, inspect, and member-list work in both TOML and managed identity
   authority modes. Mutating group commands require managed identity authority;
   TOML groups are static config resources changed by editing TOML and
@@ -979,7 +990,7 @@ An assigned service policy manager uses the existing `admin policy status`,
 services; `grants export` and `policy managers list` require global administrative read access. The
 manager retains normal self-service commands when `selfServiceEnabled` is true. The assignment does not grant
 service invocation, and self-service agent-token issuance still requires explicit
-issuance permission and an effective invocation grant.
+issuance permission in every selected context and an effective invocation grant.
 
 ### `jira` (typed)
 

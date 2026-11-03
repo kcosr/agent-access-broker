@@ -228,15 +228,13 @@ pub(crate) async fn user_token_issue(
     }
     let actor = context.identity.principal.clone();
     let principal_for_store = context.identity.principal.clone();
-    let authority =
-        super::common::agent_token_issuance_authority(context.snapshot.runtime.config());
     super::common::committed_token_issuance(
         state,
         context,
         operation,
         target,
         true,
-        move |store, catalog| {
+        move |store, catalog, environment| {
             store.issue_self_agent_token_with_catalog(
                 &hasher,
                 SelfAgentTokenIssueRequest {
@@ -246,7 +244,7 @@ pub(crate) async fn user_token_issue(
                     expires_at,
                     created_by: actor,
                 },
-                authority,
+                &environment,
                 catalog.as_ref(),
             )
         },
@@ -451,15 +449,19 @@ pub(crate) async fn user_token_resume(
     let principal = context.identity.principal.clone();
     let token_id_for_store = token_id.clone();
     let actor = context.identity.principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        store.resume_principal_agent_token_with_catalog(
-            &principal,
-            &token_id_for_store,
-            &actor,
-            catalog.as_ref(),
-            agent_access_core::AgentTokenManagementPurpose::Personal,
-        )
-    })
+    match super::common::management_token_store_call(
+        &state,
+        &context,
+        move |store, catalog, _environment| {
+            store.resume_principal_agent_token_with_catalog(
+                &principal,
+                &token_id_for_store,
+                &actor,
+                catalog.as_ref(),
+                agent_access_core::AgentTokenManagementPurpose::Personal,
+            )
+        },
+    )
     .await
     {
         Ok(token) => {
