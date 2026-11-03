@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
   `ManagedStoreError::TokenIssuanceDenied { category }` in exhaustive matches;
   its `TokenIssuanceDenial` category is non-exhaustive. See
   [upgrade and collision recovery](docs/operator-guide.md#agent-token-issuance-upgrade).
+  ([#97](https://github.com/kcosr/agent-access-broker/pull/97))
 
 - **Jira and Confluence attachment downloads allow all media types by default.**
   This also widens downloads for existing configurations that omitted
@@ -121,6 +122,7 @@ All notable changes to this project are documented in this file.
   Administrative issuance stays independent. SDK `ReasonCode::TokenIssuanceDenied`
   adds the host-only HTTP 403 reason `token_issuance_denied`. See
   [issuance rules](docs/roles.md#agent-token-issuance).
+  ([#97](https://github.com/kcosr/agent-access-broker/pull/97))
 
 - **Jira and Confluence search exclusions and text negation.** JQL `project`
   and `key`/`issuekey`, and CQL `space` and `id`/`content.id`, accept `!=` and
