@@ -30,7 +30,7 @@ pub(crate) const MAX_JIRA_QUERY_TOKENS: usize = 512;
 pub(crate) const MAX_JIRA_IN_LIST_VALUES: usize = 100;
 pub(crate) const MAX_JIRA_STRING_LITERAL_BYTES: usize = 512;
 pub(crate) const MAX_JIRA_ORDER_TERMS: usize = 5;
-pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 4;
+pub(crate) const JIRA_QUERY_AST_VERSION: u32 = 5;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,9 +61,9 @@ pub(crate) fn jql_documentation() -> Value {
             })).collect::<Vec<_>>(),
             "orderBy": {"fields": JqlSortField::ALL.iter().map(|field| field.canonical()).collect::<Vec<_>>(), "aliases": JqlSortField::alias_documentation(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_JIRA_ORDER_TERMS},
             "grouping": "AND, OR, and parentheses; mixed AND/OR requires explicit grouping. Prefix NOT, history predicates, and nested functions are unsupported. Text negation (!~) is supported on summary, description, and cf[ID], but not on aggregate text.",
-            "values": "Text operands must be quoted. Bare identifiers use ASCII letters, digits, underscore, hyphen, or dot; quote other values. Single or double quotes delimit ASCII strings, with only the matching quote and backslash escapable; non-ASCII and control characters are rejected. Dates accept YYYY-MM-DD or quoted YYYY/MM/DD, optionally with HH:mm in a quoted string; relative dates use a sign, positive integer, and m/h/d/w, e.g. -7d. Function offsets must be unquoted. Project and issue keys must be canonical uppercase keys; project keys may contain underscores, e.g. OPS_TOOLS and OPS_TOOLS-12345.",
-            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access; wildcard project entries are unsupported. Project/issue-key exclusions and text negation are query filters, never sources of authority. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
-            "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, empty JQL, ORDER BY-only JQL, and filters containing only project/issue-key exclusions or text negation (!~) require explicit authorized projects or an additional filter such as updated >= -7d. This includes any mixture of those clauses inside nested AND/OR groups. Finite scopes provide the bound. This is a narrow Broker rule, not a complete query-bound analysis; other nonempty filters retain Jira endpoint validation.",
+            "values": "Text operands must be quoted. Bare identifiers use ASCII letters, digits, underscore, hyphen, or dot; quote other values. Single or double quotes delimit ASCII strings, with only the matching quote and backslash escapable; non-ASCII and control characters are rejected. Dates accept YYYY-MM-DD or quoted YYYY/MM/DD, optionally with HH:mm in a quoted string; relative dates use a sign, positive integer, and m/h/d/w, e.g. -7d. Function offsets must be unquoted. Project and issue keys must be canonical uppercase keys; project keys may contain underscores, e.g. OPS_TOOLS and OPS_TOOLS-12345. Parent operands accept canonical uppercase issue keys or positive decimal issue IDs without leading zeros; bare and quoted references are equivalent, including in mixed IN lists.",
+            "scope": "Omit projects to use effective broker authorization, including token restrictions and exclusions. Explicit projects must be authorized and only narrow access; wildcard project entries are unsupported. Project/issue-key/parent exclusions and text negation are query filters, never sources of authority. Finite scopes inject project IN; all except injects project NOT IN; unrestricted all adds no project predicate. Returned issues are checked against the authorized boundary, not against named projects: Jira resolves a previous project key to the renamed project.",
+            "emptyFilter": "Empty or ORDER BY-only JQL browses a finite authorized project set. With all-project or all-except access, empty JQL, ORDER BY-only JQL, and filters containing only project/issue-key/parent exclusions or text negation (!~) require explicit authorized projects or an additional filter such as updated >= -7d. This includes any mixture of those clauses inside nested AND/OR groups. Finite scopes provide the bound. This is a narrow Broker rule, not a complete query-bound analysis; other nonempty filters retain Jira endpoint validation.",
             "limits": {"rawQueryBytes": MAX_JIRA_RAW_QUERY_BYTES, "tokens": MAX_JIRA_QUERY_TOKENS, "depth": MAX_JIRA_QUERY_DEPTH, "inListValues": MAX_JIRA_IN_LIST_VALUES, "stringLiteralBytes": MAX_JIRA_STRING_LITERAL_BYTES, "textQueryBytes": MAX_JIRA_TEXT_QUERY_BYTES},
             "errors": "Invalid syntax, unsupported grammar, and query caps return input_invalid. Parser diagnostics report token positions and supported choices without echoing query literals. Scope authorization and returned-issue containment errors remain distinct. Jira HTTP 400 responses, including incompatible custom-field searchers and query-bound rejections, remain upstream_failed with a generic non-success message; field discovery is not a prerequisite for search."
         },
@@ -252,7 +252,7 @@ pub(crate) fn build_jira_search_query(
         && ast.filter.as_ref().is_some_and(JqlExpr::is_exclusion_only)
     {
         return Err(jql_input_invalid(
-            "Jira search requires explicit projects or an additional filter when the query contains only project/issue-key exclusions or text negation and access covers all projects; use projects or a filter such as updated >= -7d",
+            "Jira search requires explicit projects or an additional filter when the query contains only project/issue-key/parent exclusions or text negation and access covers all projects; use projects or a filter such as updated >= -7d",
         ));
     }
     let filter_jql = ast.filter.as_ref().map(JqlExpr::emit);
@@ -541,8 +541,10 @@ impl JqlExpr {
         match self {
             Self::Clause(clause) => {
                 clause.operator == JqlOperator::NotContains
-                    || (matches!(clause.field, JqlField::Project | JqlField::Key)
-                        && matches!(clause.operator, JqlOperator::NotEq | JqlOperator::NotIn))
+                    || (matches!(
+                        clause.field,
+                        JqlField::Project | JqlField::Key | JqlField::Parent
+                    ) && matches!(clause.operator, JqlOperator::NotEq | JqlOperator::NotIn))
             }
             Self::And(children) | Self::Or(children) => {
                 children.iter().all(Self::is_exclusion_only)
@@ -702,6 +704,7 @@ jql_inventory! {
     JqlField {
         Project,
         Key,
+        Parent,
         Status,
         StatusCategory,
         IssueType,
@@ -746,6 +749,7 @@ impl JqlField {
         match self {
             Self::Project => &[],
             Self::Key => &["issuekey"],
+            Self::Parent => &[],
             Self::Status => &[],
             Self::StatusCategory => &[],
             Self::IssueType => &["type"],
@@ -787,6 +791,7 @@ impl JqlField {
         let name = match self {
             Self::Project => "project",
             Self::Key => "key",
+            Self::Parent => "parent",
             Self::Status => "status",
             Self::StatusCategory => "statusCategory",
             Self::IssueType => "issuetype",
@@ -813,7 +818,7 @@ impl JqlField {
 
     pub(crate) fn allows_operator(self, operator: JqlOperator) -> bool {
         match self {
-            Self::Project | Self::Key => matches!(
+            Self::Project | Self::Key | Self::Parent => matches!(
                 operator,
                 JqlOperator::Eq | JqlOperator::NotEq | JqlOperator::In | JqlOperator::NotIn
             ),
@@ -913,6 +918,15 @@ impl JqlField {
 pub(crate) fn jql_field_capabilities(reference: &str) -> Option<(String, Vec<&'static str>)> {
     let field = JqlField::from_input(reference)?;
     Some((field.canonical().into_owned(), field.operator_names()))
+}
+
+// Parent references are filters, never project authority or lookup requests.
+fn parent_reference(value: String) -> Result<JqlValue, String> {
+    if is_issue_key(&value) || validate_numeric_id(&value, "JQL parent value").is_ok() {
+        Ok(JqlValue::Identifier(value))
+    } else {
+        Err("JQL parent value must be a canonical issue key or positive decimal ID".to_string())
+    }
 }
 
 fn custom_field_id(reference: &str) -> Option<u64> {
@@ -1537,6 +1551,7 @@ impl JqlParser {
                     Err("JQL issue key value is invalid".to_string())
                 }
             }
+            JqlField::Parent => parent_reference(value),
             field if field.is_date() => {
                 if is_date_literal(&value) {
                     Ok(JqlValue::Date(value))
@@ -1574,6 +1589,7 @@ impl JqlParser {
                     Err("JQL issue key value is invalid".to_string())
                 }
             }
+            JqlField::Parent => parent_reference(value),
             field if field.is_date() => {
                 if is_date_literal(&value) {
                     Ok(JqlValue::Date(value))

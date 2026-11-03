@@ -548,6 +548,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   and advertises only the intersection of upstream operators and Broker's JQL
   grammar. Custom-field queries use canonical `cf[<numeric ID>]` references;
   preserve scope composition and result containment independently of discovery.
+  Parent JQL operands are filters over authorized children, including references
+  outside Broker scope; accept relationship inference without parent lookups or
+  embedded metadata. Preserve the four-operator grammar and exclusion-only guard.
   Its `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`space_list.rs` live space collection, `backend.rs` wire

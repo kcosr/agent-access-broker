@@ -347,10 +347,18 @@
     "typedCommand": "Typed CLI wrapper: agent-access jira project view [OPTIONS] <PROJECT>; run agent-access jira project view --help for flags and input alternatives."
   },
   "search": {
+    "parentFilters": "Use parent = PROJ-100 for direct children, or parent IN (PROJ-100, 10001) for keys and positive decimal IDs. Also supports != and NOT IN. Projects narrow children; parent references may name inaccessible projects and reveal relationships without parent lookups or parent metadata. Search permission suffices. Embedded issue.view hierarchy remains gated by effective all-project access. No parentEpic, recursion, EMPTY, functions or parent sorting. Negative parent filters alone require finite projects or an additional filter.",
     "resultMetadata": "Search results contain issue timestamps, small user summaries, priority and labels when supplied. They omit description bodies, detailed issue context, customFields, parent, subtasks and issueLinks. Whole-result formatting does not fetch those fields; use a separately authorized issue.view when needed.",
     "fieldDiscovery": "Use jira.project.view to discover a project's searchable fields and supported operators. Exclusions and text negation are advertised only when Jira reports the operator and Broker supports it. Insert the returned jqlReference such as cf[12345]; do not use the display name or customfield_12345. Text ~ and !~ use Jira text-search semantics rather than whole-value comparisons. Jira validates each custom field's configured type and searcher when searching; discovery is not a prerequisite. Field/operator combinations rejected by Jira return the existing generic upstream_failed response.",
     "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "inputExamples": [
+      {
+        "label": "Find direct children by parent key or numeric ID",
+        "inputs": {
+          "query": {"type": "jql", "value": "parent IN (PROJ-100, 10001) ORDER BY key"},
+          "projects": ["PROJ"]
+        }
+      },
       {
         "label": "Search by text",
         "inputs": {

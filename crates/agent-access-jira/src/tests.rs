@@ -32,6 +32,9 @@ mod jql_exclusion_tests;
 #[path = "jql_text_negation_tests.rs"]
 mod jql_text_negation_tests;
 
+#[path = "jql_parent_tests.rs"]
+mod jql_parent_tests;
+
 #[path = "underscore_key_tests.rs"]
 mod underscore_key_tests;
 

@@ -441,8 +441,8 @@ optional release and start dates. Components include ID, name and description. I
 types add a `subtask` flag; statuses are deduplicated by ID and may include
 `statusCategory`. Statuses do not report per-issue-type mappings.
 
-The `project` and `key` rows can advertise `!=` and `NOT IN` when Jira reports
-those operators. The issue-key row has REST `id: "issuekey"` and
+The `project`, `key` and `parent` rows can advertise `!=` and `NOT IN` when Jira
+reports those operators. The issue-key row has REST `id: "issuekey"` and
 `jqlReference: "key"`; its grammar also accepts the `issuekey` alias. Discovery
 keeps the intersection of Jira and Broker capabilities, so unsupported upstream
 operators are not added merely because Broker parses them.
@@ -654,9 +654,10 @@ and object identifiers.
   non-zero, non-leading-zero issue number.
 
 The same key rules apply to registered project resources, explicit search
-projects, JQL project/key operands, issue URLs, and returned issues. An
-authorized issue such as `OPS_TOOLS-12345` remains valid on continuation pages;
-underscores do not bypass project exclusions or key/project consistency checks.
+projects, JQL project/key operands, parent operands supplied as issue keys,
+issue URLs, and returned issues. An authorized issue such as `OPS_TOOLS-12345`
+remains valid on continuation pages; underscores do not bypass project exclusions
+or key/project consistency checks.
 
 An issue may be supplied as a key or as a URL. A URL locator
 (`issue_locator_from_url`) requires `https`, a host equal to the configured
@@ -1399,7 +1400,7 @@ Omit `projects` to search the caller's effective broker scope,
 including grant exclusions and token restrictions; explicit projects only narrow
 that scope. A project clause in JQL is optional. Use canonical uppercase project
 keys in `projects`; empty arrays and wildcard entries such as `["*"]` are
-invalid. Wildcards are also invalid as JQL project or issue-key operands,
+invalid. Wildcards are also invalid as JQL project, issue-key or parent operands,
 including quoted `"*"`. Omission is the way to search effective access.
 
 MCP tool definitions carry concise input descriptions. For complete grammar,
@@ -1443,7 +1444,7 @@ to raw input:
 | `ORDER BY` terms | 5 |
 | Text query | 512 bytes |
 
-Accepted JQL fields: `project`, `key`/`issuekey`, `status`, `statusCategory`,
+Accepted JQL fields: `project`, `key`/`issuekey`, `parent`, `status`, `statusCategory`,
 `issuetype`/`type`, `priority`, `resolution`, `assignee`, `reporter`, `creator`,
 `labels`/`label`, `component`/`components`, `fixVersion`/`fixVersions`,
 `affectedVersion`/`affectedVersions`, `created`, `updated`, `resolutiondate`,
@@ -1454,7 +1455,7 @@ function is accepted only when the request's credential mode is `per_user`.
 
 Supported JQL is intentionally bounded:
 
-- `project` and `key`/`issuekey` accept `=`, `!=`, `IN`, and `NOT IN`.
+- `project`, `key`/`issuekey`, and `parent` accept `=`, `!=`, `IN`, and `NOT IN`.
 - `status`, `statusCategory`, `issuetype`/`type`, and `priority` accept `=`,
   `!=`, `IN`, and `NOT IN`.
 - `resolution`, `assignee`, `labels`, `component`, `fixVersion`, and
@@ -1519,7 +1520,7 @@ Scope composition:
   returned when that project is authorized and rejected otherwise.
 - Empty or ordering-only JQL with **all** or **all except** scope returns
   `input_invalid`: supply explicit authorized `projects` or a filter such as
-  `updated >= -7d`. The same rule applies when every clause is a project or
+  `updated >= -7d`. The same rule applies when every clause is a project, parent or
   issue-key `!=` or `NOT IN` exclusion, or a `!~` text negation, including nested
   `AND`/`OR` groups and mixtures of those clauses. For example,
   `project != ARCHIVE AND summary !~ "obsolete"` requires a finite effective
@@ -1530,11 +1531,11 @@ Scope composition:
   Jira's rules. Other nonempty filters, including `status != Done`, retain
   existing behavior and Jira remains responsible for evaluating its
   endpoint-specific query bounds.
-- Caller project and issue-key exclusions are query filters, never sources of
-  authority. They may name keys outside the caller's access without granting
-  it, and do not cause resource lookups. Jira evaluates those operands, including
-  aliases; Broker does not subtract caller-written keys from returned results.
-  The actual current project must still pass authorization on every page.
+- Caller project, issue-key and parent exclusions are query filters, never
+  sources of authority. They may name keys outside the caller's access without
+  granting it, and do not cause resource lookups. Jira evaluates those operands,
+  including aliases; Broker does not subtract caller-written keys from returned
+  results. The actual current project must still pass authorization on every page.
 
 A `text` query is converted to a `key = <value>` clause when the value is a valid
 issue key, otherwise to a `text ~ "<value>"` clause. Text wildcards follow Jira's
@@ -1583,6 +1584,39 @@ literals. `scope_unresolved` covers returned-result identity/containment failure
 Jira's own search rejection, such as HTTP 400 for an incompatible custom-field
 searcher or an unbounded query not covered by the local guard, returns
 `upstream_failed` with the generic message `Jira returned non-success`.
+
+### Direct parent filters
+
+Use `parent = PROJ-100` to find direct children of an epic or another parent
+issue. `parent` accepts `=`, `!=`, `IN`, and `NOT IN`, with canonical uppercase
+issue keys or positive decimal issue IDs. Numeric IDs have no leading zeros or
+signs and are validated as strings, without a machine-integer range limit.
+Bare, single-quoted and double-quoted references canonicalize alike; lists may
+mix keys and IDs, for example `parent IN (PROJ-100, 10001)`. Existing query and
+list limits apply. Parent functions, `~`, `!~`, `<`, `<=`, `>`, `>=`, `IS EMPTY`,
+`IS NOT EMPTY`, and `ORDER BY parent` are unsupported.
+
+```json
+{
+  "query": {"type": "jql", "value": "parent = PROJ-100 ORDER BY key"},
+  "projects": ["PROJ"]
+}
+```
+
+`projects` narrows the returned children's projects. A parent operand can name
+an issue outside Broker access: the filter can reveal its relationship to an
+authorized child, but never grants access to additional children or parent
+metadata. Search permission is sufficient; Broker does not look up or separately
+authorize the parent. Jira evaluates parent relationships, aliases, visibility,
+missing values and search-index consistency. Negative parent filters participate
+in the exclusion-only bounded-query guard described above.
+
+Search results remain flat and omit parent details. Embedded parent and subtask
+metadata in `issue.view` still requires effective all-project access to that
+action. `parent` filters direct children only; `parentEpic`, descendant traversal,
+and legacy Epic Link/Parent Link aliases are unsupported. `subtasks` is not a
+complete list of epic children. Text-searching an issue key retrieves that issue,
+not its children.
 
 ### Search pagination
 

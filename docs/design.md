@@ -1593,7 +1593,7 @@ resources. Finite boundaries inject an inclusion predicate, all-except retains
 an exclusion predicate, and unrestricted all adds no resource predicate. Caller
 filters remain grouped and ordering follows all injected predicates.
 
-Caller project/issue-key and space/content-ID exclusions are query filters,
+Caller project/issue-key/parent and space/content-ID exclusions are query filters,
 never sources of authority or resource lookup requests. They do not subtract
 caller-written keys from the authorization boundary; upstream aliases and renames
 still resolve to objects whose actual current project or space must be authorized.
@@ -1606,7 +1606,7 @@ independent of searchable-field discovery.
 
 Jira's enhanced search endpoint requires a bounded query. Broker's local guard
 requires finite authorized projects for empty or ordering-only JQL, and for
-filters whose every clause is a project/issue-key `!=` or `NOT IN` exclusion or
+filters whose every clause is a project/issue-key/parent `!=` or `NOT IN` exclusion or
 text negation (`!~`). With all or all-except access, these queries require
 explicit authorized `projects` or an additional filter such as `updated >= -7d`.
 Nested `AND`/`OR` groups containing only those clauses follow the same rule.
