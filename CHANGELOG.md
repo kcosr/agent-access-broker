@@ -137,7 +137,7 @@ All notable changes to this project are documented in this file.
   [issuance rules](docs/roles.md#agent-token-issuance).
   ([#97](https://github.com/kcosr/agent-access-broker/pull/97), [#99](https://github.com/kcosr/agent-access-broker/pull/99))
 
-- **Jira parent filters, search exclusions and text negation.** JQL `project`
+- **Jira parent filters and Jira/Confluence search exclusions and text negation.** JQL `project`
   and `key`/`issuekey`, and CQL `space` and `id`/`content.id`, accept `!=` and
   `NOT IN` within effective access. Jira `summary`, `description`, and compatible
   custom fields accept `!~`; Confluence `title` and `text` accept it for pages and
