@@ -1101,6 +1101,7 @@ async fn oidc_browser_fixture_configured(
     .unwrap();
     store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "microsoft-users".to_string(),
             display_name: Some("Microsoft users".to_string()),
             description: None,
@@ -1367,6 +1368,7 @@ async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_mem
         fixture
             .store
             .create_group(GroupWriteRequest {
+                agent_token_issuance: Default::default(),
                 group_id: group.into(),
                 display_name: None,
                 description: None,
@@ -1378,6 +1380,7 @@ async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_mem
     fixture
         .store
         .patch_group(agent_access_core::GroupPatchRequest {
+            agent_token_issuance: None,
             group_id: "paused".into(),
             display_name: None,
             description: None,
@@ -1389,6 +1392,7 @@ async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_mem
     fixture
         .store
         .patch_group(agent_access_core::GroupPatchRequest {
+            agent_token_issuance: None,
             group_id: "microsoft-users".into(),
             display_name: None,
             description: None,
@@ -1450,6 +1454,7 @@ async fn microsoft_oidc_browser_enrolls_new_users_once_with_persistent_local_mem
     fixture
         .store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "later-default".into(),
             display_name: None,
             description: None,
@@ -1485,6 +1490,7 @@ async fn microsoft_oidc_browser_audit_failure_does_not_repeat_committed_enrollme
     fixture
         .store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "baseline".into(),
             display_name: None,
             description: None,
@@ -1536,6 +1542,7 @@ async fn microsoft_oidc_browser_default_group_does_not_bypass_mapped_group_admis
     fixture
         .store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: Default::default(),
             group_id: "baseline".into(),
             display_name: None,
             description: None,
@@ -2318,6 +2325,7 @@ async fn microsoft_oidc_membership_renewal_turned_off_deletes_stored_tokens() {
     fixture
         .store
         .create_principal(agent_access_core::PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::Admin,
             self_service_enabled: None,
             principal_id: "admin".into(),

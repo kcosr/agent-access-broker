@@ -74,7 +74,7 @@ fn issue(fixture: &AuditFixture, principal: &str, class: BrokerTokenClass) -> St
                 name: "access test".into(),
                 token_class: class.clone(),
                 scopes: if class == BrokerTokenClass::AgentInvoke {
-                    json!({"allowedExecutionContexts":["default"]})
+                    json!({"readOnly": false, "allowedExecutionContexts":["default"]})
                 } else {
                     json!({})
                 },
@@ -94,6 +94,7 @@ fn auditor(fixture: &AuditFixture) -> String {
         .managed_store()
         .unwrap()
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "carol".into(),
             role: Some(PrincipalRole::Auditor),
             self_service_enabled: None,
@@ -309,6 +310,7 @@ async fn browser_auditor_keeps_authentication_when_personal_access_is_disabled()
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: Some(PrincipalRole::Auditor),
             self_service_enabled: Some(false),
@@ -372,6 +374,7 @@ async fn disabled_self_service_is_enforced_on_direct_personal_routes_and_hidden_
         .managed_store()
         .unwrap()
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "bob".into(),
             role: None,
             self_service_enabled: Some(false),
@@ -527,6 +530,7 @@ async fn administrator_token_transitions_ignore_owner_personal_access_but_keep_o
             .token_id;
         store
             .patch_principal_access(PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: owner.into(),
                 role: None,
                 self_service_enabled: Some(false),
@@ -622,6 +626,7 @@ async fn administrator_can_delete_credentials_after_disabling_the_owner() {
     }
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: None,
             self_service_enabled: Some(false),

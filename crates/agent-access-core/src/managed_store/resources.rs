@@ -1099,7 +1099,7 @@ mod tests {
             principal_id: "alice".into(),
             name: "restricted".into(),
             token_class: BrokerTokenClass::AgentInvoke,
-            scopes: serde_json::json!({"allowedServices":["gitlab"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"gitlab":{"actions":["repository.view"],"resources":selection}}}),
+            scopes: serde_json::json!({"allowedServices":["gitlab"],"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{"gitlab":{"actions":["repository.view"],"resources":selection}}}),
             expires_at: None,
             created_by: "admin".into(),
         }
@@ -1108,6 +1108,7 @@ mod tests {
     fn token_setup(store: &ManagedStore) -> BrokerTokenHasher {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".into(),

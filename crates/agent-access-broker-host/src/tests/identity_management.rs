@@ -102,6 +102,7 @@ fn auditor(fixture: &AuditFixture) -> String {
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "carol".into(),
             role: Some(PrincipalRole::Auditor),
             self_service_enabled: None,
@@ -506,6 +507,7 @@ async fn identity_management_browser_mutations_require_csrf_and_preserve_sign_in
         .managed_store()
         .unwrap()
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -586,6 +588,7 @@ async fn identity_management_browser_reads_need_no_csrf() {
         .managed_store()
         .unwrap()
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "alice".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,

@@ -180,6 +180,7 @@ excluded_resource_ids = ["space-bob"]
     let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
             principal_id: "alice".into(),
             kind: "user".into(),
             role: PrincipalRole::User,
@@ -206,8 +207,7 @@ excluded_resource_ids = ["space-bob"]
         "resourceGroups":[]
     })).unwrap();
     let issue = |restricted: bool| {
-        let mut scopes =
-            json!({"allowedServices":["confluence"], "allowedExecutionContexts":["default"]});
+        let mut scopes = json!({"allowedServices":["confluence"], "allowedExecutionContexts":["default"], "readOnly":false});
         if restricted {
             scopes["serviceRestrictions"] = json!({"confluence":{
                 "actions":["page.view","search","page.create","page.update"],

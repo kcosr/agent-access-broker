@@ -164,6 +164,7 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
         let store = runtime.managed_store().unwrap();
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".into(),
@@ -181,7 +182,7 @@ async fn gmail_other_principals_never_borrow_the_connected_mailbox() {
                     principal_id: "bob".into(),
                     name: "bob-test".into(),
                     token_class: BrokerTokenClass::AgentInvoke,
-                    scopes: json!({"allowedExecutionContexts":["default"]}),
+                    scopes: json!({"readOnly": false, "allowedExecutionContexts":["default"]}),
                     expires_at: None,
                     created_by: "test".into(),
                 },
@@ -327,7 +328,7 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
         groups: vec![],
         source: None,
     };
-    let caveats=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"]}}})).unwrap();
+    let caveats=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"readOnly": false, "allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"]}}})).unwrap();
     let runtime = runtime(&f);
     let preview = runtime
         .preview_agent_token_access(&identity, &caveats)
@@ -335,7 +336,7 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
     assert_eq!(preview.access.len(), 1);
     assert_eq!(preview.access[0].action, "thread.trash");
     assert!(preview.access[0].resource_type.is_none());
-    let restricted=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}}})).unwrap();
+    let restricted=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"readOnly": false, "allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}}})).unwrap();
     assert!(
         runtime
             .preview_agent_token_access(&identity, &restricted)

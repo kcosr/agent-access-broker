@@ -389,7 +389,7 @@ impl Paths {
         let agent = fixture.issue(
             "alice",
             BrokerTokenClass::AgentInvoke,
-            json!({"allowedServices": [service], "allowedExecutionContexts": ["default"]}),
+            json!({"allowedServices": [service], "readOnly": false, "allowedExecutionContexts": ["default"]}),
         );
         let broker = import_broker(&fixture.config).await;
         let app = broker.app();

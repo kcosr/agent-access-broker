@@ -226,7 +226,8 @@ test("Swagger Basic onboarding and form calls preserve separate discovery, share
   await expect(page.getByRole("alertdialog")).not.toBeVisible();
   await grant(page, "admin", "service", ["search"]);
   await grant(page, "admin", "per_user", ["erase"]);
-  const admin = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { name: "swagger-admin", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
+  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: "write_capable" } });
+  const admin = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { readOnly: false, name: "swagger-admin", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const beforeSearch = apiRequests.length;
   const response = await invoke(admin.token, "search", { body: { query: "open items", ids: "123,456", page: 2 } });
   expect(response.ok, await response.text()).toBe(true);
@@ -259,7 +260,7 @@ test("Swagger Basic onboarding and form calls preserve separate discovery, share
   await drawer.getByLabel("Password or API token", { exact: true }).fill(reader.token);
   await drawer.getByRole("button", { name: "Save credential", exact: true }).click();
   await expect(drawer.getByRole("button", { name: "Replace credential", exact: true })).toBeVisible();
-  const readerToken = await browserManagementRequest<{ token: string }>(page, "/v1/admin/principals/reader/agent-tokens", { method: "POST", body: { name: "swagger-reader", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
+  const readerToken = await browserManagementRequest<{ token: string }>(page, "/v1/admin/principals/reader/agent-tokens", { method: "POST", body: { readOnly: false, name: "swagger-reader", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const beforeReader = apiRequests.length;
   const personalRead = await invoke(readerToken.token, "search", { body: { query: "personal" } });
   expect(personalRead.ok, await personalRead.text()).toBe(true);

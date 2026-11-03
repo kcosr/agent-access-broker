@@ -185,14 +185,16 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 governed(OperationContext {
                     agent_request_id: format!("agent-caveat-{action}"),
                     broker_request_id: format!("broker-caveat-{action}"),
-                    identity: shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-                        "allowedServices": ["fake"],
-                        "serviceRestrictions": {
-                            "fake": {
-                                "actions": [allowed_action]
+                    identity: shell_token_identity(
+                        json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+                            "allowedServices": ["fake"],
+                            "serviceRestrictions": {
+                                "fake": {
+                                    "actions": [allowed_action]
+                                }
                             }
-                        }
-                    })),
+                        }),
+                    ),
                     service: "fake".to_string(),
                     action: action.to_string(),
                     source: SourceContext::unknown(),
@@ -3063,7 +3065,7 @@ async fn token_execution_context_mismatch_denies_before_upstream_lookup() {
     let runtime = BrokerRuntime::with_providers(config, vec![provider]).unwrap();
     let identity = shell_token_identity(json!({
         "allowedServices": ["jira"],
-        "allowedExecutionContexts": ["interactive"]
+        "readOnly": false, "allowedExecutionContexts": ["interactive"]
     }));
 
     let response = runtime
@@ -3103,14 +3105,14 @@ async fn token_execution_context_mismatch_denies_before_upstream_lookup() {
 fn context_binding_and_service_context_intersection_are_enforced() {
     let runtime = BrokerRuntime::new(base_fake_config()).unwrap();
     let default = default_execution_context();
-    let unbound = shell_token_identity(json!({"allowedServices":["fake"]}));
+    let unbound = shell_token_identity(json!({"readOnly":false,"allowedServices":["fake"]}));
     assert!(
         runtime
             .enforce_agent_invoke_token_caveats(&unbound, "fake", "echo", &default)
             .is_err()
     );
     let bound = shell_token_identity(
-        json!({"allowedServices":["fake"],"allowedExecutionContexts":["interactive"]}),
+        json!({"allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["interactive"]}),
     );
     assert_eq!(
         runtime
@@ -3166,12 +3168,14 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
     };
 
     let action_denied = invoke(
-        shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-            "allowedServices": ["jira"],
-            "serviceRestrictions": {
-                "jira": {"actions": ["issue.create"]}
-            }
-        })),
+        shell_token_identity(
+            json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+                "allowedServices": ["jira"],
+                "serviceRestrictions": {
+                    "jira": {"actions": ["issue.create"]}
+                }
+            }),
+        ),
         "TEST",
     )
     .await;
@@ -3182,15 +3186,17 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
     assert!(observations.lock().unwrap().is_empty());
 
     let resource_denied = invoke(
-        shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-            "allowedServices": ["jira"],
-            "serviceRestrictions": {
-                "jira": {
-                    "actions": ["issue.view"],
-                    "resources": {"resourceIds": ["project-TEST"]}
+        shell_token_identity(
+            json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+                "allowedServices": ["jira"],
+                "serviceRestrictions": {
+                    "jira": {
+                        "actions": ["issue.view"],
+                        "resources": {"resourceIds": ["project-TEST"]}
+                    }
                 }
-            }
-        })),
+            }),
+        ),
         "OPS",
     )
     .await;
@@ -3222,15 +3228,17 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
     configure_lookup_trace_confluence(&mut config);
     config.policy.grants.clear();
     let runtime = BrokerRuntime::new(config).unwrap();
-    let identity = shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-        "allowedServices": ["confluence"],
-        "serviceRestrictions": {
-            "confluence": {
-                "actions": ["search"],
-                "resources": {"resourceIds": ["space-ENG", "space-RESEARCH"]}
+    let identity = shell_token_identity(
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+            "allowedServices": ["confluence"],
+            "serviceRestrictions": {
+                "confluence": {
+                    "actions": ["search"],
+                    "resources": {"resourceIds": ["space-ENG", "space-RESEARCH"]}
+                }
             }
-        }
-    }));
+        }),
+    );
     let mut authorization = SearchAuthorizationPlan {
         scope_type: "space".to_string(),
         scope: SearchAuthorizationScope::from_exact_values(vec![
@@ -3285,15 +3293,17 @@ async fn token_search_boundary_is_narrowed_in_provider_search_authorization() {
             governed(OperationContext {
                 agent_request_id: "agent-request".to_string(),
                 broker_request_id: "broker-request".to_string(),
-                identity: shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-                    "allowedServices": ["jira"],
-                    "serviceRestrictions": {
-                        "jira": {
-                            "actions": ["search"],
-                            "resources": {"resourceIds": ["project-ENG"]}
+                identity: shell_token_identity(
+                    json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+                        "allowedServices": ["jira"],
+                        "serviceRestrictions": {
+                            "jira": {
+                                "actions": ["search"],
+                                "resources": {"resourceIds": ["project-ENG"]}
+                            }
                         }
-                    }
-                })),
+                    }),
+                ),
                 service: "jira".to_string(),
                 action: "search".to_string(),
                 source: SourceContext::unknown(),
@@ -3339,15 +3349,17 @@ async fn empty_token_search_intersection_denies_without_provider_invocation() {
             governed(OperationContext {
                 agent_request_id: "agent-request".to_string(),
                 broker_request_id: "broker-request".to_string(),
-                identity: shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-                    "allowedServices": ["jira"],
-                    "serviceRestrictions": {
-                        "jira": {
-                            "actions": ["search"],
-                            "resources": {"resourceIds": ["project-ENG"]}
+                identity: shell_token_identity(
+                    json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+                        "allowedServices": ["jira"],
+                        "serviceRestrictions": {
+                            "jira": {
+                                "actions": ["search"],
+                                "resources": {"resourceIds": ["project-ENG"]}
+                            }
                         }
-                    }
-                })),
+                    }),
+                ),
                 service: "jira".to_string(),
                 action: "search".to_string(),
                 source: SourceContext::unknown(),
@@ -3382,12 +3394,14 @@ fn token_action_boundary_filters_caller_discovery() {
         ..lookup_trace_grant("service", None, &["project-ENG"])
     }];
     let runtime = BrokerRuntime::with_providers(config, vec![provider]).unwrap();
-    let identity = shell_token_identity(json!({"allowedExecutionContexts": ["default"],
-        "allowedServices": ["jira"],
-        "serviceRestrictions": {
-            "jira": {"actions": ["issue.view"]}
-        }
-    }));
+    let identity = shell_token_identity(
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"],
+            "allowedServices": ["jira"],
+            "serviceRestrictions": {
+                "jira": {"actions": ["issue.view"]}
+            }
+        }),
+    );
 
     let services = runtime.visible_services(&identity, &default_execution_context());
 
@@ -3401,7 +3415,7 @@ fn token_action_boundary_filters_caller_discovery() {
 fn stored_agent_token_caveats_reject_malformed_and_retired_contexts() {
     assert_eq!(
         normalized_stored_agent_invoke_caveats(
-            &json!({"allowedExecutionContexts": ["default"], "unknown": true}),
+            &json!({"readOnly": false, "allowedExecutionContexts": ["default"], "unknown": true}),
             None,
         ),
         Err(IdentityFailure::Invalid)
@@ -3412,7 +3426,7 @@ fn stored_agent_token_caveats_reject_malformed_and_retired_contexts() {
     };
     assert_eq!(
         normalized_stored_agent_invoke_caveats(
-            &json!({"allowedExecutionContexts": ["retired"]}),
+            &json!({"readOnly": false, "allowedExecutionContexts": ["retired"]}),
             Some(&configured),
         ),
         Err(IdentityFailure::Invalid)
@@ -6700,6 +6714,7 @@ async fn readiness_accepts_broker_token_source_with_active_managed_credentials()
     let store = runtime.managed_store().unwrap();
     store
         .create_or_update_principal(crate::PrincipalWriteRequest {
+            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
             role: crate::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),
@@ -6737,7 +6752,7 @@ async fn readiness_accepts_broker_token_source_with_active_managed_credentials()
                 principal_id: "alice".to_string(),
                 name: "alice agent".to_string(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": ["default"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
                 expires_at: None,
                 created_by: "admin".to_string(),
             },
@@ -6825,6 +6840,7 @@ fn managed_identity_toml_policy_accepts_existing_db_subjects() {
         .unwrap();
         store
             .create_group(crate::GroupWriteRequest {
+                agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
                 auto_enroll_new_microsoft_users: false,
                 group_id: "agents".to_string(),
                 display_name: None,
@@ -6834,6 +6850,7 @@ fn managed_identity_toml_policy_accepts_existing_db_subjects() {
             .unwrap();
         store
             .create_or_update_principal(crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".to_string(),
@@ -7390,6 +7407,7 @@ async fn managed_policy_mutation_validates_non_anonymous_subject_without_relocki
     .unwrap();
     store
         .create_group(crate::GroupWriteRequest {
+            agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
             auto_enroll_new_microsoft_users: false,
             group_id: "agents".to_string(),
             display_name: None,
@@ -7703,7 +7721,7 @@ fn token_repository_selectors_require_every_resolved_repository() {
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = |ids: Vec<&str>| {
         shell_token_identity(
-            json!({"allowedServices":["gitlab_git"],"allowedExecutionContexts":["default"],"serviceRestrictions":{"gitlab_git":{"actions":["repo.fetch"],"resources":{"resourceIds":ids}}}}),
+            json!({"allowedServices":["gitlab_git"],"readOnly": false, "allowedExecutionContexts":["default"],"serviceRestrictions":{"gitlab_git":{"actions":["repo.fetch"],"resources":{"resourceIds":ids}}}}),
         )
     };
     let mixed = ResourceScopes::from([(
@@ -9433,6 +9451,7 @@ fn personal_setup_admission_uses_transaction_groups_and_exclusive_policy_authori
         .unwrap();
         store
             .create_group(crate::GroupWriteRequest {
+                agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
                 auto_enroll_new_microsoft_users: false,
                 group_id: "agents".into(),
                 display_name: None,
@@ -9442,6 +9461,7 @@ fn personal_setup_admission_uses_transaction_groups_and_exclusive_policy_authori
             .unwrap();
         store
             .create_or_update_principal(crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
                 principal_id: "agent-one".into(),
                 kind: "user".into(),
                 role: crate::PrincipalRole::User,
@@ -9569,6 +9589,7 @@ fn personal_setup_admission_uses_toml_identity_groups_instead_of_store_membershi
         .unwrap();
         store
             .create_group(crate::GroupWriteRequest {
+                agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
                 auto_enroll_new_microsoft_users: false,
                 group_id: "agents".into(),
                 display_name: None,
@@ -9578,6 +9599,7 @@ fn personal_setup_admission_uses_toml_identity_groups_instead_of_store_membershi
             .unwrap();
         store
             .create_or_update_principal(crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
                 principal_id: "agent-one".into(),
                 kind: "user".into(),
                 role: crate::PrincipalRole::User,
@@ -9720,6 +9742,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
     );
     for id in ["hidden-group", "missing-group"] {
         let caveats = AgentInvokeTokenCaveats {
+            read_only: false,
             allowed_services: None,
             allowed_execution_contexts: None,
             service_restrictions: Some(BTreeMap::from([(
@@ -9761,6 +9784,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
             .unwrap();
         assert_eq!(!preview.access.is_empty(), allows_test);
         let caveats = AgentInvokeTokenCaveats {
+            read_only: false,
             allowed_services: None,
             allowed_execution_contexts: None,
             service_restrictions: Some(BTreeMap::from([(

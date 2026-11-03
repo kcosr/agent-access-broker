@@ -218,6 +218,17 @@ pub struct IdentitySummary {
     /// for an attested identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only_access: Option<bool>,
+    /// The stored class ceiling of an admitted issued agent token, independent
+    /// of trusted-identity path provenance and current grants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker_token: Option<BrokerTokenSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct BrokerTokenSummary {
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -259,6 +270,7 @@ impl IdentityContext {
             policy_groups: self.policy_groups.clone(),
             authenticated: self.authenticated,
             read_only_access: self.read_only_access(),
+            broker_token: self.broker_token_summary(),
         }
     }
 
@@ -266,6 +278,26 @@ impl IdentityContext {
     /// every other identity source.
     pub fn read_only_access(&self) -> Option<bool> {
         self.source.as_ref()?.read_only_access
+    }
+
+    /// Whether an admitted agent's token or trusted-identity path has a
+    /// read-only ceiling. This presentation query does not authorize actions.
+    pub fn has_read_only_agent_access(&self) -> bool {
+        parsed_agent_invoke_token_caveats(self)
+            .ok()
+            .flatten()
+            .is_some_and(|parsed| parsed.read_only_access || parsed.caveats.read_only)
+    }
+
+    fn broker_token_summary(&self) -> Option<BrokerTokenSummary> {
+        let source = self.source.as_ref()?;
+        if source.token_class != Some(BrokerTokenClass::AgentInvoke) || source.token_id.is_none() {
+            return None;
+        }
+        let caveats = AgentInvokeTokenCaveats::parse_stored(source.token_scopes.as_ref()?).ok()?;
+        Some(BrokerTokenSummary {
+            read_only: caveats.read_only,
+        })
     }
 }
 
@@ -6164,9 +6196,12 @@ impl BrokerRuntime {
             return Some(AgentInvokeRefusal::ExecutionContext);
         }
         if parsed.read_only_access && !self.action_is_read_only(service, action) {
-            return Some(AgentInvokeRefusal::ReadOnly);
+            return Some(AgentInvokeRefusal::ReadOnlyAccess);
         }
         let caveats = &parsed.caveats;
+        if caveats.read_only && !self.action_is_read_only(service, action) {
+            return Some(AgentInvokeRefusal::ReadOnlyToken);
+        }
         if caveats
             .allowed_services
             .as_ref()
@@ -6293,8 +6328,11 @@ impl BrokerRuntime {
                 Some(AgentInvokeRefusal::ExecutionContext) => {
                     return Err(execution_context_denial(parsed, execution_context));
                 }
-                Some(AgentInvokeRefusal::ReadOnly) => {
+                Some(AgentInvokeRefusal::ReadOnlyAccess) => {
                     return Err(read_only_access_denial(service, action));
+                }
+                Some(AgentInvokeRefusal::ReadOnlyToken) => {
+                    return Err(read_only_token_denial(parsed.token_id, service, action));
                 }
                 Some(AgentInvokeRefusal::Service) => {
                     "broker token is not allowed to invoke this service"
@@ -8462,7 +8500,8 @@ fn parsed_agent_invoke_token_caveats(
 /// considered.
 enum AgentInvokeRefusal {
     ExecutionContext,
-    ReadOnly,
+    ReadOnlyAccess,
+    ReadOnlyToken,
     Service,
     Action,
 }
@@ -8480,6 +8519,19 @@ fn token_caveat_denial(
             "requestedAction": action
         }
     }))
+}
+
+fn read_only_token_denial(token_id: Option<&str>, service: &str, action: &str) -> ProviderError {
+    ProviderError::deny(ReasonCode::ServiceActionDenied, "broker token is read-only").with_audit(
+        json!({
+            "brokerToken": {
+                "tokenId": token_id,
+                "requestedService": service,
+                "requestedAction": action,
+                "readOnly": true
+            }
+        }),
+    )
 }
 
 fn execution_context_denial(
@@ -8761,6 +8813,7 @@ fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
         ManagedStoreError::IdentityBindingNotFound => "managed identity binding was not found",
         ManagedStoreError::AttestedIdentityDenied => "managed identity assertion is denied",
         ManagedStoreError::SelfServiceDisabled => "self-service is disabled",
+        ManagedStoreError::TokenIssuanceDenied { category } => category.message(),
         ManagedStoreError::GroupNotFound => "managed group was not found",
         ManagedStoreError::ResourceNotFound => "managed resource was not found",
         ManagedStoreError::ResourceConflict(_) => "managed resource already exists",

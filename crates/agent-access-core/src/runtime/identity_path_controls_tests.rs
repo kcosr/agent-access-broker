@@ -161,9 +161,16 @@ fn path_control_config() -> BrokerConfig {
 fn attested(read_only: bool) -> IdentityContext {
     attested_with(
         Some(BrokerTokenClass::AgentInvoke),
-        Some(json!({"allowedExecutionContexts": ["default"]})),
+        Some(json!({"readOnly": false, "allowedExecutionContexts": ["default"]})),
         read_only,
     )
+}
+
+fn issued(read_only: bool) -> IdentityContext {
+    shell_token_identity(json!({
+        "readOnly": read_only,
+        "allowedExecutionContexts": ["default"]
+    }))
 }
 
 fn attested_with(
@@ -248,6 +255,287 @@ fn assert_read_only_denial(response: &BrokerResponse<Value>, action: &str) {
     );
     assert_eq!(response.envelope.action, action);
     assert!(response.envelope.resource_scopes.is_empty());
+}
+
+fn assert_token_read_only_denial(response: &BrokerResponse<Value>, action: &str) {
+    assert_eq!(response.status, 403, "{:?}", response.envelope);
+    assert_eq!(
+        response.envelope.reason_code,
+        Some(ReasonCode::ServiceActionDenied.into())
+    );
+    assert_eq!(
+        response.envelope.reason.as_deref(),
+        Some("broker token is read-only")
+    );
+    assert_eq!(response.envelope.action, action);
+    assert!(response.envelope.resource_scopes.is_empty());
+}
+
+#[tokio::test]
+async fn read_only_token_blocks_writes_before_provider_work_and_preserves_token_audit() {
+    let audit_path = temp_path("token-read-only.audit.jsonl");
+    let mut config = path_control_config();
+    config.audit = Some(jsonl_audit_config(audit_path.display().to_string()));
+    let provider = Arc::new(PathControlProvider::default());
+    let runtime = BrokerRuntime::with_providers(config, vec![Arc::clone(&provider)]).unwrap();
+
+    for action in ["note.write", "status.set", "missing"] {
+        let response = invoke_as(&runtime, issued(true), SERVICE, action, inputs_for(action)).await;
+        assert_token_read_only_denial(&response, action);
+    }
+    assert_eq!(provider.scope_resolutions.load(Ordering::SeqCst), 0);
+    assert_eq!(provider.invocations.load(Ordering::SeqCst), 0);
+    for action in ["echo", "status.view"] {
+        let response = invoke_as(&runtime, issued(true), SERVICE, action, inputs_for(action)).await;
+        assert_eq!(response.status, 200, "{:?}", response.envelope);
+    }
+    for action in ["note.write", "status.set"] {
+        let response =
+            invoke_as(&runtime, issued(false), SERVICE, action, inputs_for(action)).await;
+        assert_eq!(response.status, 200, "{:?}", response.envelope);
+    }
+    runtime
+        .shutdown_audit(Duration::from_secs(1))
+        .await
+        .unwrap();
+    let records = audit_records(&audit_path);
+    let denials = records
+        .iter()
+        .filter(|record| record["reasonCode"] == "service_action_denied")
+        .collect::<Vec<_>>();
+    assert_eq!(denials.len(), 3);
+    for (denial, action) in denials.iter().zip(["note.write", "status.set", "missing"]) {
+        assert_eq!(
+            denial["providerAudit"],
+            json!({"brokerToken": {
+                "tokenId": "tok_shell", "requestedService": SERVICE,
+                "requestedAction": action, "readOnly": true
+            }})
+        );
+        assert!(denial["identitySource"].get("readOnlyAccess").is_none());
+        assert!(denial.get("matchedGrant").is_none());
+        assert!(denial.get("credentialMode").is_none());
+    }
+}
+
+#[test]
+fn read_only_token_discovery_and_resource_access_share_the_action_ceiling() {
+    let runtime = BrokerRuntime::with_providers(
+        path_control_config(),
+        vec![Arc::new(PathControlProvider::default())],
+    )
+    .unwrap();
+    let identity = issued(true);
+    let context = default_execution_context();
+    assert_eq!(
+        listed_actions(&runtime, &identity),
+        ["path_controls.echo", "path_controls.status.view"]
+    );
+    let service = runtime
+        .service_capabilities(&identity, &context, SERVICE)
+        .unwrap();
+    assert_eq!(
+        service
+            .actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["echo", "status.view"])
+    );
+    let catalog = runtime.api_services_for_identity(&identity, &context);
+    assert_eq!(catalog.len(), 1);
+    assert_eq!(
+        catalog[0]
+            .actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["echo", "status.view"])
+    );
+    let discovery = runtime
+        .service_discovery(&identity, &context, SERVICE)
+        .unwrap();
+    let access = discovery
+        .resource_access(&ResourceAccessQuery::default())
+        .unwrap();
+    assert_eq!(
+        access
+            .access
+            .iter()
+            .map(|entry| entry.action())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["echo", "status.view"])
+    );
+    assert_eq!(
+        discovery
+            .actions(None, None, None)
+            .unwrap()
+            .actions
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["echo".to_owned(), "status.view".to_owned()])
+    );
+
+    // A write-only grant still authorizes an ordinary token; a read-only
+    // token has no service or resource disclosure through that grant.
+    let mut only_writes = path_control_config();
+    only_writes.policy.grants[0].actions = vec!["note.write".into()];
+    only_writes.policy.grants[1].actions = vec!["status.set".into()];
+    let runtime =
+        BrokerRuntime::with_providers(only_writes, vec![Arc::new(PathControlProvider::default())])
+            .unwrap();
+    assert_eq!(listed_actions(&runtime, &issued(false)).len(), 2);
+    assert!(listed_actions(&runtime, &identity).is_empty());
+    assert!(
+        runtime
+            .service_discovery(&identity, &context, SERVICE)
+            .is_none()
+    );
+    assert!(
+        runtime
+            .api_services_for_identity(&identity, &context)
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn inherited_read_only_token_gains_later_reads_but_never_writes() {
+    let mut config = path_control_config();
+    let all_grants = config.clone();
+    config.policy.grants[0].actions = vec!["note.write".into()];
+    config.policy.grants[1].actions = vec!["status.set".into()];
+    let runtime = BrokerRuntime::with_providers(
+        config.clone(),
+        vec![Arc::new(PathControlProvider::default())],
+    )
+    .unwrap();
+    let identity = issued(true);
+    let caveats = AgentInvokeTokenCaveats::parse_stored(
+        identity
+            .source
+            .as_ref()
+            .unwrap()
+            .token_scopes
+            .as_ref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        runtime
+            .preview_agent_token_access(&identity, &caveats)
+            .unwrap()
+            .access
+            .is_empty()
+    );
+    assert!(listed_actions(&runtime, &identity).is_empty());
+
+    runtime
+        .policy_snapshot
+        .store(Arc::new(PolicySnapshot::from_config(&all_grants, 1)));
+    assert_eq!(
+        listed_actions(&runtime, &identity),
+        ["path_controls.echo", "path_controls.status.view"]
+    );
+    assert_eq!(
+        runtime
+            .preview_agent_token_access(&identity, &caveats)
+            .unwrap()
+            .access
+            .len(),
+        2
+    );
+    for action in ["echo", "status.view"] {
+        assert_eq!(
+            invoke_as(
+                &runtime,
+                identity.clone(),
+                SERVICE,
+                action,
+                inputs_for(action)
+            )
+            .await
+            .status,
+            200
+        );
+    }
+    for action in ["note.write", "status.set"] {
+        assert_token_read_only_denial(
+            &invoke_as(
+                &runtime,
+                identity.clone(),
+                SERVICE,
+                action,
+                inputs_for(action),
+            )
+            .await,
+            action,
+        );
+    }
+    runtime
+        .policy_snapshot
+        .store(Arc::new(PolicySnapshot::from_config(&config, 2)));
+    assert!(listed_actions(&runtime, &identity).is_empty());
+    assert_eq!(
+        invoke_as(&runtime, identity, SERVICE, "echo", project_inputs())
+            .await
+            .status,
+        403
+    );
+}
+
+#[test]
+fn retained_read_only_token_preview_uses_current_classification_without_rejecting_selections() {
+    let mut runtime = BrokerRuntime::with_providers(
+        path_control_config(),
+        vec![Arc::new(PathControlProvider::default())],
+    )
+    .unwrap();
+    let scopes = json!({"readOnly": true, "allowedExecutionContexts": ["default"], "allowedServices": [SERVICE],
+        "serviceRestrictions": { SERVICE: {"actions": ["echo", "status.view"]} }});
+    let caveats = AgentInvokeTokenCaveats::parse_stored(&scopes).unwrap();
+    let identity = shell_token_identity(scopes);
+    assert_eq!(
+        runtime
+            .preview_agent_token_access(&identity, &caveats)
+            .unwrap()
+            .access
+            .len(),
+        2
+    );
+    let service = Arc::make_mut(&mut runtime.services)
+        .get_mut(SERVICE)
+        .unwrap();
+    Arc::make_mut(service)
+        .actions
+        .iter_mut()
+        .find(|action| action.action == "echo")
+        .unwrap()
+        .read_only = false;
+    let preview = runtime
+        .preview_agent_token_access(&identity, &caveats)
+        .unwrap();
+    assert_eq!(
+        preview
+            .access
+            .iter()
+            .map(|entry| entry.action.as_str())
+            .collect::<Vec<_>>(),
+        ["status.view"]
+    );
+    let denial = runtime
+        .admit_agent_invoke_token_operation(
+            &identity,
+            SERVICE,
+            "echo",
+            &default_execution_context(),
+            &ResourceScopes::new(),
+        )
+        .unwrap_err();
+    assert_eq!(denial.message, "broker token is read-only");
+    assert_eq!(
+        listed_actions(&runtime, &identity),
+        ["path_controls.status.view"]
+    );
 }
 
 #[tokio::test]
@@ -378,6 +666,7 @@ async fn read_only_write_denial_precedes_credential_lookup_scope_resolution_and_
     };
 
     assert_read_only_denial(&invoke(attested(true)).await, "issue.view");
+    assert_token_read_only_denial(&invoke(issued(true)).await, "issue.view");
     assert_lookup_observations(&observations, &[]);
 
     let response = invoke(attested(false)).await;
@@ -438,16 +727,11 @@ async fn read_only_ceiling_keeps_the_winning_grant_mode_and_clauses_of_a_read() 
     };
     assert!(!clauses(&attested(false)).is_empty());
     assert_eq!(clauses(&attested(true)), clauses(&attested(false)));
+    assert_eq!(clauses(&issued(true)), clauses(&issued(false)));
+    assert_eq!(clauses(&issued(true)), clauses(&attested(false)));
 
-    for read_only in [true, false] {
-        let response = invoke_as(
-            &runtime,
-            attested(read_only),
-            SERVICE,
-            "echo",
-            project_inputs(),
-        )
-        .await;
+    for identity in [attested(true), attested(false), issued(true), issued(false)] {
+        let response = invoke_as(&runtime, identity, SERVICE, "echo", project_inputs()).await;
         assert_eq!(response.status, 200, "{:?}", response.envelope);
     }
     runtime
@@ -465,8 +749,12 @@ async fn read_only_ceiling_keeps_the_winning_grant_mode_and_clauses_of_a_read() 
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(selections.len(), 2);
-    assert_eq!(selections[0], selections[1]);
+    assert_eq!(selections.len(), 4);
+    assert!(
+        selections
+            .iter()
+            .all(|selection| selection == &selections[0])
+    );
     assert_eq!(selections[0].0["configIndex"], 0, "{:?}", selections[0]);
     assert_eq!(selections[0].1, "service");
 }
@@ -494,10 +782,10 @@ fn caveat_helper_and_resource_predicate_agree_for_every_catalog_action() {
     // A missing descriptor is a write.
     actions.push((SERVICE.into(), "missing".into()));
     for scopes in [
-        json!({"allowedExecutionContexts": ["default"]}),
-        json!({"allowedExecutionContexts": ["default"], "allowedServices": [SERVICE],
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"], "allowedServices": [SERVICE],
             "serviceRestrictions": {SERVICE: {"actions": ["echo", "note.write"]}}}),
-        json!({"allowedExecutionContexts": ["default"], "allowedServices": ["jira"]}),
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"], "allowedServices": ["jira"]}),
     ] {
         let full_identity = attested_with(
             Some(BrokerTokenClass::AgentInvoke),
@@ -507,16 +795,26 @@ fn caveat_helper_and_resource_predicate_agree_for_every_catalog_action() {
         let full = parsed_agent_invoke_token_caveats(&full_identity)
             .unwrap()
             .unwrap();
-        for read_only in [false, true] {
-            let identity = attested_with(
+        let mut read_only_scopes = scopes.clone();
+        read_only_scopes["readOnly"] = json!(true);
+        for identity in [
+            attested_with(
                 Some(BrokerTokenClass::AgentInvoke),
                 Some(scopes.clone()),
-                read_only,
-            );
+                false,
+            ),
+            attested_with(
+                Some(BrokerTokenClass::AgentInvoke),
+                Some(scopes.clone()),
+                true,
+            ),
+            shell_token_identity(scopes.clone()),
+            shell_token_identity(read_only_scopes),
+        ] {
             let parsed = parsed_agent_invoke_token_caveats(&identity)
                 .unwrap()
                 .unwrap();
-            assert_eq!(parsed.read_only_access, read_only);
+            let read_only = parsed.read_only_access || parsed.caveats.read_only;
             for (service, action) in &actions {
                 for execution_context in [&context, &other] {
                     let case =
@@ -590,25 +888,28 @@ fn token_preview_and_picker_keep_their_management_boundary() {
         vec![Arc::new(PathControlProvider::default())],
     )
     .unwrap();
-    // A previewed or issued Broker token has no read-only ceiling, whatever
-    // the path of the person who prepares it.
-    let caveats = AgentInvokeTokenCaveats::parse_stored(&json!({
-        "allowedExecutionContexts": ["default"]
-    }))
-    .unwrap();
+    // The proposed token's ceiling is independent of the manager's path.
     for identity in [agent_one_identity(), attested(true)] {
-        let preview = runtime
-            .preview_agent_token_access(&identity, &caveats)
+        for read_only in [false, true] {
+            let caveats = AgentInvokeTokenCaveats::parse_stored(&json!({
+                "readOnly": read_only, "allowedExecutionContexts": ["default"]
+            }))
             .unwrap();
-        let previewed = preview
-            .access
-            .iter()
-            .map(|entry| entry.action.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            previewed,
-            BTreeSet::from(["echo", "note.write", "status.set", "status.view"])
-        );
+            let preview = runtime
+                .preview_agent_token_access(&identity, &caveats)
+                .unwrap();
+            let previewed = preview
+                .access
+                .iter()
+                .map(|entry| entry.action.as_str())
+                .collect::<BTreeSet<_>>();
+            let expected = if read_only {
+                BTreeSet::from(["echo", "status.view"])
+            } else {
+                BTreeSet::from(["echo", "note.write", "status.set", "status.view"])
+            };
+            assert_eq!(previewed, expected);
+        }
         let options = runtime.agent_token_options_for_identity(&identity);
         let offered = options
             .services
@@ -631,18 +932,18 @@ async fn attested_identity_with_invalid_synthetic_caveats_lists_nothing_and_is_d
         attested_with(Some(BrokerTokenClass::AgentInvoke), None, true),
         attested_with(
             Some(BrokerTokenClass::AgentInvoke),
-            Some(json!({"allowedExecutionContexts": "default"})),
+            Some(json!({"readOnly": false, "allowedExecutionContexts": "default"})),
             true,
         ),
         attested_with(Some(BrokerTokenClass::AgentInvoke), None, false),
         attested_with(
             None,
-            Some(json!({"allowedExecutionContexts": ["default"]})),
+            Some(json!({"readOnly": false, "allowedExecutionContexts": ["default"]})),
             true,
         ),
         attested_with(
             None,
-            Some(json!({"allowedExecutionContexts": ["default"]})),
+            Some(json!({"readOnly": false, "allowedExecutionContexts": ["default"]})),
             false,
         ),
     ] {
@@ -703,7 +1004,7 @@ fn identity_summary_reports_read_only_access_only_for_attested_identities() {
     assert_eq!(summary(&attested(false))["readOnlyAccess"], false);
     for identity in [
         agent_one_identity(),
-        shell_token_identity(json!({"allowedExecutionContexts": ["default"]})),
+        shell_token_identity(json!({"readOnly": false, "allowedExecutionContexts": ["default"]})),
     ] {
         assert!(summary(&identity).get("readOnlyAccess").is_none());
         let source = serde_json::to_value(&identity.source).unwrap();
@@ -712,4 +1013,48 @@ fn identity_summary_reports_read_only_access_only_for_attested_identities() {
     let source = serde_json::to_value(&attested(true).source).unwrap();
     assert_eq!(source["readOnlyAccess"], true);
     assert!(source.get("tokenScopes").is_none());
+}
+
+#[test]
+fn identity_summary_reports_only_strict_issued_agent_token_provenance() {
+    for read_only in [false, true] {
+        let identity = issued(read_only);
+        let summary = serde_json::to_value(identity.summary()).unwrap();
+        assert_eq!(summary["brokerToken"], json!({"readOnly": read_only}));
+        assert!(summary.get("readOnlyAccess").is_none());
+        assert_eq!(identity.has_read_only_agent_access(), read_only);
+        let path = attested(read_only);
+        assert!(
+            serde_json::to_value(path.summary())
+                .unwrap()
+                .get("brokerToken")
+                .is_none()
+        );
+        assert_eq!(path.has_read_only_agent_access(), read_only);
+    }
+    for token_class in [BrokerTokenClass::Admin, BrokerTokenClass::UserManage] {
+        let mut identity = issued(true);
+        identity.source.as_mut().unwrap().token_class = Some(token_class);
+        assert!(identity.summary().broker_token.is_none());
+        assert!(!identity.has_read_only_agent_access());
+    }
+    for scopes in [
+        json!({"allowedExecutionContexts": ["default"]}),
+        json!({"allowedExecutionContexts": ["default"], "readOnly": "true"}),
+        json!({"allowedExecutionContexts": ["default"], "readOnly": true, "unknown": true}),
+    ] {
+        assert!(
+            shell_token_identity(scopes)
+                .summary()
+                .broker_token
+                .is_none()
+        );
+    }
+    assert!(agent_one_identity().summary().broker_token.is_none());
+    assert!(
+        IdentityContext::anonymous()
+            .summary()
+            .broker_token
+            .is_none()
+    );
 }

@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { brokerApi } from "../api";
-import type { PrincipalRecord, PrincipalRole } from "../types";
+import type { PrincipalRecord, PrincipalRole, PrincipalAgentTokenIssuance } from "../types";
 import { generateTemporaryPassword } from "../lib/helpers";
 import { useToast } from "../workbench";
 import { paths } from "../app/paths";
@@ -21,6 +21,7 @@ export type NewPrincipal = {
   groups: string[];
   role: PrincipalRole;
   selfServiceEnabled: boolean;
+  agentTokenIssuance: PrincipalAgentTokenIssuance;
   enableLocalPassword: boolean;
 };
 
@@ -36,6 +37,7 @@ export function usePrincipalActions() {
       invalidate.oauthConnections();
       invalidate.admin();
       invalidate.agentTokenOptions();
+      void invalidate.session();
     }
 
     /**
@@ -58,7 +60,8 @@ export function usePrincipalActions() {
             displayName: input.displayName.trim() || undefined,
             email: input.email.trim() || undefined,
             role: input.role,
-            selfServiceEnabled: input.selfServiceEnabled
+            selfServiceEnabled: input.selfServiceEnabled,
+            agentTokenIssuance: input.agentTokenIssuance
           });
           if (enrollLocal) {
             await brokerApi.adminEnableLocalPassword(current, principalId, generatedPassword, true);
@@ -95,10 +98,11 @@ export function usePrincipalActions() {
       refreshMembership();
     }
 
-    async function setAccess(principalId: string, change: { role?: PrincipalRole; selfServiceEnabled?: boolean }) {
+    async function setAccess(principalId: string, change: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuance }) {
       await attempt((current) => brokerApi.adminSetAccess(current, principalId, change));
       toast("Account access updated", { tone: "success" });
       invalidate.admin();
+      invalidate.agentTokenOptions();
       if (principalId === session.principal) await invalidate.session();
       invalidate.oauthConnections();
     }

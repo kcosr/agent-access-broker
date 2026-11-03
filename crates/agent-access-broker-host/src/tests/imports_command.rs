@@ -329,7 +329,7 @@ async fn command_live_listing_is_reviewed_persisted_and_advertised_only_with_its
     let agent = fixture.issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     let path = "/v1/services/tickets/resource-access?action=issue.view";
     let (status, without_listing) = request(&app, &agent, Method::GET, path, None).await;
@@ -366,7 +366,7 @@ async fn command_live_listing_is_reviewed_persisted_and_advertised_only_with_its
     let restricted = fixture.issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"],
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"],
             "serviceRestrictions": {"tickets": {"actions": ["issue.view"]}}}),
     );
     let (status, restricted) = request(&app, &restricted, Method::GET, path, None).await;
@@ -625,7 +625,7 @@ async fn credential_free_commands_import_enable_and_publish_without_running_offl
     let agent = fixture.issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices":["clock"],"allowedExecutionContexts":["default"]}),
+        json!({"allowedServices":["clock"],"readOnly": false, "allowedExecutionContexts":["default"]}),
     );
     let broker = import_broker(&fixture.config).await;
     let app = broker.app();
@@ -1298,6 +1298,7 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
     for group in ["eng", "ops"] {
         store
             .create_group(agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
                 group_id: group.into(),
                 display_name: None,
                 description: None,
@@ -1379,7 +1380,7 @@ async fn command_enforced_grants_mix_credential_modes_and_discovery_agrees() {
     );
     drop(runtime);
 
-    let scopes = json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]});
+    let scopes = json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]});
     for (principal, stats, mine, availability) in [
         // Both credentials are present: both grants are passed.
         ("alice", "operation_failed", "operation_failed", "available"),
@@ -1570,7 +1571,7 @@ async fn command_enforced_personal_grants_pass_alone_without_a_service_slot() {
     .await;
     assert_eq!(status, StatusCode::OK, "{removed}");
 
-    let scopes = json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]});
+    let scopes = json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]});
     let agent = fixture.issue("alice", BrokerTokenClass::AgentInvoke, scopes);
     let (_, outcome) = request(
         &app,
@@ -1886,7 +1887,7 @@ async fn admission_checks_inputs_bounds_resources_and_reports_credential_failure
     let agent = fixture.issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     let invoke = |action: &'static str, inputs: Value| {
         let (app, agent) = (app.clone(), agent.clone());

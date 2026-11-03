@@ -1,3 +1,4 @@
+import { TokenEffect } from "./token-effect";
 // A token's immutable boundary: services, contexts, and per-service restrictions.
 import type { AgentTokenOptions, BrokerTokenRecord, ResourceCatalog } from "../../types";
 import { tokenAllowedServiceItems, tokenAllowedServicesSummary, tokenExecutionContextsSummary, tokenStatus } from "../../lib/helpers";
@@ -20,6 +21,7 @@ export function TokenBoundary({ record, options, contexts = true }: { record: Br
     <div className="flex flex-col gap-3">
       <KeyValue
         items={[
+          record.tokenClass === "agent_invoke" ? { label: "Restriction", value: <TokenEffect readOnly={record.scopes.readOnly} quiet /> } : null,
           { label: "Services", value: allowed ? allowed.map(name).join(", ") : summary === "All configured" ? "All services its grants allow" : summary },
           contexts
             ? {
@@ -30,7 +32,7 @@ export function TokenBoundary({ record, options, contexts = true }: { record: Br
         ]}
       />
       {!restrictions ? (
-        <p className="pt-prose">All actions and resources allowed by current grants.</p>
+        <p className="pt-prose">{record.scopes.readOnly === true ? "Read actions and resources allowed by current grants." : "Actions and resources allowed by current grants, within this token’s restrictions."}</p>
       ) : (
         Object.entries(restrictions).map(([service, restriction]) => (
           <fieldset className="pt-fieldset" key={service}>

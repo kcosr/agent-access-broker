@@ -228,7 +228,8 @@ test("administrator imports public and private OpenAPI definitions with separate
   await dialog.getByRole("button", { name: "Accept selected operations" }).click(); await expect(dialog).not.toBeVisible();
   await enable(page, "inventory");
   await grant(page, "inventory", "admin", "service", ["get_item", "create_item"]);
-  const admin = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { name: "openapi-admin", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
+  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: "write_capable" } });
+  const admin = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { readOnly: false, name: "openapi-admin", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const read = await invoke(admin.token, "inventory", "get_item", { path: { id: "one" }, query: { limit: 2 } });
   expect(read.ok, await read.text()).toBe(true);
   expect(apiRequests.at(-1)?.path).toBe("/api/items/one?limit=2");
@@ -242,7 +243,7 @@ test("administrator imports public and private OpenAPI definitions with separate
   // A second user's personal mode cannot use the configured shared API token.
   await browserManagementRequest(page, "/v1/admin/principals", { method: "POST", body: { principalId: "reader", kind: "user" } });
   await grant(page, "inventory", "reader", "per_user", ["get_item"]);
-  const reader = await browserManagementRequest<{ token: string }>(page, "/v1/admin/principals/reader/agent-tokens", { method: "POST", body: { name: "openapi-reader", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
+  const reader = await browserManagementRequest<{ token: string }>(page, "/v1/admin/principals/reader/agent-tokens", { method: "POST", body: { readOnly: false, name: "openapi-reader", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const callsBeforeMissing = apiRequests.length;
   expect((await invoke(reader.token, "inventory", "get_item", { path: { id: "one" } })).ok).toBe(false);
   expect(apiRequests).toHaveLength(callsBeforeMissing);
@@ -297,7 +298,7 @@ test("administrator imports public and private OpenAPI definitions with separate
   await dialog.getByRole("button", { name: "Accept selected operations" }).click(); await expect(dialog).not.toBeVisible();
   await enable(page, "private_inventory");
   await grant(page, "private_inventory", "admin", "service", ["get_item"]);
-  const privateToken = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { name: "openapi-private", ttl: "8h", allowedServices: ["private_inventory"], allowedExecutionContexts: ["internal"] } });
+  const privateToken = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { readOnly: false, name: "openapi-private", ttl: "8h", allowedServices: ["private_inventory"], allowedExecutionContexts: ["internal"] } });
   const privateRead = await invoke(privateToken.token, "private_inventory", "get_item", { path: { id: "one" } });
   expect(privateRead.ok, await privateRead.text()).toBe(true);
   expect(apiRequests.at(-1)?.path).toBe("/private-api/items/one");

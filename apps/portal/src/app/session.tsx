@@ -25,6 +25,8 @@ type SessionValue = {
   loading: boolean;
   /** The initial session request failed; sign-in options are still unknown. */
   sessionError: unknown;
+  /** Includes a failed refresh while an older session remains cached. */
+  sessionRefreshError: unknown;
   retrySession: () => void;
   retryingSession: boolean;
   setSession: (next: Session | ((current: Session) => Session)) => void;
@@ -173,6 +175,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       getSession,
       loading: sessionQuery.isPending,
       sessionError: sessionQuery.isError && !sessionQuery.data ? sessionQuery.error : null,
+      sessionRefreshError: sessionQuery.isError ? sessionQuery.error : null,
       retrySession: () => { void sessionQuery.refetch(); },
       retryingSession: sessionQuery.isFetching,
       setSession,

@@ -135,6 +135,7 @@ async fn credential_verification_keeps_domain_reason_outcomes() {
     let store = runtime.managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),

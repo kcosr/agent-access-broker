@@ -98,6 +98,7 @@ pub struct PrincipalAccessPatchRequest {
     pub principal_id: String,
     pub role: Option<PrincipalRole>,
     pub self_service_enabled: Option<bool>,
+    pub agent_token_issuance: Option<PrincipalAgentTokenIssuance>,
     pub actor: String,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +107,7 @@ pub struct PrincipalAccessChange {
     pub principal: PrincipalRecord,
     pub previous_role: PrincipalRole,
     pub previous_self_service_enabled: bool,
+    pub previous_agent_token_issuance: PrincipalAgentTokenIssuance,
     pub removed_services: Vec<String>,
     pub revoked_admin_token_ids: Vec<String>,
 }
@@ -250,7 +252,10 @@ impl ManagedStore {
     ) -> Result<PrincipalAccessChange, ManagedStoreError> {
         validate_principal_id(&request.principal_id)?;
         validate_actor(&request.actor)?;
-        if request.role.is_none() && request.self_service_enabled.is_none() {
+        if request.role.is_none()
+            && request.self_service_enabled.is_none()
+            && request.agent_token_issuance.is_none()
+        {
             return Err(input_invalid("at least one access setting is required"));
         }
         let mut conn = self.connection.lock().unwrap();
@@ -263,6 +268,9 @@ impl ManagedStore {
             .self_service_enabled
             .unwrap_or(principal.self_service_enabled);
         validate_principal_access(&principal.kind, role, self_service_enabled)?;
+        let agent_token_issuance = request
+            .agent_token_issuance
+            .unwrap_or(principal.agent_token_issuance);
         let role_changed = role != principal.role;
         if role_changed
             && principal_is_active_admin(&tx, &request.principal_id)?
@@ -293,13 +301,17 @@ impl ManagedStore {
             )?;
             tx.execute("UPDATE broker_tokens SET revoked_at=?2, revoked_by=?3 WHERE principal_id=?1 AND token_class='admin' AND revoked_at IS NULL", params![request.principal_id,now,request.actor]).map_err(sql_unavailable)?;
         }
-        if role_changed || self_service_enabled != principal.self_service_enabled {
-            tx.execute("UPDATE principals SET role=?2,self_service_enabled=?3,updated_at=?4 WHERE principal_id=?1",params![request.principal_id,role.as_str(),self_service_enabled,now]).map_err(sql_unavailable)?;
+        if role_changed
+            || self_service_enabled != principal.self_service_enabled
+            || agent_token_issuance != principal.agent_token_issuance
+        {
+            tx.execute("UPDATE principals SET role=?2,self_service_enabled=?3,agent_token_issuance=?4,updated_at=?5 WHERE principal_id=?1",params![request.principal_id,role.as_str(),self_service_enabled,agent_token_issuance.as_str(),now]).map_err(sql_unavailable)?;
         }
         let result = PrincipalAccessChange {
             principal: principal_by_id(&tx, &request.principal_id)?,
             previous_role: principal.role,
             previous_self_service_enabled: principal.self_service_enabled,
+            previous_agent_token_issuance: principal.agent_token_issuance,
             removed_services,
             revoked_admin_token_ids,
         };

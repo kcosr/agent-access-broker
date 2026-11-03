@@ -16,6 +16,12 @@ identity assertions, Broker credentials or trusted context headers to tool input
 This skill covers invocation and discovery, not connection setup, credential
 changes, administration or audit access.
 
+The server's connection instructions identify a read-only ceiling. When an
+identity summary is available through configured discovery, `brokerToken.readOnly`
+describes an issued token and `readOnlyAccess` describes a trusted identity path;
+either true value limits the connection. Do not invent an identity-summary MCP
+tool. A change in issuance permission does not change an existing token.
+
 Read-only connections expose and execute only actions classified as reads;
 unreviewed imported actions count as writes. Missing write tools can be expected.
 Report the need for a writable connection without switching identity to evade

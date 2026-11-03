@@ -6,6 +6,7 @@ fn access_principal(
     self_service_enabled: Option<bool>,
 ) -> Result<PrincipalRecord, ManagedStoreError> {
     store.create_principal(PrincipalWriteRequest {
+        agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
         principal_id: id.into(),
         kind: kind.into(),
         role,
@@ -23,6 +24,7 @@ fn access_patch(
     enabled: Option<bool>,
 ) -> Result<PrincipalAccessChange, ManagedStoreError> {
     store.patch_principal_access(PrincipalAccessPatchRequest {
+        agent_token_issuance: None,
         principal_id: id.into(),
         role,
         self_service_enabled: enabled,
@@ -35,7 +37,7 @@ fn access_token(
     class: BrokerTokenClass,
 ) -> Result<IssuedBrokerToken, ManagedStoreError> {
     let scopes = if class == BrokerTokenClass::AgentInvoke {
-        json!({"allowedExecutionContexts":["default"]})
+        json!({"readOnly": false, "allowedExecutionContexts":["default"]})
     } else {
         json!({})
     };
@@ -288,12 +290,12 @@ fn self_service_disablement_blocks_transactional_writes_without_changing_invocat
     let self_issue = || SelfAgentTokenIssueRequest {
         principal_id: "alice".into(),
         name: "self".into(),
-        scopes: json!({"allowedExecutionContexts":["default"]}),
+        scopes: json!({"readOnly": false, "allowedExecutionContexts":["default"]}),
         expires_at: None,
         created_by: "alice".into(),
     };
     assert!(matches!(
-        store.issue_self_agent_token(&broker_token_hasher_for_test(9), self_issue()),
+        store.issue_self_agent_token(&broker_token_hasher_for_test(9), self_issue(), AgentTokenIssuanceAuthority::Managed),
         Err(ManagedStoreError::SelfServiceDisabled)
     ));
     assert!(matches!(

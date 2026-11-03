@@ -2572,7 +2572,7 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         "PATCH",
         "/v1/admin/principals/{principal}/access",
         json!({"type":"object", "additionalProperties":false, "minProperties":1,
-            "properties":{"role":role_schema, "selfServiceEnabled":{"type":"boolean"}}}),
+            "properties":{"role":role_schema, "selfServiceEnabled":{"type":"boolean"}, "agentTokenIssuance":principal_agent_token_issuance_schema()}}),
     );
     set_request_body_schema(
         &mut routes,
@@ -2584,10 +2584,21 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             "kind":{"type":"string","enum":["user","system","service_account"],"default":"user"},
             "displayName":{"type":["string","null"]}, "email":{"type":["string","null"]},
             "externalSubject":{"type":["string","null"]},
-            "role":role_schema, "selfServiceEnabled":{"type":"boolean"}
+            "role":role_schema, "selfServiceEnabled":{"type":"boolean"},
+            "agentTokenIssuance":principal_agent_token_issuance_schema()
         }}),
     );
     routes
+}
+
+fn principal_agent_token_issuance_schema() -> Value {
+    json!({"type":"string", "enum":["inherit", "disabled", "read_only", "write_capable"],
+        "description":"Self-issued agent token permission. An explicit setting overrides groups; inherit uses the most permissive active managed group. Existing tokens are unchanged."})
+}
+
+fn group_agent_token_issuance_schema() -> Value {
+    json!({"type":"string", "enum":["disabled", "read_only", "write_capable"],
+        "description":"This group's self-issued agent token permission contribution. Disabled contributes no permission; existing tokens are unchanged."})
 }
 
 fn group_auto_enrollment_schema() -> Value {
@@ -2600,6 +2611,7 @@ fn group_write_body_schema(patch: bool) -> Value {
         "properties":{
             "displayName":{"type":["string","null"]},
             "description":{"type":["string","null"]},
+            "agentTokenIssuance":group_agent_token_issuance_schema(),
             "autoEnrollNewMicrosoftUsers":group_auto_enrollment_schema()
         }
     });
@@ -2610,6 +2622,7 @@ fn group_write_body_schema(patch: bool) -> Value {
         schema["required"] = json!(["groupId"]);
         schema["properties"]["groupId"] = json!({"type":"string","minLength":1});
         schema["properties"]["autoEnrollNewMicrosoftUsers"]["default"] = json!(false);
+        schema["properties"]["agentTokenIssuance"]["default"] = json!("disabled");
     }
     schema
 }
@@ -2617,11 +2630,12 @@ fn group_write_body_schema(patch: bool) -> Value {
 fn group_record_schema(detail: bool) -> Value {
     let mut schema = json!({
         "type":"object", "additionalProperties":false,
-        "required":["groupId","displayName","description","status","autoEnrollNewMicrosoftUsers",
+        "required":["groupId","displayName","description","status","agentTokenIssuance","autoEnrollNewMicrosoftUsers",
             "createdAt","createdBy","updatedAt","updatedBy","disabledAt","memberCount"],
         "properties":{
             "groupId":{"type":"string"}, "displayName":{"type":["string","null"]},
             "description":{"type":["string","null"]}, "status":{"enum":["active","disabled"]},
+            "agentTokenIssuance":group_agent_token_issuance_schema(),
             "autoEnrollNewMicrosoftUsers":group_auto_enrollment_schema(),
             "createdAt":{"type":["string","null"]}, "createdBy":{"type":["string","null"]},
             "updatedAt":{"type":["string","null"]}, "updatedBy":{"type":["string","null"]},
@@ -3289,8 +3303,9 @@ fn agent_invoke_scopes_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["allowedExecutionContexts"],
+        "required": ["allowedExecutionContexts", "readOnly"],
         "properties": {
+            "readOnly": {"type":"boolean", "description":"Immutable token ceiling: true permits only actions currently classified as reads, intersected with current grants and the other token restrictions."},
             "allowedExecutionContexts": execution_contexts_schema(),
             "allowedServices": allowed_services_schema(),
             "serviceRestrictions": service_restrictions_schema()
@@ -3306,8 +3321,9 @@ fn agent_token_issue_body_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "allowedExecutionContexts"],
+        "required": ["name", "allowedExecutionContexts", "readOnly"],
         "properties": {
+            "readOnly": {"type":"boolean", "description":"Immutable token ceiling: true permits only actions currently classified as reads, intersected with current grants and the other token restrictions."},
             "name": { "type": "string", "minLength": 1 },
             "ttl": { "type": "string", "pattern": "^[0-9]+[smhd]$" },
             "expiresAt": { "type": "string", "format": "date-time" },
@@ -3344,7 +3360,8 @@ fn admin_token_issue_body_schema() -> Value {
                         "anyOf": [
                             { "required": ["allowedExecutionContexts"] },
                             { "required": ["allowedServices"] },
-                            { "required": ["serviceRestrictions"] }
+                            { "required": ["serviceRestrictions"] },
+                            { "required": ["readOnly"] }
                         ]
                     }
                 }

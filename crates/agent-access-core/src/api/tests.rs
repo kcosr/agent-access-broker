@@ -1883,6 +1883,107 @@ fn token_pause_resume_routes_have_catalog_openapi_and_send_parity() {
 }
 
 #[test]
+fn agent_token_schemas_require_the_read_only_boolean_on_issuance_and_preview() {
+    let routes = http_route_specs(&crate::tests::test_resource_types());
+    for path in [
+        "/v1/tokens",
+        "/v1/tokens/effective-access",
+        "/v1/admin/principals/{principal}/agent-tokens",
+        "/v1/admin/principals/{principal}/agent-token-effective-access",
+    ] {
+        let route = routes
+            .iter()
+            .find(|route| route.method == "POST" && route.route == path)
+            .unwrap();
+        let validator =
+            jsonschema::validator_for(route.request_body_schema.as_ref().unwrap()).unwrap();
+        let mut body = json!({"allowedExecutionContexts": ["default"]});
+        if !route.route.contains("effective-access") {
+            body["name"] = json!("agent");
+        }
+        assert!(
+            !validator.is_valid(&body),
+            "{} accepted an omitted ceiling",
+            route.route
+        );
+        for read_only in [json!(false), json!(true)] {
+            body["readOnly"] = read_only;
+            assert!(validator.is_valid(&body), "{} rejected {body}", route.route);
+        }
+        for read_only in [json!(null), json!(0), json!("true")] {
+            body["readOnly"] = read_only;
+            assert!(
+                !validator.is_valid(&body),
+                "{} accepted {body}",
+                route.route
+            );
+        }
+    }
+    let validator = jsonschema::validator_for(&admin_token_issue_body_schema()).unwrap();
+    for token_class in ["admin", "user_manage"] {
+        for read_only in [false, true] {
+            assert!(!validator.is_valid(&json!({
+                "name": "management", "tokenClass": token_class,
+                "scopes": {"readOnly": read_only}
+            })));
+        }
+    }
+    for read_only in [false, true] {
+        assert!(validator.is_valid(&json!({
+            "name": "agent", "tokenClass": "agent_invoke",
+            "scopes": {"allowedExecutionContexts": ["default"], "readOnly": read_only}
+        })));
+    }
+}
+
+#[test]
+fn issuance_policy_schemas_keep_user_inheritance_distinct_from_group_contributions() {
+    let routes = http_route_specs(&crate::tests::test_resource_types());
+    for (method, route, base, allow_inherit) in [
+        (
+            "POST",
+            "/v1/admin/principals",
+            json!({"principalId": "alice"}),
+            true,
+        ),
+        (
+            "PATCH",
+            "/v1/admin/principals/{principal}/access",
+            json!({}),
+            true,
+        ),
+        (
+            "POST",
+            "/v1/admin/groups",
+            json!({"groupId": "readers"}),
+            false,
+        ),
+        ("PATCH", "/v1/admin/groups/{group}", json!({}), false),
+    ] {
+        let spec = routes
+            .iter()
+            .find(|spec| spec.method == method && spec.route == route)
+            .unwrap();
+        let validator =
+            jsonschema::validator_for(spec.request_body_schema.as_ref().unwrap()).unwrap();
+        for mode in ["inherit", "disabled", "read_only", "write_capable"] {
+            let mut body = base.clone();
+            body["agentTokenIssuance"] = json!(mode);
+            assert_eq!(
+                validator.is_valid(&body),
+                allow_inherit || mode != "inherit",
+                "{method} {route}: {body}"
+            );
+        }
+        for value in [json!(null), json!(true), json!("unknown")] {
+            let mut body = base.clone();
+            body["agentTokenIssuance"] = value;
+            assert!(!validator.is_valid(&body), "{method} {route}: {body}");
+        }
+    }
+}
+
+#[test]
 fn agent_token_issue_schemas_enforce_caveat_contracts() {
     let routes = http_route_specs(&crate::tests::test_resource_types());
     let self_schema = routes
@@ -1895,7 +1996,7 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     let self_validator = jsonschema::validator_for(self_schema).unwrap();
     assert!(self_validator.is_valid(&json!({
         "name": "coding agent",
-        "allowedExecutionContexts": ["external"]
+        "readOnly": false, "allowedExecutionContexts": ["external"]
     })));
     let service_restrictions = json!({
         "confluence": {
@@ -1909,13 +2010,13 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     });
     assert!(self_validator.is_valid(&json!({
         "name": "bounded agent",
-        "allowedExecutionContexts": ["external"],
+        "readOnly": false, "allowedExecutionContexts": ["external"],
         "allowedServices": ["confluence", "gitlab_git"],
         "serviceRestrictions": service_restrictions
     })));
     assert!(self_validator.is_valid(&json!({
         "name": "action-only ceiling",
-        "allowedExecutionContexts": ["external"],
+        "readOnly": false, "allowedExecutionContexts": ["external"],
         "allowedServices": ["confluence"],
         "serviceRestrictions": {
             "confluence": {
@@ -1925,12 +2026,12 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
         }
     })));
     assert!(self_validator.is_valid(&json!({
-        "name":"follow current grants", "allowedExecutionContexts":["external"],
+        "name":"follow current grants", "readOnly": false, "allowedExecutionContexts":["external"],
         "allowedServices":["confluence"], "serviceRestrictions":{"confluence":{"actions":["page.view"]}}
     })));
     assert!(!self_validator.is_valid(&json!({
         "name": "restriction without service ceiling",
-        "allowedExecutionContexts": ["external"],
+        "readOnly": false, "allowedExecutionContexts": ["external"],
         "serviceRestrictions": {
             "confluence": { "actions": ["page.view"], "resources": {} }
         }
@@ -1953,7 +2054,7 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     ] {
         assert!(!self_validator.is_valid(&json!({
             "name": "invalid restriction",
-            "allowedExecutionContexts": ["external"],
+            "readOnly": false, "allowedExecutionContexts": ["external"],
             "allowedServices": ["confluence", "gitlab_git"],
             "serviceRestrictions": invalid_restrictions
         })));
@@ -1961,23 +2062,23 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     assert!(!self_validator.is_valid(&json!({ "name": "missing" })));
     assert!(self_validator.is_valid(&json!({
         "name": "multiple contexts",
-        "allowedExecutionContexts": ["external", "internal"]
+        "readOnly": false, "allowedExecutionContexts": ["external", "internal"]
     })));
     assert!(!self_validator.is_valid(&json!({
         "name": "empty contexts",
-        "allowedExecutionContexts": []
+        "readOnly": false, "allowedExecutionContexts": []
     })));
     assert!(!self_validator.is_valid(&json!({
         "name": "duplicate",
-        "allowedExecutionContexts": ["external", "external"]
+        "readOnly": false, "allowedExecutionContexts": ["external", "external"]
     })));
     assert!(!self_validator.is_valid(&json!({
         "name": "invalid",
-        "allowedExecutionContexts": ["External"]
+        "readOnly": false, "allowedExecutionContexts": ["External"]
     })));
     assert!(!self_validator.is_valid(&json!({
         "name": "legacy device metadata",
-        "allowedExecutionContexts": ["external"],
+        "readOnly": false, "allowedExecutionContexts": ["external"],
         "deviceName": "workstation"
     })));
 
@@ -1993,7 +2094,7 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     let admin_validator = jsonschema::validator_for(admin_schema).unwrap();
     assert!(admin_validator.is_valid(&json!({
         "name": "multi-context agent",
-        "allowedExecutionContexts": ["external", "internal"],
+        "readOnly": false, "allowedExecutionContexts": ["external", "internal"],
         "allowedServices": ["jira"],
         "serviceRestrictions": {
             "jira": {
@@ -2004,27 +2105,27 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     })));
     assert!(!admin_validator.is_valid(&json!({
         "name": "empty contexts",
-        "allowedExecutionContexts": []
+        "readOnly": false, "allowedExecutionContexts": []
     })));
     let maximum_contexts = (0..64).map(|index| format!("ctx{index}"));
     assert!(admin_validator.is_valid(&json!({
         "name": "maximum contexts",
-        "allowedExecutionContexts": maximum_contexts.clone().collect::<Vec<_>>()
+        "readOnly": false, "allowedExecutionContexts": maximum_contexts.clone().collect::<Vec<_>>()
     })));
     assert!(!admin_validator.is_valid(&json!({
         "name": "too many contexts",
-        "allowedExecutionContexts": maximum_contexts
+        "readOnly": false, "allowedExecutionContexts": maximum_contexts
             .chain(["overflow".to_string()])
             .collect::<Vec<_>>()
     })));
     assert!(!admin_validator.is_valid(&json!({
         "name": "invalid service",
-        "allowedExecutionContexts": ["external"],
+        "readOnly": false, "allowedExecutionContexts": ["external"],
         "allowedServices": ["Bad.Service"]
     })));
     assert!(!admin_validator.is_valid(&json!({
         "name": "legacy device metadata",
-        "allowedExecutionContexts": ["external"],
+        "readOnly": false, "allowedExecutionContexts": ["external"],
         "deviceName": "workstation"
     })));
 
@@ -2047,6 +2148,13 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     assert_eq!(
         self_openapi["properties"]["allowedExecutionContexts"]["maxItems"],
         64
+    );
+    assert_eq!(self_openapi["properties"]["readOnly"]["type"], "boolean");
+    assert!(
+        self_openapi["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("readOnly"))
     );
     assert!(self_openapi["properties"].get("deviceName").is_none());
     assert_eq!(
@@ -2082,6 +2190,16 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
     assert_eq!(
         self_send["properties"]["body"]["properties"]["allowedExecutionContexts"]["maxItems"],
         64
+    );
+    assert_eq!(
+        self_send["properties"]["body"]["properties"]["readOnly"]["type"],
+        "boolean"
+    );
+    assert!(
+        self_send["properties"]["body"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("readOnly"))
     );
     assert_eq!(
         self_send["properties"]["body"]["properties"]["allowedServices"]["items"]["pattern"],
@@ -2126,7 +2244,7 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
             .any(|constraint| {
                 constraint["if"]["properties"]["tokenClass"]["const"] == "agent_invoke"
                     && constraint["then"]["properties"]["scopes"]["required"]
-                        == json!(["allowedExecutionContexts"])
+                        == json!(["allowedExecutionContexts", "readOnly"])
             })
     );
     let agent_constraint = generic_admin_send["properties"]["body"]["allOf"]
@@ -2154,7 +2272,8 @@ fn agent_token_issue_schemas_enforce_caveat_contracts() {
         json!([
             { "required": ["allowedExecutionContexts"] },
             { "required": ["allowedServices"] },
-            { "required": ["serviceRestrictions"] }
+            { "required": ["serviceRestrictions"] },
+            { "required": ["readOnly"] }
         ])
     );
 }
@@ -2167,7 +2286,7 @@ fn generic_admin_agent_token_schema_is_typed_without_changing_management_scopes(
         "name": "agent",
         "tokenClass": "agent_invoke",
         "scopes": {
-            "allowedExecutionContexts": ["external", "internal"],
+            "readOnly": false, "allowedExecutionContexts": ["external", "internal"],
             "allowedServices": ["jira"],
             "serviceRestrictions": {
                 "jira": {
@@ -2182,7 +2301,7 @@ fn generic_admin_agent_token_schema_is_typed_without_changing_management_scopes(
         "name": "missing allowed services",
         "tokenClass": "agent_invoke",
         "scopes": {
-            "allowedExecutionContexts": ["external"],
+            "readOnly": false, "allowedExecutionContexts": ["external"],
             "serviceRestrictions": {
                 "jira": { "actions": ["issue.view"], "resources": {} }
             }
@@ -2202,7 +2321,7 @@ fn generic_admin_agent_token_schema_is_typed_without_changing_management_scopes(
         "name": "untyped agent",
         "tokenClass": "agent_invoke",
         "scopes": {
-            "allowedExecutionContexts": ["external"],
+            "readOnly": false, "allowedExecutionContexts": ["external"],
             "arbitrary": true
         }
     })));
@@ -2210,7 +2329,7 @@ fn generic_admin_agent_token_schema_is_typed_without_changing_management_scopes(
         "name": "invalid service",
         "tokenClass": "agent_invoke",
         "scopes": {
-            "allowedExecutionContexts": ["external"],
+            "readOnly": false, "allowedExecutionContexts": ["external"],
             "allowedServices": ["Bad.Service"]
         }
     })));
@@ -2247,7 +2366,7 @@ fn generic_admin_agent_token_schema_is_typed_without_changing_management_scopes(
     assert!(!validator.is_valid(&json!({
         "name": "conflicting expiry",
         "tokenClass": "agent_invoke",
-        "scopes": { "allowedExecutionContexts": ["external"] },
+        "scopes": { "readOnly": false, "allowedExecutionContexts": ["external"] },
         "ttl": "1h",
         "expiresAt": "2026-08-12T00:00:00Z"
     })));

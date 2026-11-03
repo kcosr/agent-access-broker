@@ -236,8 +236,20 @@ verification, and failure. Check the sanitized error code after a failed attempt
 ## Issue a token for the agent
 
 In **My access > Tokens**, choose **Issue token** to open the token creation
-page. Set a descriptive name, finite lifetime, and one or more effective execution
-contexts. **Follow current grants** follows your grants within those contexts.
+page. Issuance must be permitted by your administrator, independently of
+self-service and service grants. Disabled issuance leaves existing tokens and
+their inspection, preview, pause, resume and revocation available.
+
+Set a descriptive name, finite lifetime, and one or more effective execution
+contexts. New tokens start read-only and can use only actions classified as reads.
+If your account may issue only read-only tokens, the form shows plain
+**Read-only** text and a note that your issuance policy requires it. With
+Write-capable issuance permission, the form shows a checked **Read-only** checkbox
+that you can clear explicitly. The restriction belongs to this token and cannot
+be edited after issuance. Changing your account's issuance permission does not
+change existing tokens. **Follow current grants** follows your grants within the
+selected contexts, including later reads; a read-only token continues to block
+writes.
 **Restrict to selected** adds service, action, and resource/group restrictions as
 a ceiling. Choose the smallest useful boundary for dedicated automation.
 
@@ -245,7 +257,11 @@ Each service uses the same **Read-only** and **Write-capable** action columns as
 the grant builder. Filter actions, then use **All** or **None** within a column
 to change only matching actions; other selections remain. Actions without
 reviewed read-only metadata are write-capable. A selected action that is no
-longer available stays visible so you can remove it.
+longer available stays visible so you can remove it. A read-only draft cannot
+select new write actions; already selected writes remain visible for correction.
+If your permission changes to Read-only while the draft allows writes, choose
+**Apply read-only restriction** and correct its selections before submitting.
+Disabled permission blocks submission while preserving the draft.
 
 Each restricted service has its own collapsible section. Its resource choices
 list only the resource types the service's actions use.
@@ -273,7 +289,13 @@ command, which adds the server for all your projects. The client snippets name
 the variable, never the token; the portal remembers the chosen client in the
 browser. Management tokens have no MCP setup.
 
-Token issuance requires an effective invocation grant. It never creates access.
+Token lists badge stored `readOnly: false` tokens as **Write-capable**, even if
+today's grants contain only reads. Read-only rows have no effect badge; their
+details show quiet **Read-only** text.
+
+Token issuance requires an effective invocation grant, but not a currently usable
+read or credential. An inherited read-only token may have an empty preview and
+gain reads later. Issuance never creates access.
 The lifetime must be one of the choices configured by the operator. A nonexpiring
 token is available only if the operator explicitly permits it.
 
@@ -284,14 +306,14 @@ context to attest.
 
 ```bash
 agent-access --config ~/.config/agent-access/setup.toml tokens issue \
-  --name engineering-reader --execution-context default --ttl 30d
+  --name engineering-reader --execution-context default --ttl 30d --read-only true
 ```
 
 For a restricted Jira token, assuming `jira-eng` is an accessible catalog resource:
 
 ```bash
 agent-access --config ~/.config/agent-access/setup.toml tokens issue \
-  --name jira-eng-reader --execution-context default --ttl 30d \
+  --name jira-eng-reader --execution-context default --ttl 30d --read-only true \
   --service jira --action jira=issue.view --action jira=search \
   --resource-id jira=jira-eng
 ```
@@ -434,6 +456,7 @@ report.
 | Symptom | Next step |
 | --- | --- |
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
+| `token_issuance_denied` | Check the account's token issuance permission. `disabled` needs administrator configuration; `read_only_required` needs an explicit Read-only choice. Existing tokens are unchanged |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
 | **Revocation failed** or **Revocation unconfirmed** on an OAuth connection | An ended connection's tokens may still be valid at the provider. Revoke the Broker application in the settings of the account that connection used (GitLab: **Preferences**, **Applications**, **Authorized applications**), or ask its administrator; this also ends a current connection of that account, so reconnect afterwards |
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |
@@ -442,7 +465,7 @@ report.
 | No visible service or no context to select | Ask the administrator to review active grants, group membership, and contexts |
 | `credential_not_found` | Store your token for the service's credential connection, or reconnect OAuth |
 | `credential_not_provisioned` | The service's credential connection offers no personal credential for your account type, or the service has none; or the action accepts only a token and your connection uses OAuth. Ask the administrator |
-| `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions. Reason `identity access is read-only` means your managed workspace connection allows only reads; ask an administrator if it needs to write |
+| `service_action_denied` | Compare the requested action/resource with current grants and the token's immutable restrictions. Reason `broker token is read-only` identifies the issued token's stored ceiling; `identity access is read-only` identifies the managed workspace path. Ask the administrator if a write-capable connection is needed |
 | `execution_context_denied` | Use the correct ingress and a token/grant authorized for that context; token selection cannot attest context |
 | `broker_token_paused` | Resume only if the secret remains trusted; otherwise replace and revoke it |
 | `rate_limited` | This request was refused or removed from the rate queue; wait its reported retry interval and do not repeat other pending calls |

@@ -835,9 +835,22 @@ admin `visibility=all` omits context metadata.
 
 Contract tests must cover TOML and managed grants, supported schema admission
 and forward migrations, grant CRUD/filter/export, one-or-more self and admin token context caveats,
-options endpoints, unknown/duplicate caveat rejection, stored tokens without
-context caveats, CLI flags, portal choices, audit fields, spec `Vary`, and non-forwarding of the
+options endpoints, unknown/duplicate caveat rejection, denial of stored tokens
+without valid context caveats or `readOnly`, CLI flags, portal choices, audit fields, spec `Vary`, and non-forwarding of the
 trusted header by provider and Git gateway transports.
+
+### Agent-token issuance and read-only matrix
+
+For agent-token issuance changes, exercise account override/group precedence,
+managed versus TOML membership, expired evidence, transactional downgrade races,
+administrative independence, explicit Boolean validation, and read-only Follow
+current grants. Verify discovery/invocation/Git refusal before credential or
+provider work, stored-token previews after reclassification, distinct identity
+provenance, cancellation-owned completion, and unchanged existing tokens after
+permission edits. Migration `033` checks must use a real schema-032 store and
+cover false backfill, invalid-row preservation, all unrevoked collisions,
+rollback, previous-binary revocation recovery and revoked-collision preservation.
+Run the updated demo/capture flow against fresh Broker and portal artifacts.
 
 ### Broker-token pause matrix
 

@@ -19,8 +19,8 @@ HTTP-MCP-only username assertion as a CLI identity header.
 In an already configured managed fingerprint ingress, `--no-token` bypasses
 inherited token configuration without reading or exporting the workspace token.
 Otherwise retain the configured ordinary Broker identity. `agent-access auth
-status` reports managed `readOnlyAccess`; such connections list and execute only
-actions classified as reads. Unreviewed imported actions count as writes. Reads
+status` reports path-only `readOnlyAccess` and issued-token `brokerToken.readOnly`.
+Either true value permits only actions classified as reads. Unreviewed imported actions count as writes. Reads
 still need grants, and local file output remains available. Report a write's
 need for a writable connection without changing identity to evade the ceiling.
 

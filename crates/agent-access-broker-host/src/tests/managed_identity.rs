@@ -132,6 +132,7 @@ async fn fixture_serving(configure: impl FnOnce(&mut BrokerConfig), served: Serv
     for principal in ["alice", "admin"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -145,6 +146,7 @@ async fn fixture_serving(configure: impl FnOnce(&mut BrokerConfig), served: Serv
     }
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -183,7 +185,7 @@ async fn fixture_serving(configure: impl FnOnce(&mut BrokerConfig), served: Serv
                 principal_id: "alice".into(),
                 name: "invocation".into(),
                 token_class: BrokerTokenClass::AgentInvoke,
-                scopes: json!({"allowedExecutionContexts": contexts, "allowedServices": ["fake", "gitlab_git"]}),
+                scopes: json!({"readOnly": false, "allowedExecutionContexts": contexts, "allowedServices": ["fake", "gitlab_git"]}),
                 expires_at: None,
                 created_by: "test".into(),
             },
@@ -263,6 +265,7 @@ async fn managed_identity_ingress_rejects_spoofing_and_management_escalation() {
     // Even a real administrator's managed identity is invocation-only.
     f.store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("alice").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,

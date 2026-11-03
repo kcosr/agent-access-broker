@@ -482,7 +482,7 @@ test("token boundaries use live resource references and allow empty effective ac
     { id: "eng", resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, allowedExecutionContexts: ["internal", "external"], enabled: true },
   ];
   const options = {
-    policyGeneration: 5, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
+    policyGeneration: 5, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
     services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
       internal: [{ included: [{ kind: "all" }], excluded: [] }],
       external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }]
@@ -491,7 +491,7 @@ test("token boundaries use live resource references and allow empty effective ac
   };
   await mockUnlistedApis(page);
   await mockResourceTypes(page);
-  await page.route("**/v1/auth/session", (route) => route.fulfill({ contentType: "application/json", body: envelope({ role: "user", selfServiceEnabled: true, authenticated: true, principal: "boundary-user",  csrfHeader: "x-csrf-token", csrfToken: "csrf-token", tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } }) }));
+  await page.route("**/v1/auth/session", (route) => route.fulfill({ contentType: "application/json", body: envelope({ role: "user", selfServiceEnabled: true, authenticated: true, principal: "boundary-user",  csrfHeader: "x-csrf-token", csrfToken: "csrf-token", tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } }) }));
   await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope(options) }));
   await page.route("**/v1/tokens/effective-access", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 5, access: [] }) }));
   await page.route(/\/v1\/tokens(?:\?.*)?$/, async (route) => {
@@ -618,7 +618,7 @@ test("scoped policy managers retain self-service navigation and only receive the
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens", "/v1/tokens/options"]) {
     await page.route(`**${path}`, (route) => route.fulfill({
       contentType: "application/json",
-      body: managementResult(path === "/v1/tokens/options" ? { policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] } : path === "/v1/credentials" ? EMPTY_CREDENTIALS : [])
+      body: managementResult(path === "/v1/tokens/options" ? { policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] } : path === "/v1/credentials" ? EMPTY_CREDENTIALS : [])
     }));
   }
 
@@ -701,7 +701,7 @@ test("audit navigation and pages stay hidden when the audit store cannot be quer
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens"]) {
     await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope(path === "/v1/credentials" ? EMPTY_CREDENTIALS : []) }));
   }
-  await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] }) }));
+  await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] }) }));
   const auditRequests: string[] = [];
   page.on("request", (request) => {
     if (/\/v1\/(admin\/)?audit\//.test(new URL(request.url()).pathname)) auditRequests.push(request.url());
@@ -837,7 +837,7 @@ test("global admins assign and revoke a service policy manager with whole-servic
   });
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
-    body: managementResult({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] })
+    body: managementResult({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] })
   }));
 
   // Managers are listed on the service's Managers tab in the Catalog.
@@ -1061,6 +1061,8 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(principalInput).toBeFocused();
     await dialog.getByLabel("Display name").fill("Alice Portal");
     await dialog.getByLabel("Email").fill(`${principalId}@example.com`);
+    await expect(dialog.getByLabel("Agent token issuance", { exact: true })).toHaveValue("inherit");
+    await dialog.getByLabel("Agent token issuance", { exact: true }).selectOption("write_capable");
     await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).not.toBeChecked();
     await dialog.getByLabel("Enable local password sign-in", { exact: true }).check();
     await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
@@ -1648,6 +1650,7 @@ test("local browser login supports administration, self-service credentials, tok
     const issueRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === `/v1/admin/principals/${principalId}/agent-tokens`);
     await dialog.getByRole("button", { name: "Issue token", exact: true }).click();
     expect((await issueRequest).postDataJSON()).toEqual({
+      readOnly: true,
       name: `managed-token-${testInfo.project.name}`,
       never: true,
       allowedServices: ["jira"],
@@ -1834,13 +1837,14 @@ test("local browser login supports administration, self-service credentials, tok
     const issueRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/v1/tokens");
     await dialog.getByRole("button", { name: "Issue token", exact: true }).click();
     expect((await issueRequest).postDataJSON()).toEqual({
+      readOnly: true,
       name: `portal-e2e-${testInfo.project.name}`,
       ttl: "37m",
       allowedExecutionContexts: ["default", "internal", "external"]
     });
     const reveal = page.getByRole("dialog", { name: "Token created", exact: true });
     await expect(reveal.getByText("default, internal, external", { exact: true })).toBeVisible();
-    await expect(reveal.getByText("All actions and resources allowed by current grants.", { exact: true })).toBeVisible();
+    await expect(reveal.getByText("Read actions and resources allowed by current grants.", { exact: true })).toBeVisible();
     rawToken = await reveal.getByLabel("Token", { exact: true }).innerText();
     expect(rawToken.length).toBeGreaterThan(20);
 
@@ -1909,7 +1913,7 @@ test("local browser login supports administration, self-service credentials, tok
     const details = drawer(`Token ${name}`);
     await expect(details.getByText("Paused", { exact: true }).first()).toBeVisible();
     await expect(details.getByText("No access currently: this token is paused.", { exact: true })).toBeVisible();
-    await expect(details.getByText("All actions and resources allowed by current grants.", { exact: true })).toBeVisible();
+    await expect(details.getByText("Read actions and resources allowed by current grants.", { exact: true })).toBeVisible();
     await details.getByRole("button", { name: "Resume token", exact: true }).click();
     await expect(toast("Token resumed")).toBeVisible();
     await expect(details.getByText("Active", { exact: true }).first()).toBeVisible();
@@ -2265,7 +2269,7 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await signInAsAdmin(page);
     await page.goto(`${baseUrl}/ui`);
     for (const principalId of [userId, ownerId]) {
-      await browserManagementRequest(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: principalId, role: principalId === ownerId ? "service_policy_manager" : "user" } });
+      await browserManagementRequest(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: principalId, agentTokenIssuance: "write_capable", role: principalId === ownerId ? "service_policy_manager" : "user" } });
       await browserManagementRequest(page, `/v1/admin/principals/${principalId}/login-methods/local-password/enable`, {
         method: "POST",
         body: { password, mustChangePassword: false, acknowledgeSeparateSignIn: true }
@@ -2295,7 +2299,7 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await page.goto(`${baseUrl}/ui`);
     const issued = await browserManagementRequest<{ token: string; record: { tokenId: string } }>(page, "/v1/tokens", {
       method: "POST",
-      body: { name: tokenName, ttl: "37m", allowedExecutionContexts: ["default"] }
+      body: { readOnly: true, name: tokenName, ttl: "37m", allowedExecutionContexts: ["default"] }
     });
     tokenId = issued.record.tokenId;
     // The grant matches but no per-user Jira credential exists; Confluence has no grant.
@@ -2524,7 +2528,7 @@ async function mockPolicyGrants(page: Page) {
   }
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
-    body: managementResult({ policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: [], services: [] }),
+    body: managementResult({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] }),
   }));
   await page.route("**/v1/admin/policy/status", (route) => route.fulfill({
     contentType: "application/json",
@@ -2748,7 +2752,7 @@ test("access resource details disclose exclusions with their own alternative", a
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
     body: envelope({
-      policyGeneration: 1, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
+      policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
       services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{
         action: "issue.view", description: "View issues", readOnly: true, resourceType: "jira_project", executionContexts: ["internal"],
         effectiveAccessByExecutionContext: { internal: [
@@ -3154,3 +3158,85 @@ function tomlString(value: string) {
 function delay(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
+
+test("managed issuance policy controls new tokens while inherited reads and existing lifecycle remain live", async ({ page, browser }, testInfo) => {
+  const suffix = `issuance-${testInfo.project.name}`;
+  const principalId = `${suffix}-user`;
+  const groupId = `${suffix}-readers`;
+  const password = "issuance-user-password";
+  await signInAsAdmin(page);
+  await page.goto(`${baseUrl}/ui/admin/principals`);
+  const created = await browserManagementRequest<{ agentTokenIssuance: string }>(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: "Issuance Reader" } });
+  expect(created.agentTokenIssuance).toBe("inherit");
+  const group = await browserManagementRequest<{ agentTokenIssuance: string }>(page, "/v1/admin/groups", { method: "POST", body: { groupId, displayName: "Issuance readers" } });
+  expect(group.agentTokenIssuance).toBe("disabled");
+  await browserManagementRequest(page, `/v1/admin/groups/${groupId}/members/${principalId}`, { method: "PUT" });
+  await browserManagementRequest(page, `/v1/admin/principals/${principalId}/login-methods/local-password/enable`, { method: "POST", body: { password, mustChangePassword: false, acknowledgeSeparateSignIn: true } });
+  const resource = await browserManagementRequest<{ record: { id: string } }>(page, "/v1/admin/policy/resources", { method: "POST", body: { id: `${suffix}-projects`, displayName: "Issuance project", resourceType: "jira_project", selector: { kind: "exact", value: "TOKENISSUANCE" }, allowedExecutionContexts: ["default"], enabled: true } });
+  const grant = (grantId: string, actions: string[]) => browserManagementRequest(page, "/v1/admin/policy/grants", { method: "POST", body: { grantId, subjects: [`user:${principalId}`], service: "jira", actions, credentialMode: "per_user", executionContexts: ["default"], resources: { resourceIds: [resource.record.id], resourceGroupIds: [] }, status: "active" } });
+  await grant(`${suffix}-initial`, ["issue.view", "issue.update"]);
+  await page.goto(`${baseUrl}/ui/admin/groups/${groupId}`);
+  const groupSection = page.getByRole("region", { name: "Token issuance", exact: true });
+  await groupSection.getByLabel("Agent token issuance", { exact: true }).selectOption("read_only");
+  await groupSection.getByRole("button", { name: "Save token issuance", exact: true }).click();
+  await expect(groupSection.getByRole("button", { name: "Save token issuance", exact: true })).toBeDisabled();
+  await page.goto(`${baseUrl}/ui/admin/principals/${principalId}`);
+  await expect(page.getByRole("region", { name: "Account access", exact: true })).toContainText("Read-only, inherited from Issuance readers");
+
+  const userContext = await browser.newContext();
+  const user = await userContext.newPage();
+  try {
+    expect(await apiSignIn(user, principalId, password)).not.toBeNull();
+    await user.goto(`${baseUrl}/ui/tokens/new`);
+    const editor = user.getByRole("main", { name: "Issue agent token", exact: true });
+    await expect(editor.getByRole("checkbox", { name: "Read-only", exact: true })).toHaveCount(0);
+    await expect(editor.getByRole("region", { name: "Token restriction", exact: true }).getByText("Read-only", { exact: true })).toBeVisible();
+    await expect(editor.getByText("Required by your account’s token issuance policy", { exact: true })).toBeVisible();
+    await expect(editor.getByRole("button", { name: "Follow current grants", exact: true })).toBeEnabled();
+    await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Inherited reads");
+    await editor.getByRole("button", { name: "Issue token", exact: true }).click();
+    const reveal = user.getByRole("dialog", { name: "Token created", exact: true });
+    await expect(reveal.getByText("Read-only", { exact: true })).toBeVisible();
+    const secret = await reveal.getByLabel("Token", { exact: true }).innerText();
+    expect(secret.length).toBeGreaterThan(20);
+    const tokens = await browserManagementRequest<Array<{ tokenId: string; scopes: { readOnly: boolean; allowedExecutionContexts: string[] } }>>(user, "/v1/tokens");
+    expect(tokens).toHaveLength(1);
+    const stored = tokens[0];
+    expect(stored.scopes).toEqual({ readOnly: true, allowedExecutionContexts: ["default"] });
+    const preview = () => browserManagementRequest<{ access: Array<{ action: string }> }>(user, "/v1/tokens/effective-access", { method: "POST", body: stored.scopes });
+    expect((await preview()).access.map((item) => item.action)).toEqual(["issue.view"]);
+    await grant(`${suffix}-later`, ["search"]);
+    expect((await preview()).access.map((item) => item.action).sort()).toEqual(["issue.view", "search"]);
+
+    // An explicit Disabled user override wins over the inherited group mode.
+    const access = page.getByRole("region", { name: "Account access", exact: true });
+    await access.getByLabel("Agent token issuance", { exact: true }).selectOption("disabled");
+    await access.getByRole("button", { name: "Save access", exact: true }).click();
+    await confirmDialog(page, "Update account access?", "Update access");
+    await expect(access).toContainText("Disabled, explicit account override");
+    // Refresh active user metadata without navigation so the one-time secret remains.
+    await user.clock.setFixedTime(new Date(await user.evaluate(() => Date.now()) + 120_000));
+    await user.evaluate(() => { window.dispatchEvent(new Event("offline")); window.dispatchEvent(new Event("online")); });
+    await expect(reveal.getByLabel("Token", { exact: true })).toHaveText(secret);
+    await reveal.getByRole("button", { name: "Done", exact: true }).click();
+    await expect(user.getByRole("button", { name: "Issue token", exact: true }).first()).toBeDisabled();
+    expect((await preview()).access.map((item) => item.action).sort()).toEqual(["issue.view", "search"]);
+    const drawer = user.getByRole("complementary", { name: "Token Inherited reads", exact: true });
+    await drawer.getByRole("button", { name: "Pause token", exact: true }).click();
+    await expect(drawer.getByRole("button", { name: "Resume token", exact: true })).toBeEnabled();
+    await drawer.getByRole("button", { name: "Resume token", exact: true }).click();
+    await expect(drawer.getByRole("button", { name: "Pause token", exact: true })).toBeEnabled();
+    await drawer.getByRole("button", { name: "Revoke", exact: true }).click();
+    await confirmDialog(user, "Revoke token?", "Revoke token");
+    await expect(drawer.getByRole("button", { name: "Pause token", exact: true })).toHaveCount(0);
+  } finally { await userContext.close(); }
+
+  // The administrative form remains independent of the target's personal mode.
+  await page.goto(`${baseUrl}/ui/admin/principals/${principalId}/tokens/new`);
+  const administered = page.getByRole("main", { name: "Issue agent token", exact: true });
+  await expect(administered.getByRole("checkbox", { name: "Read-only", exact: true })).toBeChecked();
+  await administered.getByRole("checkbox", { name: "Read-only", exact: true }).uncheck();
+  await administered.getByRole("textbox", { name: "Name", exact: true }).fill("Administrative write ceiling");
+  await administered.getByRole("button", { name: "Issue token", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Token created", exact: true }).getByText("Write-capable", { exact: true })).toBeVisible();
+});

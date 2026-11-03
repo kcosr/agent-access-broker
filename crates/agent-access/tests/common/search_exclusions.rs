@@ -124,6 +124,7 @@ pub fn configure(
     for principal in ["search-user", "ungranted-user"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
                 principal_id: principal.into(),
                 kind: "user".into(),
                 role: PrincipalRole::User,
@@ -147,7 +148,7 @@ pub fn configure(
         }
         store.issue_broker_token_with_catalog(&hasher, BrokerTokenIssueRequest {
             principal_id:principal.into(),name:name.into(),token_class:BrokerTokenClass::AgentInvoke,
-            scopes:json!({"allowedServices":[service],"allowedExecutionContexts":["default"],
+            scopes:json!({"readOnly":false,"allowedServices":[service],"allowedExecutionContexts":["default"],
                 "serviceRestrictions":{service:restriction}}),
             expires_at:None,created_by:"test".into(),
         },Some(&catalog)).unwrap().token

@@ -337,8 +337,11 @@ Follow the [operator guide](operator-guide.md) and
    recovery administrator, remove the bootstrap fields, and return
    `managed_store.auto_migrate` to `false` after successful startup/migration.
 3. Add one integration, a narrowly scoped resource and read grant, a user-owned
-   credential or approved service credential, and a finite invocation token.
-   Verify one authorized read and one denied action/resource/context.
+   credential or approved service credential, and explicit personal Read-only
+   issuance permission. Issue a finite read-only token with Follow current
+   grants; verify an authorized read and a denied write even with a write grant.
+   Disable new issuance and confirm that the existing token still works and can
+   be paused, resumed or revoked. Verify denied resource/context access too.
 4. Verify that an auditor can inspect administration and audit but cannot mutate,
    reveal credentials, run credential verification, or discover an import.
    Verify a service policy manager can change only directly assigned services.

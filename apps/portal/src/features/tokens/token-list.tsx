@@ -1,3 +1,4 @@
+import { TokenEffect } from "./token-effect";
 // Agent tokens for the signed-in user (Tokens tab) or an administered
 // principal (the user page's Tokens tab): status filter, rows, and a drawer.
 import { useMemo } from "react";
@@ -81,7 +82,7 @@ export function useTokenList(subject: AccountSubject) {
   const { session } = useSession();
   const data = useConsoleData(subject);
   const options = useAgentTokenOptions(subject);
-  const actions = useAgentTokenActions(subject, options.options);
+  const actions = useAgentTokenActions(subject, options.options, options.query.isError);
   const tokens = data.tokens;
   const names = useMemo(() => serviceDisplayNames(options.options, data.credentials.connections), [options.options, data.credentials.connections]);
   const counts = useMemo(() => {
@@ -165,7 +166,8 @@ export function TokenTable({ model, label = "Tokens" }: { model: TokenListModel;
         truncate: true,
         minWidth: "16ch",
         title: (token) => token.name,
-        cell: (token) => token.name
+        cell: (token) => token.name,
+        extra: (token) => token.tokenClass === "agent_invoke" ? <TokenEffect readOnly={token.scopes.readOnly} /> : null
       },
       {
         key: "id",
@@ -429,11 +431,12 @@ function AgentTokenDrawer({
           <TokenBoundary record={record} options={options} />
         </DrawerSection>
       ) : null}
-      {record.tokenClass === "agent_invoke" && status === "Active" ? (
+      {record.tokenClass === "agent_invoke" && status === "Active" && typeof record.scopes.readOnly === "boolean" ? (
         <DrawerSection title="Effective access">
           <EffectiveAccessDisclosure
             summary="Show what this token can reach now"
             token={{
+              readOnly: record.scopes.readOnly!,
               allowedServices: record.scopes.allowedServices,
               allowedExecutionContexts: record.scopes.allowedExecutionContexts ?? [],
               serviceRestrictions: record.scopes.serviceRestrictions

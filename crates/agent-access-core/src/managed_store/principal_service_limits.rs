@@ -206,6 +206,7 @@ mod tests {
         for (principal_id, kind) in [("alice", "user"), ("robot", "service_account")] {
             store
                 .create_principal(PrincipalWriteRequest {
+                    agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                     role: crate::PrincipalRole::User,
                     self_service_enabled: None,
                     principal_id: principal_id.into(),

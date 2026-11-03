@@ -8,6 +8,8 @@ mod output;
 #[cfg(test)]
 mod request_timeout_tests;
 #[cfg(test)]
+mod token_issuance_tests;
+#[cfg(test)]
 mod typed_documentation_tests;
 #[cfg(test)]
 use agent_access_core::ExitPolicy;
@@ -972,6 +974,9 @@ enum TokensCommand {
         service_restrictions_file: Option<PathBuf>,
         #[arg(long = "execution-context", required = true)]
         execution_contexts: Vec<String>,
+        /// Limit this token to actions classified as reads (true) or permit granted writes (false).
+        #[arg(long, action = clap::ArgAction::Set, required = true)]
+        read_only: bool,
     },
     Inspect {
         token_id: String,
@@ -1045,6 +1050,25 @@ enum AdminConfigCommand {
     Reload,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[value(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+enum PrincipalAgentTokenIssuanceArg {
+    Inherit,
+    Disabled,
+    ReadOnly,
+    WriteCapable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[value(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+enum GroupAgentTokenIssuanceArg {
+    Disabled,
+    ReadOnly,
+    WriteCapable,
+}
+
 #[derive(Debug, Subcommand)]
 enum AdminPrincipalsCommand {
     List,
@@ -1065,6 +1089,9 @@ enum AdminPrincipalsCommand {
         role: String,
         #[arg(long, action = clap::ArgAction::Set)]
         self_service_enabled: Option<bool>,
+        /// Permission to issue personal agent tokens; inherit uses active groups.
+        #[arg(long, value_enum)]
+        agent_token_issuance: Option<PrincipalAgentTokenIssuanceArg>,
     },
     Update {
         principal: String,
@@ -1263,6 +1290,9 @@ enum AdminGroupsCommand {
         /// Add newly created Microsoft accounts to this group after admission.
         #[arg(long)]
         auto_enroll_new_microsoft_users: bool,
+        /// This group's contribution to personal agent token issuance permission.
+        #[arg(long, value_enum)]
+        agent_token_issuance: Option<GroupAgentTokenIssuanceArg>,
     },
     Update {
         group: String,
@@ -1277,6 +1307,9 @@ enum AdminGroupsCommand {
         /// Enable or disable automatic local membership for new Microsoft accounts.
         #[arg(long, action = clap::ArgAction::Set)]
         auto_enroll_new_microsoft_users: Option<bool>,
+        /// This group's contribution to personal agent token issuance permission.
+        #[arg(long, value_enum)]
+        agent_token_issuance: Option<GroupAgentTokenIssuanceArg>,
     },
     Enable {
         group: String,
@@ -1330,13 +1363,16 @@ enum AdminExternalGroupBindingsCommand {
 
 #[derive(Debug, Subcommand)]
 enum AdminPrincipalAccessCommand {
-    /// Set the account role and/or personal self-service permission.
+    /// Set the account role, personal self-service, or agent token issuance permission.
     Set {
         principal: String,
         #[arg(long, value_parser = ["user", "auditor", "service_policy_manager", "admin"])]
         role: Option<String>,
         #[arg(long, action = clap::ArgAction::Set)]
         self_service_enabled: Option<bool>,
+        /// Permission to issue personal agent tokens; inherit uses active groups.
+        #[arg(long, value_enum)]
+        agent_token_issuance: Option<PrincipalAgentTokenIssuanceArg>,
     },
 }
 
@@ -1439,7 +1475,7 @@ enum AdminTokensCommand {
         principal: String,
         #[arg(long)]
         name: String,
-        #[arg(long, default_value = "agent_invoke")]
+        #[arg(long, default_value = "agent_invoke", value_parser = ["agent_invoke", "admin", "user_manage"])]
         token_class: String,
         #[arg(long, conflicts_with = "expires_at")]
         ttl: Option<String>,
@@ -1464,6 +1500,9 @@ enum AdminTokensCommand {
         service_restrictions_file: Option<PathBuf>,
         #[arg(long = "execution-context")]
         execution_contexts: Vec<String>,
+        /// Required for agent_invoke tokens; unavailable for management tokens.
+        #[arg(long, action = clap::ArgAction::Set, required_unless_present = "token_class", required_if_eq("token_class", "agent_invoke"))]
+        read_only: Option<bool>,
     },
     Revoke {
         token_id: String,
@@ -11997,6 +12036,7 @@ async fn run_tokens_command(ctx: &CliContext<'_>, command: &TokensCommand) -> Re
             restricted_services,
             service_restrictions_file,
             execution_contexts,
+            read_only,
         } => {
             let body =
                 require_cli_input(self_agent_token_issue_body(SelfAgentTokenIssueCliInput {
@@ -12011,6 +12051,7 @@ async fn run_tokens_command(ctx: &CliContext<'_>, command: &TokensCommand) -> Re
                     restricted_services,
                     service_restrictions_file,
                     execution_contexts,
+                    read_only: *read_only,
                 }));
             run_broker_json_method(ctx, reqwest::Method::POST, "/v1/tokens", Some(body)).await
         }
@@ -12064,6 +12105,7 @@ struct SelfAgentTokenIssueCliInput<'a> {
     restricted_services: &'a [String],
     service_restrictions_file: &'a Option<PathBuf>,
     execution_contexts: &'a [String],
+    read_only: bool,
 }
 
 fn self_agent_token_issue_body(
@@ -12078,6 +12120,7 @@ fn self_agent_token_issue_body(
         service_restrictions_file: input.service_restrictions_file,
     })?;
     let mut body = serde_json::Map::new();
+    body.insert("readOnly".to_string(), serde_json::json!(input.read_only));
     body.insert("name".to_string(), serde_json::json!(input.name));
     body.insert("ttl".to_string(), serde_json::json!(input.ttl));
     body.insert("expiresAt".to_string(), serde_json::json!(input.expires_at));
@@ -12529,8 +12572,9 @@ async fn run_admin_principals_command(
             external_subject,
             role,
             self_service_enabled,
+            agent_token_issuance,
         } => {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "principalId": principal,
                 "kind": kind,
                 "displayName": display_name,
@@ -12539,6 +12583,9 @@ async fn run_admin_principals_command(
                     "role": role,
                     "selfServiceEnabled": self_service_enabled.unwrap_or(kind != "service_account"),
             });
+            if let Some(setting) = agent_token_issuance {
+                body["agentTokenIssuance"] = serde_json::json!(setting);
+            }
             run_broker_json_method(
                 ctx,
                 reqwest::Method::POST,
@@ -12589,6 +12636,7 @@ async fn run_admin_principals_command(
                 principal,
                 role,
                 self_service_enabled,
+                agent_token_issuance,
             } => {
                 let mut body = serde_json::Map::new();
                 if let Some(role) = role {
@@ -12597,9 +12645,12 @@ async fn run_admin_principals_command(
                 if let Some(enabled) = self_service_enabled {
                     body.insert("selfServiceEnabled".into(), serde_json::json!(enabled));
                 }
+                if let Some(setting) = agent_token_issuance {
+                    body.insert("agentTokenIssuance".into(), serde_json::json!(setting));
+                }
                 if body.is_empty() {
                     require_cli_input::<()>(Err(anyhow::anyhow!(
-                        "access set requires --role or --self-service-enabled"
+                        "access set requires --role, --self-service-enabled, or --agent-token-issuance"
                     )));
                 }
                 run_broker_json_method(
@@ -12776,13 +12827,17 @@ async fn run_admin_groups_command(
             display_name,
             description,
             auto_enroll_new_microsoft_users,
+            agent_token_issuance,
         } => {
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "groupId": group,
                 "displayName": display_name,
                 "description": description,
                 "autoEnrollNewMicrosoftUsers": auto_enroll_new_microsoft_users,
             });
+            if let Some(setting) = agent_token_issuance {
+                body["agentTokenIssuance"] = serde_json::json!(setting);
+            }
             run_broker_json_method(ctx, reqwest::Method::POST, "/v1/admin/groups", Some(body)).await
         }
         AdminGroupsCommand::Update {
@@ -12792,6 +12847,7 @@ async fn run_admin_groups_command(
             description,
             clear_description,
             auto_enroll_new_microsoft_users,
+            agent_token_issuance,
         } => {
             let mut body = serde_json::Map::new();
             if *clear_display_name {
@@ -12810,9 +12866,12 @@ async fn run_admin_groups_command(
                     serde_json::json!(enabled),
                 );
             }
+            if let Some(setting) = agent_token_issuance {
+                body.insert("agentTokenIssuance".into(), serde_json::json!(setting));
+            }
             if body.is_empty() {
                 require_cli_input::<()>(Err(anyhow::anyhow!(
-                    "admin groups update requires at least one of --display-name, --clear-display-name, --description, --clear-description, or --auto-enroll-new-microsoft-users"
+                    "admin groups update requires at least one of --display-name, --clear-display-name, --description, --clear-description, --auto-enroll-new-microsoft-users, or --agent-token-issuance"
                 )));
             }
             run_broker_json_method(
@@ -13019,6 +13078,7 @@ async fn run_admin_tokens_command(
             restricted_services,
             service_restrictions_file,
             execution_contexts,
+            read_only,
         } => {
             let body = require_cli_input(admin_token_issue_body(AdminTokenIssueCliInput {
                 name,
@@ -13033,6 +13093,7 @@ async fn run_admin_tokens_command(
                 restricted_services,
                 service_restrictions_file,
                 execution_contexts,
+                read_only: *read_only,
             }));
             run_broker_json_method(
                 ctx,
@@ -13085,6 +13146,7 @@ struct AdminTokenIssueCliInput<'a> {
     restricted_services: &'a [String],
     service_restrictions_file: &'a Option<PathBuf>,
     execution_contexts: &'a [String],
+    read_only: Option<bool>,
 }
 
 fn admin_token_issue_body(input: AdminTokenIssueCliInput<'_>) -> Result<serde_json::Value> {
@@ -13100,6 +13162,11 @@ fn admin_token_issue_body(input: AdminTokenIssueCliInput<'_>) -> Result<serde_js
                 "admin tokens issue with --token-class agent_invoke requires at least one --execution-context"
             );
         }
+        let read_only = input.read_only.ok_or_else(|| {
+            anyhow::anyhow!(
+                "admin tokens issue with --token-class agent_invoke requires --read-only true|false"
+            )
+        })?;
         let service_restrictions = token_service_restrictions(TokenServiceRestrictionsInput {
             services: input.services,
             actions: input.actions,
@@ -13109,6 +13176,7 @@ fn admin_token_issue_body(input: AdminTokenIssueCliInput<'_>) -> Result<serde_js
             service_restrictions_file: input.service_restrictions_file,
         })?;
         let mut scopes = serde_json::Map::new();
+        scopes.insert("readOnly".to_string(), serde_json::json!(read_only));
         scopes.insert(
             "allowedExecutionContexts".to_string(),
             serde_json::json!(input.execution_contexts),
@@ -13127,9 +13195,10 @@ fn admin_token_issue_body(input: AdminTokenIssueCliInput<'_>) -> Result<serde_js
         if !input.execution_contexts.is_empty()
             || !input.services.is_empty()
             || restrictions_present
+            || input.read_only.is_some()
         {
             anyhow::bail!(
-                "admin tokens issue --execution-context, --service, --action, --resource-id, --resource-group-id, --restrict-resources, and --service-restrictions-file are only valid with --token-class agent_invoke"
+                "admin tokens issue --read-only, --execution-context, --service, --action, --resource-id, --resource-group-id, --restrict-resources, and --service-restrictions-file are only valid with --token-class agent_invoke"
             );
         }
         serde_json::json!({})
@@ -23499,6 +23568,8 @@ upload_spool_dir = "upload-spool"
             "agent-access",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "--name",
             "restricted",
             "--execution-context",
@@ -23547,6 +23618,8 @@ upload_spool_dir = "upload-spool"
                     "agent-access",
                     "tokens",
                     "issue",
+                    "--read-only",
+                    "false",
                     "--name",
                     "old",
                     "--execution-context",
@@ -23566,6 +23639,8 @@ upload_spool_dir = "upload-spool"
                 "agent-access",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "--name",
                 "missing-context",
             ])
@@ -23580,6 +23655,8 @@ upload_spool_dir = "upload-spool"
                 "agent-access",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "--name",
                 "legacy",
                 "--execution-context",
@@ -23595,6 +23672,8 @@ upload_spool_dir = "upload-spool"
                 "admin",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "alice",
                 "--name",
                 "legacy",
@@ -23733,6 +23812,7 @@ upload_spool_dir = "upload-spool"
         let body = admin_token_issue_body(AdminTokenIssueCliInput {
             name: "administered",
             token_class: "agent_invoke",
+            read_only: Some(false),
             ttl: &None,
             expires_at: &None,
             never: false,
@@ -23753,6 +23833,7 @@ upload_spool_dir = "upload-spool"
             admin_token_issue_body(AdminTokenIssueCliInput {
                 name: "management",
                 token_class: "user_manage",
+                read_only: None,
                 ttl: &None,
                 expires_at: &None,
                 never: false,

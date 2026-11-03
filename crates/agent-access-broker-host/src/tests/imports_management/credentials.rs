@@ -494,7 +494,7 @@ async fn missing_personal_basic_material_hides_tools_until_provisioned_and_owner
         BrokerTokenIssueRequest {
             principal_id: "alice".into(), name: "local Basic availability".into(),
             token_class: BrokerTokenClass::AgentInvoke,
-            scopes: json!({"allowedServices":["pending"],"allowedExecutionContexts":["default"]}),
+            scopes: json!({"allowedServices":["pending"],"readOnly": false, "allowedExecutionContexts":["default"]}),
             expires_at: None, created_by: "admin".into(),
         }).unwrap().token;
     let app = broker.app();

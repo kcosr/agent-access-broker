@@ -422,6 +422,7 @@ impl Fixture {
         .unwrap();
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "admin".into(),
@@ -434,6 +435,7 @@ impl Fixture {
             .unwrap();
         store
             .patch_principal_access(PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: "admin".into(),
                 role: Some(PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -442,6 +444,7 @@ impl Fixture {
             .unwrap();
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".into(),
@@ -468,6 +471,7 @@ impl Fixture {
         for group in ["list-members", "list-nonmembers"] {
             store
                 .create_group(GroupWriteRequest {
+                    agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
                     group_id: group.into(),
                     display_name: None,
                     description: None,
@@ -493,7 +497,7 @@ impl Fixture {
         }))
         .unwrap();
         let issue = |name: &str, restrictions: Option<Value>| {
-            let mut scopes = json!({"allowedExecutionContexts":["default"]});
+            let mut scopes = json!({"allowedExecutionContexts":["default"],"readOnly":false});
             if let Some(restrictions) = restrictions {
                 scopes["allowedServices"] = json!(["gitlab"]);
                 scopes["serviceRestrictions"] = json!({"gitlab":restrictions});

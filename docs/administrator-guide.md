@@ -180,7 +180,8 @@ an HTTP method or operation name never assigns that classification automatically
 ## Onboard a human user
 
 In **Admin > Principals > Users**, create the user with a stable principal ID and
-clear display name. Select a role and self-service setting:
+clear display name. Select a role, self-service setting, and **Agent token
+issuance** permission:
 
 | Role | Administrative authority |
 | --- | --- |
@@ -192,6 +193,21 @@ clear display name. Select a role and self-service setting:
 Roles do not grant invocation. Self-service independently controls personal
 credentials, connections, tokens, and activity; turning it off preserves existing
 invocation tokens and credentials. See [roles](roles.md).
+
+In **Overview > Account access**, **Agent token issuance** defaults to **Inherit
+from groups**. On a managed group's Overview, **Token issuance** defaults to
+**Disabled**. Configure Read-only or Write-capable for an intended group, or set
+an explicit account override. The most permissive active group wins; an explicit
+account setting, including Disabled, overrides every group. Disabled groups do
+not contribute, and TOML identity groups cannot supply issuance permission.
+Both new and existing accounts need an explicit permission after upgrade.
+
+Read-only permission still allows **Follow current grants** tokens that inherit
+future reads while blocking writes. Permission changes affect only new personal
+tokens. Administrators can issue either token type from a principal's Tokens tab
+regardless of the owner's personal permission; those forms start with Read-only
+checked. Service accounts require this administrative path. See
+[issuance rules](roles.md#agent-token-issuance).
 
 Create a group before adding members. For local login, enable a temporary password
 in the user's **Overview > Sign-in methods**, deliver it securely, and require
@@ -217,7 +233,8 @@ literal `--token-value`; use a file or environment source.
 ```bash
 agent-access admin principals create alice \
   --kind user --display-name "Alice Example" --email alice@example.com
-agent-access admin groups create agent-users --display-name "Agent users"
+agent-access admin groups create agent-users --display-name "Agent users" \
+  --agent-token-issuance read_only
 agent-access admin principals groups add alice agent-users
 agent-access admin principals password enable alice \
   --acknowledge-separate-sign-in --password-stdin
@@ -257,7 +274,8 @@ path to stop it without affecting the others; disabling the identity token keeps
 its secret. Make a path read-only when an agent connection should only read: it
 can then list and call only actions classified as reads, within the person's
 grants, and Git push through the identity token is refused. Browser sign-in and
-issued Broker tokens keep the person's full grants. Imported actions stay writes
+issued Broker tokens do not inherit the path's setting; tokens retain their
+own stored read-only and other restrictions. Imported actions stay writes
 until you review them as reads, so they are hidden from read-only paths until
 then.
 

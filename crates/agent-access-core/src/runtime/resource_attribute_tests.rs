@@ -395,6 +395,7 @@ async fn private_destination_group_exclusions_and_token_narrowing_apply_before_e
     );
     assert_eq!(send(&runtime, "two").await.status, 403);
     let caveats = AgentInvokeTokenCaveats {
+        read_only: false,
         allowed_services: Some(vec!["attribute_fixture".into()]),
         allowed_execution_contexts: Some(vec![ExecutionContext::new("default").unwrap()]),
         service_restrictions: Some(BTreeMap::from([(

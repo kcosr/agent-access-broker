@@ -1486,7 +1486,10 @@ pub(super) fn validate_imported_source_documents_structure(
 }
 /// The structure every migration through `version` creates, with readable
 /// imported records, including their accepted metadata.
-fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), ManagedStoreError> {
+pub(super) fn validate_structure_through(
+    conn: &Connection,
+    version: &str,
+) -> Result<(), ManagedStoreError> {
     let expected = Connection::open_in_memory().map_err(sql_unavailable)?;
     for migration in MANAGED_STORE_MIGRATIONS {
         expected
@@ -1504,7 +1507,7 @@ fn validate_structure_through(conn: &Connection, version: &str) -> Result<(), Ma
     check_policy_revision_ready(conn)?;
     catalog_at(
         conn,
-        if version == MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION {
+        if version >= MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION {
             ImportSchema::SourceDocuments
         } else {
             ImportSchema::CommandImports
@@ -1663,6 +1666,7 @@ mod tests {
         };
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "admin".into(),
@@ -1675,6 +1679,7 @@ mod tests {
             .unwrap();
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("admin").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -2447,6 +2452,7 @@ mod tests {
             .catalog;
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "second-admin".into(),
@@ -2459,6 +2465,7 @@ mod tests {
             .unwrap();
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("second-admin").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,
@@ -2467,6 +2474,7 @@ mod tests {
             .unwrap();
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("admin").into(),
                 role: Some(crate::PrincipalRole::User),
                 self_service_enabled: None,
@@ -2626,6 +2634,7 @@ mod tests {
         let (_temp, _config, store, ring) = fixture();
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "second-admin".into(),
@@ -2638,6 +2647,7 @@ mod tests {
             .unwrap();
         store
             .patch_principal_access(crate::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: ("second-admin").into(),
                 role: Some(crate::PrincipalRole::Admin),
                 self_service_enabled: None,

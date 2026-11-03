@@ -198,7 +198,7 @@ fn agent(contract: &Contract, broker: &TestBroker, service: &str) -> String {
     contract.fixture.issue(
         "bob",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices":[service], "allowedExecutionContexts":["default"]}),
+        json!({"allowedServices":[service], "readOnly": false, "allowedExecutionContexts":["default"]}),
     )
 }
 

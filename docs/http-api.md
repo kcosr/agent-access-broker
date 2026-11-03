@@ -299,7 +299,8 @@ Health and discovery:
 
 `GET /v1/me` returns the identity summary (`principal`, `groups`,
 `policyGroups` when non-empty, `authenticated`, and `readOnlyAccess` for an
-attested identity) plus `serviceLimits`: the
+attested identity, or `brokerToken: {readOnly: boolean}` for an admitted issued
+`agent_invoke` token) plus `serviceLimits`: the
 caller's effective [service invocation limit](#rate-limits) for each service
 `GET /v1/services` would list for the same request (identity, agent-token
 caveats, grants, and execution context), ordered by service:
@@ -352,6 +353,16 @@ classified as reads, and a write returns 403 `service_action_denied` with reason
 `identity access is read-only`. Issued Broker tokens, browser sessions and other
 identity sources omit it. The identity summaries in `/v1/capabilities` and the
 caller-filtered runtime catalog carry the same field.
+
+Issued invocation tokens instead report `brokerToken: {"readOnly": true}` or
+`{"readOnly": false}`, using their stored restriction. The object appears only
+for a strictly parsed `agent_invoke` token with an issued token ID; management
+tokens, browser sessions and trusted paths omit it, including paths with
+synthetic token caveats. True filters discovery to reads and refuses writes
+with 403 `service_action_denied`, message `broker token is read-only`. False
+adds no read-only ceiling and grants no access. `/v1/capabilities`, the caller
+catalog and `agent-access auth status` expose the same distinction. Neither
+summary member replaces ordinary authorization.
 
 `GET /v1/resource-types` requires an authenticated caller (anonymous callers
 receive `identity_required`, as on the spec routes) and a valid
@@ -667,8 +678,11 @@ persist independently of Microsoft evidence expiry or removal.
 OIDC logout is broker-local: `/v1/auth/logout`
 revokes the broker session but does not end the user's Microsoft SSO session.
 
-`tokenIssuancePolicy.selfAgentInvoke` is present for every authenticated
-session. Admin sessions additionally receive `tokenIssuancePolicy.administered`
+When `[broker_tokens]` is configured, `tokenIssuancePolicy.selfAgentInvoke` is
+present for every authenticated session, including an `access` projection of
+personal issuance permission. Without it the policy is `{}` and issuance is
+unavailable; no missing-member fallback enables issuance. Admin sessions
+additionally receive `tokenIssuancePolicy.administered`
 with `agentInvoke`, `userManage`, and `admin` policies; that object is omitted
 for non-admins. Each policy contains the ordered `options` projected from the
 corresponding `[broker_tokens]` list, a `defaultTtl` string or `null`, and a
@@ -677,6 +691,7 @@ corresponding `[broker_tokens]` list, a `defaultTtl` string or `null`, and a
 ```json
 {
   "selfAgentInvoke": {
+    "access": {"mode": "read_only", "source": "groups", "groupIds": ["engineering-readers"]},
     "defaultTtl": "8h",
     "maxTtl": "30d",
     "options": ["8h", "7d", "30d"]
@@ -982,8 +997,8 @@ Self-service token management:
 | `POST` | `/v1/tokens/{token_id}/pause` |
 | `POST` | `/v1/tokens/{token_id}/resume` |
 
-`GET /v1/tokens/options` returns ordered execution-context and service choices
-from the calling principal's effective policy. Each service reports its
+`GET /v1/tokens/options` includes `agentTokenIssuancePolicy` and returns ordered
+execution-context and service choices from the calling principal's effective policy. Each service reports its
 `service` ID, configured `displayName` (built-in or imported), `brokerHosts`
 (the hosts agents use to reach a gateway service such as Git; `[]` for other
 services), eligible contexts, and its currently eligible actions. Each action
@@ -1004,7 +1019,8 @@ and a `broker_tokens` identity source reads `Authorization` with scheme
 an ASCII (punycode) host and normalized separators. Like `brokerHosts`, it is configuration rather than
 policy. The portal uses it for client setup after issuing an agent token.
 
-`POST /v1/tokens` requires `allowedExecutionContexts` with one or
+`POST /v1/tokens` requires an explicit Boolean `readOnly` and
+`allowedExecutionContexts` with one or
 more unique configured contexts. Optional `allowedServices` and
 `serviceRestrictions` only narrow the token; requested contexts, services,
 and actions must belong to the effective target-principal options. Resource
@@ -1014,14 +1030,17 @@ and never creates permission.
 Omitting `allowedServices` and `serviceRestrictions` is the normal
 policy-following form: the token remains subject to the principal's current
 effective policy and picks up later policy changes within its selected context
-ceiling. The portal uses this form for simple issuance. Its **Advanced** flow
-adds the optional immutable restrictions described below.
+ceiling. With `readOnly: true`, later reads become usable while writes stay
+blocked. **Follow current grants** remains valid with mixed read/write grants;
+it does not explicitly select those actions. **Restrict to selected** adds the
+optional immutable restrictions described below.
 
 The specialized issue body accepts the canonical restriction shape:
 
 ```json
 {
   "name": "confluence-reader",
+  "readOnly": true,
   "allowedServices": ["confluence"],
   "allowedExecutionContexts": ["internal"],
   "serviceRestrictions": {
@@ -1042,6 +1061,25 @@ groups retain live membership. Resource contexts and group exclusions apply
 when the token is used, intersected with current grants. Selections may be saved
 with no current effective access. Raw scope values and `resourceScopes` input
 are not accepted.
+
+Every issue/preview request must supply `readOnly: true` or `false`; omitted,
+null, numeric and string values return 400 `input_invalid`. New read-only
+issuance rejects an explicitly selected current write action, even if the
+account is permitted to issue write-capable tokens. Inherited read-only tokens
+need an effective invocation grant, but not a usable read or credential today.
+`readOnly: false` is write-capable even when its selected actions are all reads.
+
+Personal issuance checks the account's current [issuance permission](roles.md#agent-token-issuance)
+inside the insertion transaction, after ordinary validation and prerequisites.
+A refusal is 403 `token_issuance_denied`, with `details.category` equal to
+`disabled` ("Agent token issuance is disabled for this account") or
+`read_only_required` ("This account may issue only read-only agent tokens").
+Body/name validation, token hasher availability, the empty-grants check, scope
+validation, expiry and audit preflight precede transactional active-account,
+self-service and issuance-policy checks. Thus no grants still returns the
+existing grant denial, and an explicitly selected write with `readOnly: true`
+returns 400 before the policy check. Disabling issuance does not prevent token
+inspection, preview, pause/resume or revocation under their existing permissions.
 
 `POST /v1/tokens` accepts at most one of `ttl`, `expiresAt`, or
 `never = true`. A finite `ttl` must match
@@ -1209,6 +1247,39 @@ services, credential, policy, and `agent-tokens` routes remain available to
 global administrators. Management-class tokens owned by service accounts fail
 with `broker_token_class_denied` at resolution and cannot enable login.
 
+Principal create accepts optional `agentTokenIssuance`: `inherit` (default),
+`disabled`, `read_only`, or `write_capable`. `POST /v1/admin/principals` is
+create-only: an existing principal returns HTTP 409, even when the body supplies
+different settings, and remains unchanged. Internal onboarding upserts preserve
+existing issuance overrides. Change existing settings through
+`PATCH /v1/admin/principals/{principal}/access`, whose optional fields are `role`,
+`selfServiceEnabled`, and `agentTokenIssuance`. Any one suffices; omitted fields
+are unchanged, and null/unknown values are invalid. An issuance-only no-op writes
+nothing; an actual issuance-only edit has no role-change side effects.
+Personal account-profile updates cannot change the setting.
+
+Principal records include configured `agentTokenIssuance`; detail and both
+personal and administrative token-options responses include
+`agentTokenIssuancePolicy`, for example:
+
+```json
+{"mode":"read_only","source":"groups","groupIds":["engineering-readers"]}
+```
+
+`mode` is `disabled`, `read_only`, or `write_capable`; `source` is `user`,
+`groups`, or `default`. Sorted, deduplicated `groupIds` contains only active
+contributing groups at the winning mode, or is empty for an override/default.
+This reports permission for the owner's next personal token, not whether all
+other issuance prerequisites hold. Session
+`tokenIssuancePolicy.selfAgentInvoke.access` carries the same projection.
+
+Managed group create and PATCH accept `agentTokenIssuance` with `disabled`
+(default on create), `read_only`, or `write_capable`; groups reject `inherit`.
+Omission on PATCH preserves the value. Every group record includes the field.
+TOML identity group reads report `disabled`, and group writes remain refused:
+file-owned groups provide no issuance contribution. See
+[resolution and membership](roles.md#agent-token-issuance).
+
 `PUT /v1/admin/principals/{principal}/login-methods/local-password` resets an
 existing active local password. It accepts
 `{"password":"...","mustChangePassword":true}`; the second field defaults to
@@ -1362,7 +1433,8 @@ edits, and group writes require the browser CSRF header. Principal-scoped
 issue/inspect/pause/resume/revoke remains available through the broader
 `/tokens` admin routes.
 
-`POST /v1/admin/principals/{principal}/agent-tokens` accepts at most one of
+`POST /v1/admin/principals/{principal}/agent-tokens` requires a top-level Boolean
+`readOnly` and accepts at most one of
 `ttl`, `expiresAt`, or `never = true`. Finite `ttl` values must match
 `broker_tokens.admin_agent_invoke_ttl_options`; `never = true` is accepted only
 when that list contains `never`. An explicit future `expiresAt` is an advanced
@@ -1376,7 +1448,11 @@ effective choices, while optional `allowedServices` and
 are calculated for the target principal, not the administrative actor. The
 response has the same shape as `GET /v1/tokens/options`, including each
 service's `displayName` and `brokerHosts` and each action's `readOnly`. Its
-`mcp` is `null` for auditors, who cannot issue the token.
+`mcp` is `null` for auditors, who cannot issue the token. Its
+`agentTokenIssuancePolicy` describes the target owner's personal permission;
+administrative issuance uses administrator write authority and may select either
+Boolean regardless of the owner's personal mode or self-service flag. An admin
+using the personal route still follows the personal policy.
 
 `POST /v1/admin/principals/{principal}/tokens` is the generic admin broker-token
 issue route. It accepts `tokenClass`, optional `scopes`, and at most one of
@@ -1388,11 +1464,12 @@ malformed or past `expiresAt`, conflicting inputs, disallowed choices, and
 `never = true` for a non-agent class return `input_invalid`. A future
 `expiresAt` is not constrained to the duration choices. For
 `tokenClass = "agent_invoke"`, `scopes` is required and uses the same typed
-`allowedExecutionContexts`, optional `allowedServices`, and optional canonical
+required Boolean `readOnly`, required `allowedExecutionContexts`, optional
+`allowedServices`, and optional canonical
 `serviceRestrictions` caveat; arbitrary or unknown caveat keys are rejected.
 Management token classes retain their
 existing scope shape, including an omitted scope object, but reject the
-agent-only `allowedExecutionContexts`, `allowedServices`, and
+agent-only `readOnly` (including false), `allowedExecutionContexts`, `allowedServices`, and
 `serviceRestrictions` keys so management
 tokens cannot be mislabeled as context- or service-bound. Omitted expiry uses
 the configured default for the selected class; if that default is absent,
@@ -1406,11 +1483,19 @@ alter stored `expiresAt` values, and existing finite or non-expiring tokens keep
 the same inspection, pause/resume, and revocation behavior.
 
 List, inspect, issue, pause, and resume results return a stored boundary under
-`record.scopes.serviceRestrictions`. It cannot be patched. Current grant or
+`record.scopes`, including the required `readOnly` Boolean for agent tokens
+and any `serviceRestrictions`. It cannot be patched. Current grant or
 group changes may make stored values unavailable without deleting them; a
 matching restoration makes them usable again. Audit records include the
 canonical safe boundary, actor, target owner, token metadata, and sanitized
-result, but never the raw token secret.
+result, but never the raw token secret. Agent-token completion
+`providerAudit.management.target` includes
+`boundary.readOnly`, `issuanceAuthority` (`personal` or `administrative`), and
+`agentTokenIssuancePolicy` only for personal issuance, captured with insertion.
+A policy refusal carries `providerAudit.management.details.category`; the API exposes
+`details.category`. Commit and the completion attempt survive disconnect. If
+completion fails after commit, the response is audit-unavailable without the
+one-time secret; the token row remains and issuance must not be retried automatically.
 
 Principal-scoped and general-admin pause/resume routes accept only
 `agent_invoke` tokens; browser-session, `user_manage`, and `admin` tokens cannot
@@ -1624,8 +1709,13 @@ permission and preserves its effect in exclusions. See [resources.md](resources.
 `{service, actions, executionContexts, resources}`. `POST
 /v1/tokens/effective-access` previews the calling principal's token caveats;
 `POST /v1/admin/principals/{principal}/agent-token-effective-access` previews
-for an administered principal. Token previews accept `allowedExecutionContexts`
-and optional `allowedServices` / `serviceRestrictions`. Responses contain
+for an administered principal. Token previews require Boolean `readOnly` and
+`allowedExecutionContexts`, with optional `allowedServices` /
+`serviceRestrictions`. They use the proposed/stored token restriction, not the
+owner's issuance mode or the manager's login path. Retained selections whose
+grants or classifications changed remain valid preview inputs and show their
+current intersection; a read-only token's reclassified write contributes no
+access. Responses contain
 `policyGeneration` and `access`, with service/action/context/resource-type rows
 and separate `clauses`. Each clause contains `included` / `excluded` selectors
 and may also contain `excludedRequests`, an array of boundaries with their own
@@ -1713,7 +1803,8 @@ role changes, token revocation, credential classes, and database operations.
 An assignment is management authority only. It does not create an invocation
 grant or permit issuing tokens for another principal. Managers retain normal
 self-service token issuance, but a self-issued `agent_invoke` token still
-requires at least one effective invocation grant; the assignment alone is not
+requires explicit issuance permission and at least one effective invocation
+grant; the assignment alone is not
 enough.
 
 ### Config reload and status
@@ -2951,7 +3042,7 @@ reason code in the sanitized portal error URL.
 | 400 | `identity_assertion_invalid`, `identity_assertion_unsupported`, `request_id_missing`, `request_id_invalid`, `input_invalid`, `oidc_flow_invalid`, `oidc_flow_expired`, `invalid_draft_handle`, `policy_authority_unavailable`, `policy_validation_failed`, `body_malformed`, `gateway_host_invalid`, `gateway_query_denied`, `gateway_header_denied`, `gateway_request_body_denied`, `git_service_denied`, `git_pkt_line_malformed`, `config_parse_failed`, `config_validation_failed` |
 | 401 | `caller_authentication_required`, `caller_authentication_invalid`, `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_revoked`, `broker_token_paused`, `gateway_auth_required`, `gateway_auth_invalid`, `local_login_failed`, `local_login_locked`, `oidc_provider_denied`, `oidc_identity_invalid`, `oidc_sign_in_required` |
 | 404 | `identity_binding_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
-| 403 | `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
+| 403 | `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `token_issuance_denied`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
 | 409 | `identity_binding_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
 | 405 | `gateway_method_denied` |
 | 408 | `operation_cancelled` |

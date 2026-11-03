@@ -18,7 +18,8 @@ HTTP-MCP-only username assertion as CLI identity, or weaken TLS verification.
 An already configured managed fingerprint ingress can use `--no-token` to
 bypass inherited token configuration without reading the workspace token.
 Otherwise retain ordinary configured identity. `agent-access auth status` shows
-managed `readOnlyAccess`; read-only paths list and execute only classified reads,
+path-only `readOnlyAccess` and issued-token `brokerToken.readOnly`. Either true
+value limits listing and execution to classified reads,
 with normal grants. Unreviewed imported actions count as writes. Local file
 output remains available. Report a write's need for a writable connection;
 do not switch identity or access paths to evade the restriction.

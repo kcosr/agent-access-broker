@@ -296,13 +296,14 @@ test("server-default discovery and group-granted personal connections need no cr
   expect(calls.some((call) => call.method === "tools/list")).toBe(true);
   expect(calls.every((call) => call.account === "discovery")).toBe(true);
 
-  await managementRequest(page, "/v1/admin/principals", { principalId: "reader", kind: "user", role: "user", selfServiceEnabled: true });
+  await managementRequest(page, "/v1/admin/principals", { principalId: "reader", kind: "user", role: "user", selfServiceEnabled: true, agentTokenIssuance: "write_capable" });
   await managementRequest(page, "/v1/admin/principals/reader/login-methods/local-password/enable", { password: "reader-password", mustChangePassword: false, acknowledgeSeparateSignIn: true });
   await managementRequest(page, "/v1/admin/groups", { groupId: "metric-readers", displayName: "Metric readers" });
   await managementRequest(page, "/v1/admin/groups/metric-readers/members/reader", undefined, "PUT");
   await managementRequest(page, "/v1/admin/policy/grants", { grantId: "metrics-admin", service: "metrics", subjects: ["user:admin"], actions: ["query"], credentialMode: "per_user", executionContexts: ["internal"], resources: { resourceIds: [], resourceGroupIds: [] }, status: "active" });
   await managementRequest(page, "/v1/admin/policy/grants", { grantId: "metrics-readers", service: "metrics", subjects: ["group:metric-readers"], actions: ["query"], credentialMode: "per_user", executionContexts: ["internal"], resources: { resourceIds: [], resourceGroupIds: [] }, status: "active" });
-  const tokenRequest = { name: "default-permissions-agent", ttl: "8h", allowedServices: ["metrics"], allowedExecutionContexts: ["internal"] };
+  await managementRequest(page, "/v1/admin/principals/admin/access", { agentTokenIssuance: "write_capable" }, "PATCH");
+  const tokenRequest = { readOnly: false, name: "default-permissions-agent", ttl: "8h", allowedServices: ["metrics"], allowedExecutionContexts: ["internal"] };
   const adminToken = await managementRequest<{ token: string }>(page, "/v1/tokens", tokenRequest);
   await refreshThroughRead(adminToken.token, "discovery");
   await page.reload();

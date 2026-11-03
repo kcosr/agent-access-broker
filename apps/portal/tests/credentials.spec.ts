@@ -86,7 +86,7 @@ type Lists = {
  * and every write as `METHOD path` with its body.
  */
 async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", start = "/ui/credentials", lists: Lists = { credentials, targets: [target], botCredentials, botTargets: [] }) {
-  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
+  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
   const writes: Array<{ request: string; body: unknown }> = [];
   const reads: string[] = [];
   const errors: string[] = [];
@@ -101,7 +101,7 @@ async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", 
     if (pathname === "/v1/auth/session") result = session;
     else if (pathname === "/v1/resource-types") result = { resourceTypes: RESOURCE_TYPES };
     else if (pathname === "/v1/me") result = { serviceLimits: [] };
-    else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, executionContexts: ["default"], services: [], resources: [], resourceGroups: [] };
+    else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, executionContexts: ["default"], services: [], resources: [], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = lists.targets;
     else if (pathname === "/v1/credentials") result = lists.credentials;
     else if (pathname === "/v1/oauth/connections") result = oauthConnections;
@@ -122,7 +122,7 @@ async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", 
 }
 
 // A service account that lost every grant on the jira connection still owns its active token.
-const bot = { principalId: "bot", kind: "service_account", role: "user", selfServiceEnabled: false, displayName: "Build bot", groups: [], status: "active", ...stamp, signInMethods: { localPassword: "absent", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] };
+const bot = { principalId: "bot", kind: "service_account", role: "user", selfServiceEnabled: false, displayName: "Build bot", groups: [], status: "active", ...stamp, signInMethods: { localPassword: "absent", microsoft: "absent" }, agentTokenIssuance: "inherit", agentTokenIssuancePolicy: { mode: "disabled", source: "default", groupIds: [] }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] };
 const botToken = { credentialId: "credential-bot-jira", ownerPrincipal: "bot", ownerKind: "user", connection: "jira", profile: "atlassian-api-token", label: null, credentialKind: "basic_api_token", metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp };
 const botCredentials = {
   connections: [{ connection: "jira", displayName: "Jira", method: "token", consumers: [], otherConsumers: 1, tokenProfiles: [{ profile: "atlassian-api-token", label: null, credentialKind: "basic_api_token", inputSchema: { connection: "jira", profile: "atlassian-api-token", credentialKind: "basic_api_token", fields: [] } }], registration: null, credential: botToken }],

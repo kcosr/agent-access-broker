@@ -391,6 +391,7 @@ async fn upload_requires_admin_and_browser_csrf_before_publication() {
         .managed_store()
         .unwrap()
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "bob".into(),
             role: Some(PrincipalRole::Auditor),
             self_service_enabled: None,

@@ -229,7 +229,8 @@ test("uploaded Swagger source persists through authentication setup, offline rel
   await page.getByRole("alertdialog", { name: "Enable inventory?", exact: true }).getByRole("button", { name: "Enable service" }).click();
   await expect(page.getByRole("alertdialog")).not.toBeVisible();
   await browserManagementRequest(page, "/v1/admin/policy/grants", { method: "POST", body: { grantId: "inventory-admin", service: "inventory", subjects: ["user:admin"], actions: ["search", "erase"], credentialMode: "service", executionContexts: ["internal"], resources: { resourceIds: [], resourceGroupIds: [] }, status: "active" } });
-  const token = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { name: "uploaded-source", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
+  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: "write_capable" } });
+  const token = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { readOnly: false, name: "uploaded-source", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const invoke = (action: string, inputs: unknown) => fetch(`${baseUrl}/v1/invoke/inventory/${action}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token.token}`, "X-Agent-Access-Request-Id": randomUUID() }, body: JSON.stringify({ inputs }) });
   const response = await invoke("search", { body: { query: "open items", ids: "123,456" } });
   expect(response.ok, await response.text()).toBe(true);

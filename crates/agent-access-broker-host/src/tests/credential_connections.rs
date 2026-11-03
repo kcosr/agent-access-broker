@@ -196,6 +196,7 @@ async fn fixture(jira: &str) -> Fixture {
     ] {
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.to_string(),
@@ -213,6 +214,7 @@ async fn fixture(jira: &str) -> Fixture {
     ] {
         store
             .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: principal.into(),
                 role: Some(role),
                 self_service_enabled: None,
@@ -734,6 +736,7 @@ async fn owners_keep_cleanup_after_grant_loss_but_cannot_set_up_or_verify() {
     fixture
         .store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "bob".into(),
             role: None,
             self_service_enabled: Some(false),
@@ -1204,6 +1207,7 @@ async fn classless_fixture() -> ClasslessFixture {
     let store = broker.runtime().managed_store().unwrap().clone();
     store
         .create_or_update_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "alice".to_string(),

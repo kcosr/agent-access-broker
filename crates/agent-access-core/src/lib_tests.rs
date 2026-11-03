@@ -1638,29 +1638,65 @@ fn execution_context_value_type_enforces_canonical_safe_slugs() {
 }
 
 #[test]
+fn agent_invoke_caveats_require_an_explicit_boolean_read_only_ceiling() {
+    for read_only in [false, true] {
+        let scopes = serde_json::json!({
+            "readOnly": read_only,
+            "allowedExecutionContexts": ["default"]
+        });
+        for parsed in [
+            AgentInvokeTokenCaveats::parse_stored(&scopes),
+            AgentInvokeTokenCaveats::parse_issuance(&scopes, None),
+        ] {
+            let parsed = parsed.unwrap();
+            assert_eq!(parsed.read_only, read_only);
+            assert_eq!(parsed.to_scopes_value(), scopes);
+        }
+    }
+    for invalid in [
+        serde_json::json!({"allowedExecutionContexts": ["default"]}),
+        serde_json::json!({"allowedExecutionContexts": ["default"], "readOnly": null}),
+        serde_json::json!({"allowedExecutionContexts": ["default"], "readOnly": 0}),
+        serde_json::json!({"allowedExecutionContexts": ["default"], "readOnly": "true"}),
+        serde_json::json!({"allowedExecutionContexts": ["default"], "read_only": true}),
+    ] {
+        assert!(
+            AgentInvokeTokenCaveats::parse_stored(&invalid).is_err(),
+            "{invalid}"
+        );
+        assert!(
+            AgentInvokeTokenCaveats::parse_issuance(&invalid, None).is_err(),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn stored_agent_invoke_caveats_require_context_binding() {
     assert!(
-        AgentInvokeTokenCaveats::parse_stored(&serde_json::json!({"allowedServices":["jira"]}))
-            .is_err()
+        AgentInvokeTokenCaveats::parse_stored(
+            &serde_json::json!({"readOnly":false,"allowedServices":["jira"]})
+        )
+        .is_err()
     );
     let valid = AgentInvokeTokenCaveats::parse_stored(&serde_json::json!({
-        "allowedServices":["jira"], "allowedExecutionContexts":["internal"]
+        "allowedServices":["jira"], "readOnly": false, "allowedExecutionContexts":["internal"]
     }))
     .unwrap();
     assert_eq!(valid.allowed_services, Some(vec!["jira".to_string()]));
     assert!(valid.service_restrictions.is_none());
     for malformed in [
-        serde_json::json!({"allowedExecutionContexts":null}),
-        serde_json::json!({"allowedExecutionContexts":[]}),
-        serde_json::json!({"allowedExecutionContexts":"internal"}),
-        serde_json::json!({"allowedExecutionContexts":["internal","internal"]}),
-        serde_json::json!({"allowedExecutionContexts":["Internal"]}),
-        serde_json::json!({"allowedServices":null,"allowedExecutionContexts":["internal"]}),
-        serde_json::json!({"allowedServices":[],"allowedExecutionContexts":["internal"]}),
-        serde_json::json!({"allowedServices":["jira","jira"],"allowedExecutionContexts":["internal"]}),
-        serde_json::json!({"allowedServices":["not a service"],"allowedExecutionContexts":["internal"]}),
-        serde_json::json!({"serviceRestrictions":null,"allowedExecutionContexts":["internal"]}),
-        serde_json::json!({"futureSecurityBoundary":true,"allowedExecutionContexts":["internal"]}),
+        serde_json::json!({"readOnly": false, "allowedExecutionContexts":null}),
+        serde_json::json!({"readOnly": false, "allowedExecutionContexts":[]}),
+        serde_json::json!({"readOnly": false, "allowedExecutionContexts":"internal"}),
+        serde_json::json!({"readOnly": false, "allowedExecutionContexts":["internal","internal"]}),
+        serde_json::json!({"readOnly": false, "allowedExecutionContexts":["Internal"]}),
+        serde_json::json!({"allowedServices":null,"readOnly": false, "allowedExecutionContexts":["internal"]}),
+        serde_json::json!({"allowedServices":[],"readOnly": false, "allowedExecutionContexts":["internal"]}),
+        serde_json::json!({"allowedServices":["jira","jira"],"readOnly": false, "allowedExecutionContexts":["internal"]}),
+        serde_json::json!({"allowedServices":["not a service"],"readOnly": false, "allowedExecutionContexts":["internal"]}),
+        serde_json::json!({"serviceRestrictions":null,"readOnly": false, "allowedExecutionContexts":["internal"]}),
+        serde_json::json!({"futureSecurityBoundary":true,"readOnly": false, "allowedExecutionContexts":["internal"]}),
     ] {
         assert!(
             AgentInvokeTokenCaveats::parse_stored(&malformed).is_err(),
@@ -1672,7 +1708,7 @@ fn stored_agent_invoke_caveats_require_context_binding() {
 #[test]
 fn agent_invoke_service_restrictions_round_trip_canonically() {
     let caveats = AgentInvokeTokenCaveats::parse_stored(&serde_json::json!({
-        "allowedServices":["confluence","gitlab"], "allowedExecutionContexts":["internal"],
+        "allowedServices":["confluence","gitlab"], "readOnly": false, "allowedExecutionContexts":["internal"],
         "serviceRestrictions":{
             "gitlab":{"actions":["project.view","commit.view"],"resources":{"resourceIds":["payments"],"resourceGroupIds":["engineering"]}},
             "confluence":{"actions":["search","page.view"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}
@@ -1681,7 +1717,7 @@ fn agent_invoke_service_restrictions_round_trip_canonically() {
     assert_eq!(
         caveats.to_scopes_value(),
         serde_json::json!({
-            "allowedServices":["confluence","gitlab"], "allowedExecutionContexts":["internal"],
+            "allowedServices":["confluence","gitlab"], "readOnly": false, "allowedExecutionContexts":["internal"],
             "serviceRestrictions":{
                 "gitlab":{"actions":["commit.view","project.view"],"resources":{"resourceIds":["payments"],"resourceGroupIds":["engineering"]}},
                 "confluence":{"actions":["page.view","search"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}
@@ -1689,7 +1725,7 @@ fn agent_invoke_service_restrictions_round_trip_canonically() {
         })
     );
     let follow = AgentInvokeTokenCaveats::parse_stored(&serde_json::json!({
-        "allowedServices":["jira"], "allowedExecutionContexts":["internal"],
+        "allowedServices":["jira"], "readOnly": false, "allowedExecutionContexts":["internal"],
         "serviceRestrictions":{"jira":{"actions":["issue.view"]}}
     }))
     .unwrap();
@@ -1722,17 +1758,17 @@ fn agent_invoke_service_restrictions_reject_invalid_structure() {
         serde_json::json!({"actions":["issue.view"],"resourceScopes":{"project":["ENG"]}}),
         serde_json::json!({"actions":["issue.view"],"resources":{},"futureBoundary":true}),
     ] {
-        let malformed = serde_json::json!({"allowedServices":["jira"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"jira":restriction}});
+        let malformed = serde_json::json!({"allowedServices":["jira"],"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{"jira":restriction}});
         assert!(
             AgentInvokeTokenCaveats::parse_stored(&malformed).is_err(),
             "accepted {malformed}"
         );
     }
     for malformed in [
-        serde_json::json!({"allowedServices":["jira"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{}}),
-        serde_json::json!({"allowedExecutionContexts":["internal"],"serviceRestrictions":{"jira":{"actions":["issue.view"]}}}),
-        serde_json::json!({"allowedServices":["jira"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"confluence":{"actions":["page.view"]}}}),
-        serde_json::json!({"allowedServices":["jira"],"allowedExecutionContexts":["internal"],"serviceRestrictions":{"not a service":{"actions":["issue.view"]}}}),
+        serde_json::json!({"allowedServices":["jira"],"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{}}),
+        serde_json::json!({"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{"jira":{"actions":["issue.view"]}}}),
+        serde_json::json!({"allowedServices":["jira"],"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{"confluence":{"actions":["page.view"]}}}),
+        serde_json::json!({"allowedServices":["jira"],"readOnly": false, "allowedExecutionContexts":["internal"],"serviceRestrictions":{"not a service":{"actions":["issue.view"]}}}),
     ] {
         assert!(
             AgentInvokeTokenCaveats::parse_stored(&malformed).is_err(),
@@ -1750,7 +1786,7 @@ fn new_agent_invoke_caveats_are_finite_and_configured() {
     let issued = AgentInvokeTokenCaveats::parse_issuance(
         &serde_json::json!({
             "allowedServices": ["jira", "confluence"],
-            "allowedExecutionContexts": ["workstation", "external"]
+            "readOnly": false, "allowedExecutionContexts": ["workstation", "external"]
         }),
         Some(&configured),
     )
@@ -1759,20 +1795,20 @@ fn new_agent_invoke_caveats_are_finite_and_configured() {
         issued.to_scopes_value(),
         serde_json::json!({
             "allowedServices": ["jira", "confluence"],
-            "allowedExecutionContexts": ["workstation", "external"]
+            "readOnly": false, "allowedExecutionContexts": ["workstation", "external"]
         })
     );
 
     assert!(matches!(
         AgentInvokeTokenCaveats::parse_issuance(
-            &serde_json::json!({"allowedServices": ["jira"]}),
+            &serde_json::json!({"readOnly":false,"allowedServices": ["jira"]}),
             Some(&configured),
         ),
         Err(AgentInvokeTokenCaveatError::ExecutionContextsRequired)
     ));
     assert!(matches!(
         AgentInvokeTokenCaveats::parse_issuance(
-            &serde_json::json!({"allowedExecutionContexts": ["internal"]}),
+            &serde_json::json!({"readOnly": false, "allowedExecutionContexts": ["internal"]}),
             Some(&configured),
         ),
         Err(AgentInvokeTokenCaveatError::ExecutionContextNotConfigured { context })
@@ -1780,25 +1816,25 @@ fn new_agent_invoke_caveats_are_finite_and_configured() {
     ));
     AgentInvokeTokenCaveats::parse_issuance(
         &serde_json::json!({
-            "allowedExecutionContexts": ["workstation", "external"]
+            "readOnly": false, "allowedExecutionContexts": ["workstation", "external"]
         }),
         Some(&configured),
     )
     .unwrap();
     AgentInvokeTokenCaveats::parse_issuance(
-        &serde_json::json!({"allowedExecutionContexts": ["external"]}),
+        &serde_json::json!({"readOnly": false, "allowedExecutionContexts": ["external"]}),
         Some(&configured),
     )
     .unwrap();
 
     AgentInvokeTokenCaveats::parse_issuance(
-        &serde_json::json!({"allowedExecutionContexts": ["default"]}),
+        &serde_json::json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
         None,
     )
     .unwrap();
     assert!(matches!(
         AgentInvokeTokenCaveats::parse_issuance(
-            &serde_json::json!({"allowedExecutionContexts": ["external"]}),
+            &serde_json::json!({"readOnly": false, "allowedExecutionContexts": ["external"]}),
             None,
         ),
         Err(AgentInvokeTokenCaveatError::ExecutionContextNotConfigured { context })

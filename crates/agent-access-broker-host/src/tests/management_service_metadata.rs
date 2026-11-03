@@ -118,6 +118,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
     for principal in ["alice", "admin", "auditor"] {
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.to_string(),
@@ -135,6 +136,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
     ] {
         store
             .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
                 principal_id: principal.into(),
                 role: Some(role),
                 self_service_enabled: None,

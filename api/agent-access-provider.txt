@@ -1509,6 +1509,7 @@ pub agent_access_provider::ReasonCode::RightMissing
 pub agent_access_provider::ReasonCode::ScopeUnresolved
 pub agent_access_provider::ReasonCode::SelfServiceDisabled
 pub agent_access_provider::ReasonCode::ServiceActionDenied
+pub agent_access_provider::ReasonCode::TokenIssuanceDenied
 pub agent_access_provider::ReasonCode::UpstreamConnectionFailed
 pub agent_access_provider::ReasonCode::UpstreamFailed
 pub agent_access_provider::ReasonCode::UpstreamForbidden

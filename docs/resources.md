@@ -327,7 +327,10 @@ access.
 ## Token restrictions
 
 Agent tokens remain bounded by current principal grants and their own service,
-action, and execution-context caveats. Within a service restriction:
+action, execution-context and required `readOnly` caveats. True allows only
+current reviewed reads, even without service restrictions and when later grants
+add writes. False adds no read-only ceiling. Issuance permission affects only
+new tokens, not this ongoing intersection. Within a service restriction:
 
 - Omitted `resources` means no additional resource restriction: follow grants.
 - Present `resources` means a restriction, including when both lists are empty.
@@ -338,6 +341,7 @@ For example:
 ```json
 {
   "name": "collaboration-reader",
+  "readOnly": true,
   "allowedExecutionContexts": ["external"],
   "allowedServices": ["confluence"],
   "serviceRestrictions": {

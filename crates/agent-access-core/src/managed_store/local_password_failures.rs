@@ -293,6 +293,7 @@ mod tests {
         let (_, store) = store_at(&temp, "store.sqlite");
         store
             .create_or_update_principal(PrincipalWriteRequest {
+                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "alice".into(),

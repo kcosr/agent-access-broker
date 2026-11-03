@@ -3884,6 +3884,7 @@ mod tests {
         .unwrap();
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "gateway-user".to_string(),
@@ -3906,7 +3907,7 @@ mod tests {
                     token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
                     scopes: json!({
                         "allowedServices": ["gitlab_git"],
-                        "allowedExecutionContexts": ["default"],
+                        "readOnly": false, "allowedExecutionContexts": ["default"],
                         "serviceRestrictions": {
                             "gitlab_git": {
                                 "actions": [token_action]
@@ -4458,6 +4459,7 @@ mod tests {
         .unwrap();
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "gateway-user".to_string(),
@@ -4480,7 +4482,7 @@ mod tests {
                     token_class: agent_access_core::BrokerTokenClass::AgentInvoke,
                     scopes: json!({
                         "allowedServices": ["gitlab_git"],
-                        "allowedExecutionContexts": ["default"],
+                        "readOnly": false, "allowedExecutionContexts": ["default"],
                         "serviceRestrictions": {
                             "gitlab_git": {
                                 "actions": ["repo.fetch"],
@@ -5460,6 +5462,7 @@ mod tests {
         for principal in ["gateway-user", "denied-user"] {
             store
                 .create_principal(agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
                     role: agent_access_core::PrincipalRole::User,
                     self_service_enabled: None,
                     principal_id: principal.into(),
@@ -5470,7 +5473,7 @@ mod tests {
                     created_by: "test".into(),
                 })
                 .unwrap();
-            tokens.push(store.issue_broker_token(&hasher, agent_access_core::BrokerTokenIssueRequest { principal_id: principal.into(), name: "cache test".into(), token_class: agent_access_core::BrokerTokenClass::AgentInvoke, scopes: json!({"allowedServices":["gitlab_git"], "allowedExecutionContexts":["default"]}), expires_at: None, created_by: "test".into() }).unwrap().token);
+            tokens.push(store.issue_broker_token(&hasher, agent_access_core::BrokerTokenIssueRequest { principal_id: principal.into(), name: "cache test".into(), token_class: agent_access_core::BrokerTokenClass::AgentInvoke, scopes: json!({"allowedServices":["gitlab_git"], "readOnly": false, "allowedExecutionContexts":["default"]}), expires_at: None, created_by: "test".into() }).unwrap().token);
         }
         drop(store);
         let runtime = BrokerRuntime::new(config).unwrap();
@@ -6623,6 +6626,7 @@ mod tests {
         .unwrap();
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "gateway-user".to_string(),
@@ -6825,6 +6829,7 @@ mod tests {
         .unwrap();
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "gateway-user".to_string(),

@@ -27,6 +27,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 use url::form_urlencoded;
 
 #[derive(Debug, Clone, Copy)]
@@ -72,6 +74,8 @@ pub(crate) struct ManagementEnvelope {
     result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<agent_access_core::ErrorBody>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +128,7 @@ pub(super) struct AgentTokenIssueBody {
     pub(super) expires_at: Option<String>,
     #[serde(default)]
     pub(super) never: bool,
+    pub(super) read_only: bool,
     pub(super) allowed_services: Option<Vec<String>>,
     pub(super) allowed_execution_contexts: Vec<String>,
     pub(super) service_restrictions: Option<BTreeMap<String, AgentTokenServiceRestrictionBody>>,
@@ -317,12 +322,14 @@ pub(super) fn admin_agent_token_issue_expires_at(
 
 pub(super) fn agent_token_issue_scopes(
     runtime: &BrokerRuntime,
+    read_only: bool,
     allowed_services: Option<Vec<String>>,
     allowed_execution_contexts: Vec<String>,
     service_restrictions: Option<BTreeMap<String, AgentTokenServiceRestrictionBody>>,
     options: &AgentTokenOptions,
 ) -> Result<Value, String> {
     let mut scopes = serde_json::Map::new();
+    scopes.insert("readOnly".to_string(), json!(read_only));
     if let Some(allowed_services) = allowed_services {
         scopes.insert("allowedServices".to_string(), json!(allowed_services));
     }
@@ -355,6 +362,7 @@ pub(super) fn parse_and_validate_agent_token_issue_scopes(
 
 pub(super) fn agent_token_boundary_audit(scopes: &Value) -> Value {
     json!({
+        "readOnly": scopes.get("readOnly").cloned(),
         "allowedServices": scopes.get("allowedServices").cloned(),
         "allowedExecutionContexts": scopes.get("allowedExecutionContexts").cloned(),
         "serviceRestrictions": scopes.get("serviceRestrictions").cloned(),
@@ -419,6 +427,11 @@ pub(super) fn validate_agent_token_options(
         for action in &restriction.actions {
             let option = service_option.actions.iter().find(|option| option.action == *action)
                 .ok_or_else(|| format!("serviceRestrictions action is not available to the principal: {service}.{action}"))?;
+            if caveats.read_only && !option.read_only {
+                return Err(format!(
+                    "readOnly tokens cannot select write actions: {service}.{action}"
+                ));
+            }
             if !option
                 .execution_contexts
                 .iter()
@@ -512,6 +525,136 @@ where
             operation(store, catalog)
         })
         .await
+}
+
+pub(crate) fn agent_token_issuance_authority(
+    config: &BrokerConfig,
+) -> agent_access_core::AgentTokenIssuanceAuthority {
+    if config.identity.authority == "managed" {
+        agent_access_core::AgentTokenIssuanceAuthority::Managed
+    } else {
+        agent_access_core::AgentTokenIssuanceAuthority::Toml
+    }
+}
+
+pub(super) async fn agent_token_issuance_policy(
+    context: &ManagementContext,
+    principal: String,
+) -> Result<agent_access_core::AgentTokenIssuancePolicy, agent_access_core::ManagedStoreError> {
+    let authority = agent_token_issuance_authority(context.snapshot.runtime.config());
+    management_store_call(context, move |store| {
+        store.agent_token_issuance_policy(&principal, authority)
+    })
+    .await
+}
+
+/// Own insertion and its completion audit together, independently of response
+/// delivery. A failed completion still withholds the secret after the commit.
+pub(crate) async fn committed_token_issuance<F, R>(
+    state: AppState,
+    context: ManagementContext,
+    operation: &'static str,
+    target: Option<Value>,
+    personal: bool,
+    mutate: F,
+    render: R,
+) -> axum::response::Response
+where
+    F: FnOnce(
+            agent_access_core::ManagedStore,
+            Option<agent_access_core::ManagedResourceCatalog>,
+        )
+            -> Result<agent_access_core::IssuedBrokerToken, agent_access_core::ManagedStoreError>
+        + Send
+        + 'static,
+    R: FnOnce(agent_access_core::IssuedBrokerToken) -> Value + Send + 'static,
+{
+    let context = Arc::new(context);
+    let owner_context = context.clone();
+    let owner_target = target.clone();
+    let owner = tokio::spawn(
+        async move {
+            let context = owner_context;
+            match management_token_store_call(&state, &context, mutate).await {
+                Ok(token) => {
+                    let record = &token.record;
+                    let mut success_target = json!({
+                        "tokenId": record.token_id,
+                        "tokenClass": record.token_class.as_str(),
+                        "name": record.name,
+                        "expiresAt": record.expires_at,
+                        "issuanceAuthority": if personal { "personal" } else { "administrative" },
+                    });
+                    success_target[if personal { "principalId" } else { "principal" }] =
+                        json!(record.principal_id);
+                    if record.token_class == BrokerTokenClass::AgentInvoke {
+                        success_target["boundary"] = agent_token_boundary_audit(&record.scopes);
+                    }
+                    if let Some(policy) = &token.issuance_policy {
+                        success_target["agentTokenIssuancePolicy"] = json!(policy);
+                    }
+                    let success_target = Some(success_target);
+                    let audit_envelope = management_success_envelope(
+                        &context,
+                        operation,
+                        success_target.clone(),
+                        Value::Null,
+                    );
+                    if let Err(error) = append_management_audit_with_phase(
+                        &context.snapshot,
+                        &context.request_id,
+                        &context.broker_request_id,
+                        &context.identity,
+                        &context.source,
+                        &audit_envelope,
+                        ManagementAuditExtra {
+                            catalog_change: None,
+                            phase: Some("success"),
+                            verification: None,
+                        },
+                    )
+                    .await
+                    {
+                        return management_audit_unavailable_response(
+                            &context.request_id,
+                            &context.broker_request_id,
+                            operation,
+                            &context.identity.principal,
+                            error,
+                        );
+                    }
+                    management_response(
+                        StatusCode::OK,
+                        management_success_envelope(
+                            &context,
+                            operation,
+                            success_target,
+                            render(token),
+                        ),
+                    )
+                }
+                Err(error) => {
+                    management_store_error_response(&context, operation, owner_target, error).await
+                }
+            }
+        }
+        .in_current_span()
+        .with_current_subscriber(),
+    );
+    match owner.await {
+        Ok(response) => response,
+        Err(_) => {
+            management_store_error_response(
+                &context,
+                operation,
+                target,
+                agent_access_core::ManagedStoreError::Unavailable(
+                    "token issuance owner failed".into(),
+                ),
+            )
+            .await
+        }
+    }
 }
 
 /// Runs a blocking call on the request snapshot's managed store, holding that
@@ -1019,6 +1162,7 @@ pub(crate) fn management_error_envelope(
         principal: principal.to_string(),
         target,
         result: None,
+        details: None,
         error: Some(agent_access_core::ErrorBody {
             message: message.to_string(),
         }),
@@ -1043,6 +1187,7 @@ pub(crate) fn management_failure_envelope(
         principal: context.identity.principal.clone(),
         target,
         result: None,
+        details: None,
         error: Some(agent_access_core::ErrorBody {
             message: message.to_string(),
         }),
@@ -1065,6 +1210,7 @@ pub(crate) fn management_success_envelope(
         principal: context.identity.principal.clone(),
         target,
         result: Some(result),
+        details: None,
         error: None,
     }
 }
@@ -1681,6 +1827,9 @@ async fn append_management_audit_with_details(
     let mut management = serde_json::Map::new();
     management.insert("operation".to_string(), json!(envelope.operation));
     management.insert("target".to_string(), json!(envelope.target));
+    if let Some(details) = &envelope.details {
+        management.insert("details".to_string(), details.clone());
+    }
     management.insert("reasonCode".to_string(), json!(envelope.reason_code));
     if let Some(change) = extra.catalog_change {
         management.insert("change".to_string(), change.clone());
@@ -1979,8 +2128,23 @@ pub(super) async fn management_store_error_response(
         Some(Value::Object(target))
     };
     let message = management_store_public_error_message(operation, &error);
-    management_context_error_response(context, status, operation, reason_code, &message, target)
-        .await
+    let category = match error {
+        agent_access_core::ManagedStoreError::TokenIssuanceDenied { category } => {
+            Some(json!({"category": category}))
+        }
+        _ => None,
+    };
+    let mut envelope = management_error_envelope(
+        &context.request_id,
+        &context.broker_request_id,
+        operation,
+        &context.identity.principal,
+        reason_code,
+        &message,
+        target,
+    );
+    envelope.details = category;
+    management_audited_response(context, status, envelope).await
 }
 
 pub(super) fn management_store_public_error_message(
@@ -2194,6 +2358,7 @@ mod tests {
                     principal: "alice".into(),
                     target: None,
                     result: Some(json!({"token": "one-time-secret"})),
+                    details: None,
                     error: None,
                 },
             );
@@ -2263,9 +2428,68 @@ mod tests {
 
     #[test]
     fn agent_token_issue_body_requires_execution_contexts() {
-        let error = serde_json::from_value::<AgentTokenIssueBody>(json!({"name": "agent"}))
-            .expect_err("new agent tokens must declare execution contexts");
+        let error = serde_json::from_value::<AgentTokenIssueBody>(
+            json!({"name": "agent", "readOnly": false}),
+        )
+        .expect_err("new agent tokens must declare execution contexts");
         assert!(error.to_string().contains("allowedExecutionContexts"));
+    }
+
+    #[test]
+    fn agent_token_issue_body_requires_a_strict_read_only_boolean() {
+        let base = json!({"name":"agent", "allowedExecutionContexts":["default"]});
+        assert!(serde_json::from_value::<AgentTokenIssueBody>(base.clone()).is_err());
+        for invalid in [
+            Value::Null,
+            json!(0),
+            json!(1),
+            json!("true"),
+            json!("false"),
+        ] {
+            let mut body = base.clone();
+            body["readOnly"] = invalid;
+            assert!(serde_json::from_value::<AgentTokenIssueBody>(body).is_err());
+        }
+        for read_only in [true, false] {
+            let mut body = base.clone();
+            body["readOnly"] = json!(read_only);
+            assert_eq!(
+                serde_json::from_value::<AgentTokenIssueBody>(body)
+                    .unwrap()
+                    .read_only,
+                read_only
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_new_token_rejects_selected_writes_but_inherits_mixed_grants() {
+        let mut options = restricted_token_options();
+        options.services[0].actions[0].read_only = false;
+        let mut selected = json!({
+            "readOnly":true, "allowedExecutionContexts":["external"],
+            "allowedServices":["jira"],
+            "serviceRestrictions":{"jira":{"actions":["issue.view"]}},
+        });
+        let caveats = AgentInvokeTokenCaveats::parse_stored(&selected).unwrap();
+        assert!(
+            validate_agent_token_options(&caveats, &options)
+                .unwrap_err()
+                .contains("cannot select write actions")
+        );
+        selected["readOnly"] = json!(false);
+        assert!(
+            validate_agent_token_options(
+                &AgentInvokeTokenCaveats::parse_stored(&selected).unwrap(),
+                &options
+            )
+            .is_ok()
+        );
+        let inherited = AgentInvokeTokenCaveats::parse_stored(&json!({
+            "readOnly":true, "allowedExecutionContexts":["external"],
+        }))
+        .unwrap();
+        assert!(validate_agent_token_options(&inherited, &options).is_ok());
     }
 
     #[test]
@@ -2273,7 +2497,7 @@ mod tests {
         let options = restricted_token_options();
         let caveats = |selection| {
             AgentInvokeTokenCaveats::parse_stored(&json!({
-                "allowedServices":["jira"],"allowedExecutionContexts":["external"],
+                "allowedServices":["jira"],"readOnly": false, "allowedExecutionContexts":["external"],
                 "serviceRestrictions":{"jira":{"actions":["issue.view"],"resources":selection}}
             }))
             .unwrap()
@@ -2332,9 +2556,9 @@ mod tests {
     fn agent_token_options_reject_unavailable_action_and_context() {
         let options = restricted_token_options();
         for value in [
-            json!({"allowedExecutionContexts":["partner"]}),
-            json!({"allowedServices":["jira"],"allowedExecutionContexts":["external"],"serviceRestrictions":{"jira":{"actions":["issue.delete"]}}}),
-            json!({"allowedServices":["gitlab"],"allowedExecutionContexts":["external"]}),
+            json!({"readOnly": false, "allowedExecutionContexts":["partner"]}),
+            json!({"allowedServices":["jira"],"readOnly": false, "allowedExecutionContexts":["external"],"serviceRestrictions":{"jira":{"actions":["issue.delete"]}}}),
+            json!({"allowedServices":["gitlab"],"readOnly": false, "allowedExecutionContexts":["external"]}),
         ] {
             let caveats = AgentInvokeTokenCaveats::parse_stored(&value).unwrap();
             assert!(validate_agent_token_options(&caveats, &options).is_err());
@@ -2375,6 +2599,7 @@ upload_spool_dir = "upload-spool"
         )
         .unwrap();
         let body = AgentTokenIssueBody {
+            read_only: false,
             name: "agent".to_string(),
             ttl: None,
             expires_at: None,

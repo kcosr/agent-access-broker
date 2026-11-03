@@ -57,6 +57,7 @@ impl Fixture {
         let store = runtime.managed_store().unwrap();
         store
             .create_principal(crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
                 role: crate::PrincipalRole::Admin,
                 self_service_enabled: None,
                 principal_id: "human-alice".into(),

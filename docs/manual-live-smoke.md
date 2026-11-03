@@ -341,7 +341,11 @@ draft, attachment, publish, and comment actions being exercised. For GitLab,
 grant only the target repository selector and the specific REST actions under
 test.
 
-Issue short-lived broker tokens when needed:
+Issue short-lived broker tokens when needed. This administrative route is
+independent of personal issuance permission; a personal `tokens issue` flow
+requires that permission explicitly. The mutation smoke requests a write-capable
+token below. Replace `default` with a context from the target's agent-token
+options when the deployment uses another context:
 
 ```bash
 "$AAB_BIN" --config "$ADMIN_CONFIG" admin tokens issue <principal> \
@@ -350,7 +354,8 @@ Issue short-lived broker tokens when needed:
   --ttl 2h
 
 "$AAB_BIN" --config "$ADMIN_CONFIG" admin tokens issue <principal> \
-  --token-class agent_invoke \
+  --token-class agent_invoke --read-only false \
+  --execution-context default \
   --name smoke-agent \
   --service jira \
   --service confluence \

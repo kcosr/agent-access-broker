@@ -295,7 +295,7 @@ test("administrator imports the reference command, grants it, and agents invoke 
   const spawnedRequests: string[] = [];
   const token = (await browserManagementRequest<{ token: string }>(page, "/v1/admin/principals/avery/agent-tokens", {
     method: "POST",
-    body: { name: "ticketing-agent", ttl: "8h", allowedServices: ["ticketing"], allowedExecutionContexts: ["internal"] }
+    body: { readOnly: false, name: "ticketing-agent", ttl: "8h", allowedServices: ["ticketing"], allowedExecutionContexts: ["internal"] }
   })).token;
 
   await test.step("Broker-checked actions get the named resources and the service credential", async () => {

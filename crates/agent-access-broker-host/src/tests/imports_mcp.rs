@@ -161,6 +161,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     for principal in ["admin", "alice", "bob", "charlie"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -174,6 +175,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     }
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("admin").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -283,7 +285,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
     }
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let tokens=["alice","bob","charlie"].into_iter().map(|principal|{
-        let issued=store.issue_broker_token(&hasher,BrokerTokenIssueRequest{principal_id:principal.into(),name:"MCP fixture".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":["one","two"],"allowedExecutionContexts":["internal","external"]}),expires_at:None,created_by:"admin".into()}).unwrap();
+        let issued=store.issue_broker_token(&hasher,BrokerTokenIssueRequest{principal_id:principal.into(),name:"MCP fixture".into(),token_class:BrokerTokenClass::AgentInvoke,scopes:json!({"allowedServices":["one","two"],"readOnly": false, "allowedExecutionContexts":["internal","external"]}),expires_at:None,created_by:"admin".into()}).unwrap();
         (principal.into(),issued.token)
     }).collect();
     drop(initial);

@@ -199,15 +199,15 @@ async function selectImport(page: Page) {
   await expect(page).toHaveURL(importTab);
 }
 
-async function managementRequest(page: Page, route: string, body?: unknown): Promise<unknown> {
-  return page.evaluate(async ({ route, body }) => {
+async function managementRequest(page: Page, route: string, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<unknown> {
+  return page.evaluate(async ({ route, body, method }) => {
     const session = await (await fetch("/v1/auth/session", { credentials: "same-origin" })).json();
     const headers: Record<string, string> = { "Content-Type": "application/json", "X-Agent-Access-Request-Id": crypto.randomUUID(), [session.result.csrfHeader]: session.result.csrfToken };
-    const response = await fetch(route, { method: body === undefined ? "GET" : "POST", credentials: "same-origin", headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const response = await fetch(route, { method, credentials: "same-origin", headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const envelope = await response.json();
     if (!response.ok || !envelope.ok) throw new Error(envelope.error?.message ?? "Management request failed");
     return envelope.result;
-  }, { route, body });
+  }, { route, body, method });
 }
 
 // The consent return path (`/ui/admin/catalog/services/metrics/import`) comes
@@ -344,7 +344,8 @@ test("administrator connects an OAuth discovery draft, reviews tools and explici
   await page.getByRole("alertdialog", { name: "Enable metrics?", exact: true }).getByRole("button", { name: "Enable service" }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await managementRequest(page, "/v1/admin/policy/grants", { grantId: "metrics-user", service: "metrics", subjects: ["user:admin"], actions: ["query", "update"], credentialMode: "per_user", executionContexts: ["internal"], resources: { resourceIds: [], resourceGroupIds: [] }, status: "active" });
-  const issued = await managementRequest(page, "/v1/tokens", { name: "oauth-browser-agent", ttl: "8h", allowedServices: ["metrics"], allowedExecutionContexts: ["internal"] }) as { token: string };
+  await managementRequest(page, "/v1/admin/principals/admin/access", { agentTokenIssuance: "write_capable" }, "PATCH");
+  const issued = await managementRequest(page, "/v1/tokens", { readOnly: false, name: "oauth-browser-agent", ttl: "8h", allowedServices: ["metrics"], allowedExecutionContexts: ["internal"] }) as { token: string };
   const invoke = (action: string) => fetch(`${baseUrl}/v1/invoke/metrics/${action}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${issued.token}`, "X-Agent-Access-Request-Id": randomUUID() }, body: JSON.stringify({ inputs: {} }) });
   const read = await invoke("query");
   expect(read.ok, await read.text()).toBe(true);

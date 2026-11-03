@@ -718,7 +718,7 @@ fn identity(token_scopes: Option<Value>) -> IdentityContext {
 }
 
 fn token(actions: &[&str], resource_ids: &[&str]) -> Value {
-    json!({"allowedServices": [SERVICE], "allowedExecutionContexts": ["default"],
+    json!({"allowedServices": [SERVICE], "readOnly": false, "allowedExecutionContexts": ["default"],
         "serviceRestrictions": {SERVICE: {"actions": actions,
             "resources": {"resourceIds": resource_ids}}}})
 }

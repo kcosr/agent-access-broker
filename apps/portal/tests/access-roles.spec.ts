@@ -9,10 +9,10 @@ import { portalDist } from "./support/binaries";
 let server: Server;
 let baseUrl: string;
 const envelope = (result: unknown) => ({ ok: true, result });
-const principal = (id = "target") => ({ principalId: id, kind: "user", role: "user", selfServiceEnabled: true, displayName: id, groups: [], status: "active", createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin", signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] });
+const principal = (id = "target") => ({ principalId: id, kind: "user", role: "user", selfServiceEnabled: true, displayName: id, groups: [], status: "active", createdAt: "2026-09-29T00:00:00Z", updatedAt: "2026-09-29T00:00:00Z", createdBy: "admin", signInMethods: { localPassword: "active", microsoft: "absent" }, agentTokenIssuance: "inherit", agentTokenIssuancePolicy: { mode: "disabled", source: "default", groupIds: [] }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [] });
 const config = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: "2026-09-29T00:00:00Z", configHash: "fixture" };
 const catalog = { services: [{ service: "jira", displayName: "Jira", surface: "http", actions: [{ action: "read", description: "Read", readOnly: true, requiredScopeTypes: [], credentialModes: ["service"] }], resourceScopes: {}, configuredCredentialModes: ["service"] }], subjects: { users: [], groups: [], anonymous: false }, resources: [], resourceGroups: [], executionContexts: { allowedValues: ["default"], defaultContext: "default" } };
-const options = { policyGeneration: 1, executionContexts: ["default"], services: [], resources: [], resourceGroups: [] };
+const options = { policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, executionContexts: ["default"], services: [], resources: [], resourceGroups: [] };
 const grant = { grantRef: "managed-read", grantId: "managed-read", writable: true, version: 1, subjects: ["user:target"], service: "jira", actions: ["read"], credentialMode: "service", executionContexts: ["default"], status: "active", resources: { resourceIds: [], resourceGroupIds: [] } };
 
 test.beforeAll(async () => {
@@ -27,7 +27,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); });
 
 async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: boolean, services = ["jira"]) {
-  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: role === "service_policy_manager" ? services : [], auditQueryable: true, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
+  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: role === "service_policy_manager" ? services : [], auditQueryable: true, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
   const requests: string[] = [];
   const mutations: string[] = [];
   await page.route("**/v1/**", async (route) => {
@@ -136,7 +136,7 @@ for (const { role, identityAuthority } of [
     const model = await fixture(page, role, false);
     await page.route("**/v1/admin/config/status", (route) => route.fulfill({ json: envelope({ ...config, identityAuthority }) }));
     await page.route("**/v1/admin/groups/onboarding", (route) => route.fulfill({ json: envelope({
-      groupId: "onboarding", displayName: "Onboarding", status: "disabled", autoEnrollNewMicrosoftUsers: identityAuthority === "managed", memberCount: 0, members: [], policyReferenceSections: []
+      groupId: "onboarding", displayName: "Onboarding", status: "disabled", autoEnrollNewMicrosoftUsers: identityAuthority === "managed", agentTokenIssuance: "disabled", memberCount: 0, members: [], policyReferenceSections: []
     }) }));
     await page.goto(`${baseUrl}/ui/admin/groups/onboarding`);
     const enrollment = page.getByRole("checkbox", { name: "Automatically add new Microsoft users", exact: true });
@@ -156,7 +156,7 @@ test("mapped groups explain durable local membership when Microsoft enrollment i
   const model = await fixture(page, "admin", false);
   await page.route("**/v1/auth/session", (route) => route.fulfill({ json: envelope({ ...model.session, loginOptions: { ...model.session.loginOptions, microsoft: { enabled: true } } }) }));
   await page.route("**/v1/admin/groups/onboarding", (route) => route.fulfill({ json: envelope({
-    groupId: "onboarding", displayName: "Onboarding", status: "active", autoEnrollNewMicrosoftUsers: true, memberCount: 0, members: [], policyReferenceSections: []
+    groupId: "onboarding", displayName: "Onboarding", status: "active", autoEnrollNewMicrosoftUsers: true, agentTokenIssuance: "disabled", memberCount: 0, members: [], policyReferenceSections: []
   }) }));
   await page.route("**/v1/admin/groups/onboarding/external-group-bindings", (route) => route.fulfill({ json: envelope([
     { bindingId: "mapping", externalGroupId: "00000000-0000-0000-0000-000000000123", groupId: "onboarding", status: "active", createdAt: "2026-10-20T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-20T00:00:00Z", updatedBy: "admin" }
@@ -431,7 +431,7 @@ test("account access edits preview scope deletion and preserve an independent se
   await expect(confirmation).toContainText("jira, gitlab");
   await expect(confirmation).toContainText("administrative API tokens");
   await confirmation.getByRole("button", { name: "Update access", exact: true }).click();
-  await expect.poll(() => updated).toEqual({ role: "auditor", selfServiceEnabled: false });
+  await expect.poll(() => updated).toEqual({ role: "auditor", selfServiceEnabled: false, agentTokenIssuance: "inherit" });
   await expect(page.getByLabel("Role", { exact: true })).toHaveValue("auditor");
   await expect(page.getByLabel("Self-service enabled", { exact: true })).not.toBeChecked();
 });
@@ -461,7 +461,7 @@ test("a manager role can change when policy is file-owned and assignments cannot
   await expect(confirmation).toContainText("Any stored direct management assignments will be removed.");
   await expect(confirmation).toContainText("Assignment names are unavailable while policy is file-owned.");
   await confirmation.getByRole("button", { name: "Update access", exact: true }).click();
-  await expect.poll(() => updated).toEqual({ role: "auditor", selfServiceEnabled: true });
+  await expect.poll(() => updated).toEqual({ role: "auditor", selfServiceEnabled: true, agentTokenIssuance: "inherit" });
   await expect(page.getByLabel("Role", { exact: true })).toHaveValue("auditor");
   expect(assignmentReads).toBe(0);
 });

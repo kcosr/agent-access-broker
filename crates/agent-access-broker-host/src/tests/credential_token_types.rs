@@ -161,6 +161,7 @@ fn setup() -> Setup {
     ] {
         store
             .create_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.to_string(),
@@ -174,6 +175,7 @@ fn setup() -> Setup {
     }
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "admin".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -526,6 +528,7 @@ async fn kind_changes_keep_tokens_and_unaccepted_rows_stay_retained_until_accept
         fixture
             .store()
             .create_or_update_principal(agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "robot".to_string(),

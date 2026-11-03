@@ -110,6 +110,7 @@ async fn local_password_admin_requires_explicit_enrollment_and_audits_previous_s
     let store = snapshot.runtime.managed_store().unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "bob".into(),
@@ -323,6 +324,130 @@ async fn hybrid_password_change_preserves_microsoft_session_and_revokes_only_loc
 }
 
 #[tokio::test]
+async fn auth_policy_projection_failure_preserves_password_and_existing_sessions() {
+    for operation in ["login", "local_change", "oidc_change"] {
+        let fixture = browser_rate_fixture(test_limits()).await;
+        let oidc_cookie = link_microsoft(&fixture);
+        let oidc_before = session(&fixture, &oidc_cookie).await;
+        let snapshot = fixture.state.current();
+        let store = snapshot.runtime.managed_store().unwrap();
+        store
+            .create_group(agent_access_core::GroupWriteRequest {
+                group_id: "issuers".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::ReadOnly,
+                created_by: "admin".into(),
+            })
+            .unwrap();
+        store.add_group("alice", "issuers", "admin").unwrap();
+        let before_tokens = store
+            .list_broker_tokens_for_principal("alice")
+            .unwrap()
+            .len();
+        let conn = rusqlite::Connection::open(&fixture.store_path).unwrap();
+        let before_hash: String = conn.query_row(
+            "SELECT password_hash_phc FROM principal_login_methods WHERE principal_id = 'alice' AND method = 'local_password'",
+            [], |row| row.get(0),
+        ).unwrap();
+        conn.execute_batch(
+            "PRAGMA ignore_check_constraints = ON;
+             UPDATE groups SET agent_token_issuance = 'private-invalid-policy' WHERE group_id = 'issuers';
+             PRAGMA ignore_check_constraints = OFF;",
+        ).unwrap();
+        // Ordinary session reads must still fail closed when current policy is
+        // unavailable, while a failed mutation must leave durable auth intact.
+        let session_error = browser(
+            &fixture,
+            Method::GET,
+            "/v1/auth/session",
+            &fixture.cookie,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(session_error.status(), StatusCode::BAD_REQUEST);
+        let response = if operation == "login" {
+            browser(
+                &fixture,
+                Method::POST,
+                "/v1/auth/local/login",
+                "",
+                None,
+                Some(json!({"principalId":"alice","password":"alice-password"})),
+            )
+            .await
+        } else {
+            let (cookie, csrf) = if operation == "local_change" {
+                (fixture.cookie.as_str(), fixture.csrf.as_str())
+            } else {
+                (
+                    oidc_cookie.as_str(),
+                    oidc_before["csrfToken"].as_str().unwrap(),
+                )
+            };
+            browser(
+                &fixture,
+                Method::POST,
+                "/v1/auth/local/password/change",
+                cookie,
+                Some(csrf),
+                Some(
+                    json!({"currentPassword":"alice-password","newPassword":"new-secret-password"}),
+                ),
+            )
+            .await
+        };
+        assert!(!response.status().is_success(), "{operation}");
+        assert!(
+            response.headers().get("set-cookie").is_none(),
+            "{operation}"
+        );
+        let body = response_json(response).await;
+        assert!(!body.to_string().contains("private-invalid-policy"));
+        assert!(!body.to_string().contains("new-secret-password"));
+        assert_eq!(
+            store
+                .list_broker_tokens_for_principal("alice")
+                .unwrap()
+                .len(),
+            before_tokens,
+            "{operation}"
+        );
+        let after_hash: String = conn.query_row(
+            "SELECT password_hash_phc FROM principal_login_methods WHERE principal_id = 'alice' AND method = 'local_password'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(
+            after_hash == before_hash,
+            "password changed after {operation} failed"
+        );
+        for cookie in [&fixture.cookie, &oidc_cookie] {
+            store
+                .resolve_browser_session(
+                    snapshot.runtime.broker_token_hasher().unwrap(),
+                    cookie.strip_prefix("aab_session=").unwrap(),
+                )
+                .unwrap();
+        }
+        conn.execute(
+            "UPDATE groups SET agent_token_issuance = 'read_only' WHERE group_id = 'issuers'",
+            [],
+        )
+        .unwrap();
+        for cookie in [&fixture.cookie, &oidc_cookie] {
+            let current = session(&fixture, cookie).await;
+            assert_eq!(current["authenticated"], true, "{operation}");
+            assert_eq!(
+                current["tokenIssuancePolicy"]["selfAgentInvoke"]["access"],
+                json!({"mode":"read_only","source":"groups","groupIds":["issuers"]})
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn password_change_sanitizes_store_failures_without_losing_validation_messages() {
     for malformed_hash in [true, false] {
         let fixture = browser_rate_fixture(test_limits()).await;
@@ -416,6 +541,7 @@ async fn local_password_enable_keeps_committed_success_if_completion_audit_fails
         let store = snapshot.runtime.managed_store().unwrap();
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
                 role: agent_access_core::PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: "bob".into(),

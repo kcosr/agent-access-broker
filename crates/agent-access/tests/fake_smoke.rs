@@ -1,3 +1,6 @@
+#[path = "fake_smoke/token_issuance.rs"]
+mod token_issuance;
+
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_core::EXECUTION_CONTEXT_HEADER;
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
@@ -979,6 +982,7 @@ fn cli_tokens_issue_sends_service_allowlist_and_ordered_execution_contexts_to_st
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/v1/tokens");
         let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["readOnly"], false);
         assert_eq!(body["name"], "codex-workstation");
         assert_eq!(body["ttl"], "30d");
         assert!(body.get("deviceName").is_none());
@@ -1000,6 +1004,8 @@ fn cli_tokens_issue_sends_service_allowlist_and_ordered_execution_contexts_to_st
             "--no-token",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "--name",
             "codex-workstation",
             "--ttl",
@@ -1070,6 +1076,8 @@ fn cli_token_resource_restrictions_distinguish_follow_grants_from_empty_and_live
                 "--no-token",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "--name",
                 "resource-boundary",
                 "--ttl",
@@ -1143,6 +1151,7 @@ fn cli_tokens_issue_omits_service_allowlist_when_absent() {
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/v1/tokens");
         let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["readOnly"], false);
         assert_eq!(body["name"], "codex-workstation");
         assert!(body.get("allowedServices").is_none());
         assert_eq!(
@@ -1159,6 +1168,8 @@ fn cli_tokens_issue_omits_service_allowlist_when_absent() {
             "--no-token",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "--name",
             "codex-workstation",
             "--execution-context",
@@ -1185,6 +1196,7 @@ fn cli_tokens_issue_never_sends_expected_request() {
         assert_eq!(request.method, "POST");
         assert_eq!(request.path, "/v1/tokens");
         let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["readOnly"], false);
         assert_eq!(body["name"], "permanent-agent");
         assert_eq!(body["never"], true);
         assert!(body["ttl"].is_null());
@@ -1204,6 +1216,8 @@ fn cli_tokens_issue_never_sends_expected_request() {
             "--no-token",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "--name",
             "permanent-agent",
             "--never",
@@ -1234,6 +1248,8 @@ fn cli_tokens_issue_never_rejects_finite_expiry_flags() {
                 "--no-token",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "--name",
                 "permanent-agent",
                 "--never",
@@ -1264,6 +1280,8 @@ fn cli_tokens_issue_never_rejects_finite_expiry_flags() {
             "--no-token",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "--name",
             "conflicting-expiry",
             "--ttl",
@@ -1297,7 +1315,8 @@ fn cli_admin_tokens_issue_never_sends_expected_request() {
         assert_eq!(
             body["scopes"],
             serde_json::json!({
-                "allowedExecutionContexts": ["internal", "external"]
+                "allowedExecutionContexts": ["internal", "external"],
+                "readOnly": false
             })
         );
         write_json_response(&mut stream, 200, token_issue_response());
@@ -1311,6 +1330,8 @@ fn cli_admin_tokens_issue_never_sends_expected_request() {
             "admin",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "alice",
             "--name",
             "permanent-agent",
@@ -1345,6 +1366,8 @@ fn cli_admin_tokens_issue_never_rejects_finite_expiry_flags() {
                 "admin",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "alice",
                 "--name",
                 "permanent-agent",
@@ -1377,6 +1400,8 @@ fn cli_admin_tokens_issue_never_rejects_finite_expiry_flags() {
             "admin",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "alice",
             "--name",
             "conflicting-expiry",
@@ -1640,6 +1665,8 @@ fn cli_tokens_commands_reject_literal_identity_token() {
         vec![
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "--name",
             "codex",
             "--execution-context",
@@ -3341,6 +3368,7 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
     .unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "admin".to_string(),
@@ -3353,6 +3381,7 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
         .unwrap();
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "admin".into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -3613,6 +3642,8 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
             "admin",
             "tokens",
             "issue",
+            "--read-only",
+            "false",
             "admin",
             "--name",
             name,
@@ -3674,6 +3705,8 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
                 "admin",
                 "tokens",
                 "issue",
+                "--read-only",
+                "false",
                 "admin",
                 "--name",
                 name,
@@ -5453,7 +5486,7 @@ fn token_record_response() -> serde_json::Value {
         "principalId": "alice",
         "name": "codex-workstation",
         "tokenClass": "agent_invoke",
-        "scopes": {},
+        "scopes": {"allowedExecutionContexts":["internal"],"readOnly":false},
         "createdAt": "2026-06-20T12:00:00Z",
         "expiresAt": "2026-07-20T12:00:00Z",
         "revokedAt": null,

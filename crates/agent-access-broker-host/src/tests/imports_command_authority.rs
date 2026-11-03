@@ -276,6 +276,7 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
     for group in ["eng", "ops"] {
         store
             .create_group(agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
                 group_id: group.into(),
                 display_name: None,
                 description: None,
@@ -361,8 +362,7 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
     drop(runtime);
     let every = set(&["issue.view", "issue.bulk", "issue.search"]);
     let scopes = |resources: Option<&[&str]>| {
-        let mut scopes =
-            json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]});
+        let mut scopes = json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]});
         if let Some(resources) = resources {
             scopes["serviceRestrictions"] = json!({"tickets": {
                 "actions": ["issue.view", "issue.bulk", "issue.search"],
@@ -723,7 +723,7 @@ async fn an_action_naming_a_dropped_type_fails_closed_alone() {
     let alice = fixture.issue(
         "alice",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedServices": ["tickets"], "allowedExecutionContexts": ["default"]}),
+        json!({"allowedServices": ["tickets"], "readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     assert_eq!(
         outcome(&app, &alice, "issue.view", json!({"project": "OPS"})).await,

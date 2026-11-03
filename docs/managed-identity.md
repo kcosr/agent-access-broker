@@ -124,7 +124,14 @@ keep the classified repository scope; invoke denials record no resource scopes.
 ### Paths, not people
 
 The controls limit an access path, not the person. Browser sign-in and issued
-Broker tokens keep the person's full grants, whatever their paths' settings.
+Broker tokens do not inherit the path's settings. Issued agent tokens have
+their own immutable `scopes.readOnly` ceiling intersected with current grants.
+Identity summaries expose that ceiling as `brokerToken.readOnly`, including
+false, only for an issued `agent_invoke` token with a token ID. Trusted paths
+omit `brokerToken` even though they use synthetic agent-invoke caveats; their
+`readOnlyAccess` remains path-only. Browser and management sessions omit both.
+Changing [issuance permission](roles.md#agent-token-issuance) changes only who
+may issue the next token, not existing token or path authority.
 Without `X-Agent-Access-User`, an explicit Broker token sent alongside a
 fingerprint keeps precedence, so the token's authority applies rather than the
 identity token's settings. With the user header, competing credentials are

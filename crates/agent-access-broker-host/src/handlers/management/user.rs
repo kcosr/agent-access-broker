@@ -1,12 +1,10 @@
 use crate::handlers::management::common::{
-    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementAuditExtra,
-    ManagementContext, agent_token_boundary_audit, agent_token_issue_scopes,
-    agent_token_list_query, append_management_audit_with_phase, credential_input_schema_query,
-    is_broker_user_manage_context, management_audit_unavailable_response, management_context,
+    AgentTokenIssueBody, CredentialPutBody, ManagementAccess, ManagementContext,
+    agent_token_boundary_audit, agent_token_issue_scopes, agent_token_list_query,
+    credential_input_schema_query, is_broker_user_manage_context, management_context,
     management_context_error_response, management_pre_audited_success_response,
-    management_response, management_store_call, management_store_error_response,
-    management_success_envelope, management_success_response, management_write_audit_preflight,
-    self_agent_token_issue_expires_at,
+    management_store_call, management_store_error_response, management_success_response,
+    management_write_audit_preflight, self_agent_token_issue_expires_at,
 };
 use crate::handlers::management::connections;
 use crate::handlers::management::credentials::{
@@ -92,7 +90,16 @@ pub(crate) async fn user_token_options(
         .snapshot
         .runtime
         .agent_token_options_for_identity(&context.identity);
-    management_success_response(&context, operation, None, json!(options)).await
+    let mut options = json!(options);
+    match super::common::agent_token_issuance_policy(&context, context.identity.principal.clone())
+        .await
+    {
+        Ok(policy) => options["agentTokenIssuancePolicy"] = json!(policy),
+        Err(error) => {
+            return management_store_error_response(&context, operation, None, error).await;
+        }
+    }
+    management_success_response(&context, operation, None, options).await
 }
 
 pub(crate) async fn user_token_issue(
@@ -170,6 +177,7 @@ pub(crate) async fn user_token_issue(
     }
     let scopes = match agent_token_issue_scopes(
         &context.snapshot.runtime,
+        body.read_only,
         body.allowed_services.clone(),
         body.allowed_execution_contexts.clone(),
         body.service_restrictions.clone(),
@@ -220,66 +228,31 @@ pub(crate) async fn user_token_issue(
     }
     let actor = context.identity.principal.clone();
     let principal_for_store = context.identity.principal.clone();
-    match super::common::management_token_store_call(&state, &context, move |store, catalog| {
-        store.issue_self_agent_token_with_catalog(
-            &hasher,
-            SelfAgentTokenIssueRequest {
-                principal_id: principal_for_store,
-                name: body.name,
-                scopes,
-                expires_at,
-                created_by: actor,
-            },
-            catalog.as_ref(),
-        )
-    })
-    .await
-    {
-        Ok(token) => {
-            let success_target = Some(json!({
-                "principalId": token.record.principal_id.clone(),
-                "tokenClass": "agent_invoke",
-                "tokenId": token.record.token_id.clone(),
-                "name": token.record.name.clone(),
-                "expiresAt": token.record.expires_at.clone(),
-                "boundary": agent_token_boundary_audit(&token.record.scopes),
-            }));
-            let audit_envelope = management_success_envelope(
-                &context,
-                operation,
-                success_target.clone(),
-                Value::Null,
-            );
-            if let Err(error) = append_management_audit_with_phase(
-                &context.snapshot,
-                &context.request_id,
-                &context.broker_request_id,
-                &context.identity,
-                &context.source,
-                &audit_envelope,
-                ManagementAuditExtra {
-                    catalog_change: None,
-                    phase: Some("success"),
-                    verification: None,
+    let authority =
+        super::common::agent_token_issuance_authority(context.snapshot.runtime.config());
+    super::common::committed_token_issuance(
+        state,
+        context,
+        operation,
+        target,
+        true,
+        move |store, catalog| {
+            store.issue_self_agent_token_with_catalog(
+                &hasher,
+                SelfAgentTokenIssueRequest {
+                    principal_id: principal_for_store,
+                    name: body.name,
+                    scopes,
+                    expires_at,
+                    created_by: actor,
                 },
+                authority,
+                catalog.as_ref(),
             )
-            .await
-            {
-                return management_audit_unavailable_response(
-                    &context.request_id,
-                    &context.broker_request_id,
-                    operation,
-                    &context.identity.principal,
-                    error,
-                );
-            }
-            management_response(
-                StatusCode::OK,
-                management_success_envelope(&context, operation, success_target, json!(token)),
-            )
-        }
-        Err(error) => management_store_error_response(&context, operation, target, error).await,
-    }
+        },
+        |token| json!(token),
+    )
+    .await
 }
 
 pub(crate) async fn user_token_get(

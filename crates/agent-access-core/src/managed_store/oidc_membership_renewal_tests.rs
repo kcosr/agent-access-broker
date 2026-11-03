@@ -155,10 +155,20 @@ fn schema(conn: &Connection) -> Vec<String> {
 
 /// Every row of `tables`, column by column.
 fn table_rows(conn: &Connection, tables: &[&str]) -> Vec<String> {
+    projected_table_rows(
+        conn,
+        &tables
+            .iter()
+            .map(|table| (*table, "*".to_string()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn projected_table_rows(conn: &Connection, tables: &[(&str, String)]) -> Vec<String> {
     let mut rows = Vec::new();
-    for table in tables {
+    for (table, projection) in tables {
         let mut statement = conn
-            .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+            .prepare(&format!("SELECT {projection} FROM {table} ORDER BY 1"))
             .unwrap();
         let columns = statement.column_count();
         let mut query = statement.query([]).unwrap();
@@ -350,9 +360,9 @@ fn golden_renewal_record_still_decrypts_and_binds_every_column() {
 }
 
 /// A store at schema 030 with Microsoft sign-in state and a group that
-/// enrolls new Microsoft users upgrades to 031 with its rows unchanged and its
-/// ledger extended by one row; the new table is empty and its constraints keep
-/// rows well formed.
+/// enrolls new Microsoft users upgrades through 031 to the current schema with
+/// every prior column unchanged. Later permission columns get their explicit
+/// defaults; the renewal table is empty and its constraints keep rows well formed.
 #[test]
 fn schema_030_upgrades_to_031_with_rows_unchanged() {
     let temp = private_dir();
@@ -382,10 +392,24 @@ fn schema_030_upgrades_to_031_with_rows_unchanged() {
         "oidc_membership_refresh_state",
         "oidc_subject_flow_watermarks",
     ];
-    let before = {
+    let (before, prior_columns) = {
         let conn = previous.connection.lock().unwrap();
         assert!(!sqlite_object_exists(&conn, "table", "oidc_membership_renewals").unwrap());
-        table_rows(&conn, &tables)
+        // Capture every schema-030 column, then compare exactly that projection
+        // after upgrade instead of comparing new columns against absent values.
+        let prior_columns = tables.map(|table| {
+            let statement = conn
+                .prepare(&format!("SELECT * FROM {table} LIMIT 0"))
+                .unwrap();
+            let projection = statement
+                .column_names()
+                .into_iter()
+                .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (table, projection)
+        });
+        (table_rows(&conn, &tables), prior_columns)
     };
     assert!(before.len() >= 7);
     drop(previous);
@@ -412,8 +436,16 @@ fn schema_030_upgrades_to_031_with_rows_unchanged() {
         MANAGED_STORE_SCHEMA_VERSION
     );
     store.check_ready(None).unwrap();
+    assert_eq!(
+        store.principal("alice").unwrap().agent_token_issuance,
+        PrincipalAgentTokenIssuance::Inherit
+    );
+    assert_eq!(
+        store.group("defaults").unwrap().agent_token_issuance,
+        AgentTokenIssuanceMode::Disabled
+    );
     let conn = store.connection.lock().unwrap();
-    assert_eq!(table_rows(&conn, &tables), before);
+    assert_eq!(projected_table_rows(&conn, &prior_columns), before);
     assert!(sqlite_object_exists(&conn, "table", "oidc_membership_renewals").unwrap());
     assert!(sqlite_object_exists(&conn, "index", "idx_oidc_membership_renewals_key").unwrap());
     assert!(table_rows(&conn, &["oidc_membership_renewals"]).is_empty());
@@ -704,6 +736,7 @@ fn fixture(membership_renewal: bool) -> Fixture {
     for (group, external) in [("team-a", GROUP_A), ("team-b", GROUP_B)] {
         store
             .create_group(GroupWriteRequest {
+                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
                 group_id: group.into(),
                 display_name: None,
                 description: None,
@@ -959,6 +992,7 @@ fn jit_sign_in_records_the_renewal_row_with_group_enrollment_in_one_transaction(
     fixture
         .store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: AgentTokenIssuanceMode::Disabled,
             group_id: "defaults".into(),
             display_name: None,
             description: None,
@@ -2147,6 +2181,7 @@ fn renewal_never_runs_group_auto_enrollment() {
     fixture
         .store
         .create_group(GroupWriteRequest {
+            agent_token_issuance: AgentTokenIssuanceMode::Disabled,
             group_id: "defaults".into(),
             display_name: None,
             description: None,
@@ -2680,6 +2715,7 @@ fn renewal_status_and_microsoft_membership_report_each_state() {
     fixture
         .store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
             principal_id: "carol".into(),
             kind: "user".into(),
             role: PrincipalRole::User,

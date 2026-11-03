@@ -213,6 +213,7 @@ fn seed_import_identities(directory: &FixtureDir, hash: &Path) -> (String, Strin
     for principal in ["admin", "agent", "personal", "missing"] {
         store
             .create_principal(PrincipalWriteRequest {
+                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
                 role: PrincipalRole::User,
                 self_service_enabled: None,
                 principal_id: principal.into(),
@@ -226,6 +227,7 @@ fn seed_import_identities(directory: &FixtureDir, hash: &Path) -> (String, Strin
     }
     store
         .patch_principal_access(PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: "admin".into(),
             role: Some(PrincipalRole::Admin),
             self_service_enabled: None,
@@ -257,17 +259,17 @@ fn seed_import_identities(directory: &FixtureDir, hash: &Path) -> (String, Strin
     let agent = issue(
         "agent",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts":["default"]}),
+        json!({"allowedExecutionContexts":["default"],"readOnly":false}),
     );
     let personal = issue(
         "personal",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts":["default"]}),
+        json!({"allowedExecutionContexts":["default"],"readOnly":false}),
     );
     let missing = issue(
         "missing",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts":["default"]}),
+        json!({"allowedExecutionContexts":["default"],"readOnly":false}),
     );
     drop(store);
     (admin, agent, personal, missing)

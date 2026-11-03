@@ -673,7 +673,7 @@ async fn jira_project_listing_honors_token_resource_and_action_ceilings() {
         fixture.runtime.managed_store().unwrap().issue_broker_token(
             fixture.runtime.broker_token_hasher().unwrap(),BrokerTokenIssueRequest {
                 principal_id:"alice".into(),name:name.into(),token_class:BrokerTokenClass::AgentInvoke,
-                scopes:json!({"allowedExecutionContexts":["default"],"allowedServices":["jira"],"serviceRestrictions":{"jira":{"actions":actions,"resources":{"resourceIds":["jira-eng"]}}}}),
+                scopes:json!({"readOnly": false, "allowedExecutionContexts":["default"],"allowedServices":["jira"],"serviceRestrictions":{"jira":{"actions":actions,"resources":{"resourceIds":["jira-eng"]}}}}),
                 expires_at:None,created_by:"test".into(),
             }
         ).unwrap().token
@@ -820,7 +820,7 @@ async fn confluence_space_listing_honors_token_resource_and_action_ceilings() {
         fixture.runtime.managed_store().unwrap().issue_broker_token(
             fixture.runtime.broker_token_hasher().unwrap(),BrokerTokenIssueRequest {
                 principal_id:"alice".into(),name:name.into(),token_class:BrokerTokenClass::AgentInvoke,
-                scopes:json!({"allowedExecutionContexts":["default"],"allowedServices":["confluence"],"serviceRestrictions":{"confluence":{"actions":actions,"resources":{"resourceIds":["confluence-alice"]}}}}),
+                scopes:json!({"readOnly": false, "allowedExecutionContexts":["default"],"allowedServices":["confluence"],"serviceRestrictions":{"confluence":{"actions":actions,"resources":{"resourceIds":["confluence-alice"]}}}}),
                 expires_at:None,created_by:"test".into(),
             }
         ).unwrap().token
@@ -1014,6 +1014,7 @@ async fn service_accounts_use_their_bearer_token_through_the_gateway_beside_oaut
     let store = fixture.runtime.managed_store().unwrap().clone();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "robot".into(),
@@ -1046,7 +1047,7 @@ async fn service_accounts_use_their_bearer_token_through_the_gateway_beside_oaut
     let robot = issue_token(
         "robot",
         BrokerTokenClass::AgentInvoke,
-        json!({"allowedExecutionContexts": ["default"]}),
+        json!({"readOnly": false, "allowedExecutionContexts": ["default"]}),
     );
     let response = authed_json_request(
         fixture.app.clone(),

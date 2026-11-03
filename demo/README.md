@@ -47,7 +47,12 @@ Each run wipes and reseeds `/tmp/agent-access-broker-demo` with demo users,
 principal groups, four catalog resources, a mixed resource group, provider
 grants, Git gateway grants, fake upstream credentials, and new tokens. Seeded grants and agent tokens use the finite
 execution context `default`. The demo agent token follows current grants without
-a service/resource ceiling. This loopback setup uses the supported direct-client
+a service/resource ceiling and explicitly stores `readOnly: false`. Alice has
+explicit Write-capable personal issuance permission; Bob and Viewer have
+Read-only permission. The bootstrap administrator keeps the ordinary default
+and uses administrative issuance. Other new accounts and groups retain the
+production defaults, so the demo does not silently enable all self-issuance.
+This loopback setup uses the supported direct-client
 `default_context`. A deployment that uses trusted context assertions must make
 the broker and Git-gateway listeners reachable only through ingress that strips
 caller-supplied `X-Agent-Access-Context` and inserts the attested value. Configure
@@ -144,8 +149,8 @@ administrator and self-service walkthroughs. A JSON manifest records each
 image's theme, viewport, and subject. Both streams use a 1440×960 viewport.
 
 The online guide-account seeder adds `auditor@example.test` with the auditor
-role and self-service disabled, plus `onboarding@example.test` with a required
-first password change. It only targets a loopback managed demo. Their random
+role, self-service and token issuance disabled, plus `onboarding@example.test`
+with Read-only issuance permission and a required first password change. It only targets a loopback managed demo. Their random
 passwords are retained in an owner-readable `guide-accounts.json` inside the
 disposable demo directory. Repeating the seeder retains existing account access
 and passwords; it refuses unexpected identity settings. Set
@@ -167,7 +172,8 @@ role-based walkthroughs.
 
 Set `AAB_CAPTURE_STREAM=showcase` or `guide` to capture one stream. Set
 `AAB_CAPTURE_SECTION=tokens` to refresh only the token creation page, including
-its shared action columns and guide resource/boundary views. This section needs
+its checked Read-only control, disabled write selections, shared action columns,
+guide resource/boundary views and token-list Write-capable badge. This section needs
 only Alice's demo credentials and does not require guide accounts or audit
 fixtures. It leaves the form unsubmitted and confirms discarding its draft.
 Partial refreshes preserve unrelated entries in the output manifest. Optional
@@ -179,6 +185,14 @@ The script leaves token forms unsubmitted, captures no secrets or sign-in
 state files, and rejects unexpected mutation requests. Review selected images
 before placing them in `docs/images/portal/`; raw captures remain ignored under
 `.scratch/` by default.
+
+After an issuance UI change, capture against freshly built Broker and portal
+artifacts using the launcher with `AAB_DEMO_BROKER_BIN` set explicitly. Refresh
+`user-token-details-*`, `user-token-access-*`, guide `user-token-resources-light`,
+`user-token-boundary-light`, and `user-tokens-light`. A full guide capture also
+refreshes `admin-create-user-light`, `admin-create-group-light`, and
+`admin-account-access-light` for their issuance controls. Review the originals,
+then refresh corresponding annotated copies and manifest checksums together.
 
 The published walkthroughs use annotated copies under
 `docs/images/portal/guide-annotated/`, with orange highlights and callouts for

@@ -150,6 +150,9 @@ pub fn is_valid_execution_context_value(value: &str) -> bool {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInvokeTokenCaveats {
+    /// Restricts this token to actions the served catalog classifies as reads.
+    /// False adds no class ceiling; current grants still govern authority.
+    pub read_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allowed_services: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -231,6 +234,7 @@ impl AgentInvokeTokenCaveats {
         let wire = serde_json::from_value::<AgentInvokeTokenCaveatsWire>(scopes.clone())
             .map_err(|error| AgentInvokeTokenCaveatError::Malformed(error.to_string()))?;
         let mut caveats = Self {
+            read_only: wire.read_only,
             allowed_services: wire.allowed_services,
             allowed_execution_contexts: wire.allowed_execution_contexts,
             service_restrictions: wire.service_restrictions.map(|restrictions| {
@@ -367,6 +371,7 @@ impl AgentInvokeTokenCaveats {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentInvokeTokenCaveatsWire {
+    read_only: bool,
     #[serde(default, deserialize_with = "deserialize_present_vec")]
     allowed_services: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_present_vec")]

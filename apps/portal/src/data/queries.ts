@@ -133,16 +133,18 @@ export function useConsoleData(subject: AccountSubject, enabled = true) {
  * granted services (with display names and broker hosts) and actions (with
  * their read-only classification), independent of the request's context.
  */
-export function useAgentTokenOptions(subject: AccountSubject, enabled = true) {
+export function useAgentTokenOptions(subject: AccountSubject, enabled = true, refreshOnMount = false) {
   const { viewer, selfService, admin, runQuery } = useQueryAccess();
   const principalId = subject.principalId;
   const self = useQuery<AgentTokenOptions>({
     queryKey: portalQueryKeys.selfAgentTokenOptions(viewer),
+    refetchOnMount: refreshOnMount ? "always" : true,
     enabled: enabled && selfService && !subject.administered,
     queryFn: () => runQuery((current) => brokerApi.agentTokenOptions(current))
   });
   const managed = useQuery<AgentTokenOptions>({
     queryKey: portalQueryKeys.managedAgentTokenOptions(viewer, principalId),
+    refetchOnMount: refreshOnMount ? "always" : true,
     enabled: enabled && admin && subject.administered && Boolean(principalId),
     queryFn: () => runQuery((current) => brokerApi.adminPrincipalAgentTokenOptions(current, principalId))
   });

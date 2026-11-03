@@ -71,6 +71,7 @@ async fn managed_mcp_checks_token_class_and_revocation_on_existing_sessions() {
     let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
     store
         .create_principal(PrincipalWriteRequest {
+            agent_token_issuance: Default::default(),
             role: agent_access_core::PrincipalRole::User,
             self_service_enabled: None,
             principal_id: "mcp-managed-user".into(),
@@ -84,6 +85,7 @@ async fn managed_mcp_checks_token_class_and_revocation_on_existing_sessions() {
     // Even an administrator's valid management tokens must not become invoke tokens.
     store
         .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+            agent_token_issuance: None,
             principal_id: ("mcp-managed-user").into(),
             role: Some(agent_access_core::PrincipalRole::Admin),
             self_service_enabled: None,
@@ -99,7 +101,7 @@ async fn managed_mcp_checks_token_class_and_revocation_on_existing_sessions() {
     };
     let issue = |token_class: BrokerTokenClass| {
         let scopes = if token_class == BrokerTokenClass::AgentInvoke {
-            json!({"allowedServices":["fake"],"allowedExecutionContexts":["default"]})
+            json!({"allowedServices":["fake"],"readOnly": false, "allowedExecutionContexts":["default"]})
         } else {
             json!({})
         };

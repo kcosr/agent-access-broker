@@ -52,7 +52,7 @@ export const ADMIN_SESSION = {
   csrfHeader: "x-csrf-token",
   csrfToken: "fixture",
   loginOptions: { localPassword: { enabled: true } },
-  tokenIssuancePolicy: { selfAgentInvoke: ttlPolicy, administered: { agentInvoke: ttlPolicy, userManage: ttlPolicy, admin: ttlPolicy } }
+  tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { mode: "write_capable", source: "user", groupIds: [] } }, administered: { agentInvoke: ttlPolicy, userManage: ttlPolicy, admin: ttlPolicy } }
 } as Session;
 
 /** The record result the Broker returns for a mutation of the import. */

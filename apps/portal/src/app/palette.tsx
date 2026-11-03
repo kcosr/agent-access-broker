@@ -66,7 +66,7 @@ function usePaletteSources(): PaletteSource[] {
   const self = useSelfSubject();
   const console = useConsoleData(self);
   const tokenOptions = useAgentTokenOptions(self);
-  const tokenActions = useAgentTokenActions(self, tokenOptions.options);
+  const tokenActions = useAgentTokenActions(self, tokenOptions.options, tokenOptions.query.isError);
   const principals = useAdminPrincipals(admin);
   const groups = useAdminGroups(admin);
   const catalog = usePolicyCatalog(policy);
