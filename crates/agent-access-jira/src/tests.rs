@@ -5696,6 +5696,47 @@ async fn comment_add_visibility_requires_allowlist_and_serializes_group_identifi
 }
 
 #[tokio::test]
+async fn comment_add_converts_bold_inline_code_without_conflicting_marks() {
+    let mut backend = StubJiraBackend::default();
+    backend.issues.insert("PROJ-1".to_string(), visible_issue());
+    let backend = Arc::new(backend);
+    let provider =
+        JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
+
+    let result = provider
+        .invoke(per_user_invocation(
+            "comment.add",
+            json!({
+                "issue": "PROJ-1",
+                "contentFormat": "markdown",
+                "content": "**before `value` after**"
+            }),
+            vec![],
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(result.audit.as_ref().unwrap()["contentFormat"], "markdown");
+    let added = backend.added_comments.lock().unwrap();
+    assert_eq!(added.len(), 1);
+    assert_eq!(
+        added[0].body,
+        json!({
+            "version": 1,
+            "type": "doc",
+            "content": [{
+                "type": "paragraph",
+                "content": [
+                    { "type": "text", "text": "before ", "marks": [{ "type": "strong" }] },
+                    { "type": "text", "text": "value", "marks": [{ "type": "code" }] },
+                    { "type": "text", "text": " after", "marks": [{ "type": "strong" }] },
+                ],
+            }],
+        })
+    );
+}
+
+#[tokio::test]
 async fn comment_add_applies_configured_attribution_footer() {
     let mut backend = StubJiraBackend::default();
     backend.issues.insert("PROJ-1".to_string(), visible_issue());

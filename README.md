@@ -107,6 +107,10 @@ the caller's authorized resources and byte limits. Operators can set independent
 download allow and deny patterns, including `image/*` or `*/*`; uploads retain
 their separate exact allowlist. See [attachment media policy](docs/configuration.md#jira-and-confluence-attachment-media-policy).
 
+Jira [Markdown writes](docs/providers-jira.md#normalized-rich-content-writes)
+preserve inline code and safe links while removing incompatible bold, italic,
+and strikethrough formatting from code fragments.
+
 Native action schemas expose input fields directly. Field descriptions explain
 locator alternatives, paired content fields, content
 formats and mode requirements, and provider denials name the fields that need

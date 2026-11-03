@@ -803,10 +803,13 @@ impl AdfBuilder {
         let mut node = Map::new();
         node.insert("type".into(), json!("text"));
         node.insert("text".into(), json!(text));
+        // ADF permits only links alongside code; keep the stack intact for later text.
+        let code = self.marks.iter().any(|mark| mark["type"] == "code");
         let marks = self
             .marks
             .iter()
             .filter(|mark| !mark.is_null())
+            .filter(|mark| !code || matches!(mark["type"].as_str(), Some("code" | "link")))
             .cloned()
             .collect::<Vec<_>>();
         if !marks.is_empty() {
@@ -1150,6 +1153,61 @@ mod tests {
         assert_eq!(document["content"][4]["attrs"]["language"], "rust");
         assert_eq!(document["content"][5]["type"], "rule");
         assert_eq!(convert("hello"), convert("hello"));
+    }
+
+    #[test]
+    fn inline_code_keeps_only_compatible_marks_and_preserves_surrounding_text() {
+        let link = json!({ "type": "link", "attrs": { "href": "https://example.test" } });
+        for (source, surrounding_marks) in [
+            (
+                "**before `value` after** outside",
+                json!([{ "type": "strong" }]),
+            ),
+            ("*before `value` after* outside", json!([{ "type": "em" }])),
+            (
+                "~~before `value` after~~ outside",
+                json!([{ "type": "strike" }]),
+            ),
+            (
+                "**~~*before `value` after*~~** outside",
+                json!([{ "type": "strong" }, { "type": "strike" }, { "type": "em" }]),
+            ),
+            (
+                "[**before `value` after**](https://example.test) outside",
+                json!([link, { "type": "strong" }]),
+            ),
+            (
+                "**[before `value` after](https://example.test)** outside",
+                json!([{ "type": "strong" }, link]),
+            ),
+            (
+                "**[before `value` after](javascript:alert(1))** outside",
+                json!([{ "type": "strong" }]),
+            ),
+        ] {
+            let code_marks = if source.contains("https://example.test") {
+                json!([link, { "type": "code" }])
+            } else {
+                json!([{ "type": "code" }])
+            };
+            assert_eq!(
+                convert(source),
+                json!({
+                    "version": 1,
+                    "type": "doc",
+                    "content": [{
+                        "type": "paragraph",
+                        "content": [
+                            { "type": "text", "text": "before ", "marks": surrounding_marks },
+                            { "type": "text", "text": "value", "marks": code_marks },
+                            { "type": "text", "text": " after", "marks": surrounding_marks },
+                            { "type": "text", "text": " outside" },
+                        ],
+                    }],
+                }),
+                "{source}",
+            );
+        }
     }
 
     #[test]

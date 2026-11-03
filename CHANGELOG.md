@@ -390,6 +390,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Jira Markdown writes no longer combine inline code with incompatible bold,
+  italic, or strikethrough marks. Code text, safe links, and surrounding text
+  formatting are preserved.
+
 - Portal layout polish: grant action columns start level, settings sections
   wrap wide actions below their description, the Users table fits beside an
   open drawer, Account names the sign-in method in words, and a group's Grants
