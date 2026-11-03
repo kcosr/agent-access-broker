@@ -7,9 +7,9 @@ use agent_access_cloudbees_ci::{CloudbeesCiControllerConfig, CloudbeesCiProvider
 use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig};
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
-    AttributionConfig, AuditConfig, AuditDurability, BrokerConfig, BrokerTokenTtlOption,
-    BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig, ConnectionConfig,
-    ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
+    AggregateInvocationLimitConfig, AttributionConfig, AuditConfig, AuditDurability, BrokerConfig,
+    BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig,
+    ConnectionConfig, ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
     CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
     GatewayConfig, GatewayGitConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
     IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
@@ -889,6 +889,7 @@ fn limits_value(limits: &LimitsConfig) -> Value {
     let InvocationLimitsConfig {
         default,
         services,
+        aggregate,
         principal_overrides,
     } = invocations;
     let limit = |limit: &InvocationLimitConfig| {
@@ -909,6 +910,16 @@ fn limits_value(limits: &LimitsConfig) -> Value {
             Fields::default()
                 .opt("default", default.as_ref().map(limit))
                 .put("services", keyed(services, limit))
+                .put(
+                    "aggregate",
+                    keyed(aggregate, |limit| {
+                        let AggregateInvocationLimitConfig { requests, window } = limit;
+                        Fields::default()
+                            .int("requests", *requests)
+                            .put("window", window.as_str())
+                            .value()
+                    }),
+                )
                 .put(
                     "principal_overrides",
                     tables(principal_overrides, |entry| {

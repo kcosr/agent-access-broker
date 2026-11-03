@@ -573,8 +573,13 @@ can rename, defer or filter helpers independently of the Broker's wire contract.
 `services_describe` includes [live service limits](http-api.md#live-service-limits)
 on both transports, including service-scoped connections. Its process-local
 observations describe this principal's effective rate, FIFO queue and shared
-request occupancy; they reserve nothing. Anonymous detail omits `limits`, and
-`services_list`/`tools/list` stay static. Describe retains independent bounded
+request occupancy. Optional `limits.aggregate` gives the shared service cap;
+`limits.invocations.availableImmediately` and `nextAdmission*` estimate joint
+eligibility after accepted waiters, and `blockingScope` identifies a personal or
+shared constraint when immediate capacity is unavailable. These estimates reserve
+nothing and can reveal [shared usage](security-model.md#residual-risks).
+Anonymous detail omits `limits`, and `services_list`/`tools/list` stay static.
+Describe retains independent bounded
 capacity when invocation slots are full. Scoped stdio `services_describe` uses
 that detail directly, requiring an authenticated, visible invoke service with
 `scopedMcpReady: true`; it does not require a separate catalog request. Other

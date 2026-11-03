@@ -732,7 +732,12 @@ impl ReloadableState {
             reload_in_progress: AtomicBool::new(false),
             shared_ingress: Arc::new(IngressGuards::new()),
             service_detail_ingress: Arc::new(IngressGuards::new()),
-            shared_invocations: Arc::new(InvocationLimiter::new()),
+            shared_invocations: Arc::new(InvocationLimiter::new(
+                snapshot
+                    .runtime
+                    .configured_invocation_limits()
+                    .aggregate_limits(),
+            )),
             admission_owners: Arc::new(crate::admission::AdmissionRegistry::default()),
             shared_spool: Arc::new(UploadSpoolBudgets::new()),
             operations: Arc::new(crate::operations::OperationRegistry::default()),
@@ -778,7 +783,13 @@ impl ReloadableState {
 
     /// Replaces the invocation limiter, for tests that control its clock.
     #[cfg(test)]
-    pub(crate) fn with_invocation_limiter(mut self, limiter: InvocationLimiter) -> Self {
+    pub(crate) fn with_invocation_limiter(mut self, mut limiter: InvocationLimiter) -> Self {
+        limiter.initialize_aggregate_limits(
+            self.current()
+                .runtime
+                .configured_invocation_limits()
+                .aggregate_limits(),
+        );
         self.shared_invocations = Arc::new(limiter);
         self
     }
@@ -874,9 +885,14 @@ impl ReloadableState {
         } else {
             previous.caller_security_epoch
         };
-        self.shared_invocations.publish_runtime(|_| {
-            self.active.store(next.clone());
-        });
+        self.shared_invocations.publish_runtime(
+            next.runtime
+                .configured_invocation_limits()
+                .aggregate_limits(),
+            |_| {
+                self.active.store(next.clone());
+            },
+        );
         next
     }
 

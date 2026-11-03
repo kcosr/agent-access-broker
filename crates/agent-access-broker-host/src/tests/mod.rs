@@ -60,6 +60,7 @@ use tracing_subscriber::layer::Context as TracingLayerContext;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 
+mod aggregate_limits;
 mod atlassian_connections;
 mod audit_query;
 mod body_admission;
@@ -2012,7 +2013,7 @@ async fn gateway_counts_only_pack_posts_and_rejects_with_retry_after_plain_text(
     .unwrap();
     assert!(
         body.starts_with(
-            "Rate limit reached for service \"gitlab_git\": 1 request per 1m. This request was not queued or executed. "
+            "Rate limit reached for service \"gitlab_git\": 1 request per 1m for this principal. This request was not queued or executed. "
         ),
         "{body}"
     );

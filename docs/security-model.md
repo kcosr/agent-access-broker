@@ -934,8 +934,10 @@ Agent Access Broker applies these controls in the request path:
   behavior. Service invocations (invoke, HTTP MCP action tools, and Git pack
   transfers) are rate limited per principal and service across tokens and
   transports. Principals sharing an ingress address have independent invocation
-  windows; there is no aggregate service quota protecting a shared upstream
-  budget. Optional FIFO waiting retains existing request slots, so waiting calls
+  windows. Optional TOML aggregate caps limit combined admissions by service ID;
+  personal overrides cannot bypass them. Personal and shared windows are charged
+  together, with eligible principals taking turns while retaining personal FIFO
+  order. Optional waiting retains existing request slots, so waiting calls
   can still exhaust shared concurrency. Discovery,
   specs, and management are not rate limited; authentication abuse,
   anonymous traffic, and invalid credentials use independent source and
@@ -946,8 +948,10 @@ Agent Access Broker applies these controls in the request path:
   admission removes a waiter without dispatch; unobserved connection loss may
   leave it eligible to run. Client timeouts therefore require outcome
   reconciliation before retrying mutations. Caller-filtered service detail
-  exposes only the caller's local rate/queue state and approximate shared
-  occupancy, omitting anonymous live limits and other principals' usage.
+  exposes personal rate/queue state, configured aggregate policy and joint
+  admission estimates, omitting anonymous live limits and explicit other-user
+  inventory. Numeric availability can reveal remaining shared capacity and
+  activity timing; pre-policy refusals have a broader visibility boundary.
 
 ## Complementary egress and content screening
 
@@ -1003,6 +1007,9 @@ so configured identity headers remain with the original Broker endpoint.
 
 | Residual risk | Mitigation |
 | --- | --- |
+| Requests later denied by service/action policy consume a configured shared service cap. Pre-policy rate refusals can reveal that cap and contention timing to an admitted identity without a service grant. | Bound each caller's contribution with personal limits. A per-`anonymous` override requires TOML identity authority. Set `identity.mode = "required"` to reject anonymous callers before rate admission; if managed identity must allow anonymous invocation, lower the default or per-service personal limit, also affecting other callers without overrides. The `managed_store.require_registered_principal_for_invocation` check follows rate admission, so it restricts execution without preventing these charges. Rate admission never grants service authority. |
+| Live detail's numeric availability reveals remaining shared capacity when the aggregate cap binds; repeated observations can reveal other callers' activity timing. | Detail requires current caller visibility and omits anonymous live state, other principal identities and explicit shared usage/queue inventories. Treat the joint estimates as operational information available to callers who can describe the service. |
+| A Broker restart or aggregate window change replenishes a shared allowance; separate Broker processes enforce separate counters. | Size caps as process-local invocation protection. Ordinary reloads and count-only changes retain usage; removing/re-enabling a cap starts empty. Do not treat these counters as a persistent or distributed upstream quota. |
 | Authorization is revoked while an already prepared request is uploading. | Existing request snapshots may finish; concurrency limits and a total receive deadline bound pending uploads. Stop ingress and terminate the process when incident response requires canceling prepared work. |
 | Agent summarizes sensitive content it was authorized to read. | Keep broker policy narrow and pair it with agent-side output controls for sensitive workflows. |
 | An agent asserts its own context header. | Broker always requires a valid named trusted caller credential for protected headers on public and Git listeners. Keep that credential private and configure the caller with only its approved contexts and forwarding capability; asserted ingress must replace client context values. |

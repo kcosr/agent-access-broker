@@ -211,9 +211,10 @@ pub(crate) async fn acquire_caller_guard(
     Ok(principal_permit)
 }
 
-/// Charges one service invocation to the caller's `(principal, service)`
-/// window. Call once per service-invoking request, after identity resolution
-/// and caller admission and before policy evaluation, credential selection,
+/// Charges one service invocation to the caller's `(principal, service)` window
+/// and the configured shared service window together. Call once per invoking
+/// request, after identity resolution and caller admission and before policy
+/// evaluation, credential selection,
 /// pre-policy lookups, or any upstream call. Unknown services are left to
 /// existing validation and never create limiter state.
 ///
@@ -308,7 +309,7 @@ pub(crate) fn emit_invocation_limited(
         service = operation.service.as_str(),
         action = operation.action.as_str(),
         limitKind = "invocation_rate",
-        limitScope = agent_access_core::INVOCATION_LIMIT_SCOPE_PRINCIPAL,
+        limitScope = rejection.scope.as_str(),
         limit = rejection.limit.requests(),
         windowSeconds = rejection.limit.window_seconds(),
         retryAfterSeconds = rejection.retry_after_seconds,

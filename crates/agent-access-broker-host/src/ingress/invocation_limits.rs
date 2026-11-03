@@ -1,4 +1,4 @@
-//! Rolling-window service invocation limiter keyed by `(principal, service)`.
+//! Rolling-window service invocation limits for principals and shared services.
 //!
 //! Each key keeps at most [`SLOTS`] sub-buckets of `window / 60`. A bucket
 //! records how many requests it admitted and when it admitted the last one;
@@ -14,9 +14,9 @@
 //! State is process-local and survives reloads. Idle keys whose history has
 //! fully expired are pruned by an amortized sweep, never by scanning every key
 //! on every request, and there is no global key-capacity rejection.
-use agent_access_core::{InvocationLimit, InvocationRateLimited};
+use agent_access_core::{InvocationLimit, InvocationLimitScope, InvocationRateLimited};
 use chrono::{DateTime, Duration as ChronoDuration, DurationRound, Utc};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
@@ -74,6 +74,8 @@ pub(crate) struct InvocationLimiter {
 struct LimiterState {
     /// principal -> service -> window. Nested maps allow borrowed lookups.
     keys: HashMap<String, HashMap<String, KeyWindow>>,
+    aggregate_limits: BTreeMap<String, InvocationLimit>,
+    aggregate_windows: HashMap<String, KeyWindow>,
     key_count: usize,
     next_sweep_ns: u64,
     sweep_at_key_count: usize,
@@ -165,8 +167,10 @@ fn bucket_index(now_ns: u64, window_ns: u64) -> u64 {
 }
 
 impl InvocationLimiter {
-    pub(crate) fn new() -> Self {
-        Self::with_clock(Arc::new(SystemLimiterClock::new()))
+    pub(crate) fn new(aggregate: &BTreeMap<String, InvocationLimit>) -> Self {
+        let limiter = Self::with_clock(Arc::new(SystemLimiterClock::new()));
+        limiter.state.lock().unwrap().aggregate_limits = aggregate.clone();
+        limiter
     }
 
     pub(crate) fn with_clock(clock: Arc<dyn LimiterClock>) -> Self {
@@ -179,6 +183,18 @@ impl InvocationLimiter {
                 ..LimiterState::default()
             }),
         }
+    }
+
+    /// Installs a fixture's initial policy before the limiter is shared.
+    #[cfg(test)]
+    pub(crate) fn initialize_aggregate_limits(
+        &mut self,
+        aggregate: &BTreeMap<String, InvocationLimit>,
+    ) {
+        let state = self.state.get_mut().unwrap();
+        assert!(state.keys.is_empty() && state.scheduler.is_empty());
+        assert!(state.aggregate_windows.is_empty());
+        state.aggregate_limits = aggregate.clone();
     }
 
     /// Admits and records one request for `(principal, service)` under
@@ -210,6 +226,7 @@ impl InvocationLimiter {
         drop(state);
         let retry_after_seconds = wait_ns.div_ceil(NANOS_PER_SECOND).max(1);
         Err(InvocationRateLimited {
+            scope: InvocationLimitScope::Principal,
             service: service.to_string(),
             limit,
             retry_after_seconds,
@@ -247,6 +264,17 @@ impl InvocationLimiter {
 }
 
 impl LimiterState {
+    /// Publication owns policy and history reconciliation under the admission
+    /// lock. A removed or differently-sized window cannot survive re-enabling.
+    fn install_aggregate_limits(&mut self, aggregate: &BTreeMap<String, InvocationLimit>) {
+        self.aggregate_windows.retain(|service, window| {
+            aggregate.get(service).is_some_and(|limit| {
+                window.window_ns == u64::from(limit.window_seconds()) * NANOS_PER_SECOND
+            })
+        });
+        self.aggregate_limits = aggregate.clone();
+    }
+
     /// The key's window, created on first use. Existing keys are found
     /// without allocating.
     fn window_mut(&mut self, principal: &str, service: &str, window_ns: u64) -> &mut KeyWindow {
@@ -277,6 +305,8 @@ impl LimiterState {
             services.retain(|_, window| !window.is_idle(now_ns));
             !services.is_empty()
         });
+        self.aggregate_windows
+            .retain(|_, window| !window.is_idle(now_ns));
         self.key_count = self.keys.values().map(HashMap::len).sum();
         self.scheduler.prune_settings(&self.keys);
         self.next_sweep_ns = now_ns.saturating_add(duration_ns(SWEEP_INTERVAL));

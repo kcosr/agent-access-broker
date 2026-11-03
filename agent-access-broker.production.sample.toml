@@ -147,3 +147,10 @@ upload_spool_dir = "/var/lib/agent-access-broker/spool" # required; broker-owned
 [limits.invocations]
 # max_wait defaults to 0s (immediate rejection). Waiting retains request slots.
 default = { requests = 100, window = "1m", max_wait = "0s" }
+
+# After configuring a service, an optional shared cap limits all principals
+# together in this Broker process. Personal overrides cannot bypass it.
+# Use that configured service's exact ID; imports must already be retained.
+# [limits.invocations.aggregate.jira]
+# requests = 200
+# window = "1m"

@@ -846,7 +846,7 @@ async fn mcp_tool_calls_are_counted_once_and_protocol_messages_are_not_counted()
     let message = envelope["error"]["message"].as_str().unwrap();
     assert!(
         message.starts_with(
-            "Rate limit reached for service \"fake\": 2 requests per 1m. This request was not queued or executed. "
+            "Rate limit reached for service \"fake\": 2 requests per 1m for this principal. This request was not queued or executed. "
         ),
         "{message}"
     );

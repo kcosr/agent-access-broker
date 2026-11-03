@@ -1,11 +1,11 @@
-//! Per-principal, per-service invocation rate limits: `[limits.invocations]`
+//! Personal and shared service invocation rate limits: `[limits.invocations]`
 //! configuration, validation, effective-limit resolution, and the canonical
 //! `rate_limited` rejection.
 //!
 //! The broker counts each admitted service invocation once in a rolling window
-//! keyed by `(principal, service)`. This module decides which limit applies and
-//! how a rejection is described; the in-memory window itself lives in the
-//! broker's ingress layer.
+//! keyed by `(principal, service)` and, when configured, a shared service window.
+//! This module resolves both policies and describes rejections; in-memory
+//! histories and atomic admission live in the broker's ingress layer.
 
 use crate::{BrokerConfig, parse_ttl_seconds};
 use agent_access_provider::{ProviderError, ReasonCode, ServiceDescriptor, is_service_name};
@@ -30,9 +30,6 @@ pub const BUILT_IN_INVOCATION_LIMIT: InvocationLimit = InvocationLimit {
     requests: 100,
     window_seconds: 60,
 };
-/// `result.limitScope` of broker-owned per-principal invocation limits.
-pub const INVOCATION_LIMIT_SCOPE_PRINCIPAL: &str = "principal";
-
 /// `[limits.invocations]`.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +40,9 @@ pub struct InvocationLimitsConfig {
     /// `[limits.invocations.services.<service>]` per-service defaults.
     #[serde(default)]
     pub services: BTreeMap<String, InvocationLimitConfig>,
+    /// `[limits.invocations.aggregate.<service>]` caps shared by all principals.
+    #[serde(default)]
+    pub aggregate: BTreeMap<String, AggregateInvocationLimitConfig>,
     /// Only valid with `identity.authority = "toml"`; managed deployments keep
     /// overrides in the managed store.
     #[serde(default)]
@@ -59,6 +59,16 @@ pub struct InvocationLimitConfig {
     /// Maximum FIFO rate-admission wait. Service values inherit the default.
     #[serde(default)]
     pub max_wait: Option<String>,
+}
+
+/// One shared service cap. Waiting policy comes from the personal service
+/// configuration; an aggregate cap cannot supply another waiting budget.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AggregateInvocationLimitConfig {
+    pub requests: u64,
+    /// Broker duration syntax (`s`, `m`, `h`, `d`), from `1s` to `1d`.
+    pub window: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -224,6 +234,7 @@ impl EffectiveInvocationLimit {
 pub struct ConfiguredInvocationLimits {
     default: InvocationLimit,
     services: BTreeMap<String, InvocationLimit>,
+    aggregate: BTreeMap<String, InvocationLimit>,
     default_max_wait: Duration,
     service_max_wait: BTreeMap<String, Duration>,
     /// principal -> service -> limit; populated only for TOML identity authority.
@@ -235,6 +246,7 @@ impl Default for ConfiguredInvocationLimits {
         Self {
             default: BUILT_IN_INVOCATION_LIMIT,
             services: BTreeMap::new(),
+            aggregate: BTreeMap::new(),
             default_max_wait: Duration::ZERO,
             service_max_wait: BTreeMap::new(),
             principal_overrides: BTreeMap::new(),
@@ -257,6 +269,15 @@ impl ConfiguredInvocationLimits {
             .iter()
             .filter_map(|(service, limit)| {
                 InvocationLimit::from_config(limit)
+                    .ok()
+                    .map(|limit| (service.clone(), limit))
+            })
+            .collect();
+        let aggregate = invocations
+            .aggregate
+            .iter()
+            .filter_map(|(service, limit)| {
+                InvocationLimit::parse(limit.requests, &limit.window)
                     .ok()
                     .map(|limit| (service.clone(), limit))
             })
@@ -293,6 +314,7 @@ impl ConfiguredInvocationLimits {
         Self {
             default,
             services,
+            aggregate,
             default_max_wait,
             service_max_wait,
             principal_overrides,
@@ -303,6 +325,17 @@ impl ConfiguredInvocationLimits {
     /// principal overrides.
     pub fn service_limit(&self, service: &str) -> InvocationLimit {
         self.services.get(service).copied().unwrap_or(self.default)
+    }
+
+    /// The cap shared by every principal for this service, independent of all
+    /// personal defaults and overrides. Absence means there is no shared cap.
+    pub fn aggregate_limit(&self, service: &str) -> Option<InvocationLimit> {
+        self.aggregate.get(service).copied()
+    }
+
+    /// Configured shared caps for atomic installation with a runtime generation.
+    pub fn aggregate_limits(&self) -> &BTreeMap<String, InvocationLimit> {
+        &self.aggregate
     }
 
     pub fn max_wait(&self, service: &str) -> Duration {
@@ -333,12 +366,30 @@ impl ConfiguredInvocationLimits {
     }
 }
 
-/// A broker-owned `rate_limited` rejection for one principal and service.
+/// Which allowance prevents a broker-owned service invocation admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationLimitScope {
+    Principal,
+    Service,
+}
+
+impl InvocationLimitScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Principal => "principal",
+            Self::Service => "service",
+        }
+    }
+}
+
+/// A broker-owned `rate_limited` rejection for a personal or shared allowance.
 /// Convert with [`InvocationRateLimited::into_provider_error`]; the request
 /// was not dispatched and is safe to retry after `retry_after_seconds`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InvocationRateLimited {
     pub service: String,
+    pub scope: InvocationLimitScope,
     pub limit: InvocationLimit,
     /// Whole seconds, at least 1.
     pub retry_after_seconds: u64,
@@ -375,13 +426,17 @@ impl InvocationRateLimited {
     pub fn message(&self) -> String {
         let requests = self.limit.requests;
         let noun = if requests == 1 { "request" } else { "requests" };
+        let (heading, allowance) = match self.scope {
+            InvocationLimitScope::Principal => ("Rate limit", "for this principal"),
+            InvocationLimitScope::Service => ("Shared rate limit", "across all principals"),
+        };
         let disposition = if self.was_queued {
-            "is no longer queued and was not executed"
+            "is no longer schedulable within its waiting bound, is no longer queued, and was not executed"
         } else {
             "was not queued or executed"
         };
         format!(
-            "Rate limit reached for service \"{}\": {requests} {noun} per {}. This request {disposition}. Configured maximum wait: {}s; limiting bound: {}, with {}ms remaining after {}ms waiting. {} requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in {}s. Do not resubmit requests that are already pending. Retry after {}s (at {}).",
+            "{heading} reached for service \"{}\": {requests} {noun} per {} {allowance}. This request {disposition}. Configured maximum wait: {}s; limiting bound: {}, with {}ms remaining after {}ms waiting. {} requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in {}s. Do not resubmit requests that are already pending. Retry after {}s (at {}).",
             self.service,
             self.limit.window_label(),
             self.max_wait_seconds,
@@ -398,7 +453,7 @@ impl InvocationRateLimited {
     /// Structured error `result`.
     pub fn result(&self) -> Value {
         json!({
-            "limitScope": INVOCATION_LIMIT_SCOPE_PRINCIPAL,
+            "limitScope": self.scope,
             "service": self.service,
             "limit": self.limit.requests,
             "windowSeconds": self.limit.window_seconds,
@@ -418,7 +473,7 @@ impl InvocationRateLimited {
     pub fn audit(&self) -> Value {
         json!({
             "rateLimit": {
-                "limitScope": INVOCATION_LIMIT_SCOPE_PRINCIPAL,
+                "limitScope": self.scope,
                 "service": self.service,
                 "limit": self.limit.requests,
                 "windowSeconds": self.limit.window_seconds,
@@ -463,6 +518,17 @@ pub(crate) fn validate_invocation_limits(
         // Offline validation cannot see retained imports. Any configured store
         // is loaded at startup/reload, even when imports are disabled; check
         // deferred names against that complete catalog before publication.
+        if !is_service_name(service)
+            || (!services.contains_key(service) && config.managed_store.is_none())
+        {
+            errors.push(format!("{label} references unknown service {service}"));
+        }
+    }
+    for (service, limit) in &invocations.aggregate {
+        let label = format!("limits.invocations.aggregate.{service}");
+        if let Err(error) = InvocationLimit::parse(limit.requests, &limit.window) {
+            errors.push(format!("{label}: {error}"));
+        }
         if !is_service_name(service)
             || (!services.contains_key(service) && config.managed_store.is_none())
         {
@@ -522,10 +588,21 @@ pub(crate) fn validate_invocation_limit_service_references(
     services: &BTreeMap<String, Arc<ServiceDescriptor>>,
     errors: &mut Vec<String>,
 ) {
-    for service in config.limits.invocations.services.keys() {
+    let invocations = &config.limits.invocations;
+    for (section, service) in invocations
+        .services
+        .keys()
+        .map(|service| ("services", service))
+        .chain(
+            invocations
+                .aggregate
+                .keys()
+                .map(|service| ("aggregate", service)),
+        )
+    {
         if !services.contains_key(service) {
             errors.push(format!(
-                "limits.invocations.services.{service} references unknown service {service}"
+                "limits.invocations.{section}.{service} references unknown service {service}"
             ));
         }
     }
@@ -650,9 +727,55 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_configuration_is_a_strict_service_rate_map() {
+        let config = toml::from_str::<InvocationLimitsConfig>(
+            "[aggregate.jira]\nrequests = 200\nwindow = '1m'",
+        )
+        .unwrap();
+        assert_eq!(
+            config.aggregate,
+            BTreeMap::from([(
+                "jira".into(),
+                AggregateInvocationLimitConfig {
+                    requests: 200,
+                    window: "1m".into(),
+                },
+            )])
+        );
+        assert!(config.default.is_none());
+        assert!(config.services.is_empty());
+        assert!(config.principal_overrides.is_empty());
+
+        for entry in [
+            "requests = 200\nwindow = '1m'\nmax_wait = '10s'",
+            "requests = 200\nwindow = '1m'\nprincipal = 'alice'",
+            "requests = 200\nwindow = '1m'\nenabled = true",
+            "requests = 200",
+            "window = '1m'",
+            "requests = -1\nwindow = '1m'",
+            "requests = 1.5\nwindow = '1m'",
+        ] {
+            let source = format!("[aggregate.jira]\n{entry}");
+            assert!(
+                toml::from_str::<InvocationLimitsConfig>(&source).is_err(),
+                "{source}"
+            );
+        }
+        assert!(
+            toml::from_str::<InvocationLimitsConfig>("[aggregate]\nrequests = 200\nwindow = '1m'")
+                .is_err(),
+            "aggregate is a service map, not a default cap"
+        );
+        let defaults = ConfiguredInvocationLimits::default();
+        assert!(defaults.aggregate_limits().is_empty());
+        assert_eq!(defaults.aggregate_limit("jira"), None);
+    }
+
+    #[test]
     fn rejection_message_result_and_audit_follow_the_contract() {
         let rejection = InvocationRateLimited {
             service: "jira".into(),
+            scope: InvocationLimitScope::Principal,
             limit: InvocationLimit::parse(20, "1m").unwrap(),
             retry_after_seconds: 12,
             retry_at: Utc.with_ymd_and_hms(2026, 9, 25, 14, 3, 12).unwrap(),
@@ -665,7 +788,7 @@ mod tests {
         };
         assert_eq!(
             rejection.message(),
-            "Rate limit reached for service \"jira\": 20 requests per 1m. This request was not queued or executed. Configured maximum wait: 10s; limiting bound: configured rate-wait budget, with 10000ms remaining after 0ms waiting. 2 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z)."
+            "Rate limit reached for service \"jira\": 20 requests per 1m for this principal. This request was not queued or executed. Configured maximum wait: 10s; limiting bound: configured rate-wait budget, with 10000ms remaining after 0ms waiting. 2 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z)."
         );
         assert_eq!(
             rejection.result(),
@@ -708,11 +831,40 @@ mod tests {
             result_retry_after_seconds(error.result.as_deref()),
             Some(12)
         );
+        let shared = InvocationRateLimited {
+            scope: InvocationLimitScope::Service,
+            limit: InvocationLimit::parse(200, "5m").unwrap(),
+            was_queued: true,
+            ..rejection.clone()
+        };
+        let shared_message = shared.message();
+        assert!(shared_message.starts_with(
+            "Shared rate limit reached for service \"jira\": 200 requests per 5m across all principals."
+        ));
+        assert!(shared_message.contains(
+            "This request is no longer schedulable within its waiting bound, is no longer queued, and was not executed."
+        ));
+        assert!(shared_message.contains(
+            "2 requests for this principal and service are already queued and remain pending."
+        ));
+        assert!(!shared_message.contains("personal allowance is exhausted"));
+        assert_eq!(shared.result()["limitScope"], "service");
+        assert_eq!(shared.result()["limit"], 200);
+        assert_eq!(shared.result()["windowSeconds"], 300);
+        assert_eq!(shared.audit()["rateLimit"]["limitScope"], "service");
+        assert_eq!(shared.audit()["rateLimit"]["queuedRequests"], 2);
+        assert_eq!(InvocationLimitScope::Principal.as_str(), "principal");
+        assert_eq!(InvocationLimitScope::Service.as_str(), "service");
+
         let single = InvocationRateLimited {
             limit: InvocationLimit::parse(1, "90s").unwrap(),
             ..rejection
         };
-        assert!(single.message().contains(": 1 request per 90s."));
+        assert!(
+            single
+                .message()
+                .contains(": 1 request per 90s for this principal.")
+        );
     }
 
     #[test]

@@ -347,7 +347,7 @@ async fn toml_overrides_take_precedence_and_limit_changes_apply_on_the_next_requ
         limited["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("per 2m.")
+            .contains("per 2m for this principal.")
     );
 }
 
@@ -368,7 +368,7 @@ async fn rate_limited_invocation_returns_the_contract_body_header_and_audit() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers()[RETRY_AFTER], "12");
     let value = response_json(response).await;
-    let message = "Rate limit reached for service \"fake\": 2 requests per 1m. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:04:00Z).";
+    let message = "Rate limit reached for service \"fake\": 2 requests per 1m for this principal. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:04:00Z).";
     assert_eq!(value["reasonCode"], "rate_limited");
     assert_eq!(value["decision"], "error");
     assert_eq!(value["service"], "broker");
@@ -437,6 +437,7 @@ async fn managed_store_overrides_take_precedence_and_apply_without_reload() {
             default: Some(limit(3, "1m")),
             services: BTreeMap::from([("fake".to_string(), limit(2, "1m"))]),
             principal_overrides: vec![],
+            aggregate: BTreeMap::new(),
         },
         ..test_limits()
     })
@@ -486,7 +487,7 @@ async fn managed_store_overrides_take_precedence_and_apply_without_reload() {
         limited["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("per 30s.")
+            .contains("per 30s for this principal.")
     );
 }
 
@@ -515,7 +516,9 @@ async fn request_limited_event_includes_limit_detail_and_token_id() {
     let body = assert_limited(limited, 1).await;
     let message = body["error"]["message"].as_str().unwrap();
     assert!(
-        message.contains(": 1 request per 90s. This request was not queued or executed."),
+        message.contains(
+            ": 1 request per 90s for this principal. This request was not queued or executed."
+        ),
         "{message}"
     );
     assert!(

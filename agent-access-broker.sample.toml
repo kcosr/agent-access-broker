@@ -979,6 +979,13 @@ window = "1m"
 # Optional: override default.max_wait independently of principal rate overrides.
 # max_wait = "10s"
 
+# Optional shared cap across every principal using this service, independent
+# of personal defaults and overrides. One max_wait above covers both limits.
+# The cap counts Broker admissions in this process, not upstream HTTP calls.
+# [limits.invocations.aggregate.jira]
+# requests = 200
+# window = "1m"
+
 # Principal overrides are only valid with identity.authority = "toml" and must
 # name a configured static principal (or "anonymous"). Managed deployments
 # store overrides in the managed store instead.

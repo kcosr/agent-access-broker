@@ -271,9 +271,14 @@ metadata; it does not replace health or readiness checks.
 Surfaces use the broker's canonical `invoke` or `gateway` spelling. Action names replace counts. `--verbose` returns an unwrapped array of
 complete service objects, including action schemas. `services describe SERVICE`
 returns one complete service object, including authenticated callers' effective
-`limits`, FIFO queue/rate observations and shared request occupancy in JSON and
-text output. Observations are process-local estimates, not reservations; anonymous
-detail omits them. Lists remain static. See [live service limits](http-api.md#live-service-limits).
+`limits`, personal FIFO queue/rate observations and shared request occupancy in
+JSON and text output. Optional `limits.aggregate` gives the shared service cap;
+`limits.invocations.availableImmediately` and `nextAdmission*` estimate joint
+eligibility after accepted waiters, and `blockingScope` identifies a personal or
+shared constraint when immediate capacity is unavailable. Observations are
+process-local estimates, not reservations; anonymous detail omits them and lists
+remain static. See [live service limits](http-api.md#live-service-limits) and the
+[shared-usage disclosure](security-model.md#residual-risks).
 An empty compact list is `{"services":[]}`.
 `availability` reports local credential readiness. Missing or unusable credentials
 hide actions, schemas, resources and coverage; an authorized service remains with
@@ -841,9 +846,11 @@ the same effective group.
   1,000,000) and the window (1s to 1d). These commands require managed
   identity authority; TOML deployments configure
   `[[limits.invocations.principal_overrides]]`. Changes apply to the
-  principal's next counted request and reforecast pending waiters without
-  extending deadlines. These overrides select requests/window only; service or
-  default `max_wait` still applies independently.
+  principal's next counted request and reforecast affected pending requests,
+  including other principals' requests when a shared cap applies. A changed
+  forecast can refuse a queued request with 429; deadlines never extend.
+  These overrides select requests/window only; service or default `max_wait`
+  still applies independently.
 
   ```sh
   agent-access admin principals service-limits list alice
@@ -1335,10 +1342,14 @@ nonapplication. The error message reports the wait. Upstream failures may carry
 `result.retryAfterSeconds` and `result.retryAt` when known. The CLI never
 retries automatically; wait before running the command again, and do not retry
 in a loop. Optional Broker waiting holds the original request open; do not
-resubmit pending calls. Retry guidance accounts for this principal/service's
-accepted FIFO queue. `concurrency_limited` prints no extra line and has no
-`Retry-After`: waiting calls can occupy existing slots across services, so wait
-for capacity without duplicating them.
+resubmit pending calls. Retry guidance accounts for accepted waiters across
+principals and any configured shared service cap. Broker admission rate metadata
+uses `limitScope: "principal"` or `"service"`, distinct from upstream throttling's
+`"upstream"` scope. Personal refusal messages add `for this principal`;
+shared refusals begin `Shared rate limit reached` and describe the
+allowance `across all principals`. `concurrency_limited` prints no extra line and
+has no `Retry-After`: waiting calls can occupy existing slots across services,
+so wait for capacity without duplicating them.
 
 In addition to HTTP-derived codes:
 

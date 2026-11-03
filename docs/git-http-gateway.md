@@ -413,7 +413,12 @@ before the fetch POST. A positive `max_wait` can admit later POSTs after the
 window allows them, subject to client and ingress deadlines. Set a gateway-specific
 value with
 `[limits.invocations.services.<gateway>]`; see
-[configuration](configuration.md#service-invocation-limits). Waiting occurs before
+[configuration](configuration.md#service-invocation-limits). An optional
+`[limits.invocations.aggregate.<gateway>]` requests/window pair caps pack POSTs
+across all principals using that gateway service ID. Both personal and shared
+allowances must permit admission; a personal override cannot bypass the shared
+cap. Ref discovery remains uncharged. Waiting uses one budget and fair turns
+among eligible personal FIFOs. It occurs before
 consuming or forwarding the pack, retains existing request slots, and shares
 the original ingress body deadline. Observed pending cancellation removes the
 request without a charge or dispatch; delayed disconnect detection means a
@@ -435,7 +440,9 @@ identifying the effective rate, configured wait, limiting deadline, pending
 count and next unreserved admission. Retry timing honors accepted waiters; do
 not repeat still-pending calls. A future projected FIFO turn that cannot fit the
 remaining deadline also uses this 429 outcome. The rejection is audited with the
-resolved principal, the real gateway action, and `providerAudit.rateLimit`.
+resolved principal, the real gateway action, and `providerAudit.rateLimit`, whose
+`limitScope` distinguishes `principal` and `service`. New contention can make
+a queued POST infeasible and remove it with 429 before its unchanged deadline.
 
 Credentialed gateway forwarding is audit-gated with
 `providerAudit.gateway.phase = "started"` before upstream credentials are sent,

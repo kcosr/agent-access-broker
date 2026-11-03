@@ -9,6 +9,7 @@ import type { CatalogService } from "./catalog-data";
 export function LimitsTab({ service, data, onEdit }: { service: CatalogService; data: ImportPreviewResult | null; onEdit: () => void }) {
   const imported = service.imported;
   const limit = (data?.service ?? imported)?.definition.invocationLimit;
+  const aggregate = service.catalog?.aggregateInvocationLimit;
   const canEdit = Boolean(data && data.operatorAllowed && data.service.status !== "retired");
   return (
     <SettingsPage>
@@ -43,6 +44,15 @@ export function LimitsTab({ service, data, onEdit }: { service: CatalogService; 
           </div>
         </SettingsSection>
       )}
+      <SettingsSection title="Shared service cap" description="Combined invocation allowance across all principals in this Broker process.">
+        <KeyValue
+          labelWidth={160}
+          items={[
+            { label: "Rate", value: !service.catalog ? <span className="wb-muted">Policy unavailable</span> : aggregate ? formatServiceLimit(aggregate) : <span className="wb-muted">No shared cap</span> },
+            { label: "Configuration", value: <span>Broker TOML (<span className="wb-mono">[limits.invocations.aggregate.{service.service}]</span>)</span> }
+          ]}
+        />
+      </SettingsSection>
     </SettingsPage>
   );
 }

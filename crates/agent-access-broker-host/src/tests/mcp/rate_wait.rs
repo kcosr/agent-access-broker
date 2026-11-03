@@ -69,6 +69,96 @@ fn assert_cancelled(record: &Value) {
 }
 
 #[tokio::test]
+async fn native_mcp_shares_rest_service_capacity_and_reports_the_callers_joint_eligibility() {
+    let fixture = Fixture::new(|config| {
+        let peer_tokens = config.identity.sources[0].principals[0]
+            .token_refs
+            .split_off(1);
+        config.identity.sources[0]
+            .principals
+            .push(StaticPrincipalConfig {
+                principal: "mcp-peer".into(),
+                token_refs: peer_tokens,
+            });
+        config.policy.grants[0]
+            .subjects
+            .push("user:mcp-peer".into());
+        config.limits.invocations.aggregate.insert(
+            "fake".into(),
+            crate::tests::aggregate_limits::aggregate(1, "1m"),
+        );
+    })
+    .await;
+    let seeded = invoke_fake_project_with_token(
+        fixture.app.clone(),
+        "mcp-shared-rest-seed",
+        TOKEN_A,
+        "TEST",
+    )
+    .await;
+    assert_eq!(seeded.status(), StatusCode::OK);
+    drop(seeded);
+    let session = fixture.initialize_version(TOKEN_B, VERSION).await;
+    let native = agent_access_core::mcp::tool_name("fake", "echo");
+    let response = fixture.send(request(Method::POST, Some(TOKEN_B), Some(&session), Some(json!({
+        "jsonrpc":"2.0","id":991,"method":"tools/call",
+        "params":{"name":native,"arguments":{"inputs":{"project":"TEST","message":"shared MCP refused"}}}
+    })))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let limited = rpc_body(response).await;
+    assert_eq!(limited["result"]["isError"], true);
+    assert!(limited.get("error").is_none(), "{limited}");
+    // Rate refusals carry the complete human message as MCP text; their
+    // structured content still carries the ordinary admission envelope.
+    let envelope = &limited["result"]["structuredContent"];
+    assert_eq!(
+        limited["result"]["content"][0]["text"],
+        envelope["error"]["message"]
+    );
+    assert_eq!(envelope["reasonCode"], "rate_limited");
+    assert_eq!(envelope["service"], "broker");
+    assert_eq!(envelope["action"], "request.admit");
+    assert!(envelope.get("result").is_none());
+    assert!(
+        envelope["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Shared rate limit")
+    );
+
+    let response = fixture
+        .send(request(
+            Method::POST,
+            Some(TOKEN_B),
+            Some(&session),
+            Some(json!({
+                "jsonrpc":"2.0","id":992,"method":"tools/call",
+                "params":{"name":"services_describe","arguments":{"service":"fake"}}
+            })),
+        ))
+        .await;
+    let described = rpc_body(response).await;
+    let detail = structured(&described);
+    assert_eq!(
+        detail["limits"]["aggregate"],
+        json!({"requests":1,"windowSeconds":60})
+    );
+    assert_eq!(detail["limits"]["invocations"]["countedRequests"], 0);
+    assert_eq!(detail["limits"]["invocations"]["blockingScope"], "service");
+    assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 0);
+    let records = read_audit_records(&fixture.audit_path);
+    let limited = records
+        .iter()
+        .find(|record| record["reasonCode"] == "rate_limited")
+        .unwrap();
+    assert_eq!(limited["principal"], "mcp-peer");
+    assert_eq!(
+        limited["providerAudit"]["rateLimit"]["limitScope"],
+        "service"
+    );
+}
+
+#[tokio::test]
 async fn queued_native_cancellation_releases_permits_without_charge_or_execution() {
     let provider = ControlledProvider::new(false);
     let fixture = waiting_fixture(provider.clone(), |_| {}).await;

@@ -2112,6 +2112,11 @@ requests = 20
 window = "1m"
 max_wait = "10s"                            # optional; inherits default.max_wait
 
+# Optional shared cap, independent of the personal allowance above.
+[limits.invocations.aggregate.jira]
+requests = 200
+window = "1m"
+
 # Only valid with identity.authority = "toml".
 [[limits.invocations.principal_overrides]]
 principal = "alice"
@@ -2128,6 +2133,15 @@ service. Each `(principal, service)` pair has one rolling window: at most
 is an ordinary key. Many principals commonly share one source address (for
 example everything arriving through a shared ingress proxy), so service-invocation limits are never
 keyed on the source address.
+
+Optional `[limits.invocations.aggregate.<service>]` adds a second rolling window
+shared by all principals using that exact service ID. Each entry accepts only
+`requests` and `window`; absence means no shared cap. There is no aggregate
+default, personal override or separate `max_wait`. Both the personal allowance
+and the shared cap must permit admission, even when their windows differ.
+Native SDK services, imported MCP/OpenAPI services, command imports and gateways
+use the same enforcement. Different service IDs have separate caps even when
+they use the same provider kind, endpoint or credential connection.
 
 A request is counted once, when it is admitted, however many upstream calls it
 later makes:
@@ -2150,9 +2164,13 @@ taken after identity resolution and after the service is known to be
 configured, and before policy evaluation, credential selection, pre-policy
 resource lookups, and upstream calls. Requests later denied by policy still
 count; a request rejected by the limit is never added to rate history. Unknown services are
-rejected by existing validation and never create limiter state.
+rejected by existing validation and never create limiter state. Both allowances
+are charged together, or neither is charged. Because accounting precedes policy,
+later-denied requests can consume the shared cap and rate refusals can disclose
+its policy and timing before service authorization; see the
+[security model](security-model.md#residual-risks).
 
-The effective limit for a principal and service is the first of:
+The effective personal limit for a principal and service is the first of:
 
 1. The principal's override for that service: `principal_overrides` with
    `identity.authority = "toml"`, or the managed store's
@@ -2176,13 +2194,28 @@ unknown names against the retained import catalog and rejects names absent from
 both catalogs. Disabled and retired imports remain valid references, including
 when imports are disabled globally.
 
-With positive `max_wait`, a request can wait in FIFO order for its existing
-principal/service allowance, shared across tokens and transports. Its projected
-turn must fit the configured wait and the remaining request deadline. Waiting
+The aggregate map also stays in source TOML across catalog edits. Managed
+`invocationLimit` and personal overrides cannot replace or bypass it. The portal's
+service **Limits** tab displays shared caps read-only; change TOML and reload to
+update them.
+
+With positive `max_wait`, a request can wait for both allowances in one budget.
+Each principal/service queue remains FIFO across tokens and transports; service
+arbitration takes one eligible head per principal in round-robin order. A
+personally throttled caller or one awaiting fresh settings does not block other
+eligible callers. Anonymous traffic shares one FIFO and one such turn. A new
+arrival cannot overtake eligible queued work. Its projected turn must fit the
+configured wait and the remaining request deadline. Waiting
 holds the original inbound request open before policy, credentials or upstream
 work. REST and Git also wait before body parsing/spooling; HTTP MCP has already
 parsed its protocol message before service admission. Only admission consumes a
 rate unit; later denials still count. No automatic retry or durable job is created.
+
+Forecasts assume no later arrivals or settings changes and reserve no capacity.
+New contention or a settings change, including another caller's settings becoming
+usable, can move an accepted request outside its original waiting bound. It is
+then removed with HTTP 429 before that bound expires; its deadline is never
+extended. A newcomer that cannot itself be accepted does not displace waiters.
 
 Waiters retain existing global/per-principal request slots (defaults 100/10),
 including any MCP response slot. Waiting can fill a principal's slots across
@@ -2208,16 +2241,22 @@ remains and existing operation ownership applies.
 Managed override updates reforecast affected pending requests without extending
 their deadlines. Runtime publication, including reload and imported-catalog
 replacement, cancels pending admission; already-admitted operations retain their
-existing snapshot behavior. Failed reloads leave requests unchanged. Limiter
-history is held in memory per broker process and survives reloads. When the effective window
-length for a key changes, that key's history resets; when only `requests`
-changes, the existing history is evaluated against the new value.
+existing snapshot behavior. Failed reloads leave requests unchanged. Personal and
+shared history is held in memory per broker process and survives reloads. When
+only `requests` changes, existing history is evaluated against the new value;
+lowering it below current usage prevents admission until enough history expires.
+Changing a window resets that history. Removing a shared cap discards its
+history, and enabling one starts empty; traffic while disabled is not reconstructed.
+Restart clears all rate history. A cap does not coordinate other Broker processes
+or persist a vendor quota across these reset boundaries.
 
 The window is kept as 60 sub-buckets per key. The broker never admits more
 than `requests` in any trailing `window`, may be conservative by at most
 `window / 60`, and memory per key does not depend on `requests`. Idle keys are
 pruned by a periodic amortized sweep; there is no global key capacity that
 could reject other principals.
+The full allowance may be consumed in a burst; a rate cap does not smooth
+admissions or impose an additional concurrency limit.
 
 Validation:
 
@@ -2227,8 +2266,9 @@ Validation:
 - `max_wait` accepts nonnegative whole-second durations in `s`, `m`, `h`, or
   `d` syntax, within representable duration/deadline bounds. It may exceed the
   rate window or a transport deadline; the request's remaining deadline wins.
-- `services.<service>` keys must be configured native, imported or gateway
-  service names.
+- `services.<service>` and `aggregate.<service>` keys must be configured native,
+  imported or gateway service names. Aggregate entries use the same positive
+  requests/window ranges and reject `max_wait` or any other field.
 - `principal_overrides` is rejected unless `identity.authority = "toml"`. Each
   entry must name a configured static principal (or `anonymous`) and a
   configured service; duplicate `(principal, service)` pairs are rejected.

@@ -1,10 +1,13 @@
-//! Source TOML wait policy survives stored import loading and publication.
+//! Source TOML wait policy and shared caps survive import loading/publication.
 use super::*;
 use crate::imports::{
     ImportedCredentialBinding, ImportedCredentialDelivery, ImportedCredentialMode,
     ImportedDiscoveryCredential, ImportedInvocationLimit,
 };
-use crate::{InvocationLimitConfig, ManagedStoreConfig, PrincipalRole, PrincipalWriteRequest};
+use crate::{
+    AggregateInvocationLimitConfig, InvocationLimit, InvocationLimitConfig, ManagedStoreConfig,
+    PrincipalRole, PrincipalWriteRequest,
+};
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -88,6 +91,22 @@ fn fixture() -> Fixture {
             max_wait: Some("7s".into()),
         },
     );
+    config.limits.invocations.aggregate = [
+        ("records", 17, "2m"),
+        ("other_import", 23, "3m"),
+        ("fake", 29, "10s"),
+    ]
+    .into_iter()
+    .map(|(service, requests, window)| {
+        (
+            service.into(),
+            AggregateInvocationLimitConfig {
+                requests,
+                window: window.into(),
+            },
+        )
+    })
+    .collect();
     Fixture {
         _directory: directory,
         config,
@@ -100,6 +119,24 @@ fn assert_limits(runtime: &BrokerRuntime, service: &str, requests: u32, window: 
     assert_eq!(limit.requests(), requests);
     assert_eq!(limit.window_seconds(), window);
     assert_eq!(configured.max_wait(service), Duration::from_secs(wait));
+    assert_aggregate_limits(runtime);
+}
+
+fn assert_aggregate_limits(runtime: &BrokerRuntime) {
+    let expected = BTreeMap::from([
+        ("records".into(), InvocationLimit::parse(17, "2m").unwrap()),
+        (
+            "other_import".into(),
+            InvocationLimit::parse(23, "3m").unwrap(),
+        ),
+        ("fake".into(), InvocationLimit::parse(29, "10s").unwrap()),
+    ]);
+    assert_eq!(
+        runtime.configured_invocation_limits().aggregate_limits(),
+        &expected
+    );
+    let from_source = crate::ConfiguredInvocationLimits::from_config(runtime.config());
+    assert_eq!(from_source.aggregate_limits(), &expected);
 }
 
 fn update(
@@ -227,6 +264,32 @@ fn imported_limit_publications_preserve_wait_and_restore_source_rate_fallback() 
     });
     assert_limits(&runtime, "other_import", 100, 60, 11);
 
+    // A successful discovery refresh publishes a new catalog even when its
+    // accepted actions are unchanged. The source cap must survive that path.
+    let record = runtime.imported_catalog().service("records").unwrap();
+    let prepared = runtime
+        .prepare_imported_service_change(record, None)
+        .unwrap();
+    let refreshed = runtime
+        .managed_store()
+        .unwrap()
+        .write_imported_preview(
+            crate::ImportedPreviewWriteRequest {
+                service: "records".into(),
+                expected_version: record.version,
+                expected_catalog_revision: runtime.import_catalog_revision(),
+                config_revision: "aggregate-limits-test".into(),
+                credential_versions: BTreeMap::new(),
+                manifest: serde_json::json!({"tools": []}),
+                quarantine_actions: vec![],
+                actor: "admin".into(),
+            },
+            |catalog| runtime.with_imported_catalog(catalog.clone(), prepared),
+        )
+        .unwrap();
+    runtime = refreshed.value;
+    assert_limits(&runtime, "records", 9, 30, 7);
+
     for status in [
         ImportedServiceStatus::Disabled,
         ImportedServiceStatus::Retired,
@@ -274,6 +337,76 @@ fn imported_limit_unknown_names_fail_startup_and_reload_after_catalog_loading() 
         );
     }
     assert_limits(&runtime, "records", 2, 10, 7);
+}
+
+#[test]
+fn aggregate_unknown_names_fail_startup_and_reload_after_catalog_loading() {
+    let fixture = fixture();
+    let runtime = BrokerRuntime::new(fixture.config.clone()).unwrap();
+    let mut config = fixture.config.clone();
+    let limit = config
+        .limits
+        .invocations
+        .aggregate
+        .remove("records")
+        .unwrap();
+    config
+        .limits
+        .invocations
+        .aggregate
+        .insert("reocrds".into(), limit);
+    crate::validate_broker_config(&config).unwrap();
+    for error in [
+        failure(BrokerRuntime::new(config.clone())),
+        failure(BrokerRuntime::new_for_reload(config, &runtime)),
+    ] {
+        assert!(
+            error.contains(
+                "limits.invocations.aggregate.reocrds references unknown service reocrds"
+            ),
+            "{error}"
+        );
+    }
+    assert_aggregate_limits(&runtime);
+}
+
+#[test]
+fn aggregate_offline_deferral_keeps_name_syntax_and_rate_validation() {
+    let fixture = fixture();
+    for service in ["records/invalid", "missing"] {
+        let mut config = fixture.config.clone();
+        config.limits.invocations.aggregate.insert(
+            service.into(),
+            AggregateInvocationLimitConfig {
+                requests: 0,
+                window: "1m".into(),
+            },
+        );
+        let error = config_errors(crate::validate_broker_config(&config).unwrap_err());
+        assert!(
+            error.contains(&format!(
+                "limits.invocations.aggregate.{service}: requests must be an integer from 1"
+            )),
+            "{error}"
+        );
+        if service.contains('/') {
+            assert!(
+                error.contains("references unknown service records/invalid"),
+                "{error}"
+            );
+        }
+    }
+    let mut config = crate::runtime::tests::base_fake_config();
+    config.limits.invocations.aggregate = fixture.config.limits.invocations.aggregate;
+    let error = config_errors(crate::validate_broker_config(&config).unwrap_err());
+    assert!(
+        error.contains("limits.invocations.aggregate.records references unknown service records"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("references unknown service fake"),
+        "native services are resolved offline: {error}"
+    );
 }
 
 #[test]

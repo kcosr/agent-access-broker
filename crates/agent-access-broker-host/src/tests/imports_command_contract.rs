@@ -661,6 +661,71 @@ fn process_https_proxy() -> bool {
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
 }
 
+#[tokio::test]
+async fn shared_command_cap_refuses_before_starting_another_process() {
+    let contract = Contract::new(&clock_manifest());
+    let mut config = contract.fixture.config.clone();
+    let broker = import_broker(&config).await;
+    let app = broker.app();
+    import(&app, &contract.admin, "clock", "tickets", &[]).await;
+    let runtime = broker.runtime();
+    runtime
+        .create_managed_policy_grant(grant(
+            "clock-shared-cap",
+            "user:admin",
+            "clock",
+            "time.now",
+            "service",
+            0,
+            select(&[], &[]),
+        ))
+        .unwrap();
+    let agent = contract.fixture.issue("admin", BrokerTokenClass::AgentInvoke,
+        json!({"readOnly":false,"allowedServices":["clock"],"allowedExecutionContexts":["default"]}));
+    config
+        .limits
+        .invocations
+        .aggregate
+        .insert("clock".into(), super::aggregate_limits::aggregate(1, "1m"));
+    broker.reload_config(&config).await;
+    let (status, result) = invoke_as(
+        &app,
+        &agent,
+        "command-shared-first",
+        "clock",
+        "time.now",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(contract.started("invoke").len(), 1);
+    let (status, result) = invoke_as(
+        &app,
+        &agent,
+        "command-shared-refused",
+        "clock",
+        "time.now",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{result}");
+    assert_eq!(result["reasonCode"], "rate_limited");
+    assert_eq!(result["service"], "broker");
+    assert_eq!(result["action"], "request.admit");
+    assert!(result.get("result").is_none());
+    assert_eq!(
+        contract.started("invoke").len(),
+        1,
+        "shared denial launched a command"
+    );
+    let records = contract.audited("command-shared-refused");
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0]["providerAudit"]["rateLimit"]["limitScope"],
+        "service"
+    );
+}
+
 /// Criteria 7a, 8, 9, 10, 11, 18 and 20: each authority mode's request,
 /// read from the command's stdin, carries the caller, the admitted
 /// resources with their identity and private attributes, and exactly the

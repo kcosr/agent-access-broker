@@ -1639,7 +1639,11 @@ Action entries include required boolean `readOnly`, supported `credentialModes`,
 and `lookupRequired`; service
 entries include currently configured credential modes, lookup credential
 availability, and scope editor metadata such as token-list or repository
-selector controls.
+selector controls. A service with a configured shared rate cap also includes
+`aggregateInvocationLimit: {"requests": 200, "windowSeconds": 60}`. This is
+static TOML policy, omitted when no shared cap is configured, and follows the
+catalog's existing service-scope filtering. It contains no live usage or queue
+state and grants no write authority.
 
 `GET /v1/admin/policy/grants` lists grants. Query parameters `subject`,
 `service`, `executionContext`, and `status` are optional exact filters; the
@@ -2540,8 +2544,10 @@ runtime, so scoped clients can validate that view through detail alone. For exam
       "queuedRequests": 2,
       "availableImmediately": 0,
       "nextAdmissionAfterSeconds": 20,
-      "nextAdmissionAt": "2026-10-24T12:00:20Z"
+      "nextAdmissionAt": "2026-10-24T12:00:20Z",
+      "blockingScope": "service"
     },
+    "aggregate": { "requests": 20, "windowSeconds": 10 },
     "capacity": {
       "maxConcurrentRequests": 100,
       "maxConcurrentRequestsPerPrincipal": 10,
@@ -2551,14 +2557,22 @@ runtime, so scoped clients can validate that view through detail alone. For exam
 }
 ```
 
-The allowance is shared across the principal's tokens and transports.
+The personal allowance is shared across the principal's tokens and transports.
+Optional `aggregate` contains the configured shared service policy, not a usage
+counter. It is absent when that service has no aggregate cap.
 `countedRequests` is conservative rolling history and can exceed a newly lowered
 limit until old admissions expire. `queuedRequests` counts uncharged pending
-requests. `availableImmediately` is unreserved capacity after FIFO precedence;
+requests for this principal. `availableImmediately` is joint unreserved capacity
+after personal FIFO and fair service scheduling;
 `nextAdmissionAfterSeconds` and `nextAdmissionAt` forecast one additional request
-at the tail, including accepted waiters. Zero means rate admission is possible
+at the tail, including accepted waiters across principals. Zero means rate admission is possible
 now. These values neither reserve capacity nor promise authorization, concurrency,
-execution or delivery. There is no single window reset time.
+execution or delivery. There is no single window reset time. `blockingScope`
+is `principal` or `service` when capacity is unavailable, and is omitted when
+immediate admission is possible. Shared scheduling that delays the caller beyond
+its personal-only forecast uses `service`. An equal-time personal/shared opening
+also uses `service`; when the personal allowance opens later, the scope is
+`principal`.
 
 `maxWaitSeconds` is configured policy; a request's remaining transport/operation
 budget may be shorter. Compare it with client/proxy timeouts and allow useful
@@ -2567,8 +2581,12 @@ invocation. `capacity` reports shared request caps and this principal's
 occupancy across services, including waiters; its separate sample is approximate.
 It excludes other principals' usage and does not summarize separate MCP
 response/control or command-worker pools. `instanceId` is an opaque process
-limiter identifier retained across reloads and changed at restart. No aggregate
-service-wide or distributed quota is implied.
+limiter identifier retained across reloads and changed at restart. Both personal
+and aggregate policy apply within that process; no distributed quota is implied.
+No explicit shared usage, shared queue depth or other principal identities are
+returned. However, numeric availability can reveal remaining shared capacity
+when it binds, and repeated observations can reveal other callers' activity
+timing. See [residual risks](security-model.md#residual-risks).
 
 HTTP detail responses use `Cache-Control: no-store`. Observations can become
 stale immediately; repeated describe calls do not charge quota, reorder the queue,
@@ -3251,6 +3269,13 @@ built-in 100 requests per `1m` (see
 principal share its windows. No authenticated limit is keyed on the source
 address.
 
+Optional `[limits.invocations.aggregate.<service>]` adds a shared window across
+all principals using that exact service ID. It applies alongside personal limits
+to native, imported, command-backed and gateway services. Both allowances are
+charged together at admission, even when their windows differ. A personal
+override cannot bypass the shared cap. The cap counts Broker invocations rather
+than upstream HTTP calls and is local to one Broker process.
+
 A request is counted once, when it is admitted, after identity resolution and
 after the service is known to be configured, and before policy evaluation,
 credential selection, pre-policy lookups, or any upstream call:
@@ -3270,15 +3295,22 @@ notifications, session deletion, cancellation) and MCP discovery helper tools,
 self-service and admin management, Git ref discovery (`GET .../info/refs`), and
 authentication routes. Requests later denied by policy still count; a rejected
 request is never added to rate history. Unknown services fail existing validation without
-limiter state.
+limiter state. Because this precedes service/action policy, admitted identities
+can consume shared capacity through later-denied requests and can learn shared
+policy and contention timing from a rate refusal without a service grant.
 
 When configured `max_wait` is positive, admission may hold the original request
 open in FIFO order before provider work. REST and Git wait before body parsing;
 HTTP MCP has already parsed its protocol message. The queue shares the
-principal/service allowance across tokens and transports and retains existing
-request slots. Only admission charges quota. A queued request is one attempt;
+principal/service allowance across tokens and transports. Eligible principals
+take round-robin turns against shared capacity; personally throttled or
+unresolved principals do not block peers. One waiting budget covers both limits
+and retains existing request slots. Only admission charges quota. A queued request is one attempt;
 do not resubmit pending calls. If slots fill, new requests can instead receive
-`concurrency_limited`, including requests for another service.
+`concurrency_limited`, including requests for another service. Forecasts reserve
+no capacity. New contention or changed settings can make an accepted request
+infeasible and return 429 before its original waiting deadline; that deadline is
+never extended. An infeasible newcomer does not displace accepted peers.
 
 If a hard deadline has already elapsed before a rate grant or queue insertion,
 the initial admission check retains the surface's timeout outcome. This applies
@@ -3322,9 +3354,9 @@ Content-Type: application/json
   "action": "request.admit",
   "resourceScopes": {},
   "reasonCode": "rate_limited",
-  "reason": "Rate limit reached for service \"jira\": 20 requests per 1m. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z).",
+  "reason": "Rate limit reached for service \"jira\": 20 requests per 1m for this principal. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z).",
   "error": {
-    "message": "Rate limit reached for service \"jira\": 20 requests per 1m. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z)."
+    "message": "Rate limit reached for service \"jira\": 20 requests per 1m for this principal. This request was not queued or executed. Configured maximum wait: 0s; limiting bound: configured rate-wait budget, with 0ms remaining after 0ms waiting. 0 requests for this principal and service are already queued and remain pending. The next unreserved admission is estimated in 12s. Do not resubmit requests that are already pending. Retry after 12s (at 2026-09-25T14:03:12Z)."
   }
 }
 ```
@@ -3332,12 +3364,15 @@ Content-Type: application/json
 There is no `result` on these reserved responses. Consumers validate the complete
 [pre-dispatch contract](trusted-callers.md#http-failures-before-provider-dispatch),
 including request correlation, before treating a request as not applied.
-The message identifies the service, effective limit/window, configured maximum
+The message identifies the service, personal or shared limit/window, configured maximum
 wait, limiting rate/body/operation deadline and remaining budget, queued count,
 and projected next unreserved admission. It says whether this request was never
 queued or was removed, and that it did not execute. Other accepted requests
 remain pending. Counts cover this principal/service across tokens without
 revealing request IDs, actions or inputs.
+Shared messages begin `Shared rate limit reached` and describe the allowance
+`across all principals`. A displaced queued request says it is no longer
+schedulable within its waiting bound, is no longer queued, and was not executed.
 
 `Retry-After` and the RFC 3339 retry time forecast an additional request after
 honoring the accepted queue, rounded up to whole seconds. They may change as
@@ -3364,6 +3399,9 @@ The rejected request's audit record carries `decision = "error"`,
 `service`, `limit`, `windowSeconds`, and `retryAfterSeconds`. The
 `request_limited` service event (`limitKind = "invocation_rate"`) carries the
 same fields plus `principal` and `tokenId` when a broker token was used.
+Admission `limitScope` is `principal` or `service`; the latter is the aggregate
+cap and remains distinct from an upstream throttle's `upstream` scope. Retry
+timing always uses the joint forecast, while queue counts remain personal.
 Final audit records carry host-owned `providerAudit.admission` with `waited`,
 `waitedMilliseconds` and `outcome` (`admitted`, `rejected` or `cancelled`). An
 admitted outcome stays `admitted` if later identity, policy or provider work
@@ -3401,9 +3439,11 @@ accepts exactly `{"requests":N,"windowSeconds":S}`, with `requests` from 1 to
 item (`overridden = true`). `DELETE` accepts no body, removes the override if
 there is one, and returns the effective item that now applies (the service
 limit or default, `overridden = false`); it is idempotent. Changes apply to the
-principal's next counted request and reforecast its pending queue without a
-reload or deadline extension. Overrides select only requests/window; the
-service/default `max_wait` applies independently. Overrides apply to users,
+principal's next counted request and reforecast affected pending requests without
+a reload, including other principals' queued requests when a shared cap applies.
+A changed forecast can refuse a queued request with 429; deadlines never extend.
+Overrides select only requests/window; the service/default `max_wait` applies
+independently. Overrides apply to users,
 service accounts, and system principals, active or disabled.
 
 These routes use management envelopes and audit. `GET` permits an active human

@@ -5642,6 +5642,13 @@ fn invocation_limits_validate_values_services_and_overrides() {
     config.limits.invocations = InvocationLimitsConfig {
         default: Some(limit(10, "2h")),
         services: BTreeMap::from([("jira".into(), limit(20, "1m"))]),
+        aggregate: BTreeMap::from([(
+            "jira".into(),
+            AggregateInvocationLimitConfig {
+                requests: 200,
+                window: "5m".into(),
+            },
+        )]),
         principal_overrides: vec![entry("alice", "jira"), entry("anonymous", "gitlab")],
     };
     validate_broker_config(&config).unwrap();
@@ -5660,6 +5667,26 @@ fn invocation_limits_validate_values_services_and_overrides() {
     );
     assert_eq!(resolved.principal_override("alice", "gitlab"), None);
     assert_eq!(
+        resolved.aggregate_limit("jira"),
+        Some(InvocationLimit::parse(200, "5m").unwrap())
+    );
+    assert_eq!(resolved.aggregate_limit("confluence"), None);
+    assert_eq!(resolved.aggregate_limits().len(), 1);
+    assert_eq!(
+        resolved.aggregate_limit("jira"),
+        resolved.aggregate_limits().get("jira").copied()
+    );
+    let high_override = InvocationLimit::parse(1_000, "30s").unwrap();
+    assert_eq!(
+        resolved.effective("jira", Some(high_override)).limit(),
+        high_override,
+        "personal policy and the shared cap remain independent constraints"
+    );
+    assert_eq!(
+        resolved.aggregate_limit("jira"),
+        Some(InvocationLimit::parse(200, "5m").unwrap())
+    );
+    assert_eq!(
         ConfiguredInvocationLimits::from_config(&sample_broker()).service_limit("gitlab"),
         InvocationLimit::parse(100, "1m").unwrap()
     );
@@ -5673,6 +5700,24 @@ fn invocation_limits_validate_values_services_and_overrides() {
             ("gitlab".into(), limit(1, "soon")),
             ("missing".into(), limit(1, "1m")),
         ]),
+        aggregate: BTreeMap::from(
+            [
+                ("jira", 0, "1m"),
+                ("confluence", 1_000_001, "1m"),
+                ("gitlab", 1, "2d"),
+                ("fake", 1, "soon"),
+                ("missing", 1, "1m"),
+            ]
+            .map(|(service, requests, window)| {
+                (
+                    service.into(),
+                    AggregateInvocationLimitConfig {
+                        requests,
+                        window: window.into(),
+                    },
+                )
+            }),
+        ),
         principal_overrides: vec![
             entry("alice", "jira"),
             entry("alice", "jira"),
@@ -5691,6 +5736,11 @@ fn invocation_limits_validate_values_services_and_overrides() {
         "limits.invocations.services.confluence: window must be between 1s and 1d",
         "limits.invocations.services.gitlab: window must use the s, m, h, or d duration syntax",
         "limits.invocations.services.missing references unknown service missing",
+        "limits.invocations.aggregate.jira: requests must be an integer from 1 to 1000000",
+        "limits.invocations.aggregate.confluence: requests must be an integer from 1 to 1000000",
+        "limits.invocations.aggregate.gitlab: window must be between 1s and 1d",
+        "limits.invocations.aggregate.fake: window must use the s, m, h, or d duration syntax",
+        "limits.invocations.aggregate.missing references unknown service missing",
         "limits.invocations.principal_overrides[1] duplicates the override for principal alice and service jira",
         "limits.invocations.principal_overrides[2] references unknown principal mallory",
         "limits.invocations.principal_overrides[3] references unknown service missing",

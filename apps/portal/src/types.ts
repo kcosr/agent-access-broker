@@ -667,6 +667,8 @@ export type PolicyServiceCatalog = {
   credentialVerificationInputs?: string[];
   actions: PolicyActionCatalog[];
   resourceScopes: Record<string, PolicyScopeCatalog>;
+  /** Configured combined invocation allowance; no live usage is exposed here. */
+  aggregateInvocationLimit?: { requests: number; windowSeconds: number };
   configuredCredentialModes: string[];
   lookupCredentialConfigured: boolean;
 };

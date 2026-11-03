@@ -323,6 +323,13 @@ fn managed_import_rate_preserves_service_wait_policy_and_default_inheritance() {
                 max_wait: service_wait.map(str::to_string),
             },
         );
+        config.limits.invocations.aggregate.insert(
+            "ticketing".into(),
+            crate::AggregateInvocationLimitConfig {
+                requests: 25,
+                window: "2m".into(),
+            },
+        );
         let mut record = command_record(&[], None);
         record.definition.invocation_limit = Some(crate::imports::ImportedInvocationLimit {
             requests: 2,
@@ -332,6 +339,10 @@ fn managed_import_rate_preserves_service_wait_policy_and_default_inheritance() {
         let effective = crate::ConfiguredInvocationLimits::from_config(&config);
         assert_eq!(effective.service_limit("ticketing").requests(), 2);
         assert_eq!(effective.service_limit("ticketing").window_seconds(), 10);
+        assert_eq!(
+            effective.aggregate_limit("ticketing"),
+            Some(crate::InvocationLimit::parse(25, "2m").unwrap())
+        );
         assert_eq!(
             effective.max_wait("ticketing"),
             Duration::from_secs(if service_wait.is_some() { 7 } else { 11 })

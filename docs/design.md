@@ -1011,8 +1011,9 @@ sequenceDiagram
 2. **Invocation rate admission.** After identity resolution and ingress
    concurrency admission, a request for a configured service can wait in FIFO
    order within `max_wait` and its absolute request deadline. It retains existing
-   request slots and is charged once only when admitted to the caller's
-   `(principal, service)` rolling window (see
+   request slots and is charged once only when both the caller's
+   `(principal, service)` rolling window and any configured shared service
+   window allow it. Personal FIFOs take fair turns among eligible callers (see
    [operational limits](#operational-limits)). A rejection is `rate_limited`
    (429) with retry guidance and one audit record; it performs no policy,
    lookup, credential, or upstream work. Requests later denied by policy still
@@ -2473,34 +2474,50 @@ management, MCP protocol messages, and Git ref discovery (`GET .../info/refs`)
 are not counted. Service invocation limits are not keyed on the source address, because many
 principals commonly share one (for example behind a shared ingress proxy).
 
+Optional `[limits.invocations.aggregate.<service>]` adds a process-local rolling
+window for all principals using that exact service ID. Personal overrides and
+managed imported rates cannot replace it. Personal and shared windows may differ;
+one admission atomically charges both at the same actual timestamp. The host
+enforces the cap for native, imported, command-backed and gateway services without
+provider-specific limiters. It counts admitted invocations, not their upstream
+call fan-out. Requests later denied by policy still consume both allowances.
+
 The window is 60 sub-buckets of `window / 60`, each counted until its last
 admitted request leaves the trailing window. It never admits more than
 `requests` in any trailing window, is conservative by at most `window / 60`,
 records only admitted requests, and keeps memory per key independent of
 `requests`. Idle keys are pruned by an amortized sweep; there is no global key
-capacity that could reject other principals. History survives reloads and resets
-for a key only when its window length changes. Managed override changes reforecast
-pending requests without extending deadlines. Actual runtime publication cancels
+capacity that could reject other principals. History survives reloads and
+count-only changes; a window change resets that history. Removing a shared cap
+discards its history, enabling it starts empty, and restart clears all histories.
+Aggregate policy is installed and reconciled under the runtime publication epoch
+fence. Managed override changes reforecast pending requests without extending
+deadlines. Actual runtime publication cancels
 pending admission; already-admitted operations keep their snapshot semantics.
-Global administrators
-manage managed-store overrides through
+Global administrators manage managed-store overrides through
 `/v1/admin/principals/{principal}/service-limits`, which reports each configured
 service's effective limit and whether an override supplies it; callers see
 their own effective limits, without that distinction, as `/v1/me`
 `serviceLimits`, filtered to the services `/v1/services` would show them.
 
 `max_wait` resolves from the service, then default, then zero independently of
-principal rate overrides. Positive waiting uses one FIFO queue per principal and
-service across tokens/transports, before policy or credential work. REST and Git
+principal rate overrides. One waiting budget covers both allowances. Positive
+waiting uses one FIFO queue per principal and service across tokens/transports,
+before policy or credential work. A service ring takes one eligible head per
+principal in round-robin order, skipping personally throttled or unresolved keys.
+Settings reads and failures remain isolated per key. REST and Git
 wait before body parsing; HTTP MCP has already parsed its protocol message.
-Forecasts honor conservative bucket history and accepted waiters. Rate capacity
+Pure forecasts simulate the same ring against copied histories and assume no new
+arrivals or settings changes. They reserve no capacity: changed contention can
+make an accepted request infeasible and remove it with 429 before its unchanged
+deadline. Infeasible newcomers cannot displace accepted peers. Rate capacity
 must be due within the configured wait; timer latency may delay processing that
 opportunity, while actual body/operation deadlines remain strict. HTTP MCP keeps
 one absolute operation deadline across waiting and execution.
 
 Waiters retain existing global/per-principal request and MCP response slots.
-There is no new queue-count setting or aggregate service quota. Observed pending
-cancellation, abandonment, runtime publication or shutdown removes the ticket
+There is no separate queue-count setting or cross-service concurrency isolation.
+Observed pending cancellation, abandonment, runtime publication or shutdown removes the ticket
 without a charge or dispatch; admission that wins the race keeps its charge.
 The original identity is revalidated after admission without remapping it.
 Detected connection loss affects pending admission only; unread bodies or proxies
@@ -2512,7 +2529,11 @@ Single-service detail adds caller-specific [live limits](http-api.md#live-servic
 through HTTP, CLI and existing MCP describe. Observation never changes limiter
 state. REST detail has an independent bounded control pool with the configured
 request caps; HTTP MCP keeps its existing control pool. Other lists/specs remain
-static, anonymous detail omits limits, and no upstream quota is probed.
+static, anonymous detail omits limits, and no upstream quota is probed. Detail
+includes optional aggregate policy and joint capacity estimates, but no explicit
+other-user queue/count inventory. Those estimates can reveal remaining shared
+capacity and activity timing; pre-policy rate refusals have the broader disclosure
+boundary described in the [security model](security-model.md#residual-risks).
 
 A rejection is HTTP 429 `rate_limited` with a complete message, a
 `Retry-After` header, and the reserved `broker/request.admit` envelope without
@@ -2520,8 +2541,9 @@ a `result`. The correlated tuple establishes nonapplication; see
 [trusted callers](trusted-callers.md#http-failures-before-provider-dispatch).
 Other broker errors with `result.retryAfterSeconds` also carry `Retry-After`. The rejected
 request's audit record carries `providerAudit.rateLimit`, and the
-`request_limited` event carries the same detail plus the broker token ID. Retry
-timing honors accepted waiters, and queue deadline expiry uses the same 429
+`request_limited` event carries the same detail plus the broker token ID.
+`limitScope` is `principal` or `service`, with the corresponding policy in the
+limit fields. Retry timing honors accepted waiters, and queue deadline expiry uses the same 429
 contract. Proven pre-admission cancellation instead uses the original action's
 `operation_cancelled`, `executionState: "not_dispatched"`, `retrySafe: true`.
 A hard deadline already elapsed before grant or queue insertion retains the
