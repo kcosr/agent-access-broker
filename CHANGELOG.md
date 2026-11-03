@@ -151,7 +151,7 @@ All notable changes to this project are documented in this file.
   positive content type first while preserving policy restrictions and grouped
   caller filters. See [Jira search](docs/providers-jira.md) and
   [Confluence search](docs/providers-confluence.md).
-  ([#94](https://github.com/kcosr/agent-access-broker/pull/94), [#96](https://github.com/kcosr/agent-access-broker/pull/96))
+  ([#94](https://github.com/kcosr/agent-access-broker/pull/94), [#96](https://github.com/kcosr/agent-access-broker/pull/96), [#100](https://github.com/kcosr/agent-access-broker/pull/100))
 
 - **Jira comment bodies in batches.** `issue.view` accepts `includeComments`
   (`jira issue view --include-comments`) for one chronological page of full
