@@ -348,6 +348,9 @@ pub(crate) async fn auth_local_login(
     let login_source = auth_source_key(&source);
     let session_ttl_seconds =
         parse_ttl_seconds(&snapshot.runtime.config().browser_auth.session_ttl).unwrap_or(8 * 3600);
+    let issuance_authority = snapshot.runtime.config().broker_tokens.as_ref().map(|_| {
+        super::management::common::agent_token_issuance_authority(snapshot.runtime.config())
+    });
     let work = match store.try_admit_local_password_request() {
         Ok(work) => work,
         Err(_) => {
@@ -375,6 +378,7 @@ pub(crate) async fn auth_local_login(
                     lockout_ttl_seconds,
                 },
                 session_ttl_seconds,
+                issuance_authority,
             )
         })
         .await
@@ -414,7 +418,7 @@ pub(crate) async fn auth_local_login(
     let return_to = sanitize_return_to(snapshot.runtime.config(), body.return_to.as_deref());
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(&snapshot, &identity).await;
-    let result = match browser_session_result(
+    let result = browser_session_result(
         &snapshot,
         BrowserSessionResultFields {
             sign_in_methods: &verified.sign_in_methods,
@@ -430,12 +434,8 @@ pub(crate) async fn auth_local_login(
             policy_management_services: &policy_management_services,
             return_to: Some(return_to),
         },
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(error) => return session_policy_error_response(response_context, error).await,
-    };
+        authenticated.agent_token_issuance_policy.as_ref(),
+    );
     let mut response = auth_success_response(
         response_context,
         Some(identity.principal.clone()),
@@ -585,6 +585,9 @@ pub(crate) async fn auth_password_change(
     let session_ttl_seconds =
         parse_ttl_seconds(&snapshot.runtime.config().browser_auth.session_ttl).unwrap_or(8 * 3600);
     let replace_local_session = cookie_identity.login_method == "local_password";
+    let issuance_authority = snapshot.runtime.config().broker_tokens.as_ref().map(|_| {
+        super::management::common::agent_token_issuance_authority(snapshot.runtime.config())
+    });
     let principal_for_change = principal_id.clone();
     if let Err(response) =
         auth_write_audit_preflight(response_context, &cookie_identity.identity).await
@@ -623,6 +626,7 @@ pub(crate) async fn auth_password_change(
                     replace_local_session,
                     session_ttl_seconds,
                 },
+                issuance_authority,
             )
         })
         .await
@@ -652,10 +656,12 @@ pub(crate) async fn auth_password_change(
     let Some(issued) = changed.replacement_session else {
         // Keep the OIDC cookie and session provenance. Local password writes only
         // revoke local sessions; do not silently exchange the Microsoft session.
-        let result = match session_result(&snapshot, &cookie_identity).await {
-            Ok(result) => result,
-            Err(error) => return session_policy_error_response(response_context, error).await,
-        };
+        let result = session_result_with_policy(
+            &snapshot,
+            &cookie_identity,
+            changed.agent_token_issuance_policy.as_ref(),
+        )
+        .await;
         return auth_committed_success_response(
             response_context,
             Some(principal_id),
@@ -675,7 +681,7 @@ pub(crate) async fn auth_password_change(
     );
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(&snapshot, &identity).await;
-    let result = match browser_session_result(
+    let result = browser_session_result(
         &snapshot,
         BrowserSessionResultFields {
             sign_in_methods: &verified.sign_in_methods,
@@ -691,12 +697,8 @@ pub(crate) async fn auth_password_change(
             policy_management_services: &policy_management_services,
             return_to: None,
         },
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(error) => return session_policy_error_response(response_context, error).await,
-    };
+        changed.agent_token_issuance_policy.as_ref(),
+    );
     let mut response = auth_committed_success_response(
         response_context,
         Some(identity.principal.clone()),
@@ -1154,29 +1156,16 @@ fn cookie_identity_from_session(
     )
 }
 
-async fn browser_session_result(
+fn browser_session_result(
     snapshot: &RuntimeSnapshot,
     fields: BrowserSessionResultFields<'_>,
-) -> Result<Value, ManagedStoreError> {
+    access: Option<&agent_access_core::AgentTokenIssuancePolicy>,
+) -> Value {
     let csrf_token = snapshot
         .runtime
         .browser_csrf_key()
         .and_then(|key| key.token_for_session(fields.token_id).ok());
     let is_admin = fields.role == PrincipalRole::Admin;
-    let access = if snapshot.runtime.config().broker_tokens.is_some() {
-        let principal = fields.identity.principal.clone();
-        let authority =
-            super::management::common::agent_token_issuance_authority(snapshot.runtime.config());
-        Some(
-            snapshot
-                .managed_store_call(move |store| {
-                    store.agent_token_issuance_policy(&principal, authority)
-                })
-                .await?,
-        )
-    } else {
-        None
-    };
     let mut result = json!({
         "authenticated": true,
         "principal": &fields.identity.principal,
@@ -1194,7 +1183,7 @@ async fn browser_session_result(
         "passwordChangeRequired": fields.password_change_required,
         "csrfHeader": &snapshot.runtime.config().browser_auth.csrf_header,
         "csrfToken": csrf_token,
-        "tokenIssuancePolicy": token_issuance_policy(snapshot.runtime.config(), is_admin, access.as_ref()),
+        "tokenIssuancePolicy": token_issuance_policy(snapshot.runtime.config(), is_admin, access),
         "auditQueryable": crate::handlers::spec::route_feature_available(
             snapshot,
             agent_access_core::RouteFeature::AuditQuery,
@@ -1203,7 +1192,7 @@ async fn browser_session_result(
     if let Some(return_to) = fields.return_to {
         result["returnTo"] = json!(return_to);
     }
-    Ok(result)
+    result
 }
 
 fn token_issuance_policy(
@@ -1261,6 +1250,28 @@ async fn session_result(
     snapshot: &RuntimeSnapshot,
     cookie_identity: &BrowserCookieIdentity,
 ) -> Result<Value, ManagedStoreError> {
+    let access = if snapshot.runtime.config().broker_tokens.is_some() {
+        let principal = cookie_identity.identity.principal.clone();
+        let authority =
+            super::management::common::agent_token_issuance_authority(snapshot.runtime.config());
+        Some(
+            snapshot
+                .managed_store_call(move |store| {
+                    store.agent_token_issuance_policy(&principal, authority)
+                })
+                .await?,
+        )
+    } else {
+        None
+    };
+    Ok(session_result_with_policy(snapshot, cookie_identity, access.as_ref()).await)
+}
+
+async fn session_result_with_policy(
+    snapshot: &RuntimeSnapshot,
+    cookie_identity: &BrowserCookieIdentity,
+    access: Option<&agent_access_core::AgentTokenIssuancePolicy>,
+) -> Value {
     let (role, self_service_enabled, policy_management_services) =
         session_management_access(snapshot, &cookie_identity.identity).await;
     browser_session_result(
@@ -1279,8 +1290,8 @@ async fn session_result(
             policy_management_services: &policy_management_services,
             return_to: None,
         },
+        access,
     )
-    .await
 }
 
 async fn session_policy_error_response(

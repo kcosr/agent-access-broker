@@ -1102,3 +1102,118 @@ fn agent_token_issuance_strict_boolean_and_management_class_rejection_are_transa
     }
     assert!(store.list_broker_tokens().unwrap().is_empty());
 }
+
+#[test]
+fn agent_token_issuance_preserves_created_at_precision_and_fractional_list_order() {
+    let (_temp, store) = identity_test_store();
+    create_alice(&store);
+    store
+        .patch_principal_access(PrincipalAccessPatchRequest {
+            principal_id: "alice".into(),
+            role: Some(PrincipalRole::Admin),
+            self_service_enabled: None,
+            agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
+            actor: "admin".into(),
+        })
+        .unwrap();
+    let hasher = broker_token_hasher_for_test(97);
+    let assert_created_at = |record: &BrokerTokenRecord| {
+        let created_at = DateTime::parse_from_rfc3339(&record.created_at)
+            .unwrap()
+            .with_timezone(&Utc);
+        // Creation metadata keeps the pre-existing precise UTC representation;
+        // the whole-second Z timestamp used for policy resolution is separate.
+        assert!(
+            record.created_at.ends_with("+00:00"),
+            "{}",
+            record.created_at
+        );
+        assert_eq!(record.created_at, created_at.to_rfc3339());
+        assert_eq!(
+            store.broker_token(&record.token_id).unwrap().created_at,
+            record.created_at
+        );
+    };
+
+    let personal = store
+        .issue_self_agent_token(
+            &hasher,
+            issuance_request("alice", true),
+            AgentTokenIssuanceAuthority::Managed,
+        )
+        .unwrap();
+    assert_created_at(&personal.record);
+    let mut agent_token_ids = vec![personal.record.token_id];
+    for class in [
+        BrokerTokenClass::AgentInvoke,
+        BrokerTokenClass::UserManage,
+        BrokerTokenClass::Admin,
+    ] {
+        let agent = class == BrokerTokenClass::AgentInvoke;
+        let issued = store
+            .issue_broker_token(
+                &hasher,
+                BrokerTokenIssueRequest {
+                    principal_id: "alice".into(),
+                    name: "administrative issuance".into(),
+                    token_class: class,
+                    scopes: if agent {
+                        issuance_request("alice", false).scopes
+                    } else {
+                        json!({})
+                    },
+                    expires_at: None,
+                    created_by: "admin".into(),
+                },
+            )
+            .unwrap();
+        assert_created_at(&issued.record);
+        if agent {
+            agent_token_ids.push(issued.record.token_id);
+        }
+    }
+
+    // Make chronological and token-ID ordering disagree deterministically.
+    // Both fixtures occupy the same second, so dropping fractional precision
+    // would incorrectly order the earlier token first on the UUID tie-break.
+    agent_token_ids.sort();
+    let timestamps = [
+        "2026-01-01T00:00:00.100000001+00:00",
+        "2026-01-01T00:00:00.900000009+00:00",
+    ];
+    {
+        let conn = store.connection.lock().unwrap();
+        for (token_id, timestamp) in agent_token_ids.iter().zip(timestamps) {
+            conn.execute(
+                "UPDATE broker_tokens SET created_at=?2 WHERE token_id=?1",
+                params![token_id, timestamp],
+            )
+            .unwrap();
+        }
+    }
+    let expected_ids = agent_token_ids.into_iter().rev().collect::<Vec<_>>();
+    for records in [
+        store.list_self_agent_tokens("alice", false, false).unwrap(),
+        store.list_broker_tokens_for_principal("alice").unwrap(),
+        store.list_broker_tokens().unwrap(),
+    ] {
+        let agent_tokens = records
+            .into_iter()
+            .filter(|token| token.token_class == BrokerTokenClass::AgentInvoke)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            agent_tokens
+                .iter()
+                .map(|token| token.token_id.clone())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        assert_eq!(
+            agent_tokens
+                .iter()
+                .map(|token| token.created_at.as_str())
+                .collect::<Vec<_>>(),
+            timestamps.into_iter().rev().collect::<Vec<_>>()
+        );
+    }
+}

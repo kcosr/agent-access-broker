@@ -2312,7 +2312,7 @@ impl ManagedStore {
         if request.token_class == BrokerTokenClass::AgentInvoke {
             validate_token_resource_references(&conn, &request.scopes, catalog)?;
         }
-        let now = normalized_now_string();
+        let now = now_string();
         let principal = principal_by_id_without_groups(&conn, &request.principal_id)?;
         if principal.status == "disabled" {
             return Err(ManagedStoreError::PrincipalDisabled);
@@ -2328,7 +2328,9 @@ impl ManagedStore {
             if !principal.self_service_enabled {
                 return Err(ManagedStoreError::SelfServiceDisabled);
             }
-            let policy = agent_token_issuance::policy_at_conn(&conn, &principal, authority, &now)?;
+            let resolved_at = normalized_now_string();
+            let policy =
+                agent_token_issuance::policy_at_conn(&conn, &principal, authority, &resolved_at)?;
             let caveats = AgentInvokeTokenCaveats::parse_stored(&request.scopes)
                 .map_err(|error| input_invalid(error.to_string()))?;
             agent_token_issuance::authorize(&policy, caveats.read_only)?;
@@ -3307,6 +3309,7 @@ impl ManagedStore {
         password_hasher: &LocalPasswordHasher,
         token_hasher: &BrokerTokenHasher,
         request: LocalPasswordChangeRequest,
+        issuance_authority: Option<AgentTokenIssuanceAuthority>,
     ) -> Result<ChangedLocalPassword, ManagedStoreError> {
         let verify = &request.verification;
         validate_local_password_verify_request(verify)?;
@@ -3355,6 +3358,19 @@ impl ManagedStore {
                 ManagedStoreError::LocalLoginFailed
             });
         };
+        // Capture all fallible access-policy response data before changing the
+        // password or revoking sessions. A projection failure must not hide a
+        // committed password change or strand its replacement session.
+        let agent_token_issuance_policy = issuance_authority
+            .map(|authority| {
+                agent_token_issuance::policy_at_conn(
+                    &tx,
+                    &principal_by_id_without_groups(&tx, &verified.principal_id)?,
+                    authority,
+                    &normalized_now_string(),
+                )
+            })
+            .transpose()?;
         let existing = local_password_login_method(&tx, &verified.principal_id)?
             .ok_or(ManagedStoreError::LocalLoginFailed)?;
         let method = write_local_password_tx(&tx, &write, &password_hash, Some(&existing))?;
@@ -3380,6 +3396,7 @@ impl ManagedStore {
         Ok(ChangedLocalPassword {
             verified,
             replacement_session,
+            agent_token_issuance_policy,
         })
     }
 
@@ -3562,6 +3579,7 @@ impl ManagedStore {
         token_hasher: &BrokerTokenHasher,
         request: LocalPasswordVerifyRequest,
         session_ttl_seconds: u64,
+        issuance_authority: Option<AgentTokenIssuanceAuthority>,
     ) -> Result<AuthenticatedLocalPassword, ManagedStoreError> {
         validate_local_password_verify_request(&request)?;
         let _work = self.try_acquire_work()?;
@@ -3597,6 +3615,19 @@ impl ManagedStore {
                 ManagedStoreError::LocalLoginFailed
             });
         };
+        // Authentication failure accounting stays independent of policy
+        // projection. On success, resolve policy before clearing counters or
+        // inserting the session so projection errors cannot orphan a session.
+        let agent_token_issuance_policy = issuance_authority
+            .map(|authority| {
+                agent_token_issuance::policy_at_conn(
+                    &tx,
+                    &principal_by_id_without_groups(&tx, &verified.principal_id)?,
+                    authority,
+                    &normalized_now_string(),
+                )
+            })
+            .transpose()?;
         local_password_failures::clear_source(&tx, &request.principal_id, &request.source)?;
         let session = issue_browser_session_tx(
             &tx,
@@ -3612,7 +3643,11 @@ impl ManagedStore {
             &normalized_now_string(),
         )?;
         tx.commit().map_err(sql_unavailable)?;
-        Ok(AuthenticatedLocalPassword { verified, session })
+        Ok(AuthenticatedLocalPassword {
+            verified,
+            session,
+            agent_token_issuance_policy,
+        })
     }
 
     pub fn issue_browser_session(
@@ -6039,11 +6074,13 @@ pub struct LocalPasswordChangeRequest {
 pub struct ChangedLocalPassword {
     pub verified: VerifiedLocalPassword,
     pub replacement_session: Option<IssuedBrowserSession>,
+    pub agent_token_issuance_policy: Option<AgentTokenIssuancePolicy>,
 }
 
 pub struct AuthenticatedLocalPassword {
     pub verified: VerifiedLocalPassword,
     pub session: IssuedBrowserSession,
+    pub agent_token_issuance_policy: Option<AgentTokenIssuancePolicy>,
 }
 
 #[derive(Debug, Clone)]
@@ -11882,6 +11919,7 @@ PRAGMA foreign_keys = ON;
                     &tokens,
                     local_change("first-password", false).verification,
                     3600,
+                    None,
                 )
             });
             entered
@@ -11943,6 +11981,7 @@ PRAGMA foreign_keys = ON;
                 &task_hasher,
                 &tokens,
                 local_change("first-password", true),
+                None,
             )
         });
         entered
@@ -12021,7 +12060,12 @@ PRAGMA foreign_keys = ON;
             Err(ManagedStoreError::LocalPasswordNotEnabled)
         ));
         assert!(matches!(
-            store.change_local_password(&hasher, &tokens, local_change("first-password", false)),
+            store.change_local_password(
+                &hasher,
+                &tokens,
+                local_change("first-password", false),
+                None
+            ),
             Err(ManagedStoreError::LocalLoginFailed)
         ));
         assert_eq!(
@@ -12081,7 +12125,7 @@ PRAGMA foreign_keys = ON;
             )
             .unwrap();
         let changed = store
-            .change_local_password(&hasher, &tokens, local_change("first-password", true))
+            .change_local_password(&hasher, &tokens, local_change("first-password", true), None)
             .unwrap();
         let new = changed.replacement_session.unwrap();
         assert!(!changed.verified.password_change_required);
@@ -12105,10 +12149,179 @@ PRAGMA foreign_keys = ON;
         invalid.session_ttl_seconds = 0;
         assert!(
             store
-                .change_local_password(&hasher, &tokens, invalid)
+                .change_local_password(&hasher, &tokens, invalid, None)
                 .is_err()
         );
         assert!(store.resolve_browser_session(&tokens, &new.token).is_ok());
+    }
+
+    #[test]
+    fn local_password_policy_failure_preserves_credentials_sessions_and_counters() {
+        let temp = TempDir::new().unwrap();
+        let store = ManagedStore::open(
+            &store_config(&temp.path().join("store.sqlite")),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        create_alice(&store);
+        let hasher = local_password_hasher_for_test(23);
+        let tokens = broker_token_hasher_for_test(24);
+        store
+            .enable_local_password(&hasher, local_write("first-password"))
+            .unwrap();
+        store
+            .create_group(GroupWriteRequest {
+                group_id: "issuers".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                agent_token_issuance: AgentTokenIssuanceMode::ReadOnly,
+                created_by: "admin".into(),
+            })
+            .unwrap();
+        store.add_group("alice", "issuers", "admin").unwrap();
+        let authenticated = store
+            .authenticate_local_password_session(
+                &hasher,
+                &tokens,
+                local_change("first-password", false).verification,
+                3600,
+                Some(AgentTokenIssuanceAuthority::Managed),
+            )
+            .unwrap();
+        let captured_policy = AgentTokenIssuancePolicy {
+            mode: AgentTokenIssuanceMode::ReadOnly,
+            source: AgentTokenIssuanceSource::Groups,
+            group_ids: vec!["issuers".into()],
+        };
+        assert_eq!(
+            authenticated.agent_token_issuance_policy,
+            Some(captured_policy.clone())
+        );
+        let before_method = store.list_login_methods("alice").unwrap();
+        assert!(matches!(
+            store
+                .verify_local_password(&hasher, local_change("wrong-password", false).verification),
+            Err(ManagedStoreError::LocalLoginFailed)
+        ));
+        {
+            let conn = store.connection.lock().unwrap();
+            conn.execute_batch(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE groups SET agent_token_issuance = 'invalid-policy' WHERE group_id = 'issuers';
+                 PRAGMA ignore_check_constraints = OFF;",
+            )
+            .unwrap();
+        }
+        for operation in ["login", "local_change", "oidc_change"] {
+            let result = if operation == "login" {
+                store
+                    .authenticate_local_password_session(
+                        &hasher,
+                        &tokens,
+                        local_change("first-password", false).verification,
+                        3600,
+                        Some(AgentTokenIssuanceAuthority::Managed),
+                    )
+                    .map(|_| ())
+            } else {
+                store
+                    .change_local_password(
+                        &hasher,
+                        &tokens,
+                        local_change("first-password", operation == "local_change"),
+                        Some(AgentTokenIssuanceAuthority::Managed),
+                    )
+                    .map(|_| ())
+            };
+            assert!(
+                matches!(result, Err(ManagedStoreError::InputInvalid(_))),
+                "{operation}"
+            );
+            assert_eq!(
+                store
+                    .list_broker_tokens_for_principal("alice")
+                    .unwrap()
+                    .len(),
+                1,
+                "{operation}"
+            );
+            assert!(
+                store
+                    .resolve_browser_session(&tokens, &authenticated.session.token)
+                    .is_ok(),
+                "{operation}"
+            );
+            let conn = store.connection.lock().unwrap();
+            let attempts: i64 = conn.query_row(
+                "SELECT failed_attempts FROM local_password_failures WHERE principal_id = 'alice' AND source = '203.0.113.10'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(attempts, 1, "{operation}");
+            let method = local_password_login_method(&conn, "alice")
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                method.password_set_at, before_method[0].password_set_at,
+                "{operation}"
+            );
+            assert!(
+                hasher
+                    .verify_password(
+                        "first-password",
+                        &local_password_hash(&conn, &method.login_method_id).unwrap()
+                    )
+                    .unwrap(),
+                "{operation}"
+            );
+        }
+        // Bad credentials still follow the normal failure/lockout path even
+        // when a valid user's response policy cannot be resolved.
+        for principal in ["alice", "unknown-user"] {
+            for attempt in 1..=3 {
+                let mut request = local_change("wrong-password", false).verification;
+                request.principal_id = principal.into();
+                request.source = "203.0.113.11".into();
+                let result = store.authenticate_local_password_session(
+                    &hasher,
+                    &tokens,
+                    request,
+                    3600,
+                    Some(AgentTokenIssuanceAuthority::Managed),
+                );
+                assert!(
+                    match result {
+                        Err(ManagedStoreError::LocalLoginFailed) => attempt < 3,
+                        Err(ManagedStoreError::LocalLoginLocked) => attempt == 3,
+                        _ => false,
+                    },
+                    "{principal}, attempt {attempt}"
+                );
+            }
+        }
+        store
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE groups SET agent_token_issuance = 'read_only' WHERE group_id = 'issuers'",
+                [],
+            )
+            .unwrap();
+        let changed = store
+            .change_local_password(
+                &hasher,
+                &tokens,
+                local_change("first-password", true),
+                Some(AgentTokenIssuanceAuthority::Managed),
+            )
+            .unwrap();
+        assert_eq!(changed.agent_token_issuance_policy, Some(captured_policy));
+        assert!(
+            store
+                .resolve_browser_session(&tokens, &changed.replacement_session.unwrap().token)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -12201,6 +12414,7 @@ PRAGMA foreign_keys = ON;
                         &broker_token_hasher_for_test(26),
                         local_change("first-password", false).verification,
                         3600,
+                        None,
                     )
                     .map(|_| ())
             } else {
@@ -12209,6 +12423,7 @@ PRAGMA foreign_keys = ON;
                         &worker_hasher,
                         &broker_token_hasher_for_test(26),
                         local_change("first-password", true),
+                        None,
                     )
                     .map(|_| ())
             }

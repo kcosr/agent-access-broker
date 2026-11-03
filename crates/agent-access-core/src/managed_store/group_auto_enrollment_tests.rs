@@ -154,7 +154,7 @@ fn group_auto_enrollment_excludes_local_login_and_admin_linked_accounts() {
     let passwords = local_password_hasher_for_test(76);
     let hasher = broker_token_hasher_for_test(77);
     store.enable_local_password(&passwords, local_write("first-password")).unwrap();
-    store.authenticate_local_password_session(&passwords, &hasher, local_change("first-password", false).verification, 3600).unwrap();
+    store.authenticate_local_password_session(&passwords, &hasher, local_change("first-password", false).verification, 3600, None).unwrap();
     assert!(store.groups("alice").unwrap().is_empty());
     store.link_oidc_login_method(OidcLoginMethodLinkRequest { principal_id: "alice".into(), user_object_id: TEST_OIDC_USER.into(), actor: "admin".into() }).unwrap();
     let result = enrollment_succeeded(store.complete_oidc_login(&hasher, test_oidc_completion_request(
