@@ -750,6 +750,10 @@ Native `adf` content is a JSON object. Markdown and plain text are strings and
 are deterministically converted to ADF. Plain-text punctuation is never
 interpreted as Markdown. Raw HTML and unsafe links in Markdown do not become
 trusted provider markup; unsupported constructs retain safe readable content.
+Inline code preserves its text and safe links, dropping surrounding bold,
+italic, and strikethrough formatting from the code fragment to satisfy
+[ADF's code-mark rules](https://developer.atlassian.com/cloud/jira/platform/apis/document/marks/code/).
+Surrounding text retains its formatting.
 Conversion is pure and offline.
 
 Every write validates the closed source shape, explicit format, source type,
