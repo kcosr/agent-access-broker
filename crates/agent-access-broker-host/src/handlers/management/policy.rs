@@ -5,7 +5,7 @@ use crate::handlers::management::common::{
 };
 use crate::state::AppState;
 use agent_access_core::{
-    BrokerConfig, DEFAULT_EXECUTION_CONTEXT, ManagedPolicyGrantCreateRequest,
+    BrokerConfig, DEFAULT_EXECUTION_CONTEXT, InvocationLimit, ManagedPolicyGrantCreateRequest,
     ManagedPolicyGrantPatchRequest, ManagedPolicyGrantRecord, ManagedPolicyGrantStatusRequest,
     ManagedPolicyGrantSubjectAddRequest, ManagedPolicyGrantSubjectRemoveRequest,
     ManagedPolicyRevision, ManagedStoreError, PolicyGrantConfig, PolicyReadScope, PolicyWriteScope,
@@ -106,6 +106,8 @@ pub(crate) struct PolicyServiceCatalog {
     credential_verification_inputs: Vec<String>,
     actions: Vec<PolicyActionCatalog>,
     resource_scopes: BTreeMap<String, PolicyScopeCatalog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregate_invocation_limit: Option<InvocationLimit>,
     configured_credential_modes: Vec<String>,
     lookup_credential_configured: bool,
 }
@@ -535,12 +537,16 @@ pub(crate) async fn admin_policy_catalog(
                 .runtime
                 .service_descriptor(&capabilities.service);
             let runtime = &context.snapshot.runtime;
+            let aggregate_invocation_limit = runtime
+                .configured_invocation_limits()
+                .aggregate_limit(&capabilities.service);
             let mut catalog = service_catalog(
                 runtime.effective_credentials(),
                 capabilities,
                 descriptor
                     .as_ref()
                     .map(|descriptor| &descriptor.credentials),
+                aggregate_invocation_limit,
             );
             if runtime
                 .imported_catalog()
@@ -1710,6 +1716,7 @@ pub(crate) fn service_catalog(
     configured_credentials: &agent_access_core::CredentialsConfig,
     capabilities: ServiceCapabilities,
     credentials: Option<&CredentialDescriptor>,
+    aggregate_invocation_limit: Option<InvocationLimit>,
 ) -> PolicyServiceCatalog {
     let configured_credential_modes = configured_credential_modes(
         configured_credentials,
@@ -1738,6 +1745,7 @@ pub(crate) fn service_catalog(
         credential_verification_inputs: capabilities.credential_verification_inputs,
         actions,
         resource_scopes,
+        aggregate_invocation_limit,
         configured_credential_modes,
         lookup_credential_configured: configured_credentials
             .lookup

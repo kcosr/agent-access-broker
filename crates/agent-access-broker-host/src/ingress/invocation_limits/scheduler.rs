@@ -3,10 +3,16 @@
 //! the settings used by each atomic admission.
 use super::*;
 use agent_access_core::{InvocationDeadlineKind, format_retry_at};
+
+mod driver;
+mod forecast;
+mod settings;
 use agent_access_provider::{ProviderError, ReasonCode};
+use forecast::{Projection, forecast_existing, project};
 use futures_util::future::BoxFuture;
 use serde::Serialize;
 use serde_json::json;
+pub(crate) use settings::InvocationLimitUpdate;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
@@ -127,6 +133,8 @@ pub(crate) struct InvocationObservationValues {
     pub available_immediately: u32,
     pub next_admission_after_seconds: u64,
     pub next_admission_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking_scope: Option<InvocationLimitScope>,
 }
 
 #[derive(Default)]
@@ -136,13 +144,20 @@ pub(super) struct SchedulerState {
     next_ticket: u64,
     settings: HashMap<Key, Settings>,
     queues: HashMap<Key, Queue>,
+    services: HashMap<String, ServiceQueue>,
 }
 
 impl SchedulerState {
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.queues.is_empty()
+    }
+
     pub(super) fn prune_settings(&mut self, history: &HashMap<String, HashMap<String, KeyWindow>>) {
         self.settings.retain(|key, settings| {
             settings.changing != 0
                 || Arc::strong_count(&settings.identity) > 1
+                || settings.refreshing.is_some()
                 || self.queues.contains_key(key)
                 || history
                     .get(&key.0)
@@ -157,6 +172,7 @@ struct Settings {
     changing: usize,
     cached: Option<(u64, InvocationLimit)>,
     notify: Arc<Notify>,
+    refreshing: Option<u64>,
 }
 
 impl Default for Settings {
@@ -167,16 +183,23 @@ impl Default for Settings {
             changing: 0,
             cached: None,
             notify: Arc::new(Notify::new()),
+            refreshing: None,
         }
     }
+}
+
+struct ServiceQueue {
+    ring: VecDeque<String>,
+    driver_id: u64,
+    notify: Arc<Notify>,
 }
 
 struct Queue {
     entries: VecDeque<Queued>,
     revision: u64,
-    dirty: bool,
     driver_id: u64,
     limit: InvocationLimit,
+    refresh_stop: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -251,6 +274,7 @@ impl Drop for SettingsReadLease {
                 .get(&self.key)
                 .is_some_and(|settings| {
                     settings.changing == 0
+                        && settings.refreshing.is_none()
                         && Arc::ptr_eq(&settings.identity, &self.identity)
                         && Arc::strong_count(&settings.identity) == 2
                 })
@@ -283,13 +307,18 @@ impl InvocationLimiter {
         }
     }
 
-    pub(crate) fn publish_runtime<F: FnOnce(u64)>(&self, publish: F) {
+    pub(crate) fn publish_runtime<F: FnOnce(u64)>(
+        &self,
+        aggregate: &BTreeMap<String, InvocationLimit>,
+        publish: F,
+    ) {
         let mut state = self.state.lock().unwrap();
         state.scheduler.epoch = state
             .scheduler
             .epoch
             .checked_add(1)
             .expect("runtime generation exhausted");
+        state.install_aggregate_limits(aggregate);
         publish(state.scheduler.epoch);
         invalidate_pending(
             &mut state.scheduler,
@@ -323,169 +352,11 @@ impl InvocationLimiter {
             .entry(key.clone())
             .or_default()
             .changing += 1;
+        notify_service(&state.scheduler, service);
         InvocationLimitUpdate {
             limiter: self.clone(),
             key,
             finished: false,
-        }
-    }
-
-    async fn resolve(
-        self: &Arc<Self>,
-        epoch: u64,
-        key: &Key,
-        resolver: &InvocationLimitResolver,
-        purpose: ResolutionPurpose,
-        stopped: Option<&CancellationToken>,
-    ) -> Result<Resolved, InvocationAdmissionError> {
-        loop {
-            if stopped.is_some_and(CancellationToken::is_cancelled) {
-                return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
-            }
-            let (identity, revision, changing, cached, notify) = {
-                let mut state = self.state.lock().unwrap();
-                check_epoch(&state.scheduler, epoch)?;
-                let settings = state.scheduler.settings.entry(key.clone()).or_default();
-                (
-                    settings.identity.clone(),
-                    settings.revision,
-                    settings.changing != 0,
-                    settings
-                        .cached
-                        .filter(|(cached_epoch, _)| *cached_epoch == epoch)
-                        .map(|(_, limit)| limit),
-                    settings.notify.clone(),
-                )
-            };
-            let lease = SettingsReadLease {
-                limiter: self.clone(),
-                key: key.clone(),
-                identity,
-            };
-            // Enable the waiter before checking the revision again: notifications
-            // cannot be lost between clearing a write fence and awaiting it.
-            let changed = notify.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            if changing {
-                let still_changing = {
-                    let state = self.state.lock().unwrap();
-                    check_epoch(&state.scheduler, epoch)?;
-                    state
-                        .scheduler
-                        .settings
-                        .get(key)
-                        .is_some_and(|s| s.changing != 0)
-                };
-                if still_changing {
-                    tokio::select! {
-                        _ = changed => {},
-                        _ = async { match stopped { Some(token) => token.cancelled().await, None => std::future::pending::<()>().await } } => {
-                            return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
-                        }
-                    }
-                }
-                continue;
-            }
-            if let Some(limit) = cached
-                && purpose == ResolutionPurpose::QueueWake
-            {
-                return Ok(Resolved {
-                    limit,
-                    revision,
-                    lease,
-                });
-            }
-            if stopped.is_some_and(CancellationToken::is_cancelled) {
-                return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
-            }
-            let result = resolver().await;
-            // An already-started blocking store read keeps its owner until it
-            // returns, but its abandoned result cannot publish settings or
-            // start a replacement read after a fence changes.
-            if stopped.is_some_and(CancellationToken::is_cancelled) {
-                return Err(cancelled(AdmissionCancellationReason::OwnerAbandoned));
-            }
-            let mut state = self.state.lock().unwrap();
-            check_epoch(&state.scheduler, epoch)?;
-            let settings = state
-                .scheduler
-                .settings
-                .get_mut(key)
-                .expect("active settings read retains its fence");
-            if !Arc::ptr_eq(&settings.identity, &lease.identity)
-                || settings.revision != revision
-                || settings.changing != 0
-            {
-                continue;
-            }
-            let limit = result.map_err(|error| InvocationAdmissionError::Resolution {
-                error,
-                waited: false,
-                waited_milliseconds: 0,
-            })?;
-            if purpose != ResolutionPurpose::Observation {
-                // New requests retain the existing fresh-read/fail-closed
-                // contract. A changed pair discovered without a host mutation
-                // notification must also fence older concurrent reads.
-                if settings.cached.is_some_and(|(cached_epoch, cached_limit)| {
-                    cached_epoch == epoch && cached_limit != limit
-                }) {
-                    settings.revision = settings
-                        .revision
-                        .checked_add(1)
-                        .expect("settings revision exhausted");
-                    settings.notify.notify_waiters();
-                }
-                settings.cached = Some((epoch, limit));
-            }
-            return Ok(Resolved {
-                limit,
-                revision: settings.revision,
-                lease,
-            });
-        }
-    }
-
-    async fn resolve_initial(
-        self: &Arc<Self>,
-        key: &Key,
-        request: &InvocationAdmissionRequest,
-    ) -> Result<Resolved, InvocationAdmissionError> {
-        let stopped = CancellationToken::new();
-        let _stop_on_return = stopped.clone().drop_guard();
-        let limiter = self.clone();
-        let key = key.clone();
-        let epoch = request.epoch;
-        // The host resolver captures this request's original permits and
-        // admission registration. This worker can only resolve settings;
-        // dropping its result can never enqueue or grant an invocation.
-        let resolver = request.resolve_limit.clone();
-        let mut read = tokio::spawn(
-            async move {
-                limiter
-                    .resolve(
-                        epoch,
-                        &key,
-                        &resolver,
-                        ResolutionPurpose::NewAdmission,
-                        Some(&stopped),
-                    )
-                    .await
-            }
-            .instrument(tracing::Span::current()),
-        );
-        tokio::select! {
-            biased;
-            reason = request.cancellation.cancelled() => Err(cancelled(reason)),
-            _ = async { match request.hard_deadline { Some(deadline) => tokio::time::sleep_until(deadline.at).await, None => std::future::pending::<()>().await } } => {
-                Err(InvocationAdmissionError::Deadline(request.hard_deadline.expect("deadline timer enabled").kind))
-            }
-            result = &mut read => result.unwrap_or_else(|_| Err(InvocationAdmissionError::Resolution {
-                error: ProviderError::error(ReasonCode::OperationFailed, "rate settings resolution task failed"),
-                waited: false,
-                waited_milliseconds: 0,
-            })),
         }
     }
 
@@ -519,42 +390,65 @@ impl InvocationLimiter {
                 {
                     return Err(InvocationAdmissionError::Deadline(deadline.kind));
                 }
-                let now_ns = duration_ns(self.clock.monotonic());
-                self.process(
-                    &mut state,
-                    &key,
-                    resolved.limit,
-                    resolved.revision,
-                    now,
-                    now_ns,
-                );
-                let projection = project(&state, &key, resolved.limit, now, now_ns);
-                let deadline = request.hard_deadline;
+                // Previously accepted due work wins before a newcomer joins
+                // the ring, including a newcomer with zero waiting budget.
+                // Time/cancellation may advance during a projection; commit
+                // its simulated settlement before deciding the new request.
+                let (now, now_ns, projection) = loop {
+                    self.process_service(
+                        &mut state,
+                        &key.1,
+                        Instant::now(),
+                        duration_ns(self.clock.monotonic()),
+                    );
+                    let now = Instant::now();
+                    let now_ns = duration_ns(self.clock.monotonic());
+                    let projection = project(&state, &key, resolved.limit, now, now_ns);
+                    if !projection.requires_settlement {
+                        break (now, now_ns, projection);
+                    }
+                };
+                let rate_deadline = now
+                    .checked_add(request.max_wait)
+                    .expect("validated max_wait deadline");
+                let opportunity = instant_for(now, now_ns, projection.next_ns);
+                if let Some(reason) = request.cancellation.reason() {
+                    return Err(cancelled(reason));
+                }
+                if let Some(deadline) = request.hard_deadline
+                    && Instant::now() >= deadline.at
+                {
+                    return Err(InvocationAdmissionError::Deadline(deadline.kind));
+                }
                 if projection.next_ns == now_ns {
+                    // The trial used the same FIFO/ring arbitration as the
+                    // driver. It cannot evict any peer unless accepted here.
                     record(&mut state, &key, resolved.limit, now_ns);
+                    self.process_service(
+                        &mut state,
+                        &key.1,
+                        Instant::now(),
+                        duration_ns(self.clock.monotonic()),
+                    );
                     return Ok(InvocationAdmissionGrant {
                         waited: false,
                         waited_milliseconds: 0,
                     });
                 }
-                let rate_deadline = now
-                    .checked_add(request.max_wait)
-                    .expect("validated max_wait deadline");
-                let opportunity = instant_for(now, now_ns, projection.next_ns);
                 if request.max_wait.is_zero()
                     || opportunity > rate_deadline
-                    || deadline.is_some_and(|bound| opportunity >= bound.at)
+                    || request
+                        .hard_deadline
+                        .is_some_and(|bound| opportunity >= bound.at)
                 {
                     return Err(InvocationAdmissionError::RateLimited(self.rejection(
-                        &request.service,
-                        resolved.limit,
+                        &key.1,
+                        &projection,
                         request.max_wait,
                         now,
                         rate_deadline,
-                        deadline,
+                        request.hard_deadline,
                         false,
-                        projection.queued,
-                        projection.next_ns,
                         now,
                         now_ns,
                     )));
@@ -567,17 +461,31 @@ impl InvocationLimiter {
                 let ticket = Arc::new(Ticket {
                     id: state.scheduler.next_ticket,
                     epoch: request.epoch,
-                    service: request.service.clone(),
+                    service: key.1.clone(),
                     enqueued: now,
                     rate_deadline,
                     max_wait: request.max_wait,
-                    hard_deadline: deadline,
+                    hard_deadline: request.hard_deadline,
                     cancellation: request.cancellation.clone(),
                     resolver: request.resolve_limit.clone(),
                     outcome: Mutex::new(None),
                     notify: Notify::new(),
                 });
-                let start_driver = !state.scheduler.queues.contains_key(&key);
+                let start_key = !state.scheduler.queues.contains_key(&key);
+                let start_service = !state.scheduler.services.contains_key(&key.1);
+                if start_key {
+                    state
+                        .scheduler
+                        .services
+                        .entry(key.1.clone())
+                        .or_insert_with(|| ServiceQueue {
+                            ring: VecDeque::new(),
+                            driver_id: ticket.id,
+                            notify: Arc::new(Notify::new()),
+                        })
+                        .ring
+                        .push_back(key.0.clone());
+                }
                 state
                     .scheduler
                     .queues
@@ -585,25 +493,38 @@ impl InvocationLimiter {
                     .or_insert_with(|| Queue {
                         entries: VecDeque::new(),
                         revision: resolved.revision,
-                        dirty: false,
                         driver_id: ticket.id,
                         limit: resolved.limit,
+                        refresh_stop: CancellationToken::new(),
                     })
                     .entries
                     .push_back(Queued {
                         ticket: ticket.clone(),
                         opportunity_ns: projection.next_ns,
                     });
-                let notify = state.scheduler.settings[&key].notify.clone();
-                notify.notify_waiters();
-                if start_driver {
+                // Commit acceptance and any resulting peer displacement in
+                // this same critical section. An infeasible trial never gets
+                // here and therefore never removes an accepted peer.
+                self.process_service(&mut state, &key.1, now, now_ns);
+                if start_key && state.scheduler.queues.contains_key(&key) {
                     let limiter = self.clone();
                     let driver_key = key.clone();
                     let driver_id = ticket.id;
+                    let notify = state.scheduler.settings[&key].notify.clone();
                     tokio::spawn(async move {
-                        limiter.drive(driver_key, notify, driver_id).await;
+                        limiter.refresh_key(driver_key, notify, driver_id).await;
                     });
                 }
+                if start_service && let Some(service) = state.scheduler.services.get(&key.1) {
+                    let limiter = self.clone();
+                    let name = key.1.clone();
+                    let notify = service.notify.clone();
+                    let driver_id = service.driver_id;
+                    tokio::spawn(async move {
+                        limiter.drive_service(name, notify, driver_id).await;
+                    });
+                }
+                notify_service(&state.scheduler, &key.1);
                 ticket
             };
             let _guard = PendingGuard {
@@ -616,350 +537,12 @@ impl InvocationLimiter {
                     return outcome;
                 }
                 tokio::select! {
-                    _ = ticket.notify.notified() => {}
-                    reason = request.cancellation.cancelled() => { self.remove(&key, ticket.id, reason); }
-                }
-            }
-        }
-    }
-
-    async fn drive(self: Arc<Self>, key: Key, notify: Arc<Notify>, driver_id: u64) {
-        loop {
-            let changed = notify.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let pending = {
-                let state = self.state.lock().unwrap();
-                state
-                    .scheduler
-                    .queues
-                    .get(&key)
-                    .filter(|queue| queue.driver_id == driver_id)
-                    .and_then(|queue| {
-                        queue.entries.front().map(|entry| {
-                            (
-                                entry.ticket.clone(),
-                                queue
-                                    .entries
-                                    .iter()
-                                    .filter_map(|entry| {
-                                        entry.ticket.hard_deadline.map(|bound| bound.at)
-                                    })
-                                    .min(),
-                            )
-                        })
-                    })
-            };
-            let resolved = {
-                let Some((first, mut hard_deadline)) = pending else {
-                    return;
-                };
-                let resolving = self.resolve(
-                    first.epoch,
-                    &key,
-                    &first.resolver,
-                    ResolutionPurpose::QueueWake,
-                    None,
-                );
-                tokio::pin!(resolving);
-                // A managed read may own a noncancelable blocking worker. Keep its
-                // resolver (and request-permit keepalive) until that read returns,
-                // while still delivering queue cancellation/deadline outcomes.
-                loop {
-                    tokio::select! {
-                        result = &mut resolving => break result,
-                        _ = &mut changed => {},
-                        _ = async { match hard_deadline { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending::<()>().await } } => {
-                            self.expire_hard_deadlines(&key, driver_id);
-                        }
+                    _ = ticket.notify.notified() => {},
+                    reason = request.cancellation.cancelled() => {
+                        self.remove(&key, ticket.id, reason);
                     }
-                    changed.set(notify.notified());
-                    changed.as_mut().enable();
-                    hard_deadline = self
-                        .state
-                        .lock()
-                        .unwrap()
-                        .scheduler
-                        .queues
-                        .get(&key)
-                        .filter(|queue| queue.driver_id == driver_id)
-                        .and_then(|queue| {
-                            queue
-                                .entries
-                                .iter()
-                                .filter_map(|entry| {
-                                    entry.ticket.hard_deadline.map(|bound| bound.at)
-                                })
-                                .min()
-                        });
                 }
-            };
-            let resolved = match resolved {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    let mut state = self.state.lock().unwrap();
-                    if !state
-                        .scheduler
-                        .queues
-                        .get(&key)
-                        .is_some_and(|queue| queue.driver_id == driver_id)
-                    {
-                        return;
-                    }
-                    if let Some(queue) = state.scheduler.queues.remove(&key) {
-                        // Resolution errors are cloned as the provider type is cloneable.
-                        for entry in queue.entries {
-                            let error = match &error {
-                                InvocationAdmissionError::Resolution { error, .. } => {
-                                    InvocationAdmissionError::Resolution {
-                                        error: error.clone(),
-                                        waited: true,
-                                        waited_milliseconds: milliseconds(
-                                            entry.ticket.enqueued.elapsed(),
-                                        ),
-                                    }
-                                }
-                                InvocationAdmissionError::Cancelled(removal) => {
-                                    InvocationAdmissionError::Cancelled(
-                                        entry.ticket.removal(removal.reason),
-                                    )
-                                }
-                                InvocationAdmissionError::RateLimited(_) => unreachable!(),
-                                InvocationAdmissionError::Deadline(_) => unreachable!(),
-                            };
-                            entry.ticket.finish(Err(error));
-                        }
-                    }
-                    return;
-                }
-            };
-            let wake = {
-                let mut state = self.state.lock().unwrap();
-                if !state
-                    .scheduler
-                    .queues
-                    .get(&key)
-                    .is_some_and(|queue| queue.driver_id == driver_id)
-                {
-                    return;
-                }
-                if !settings_current(&state.scheduler, &key, &resolved) {
-                    continue;
-                }
-                let now = Instant::now();
-                let now_ns = duration_ns(self.clock.monotonic());
-                self.process(
-                    &mut state,
-                    &key,
-                    resolved.limit,
-                    resolved.revision,
-                    now,
-                    now_ns,
-                );
-                let Some(queue) = state.scheduler.queues.get(&key) else {
-                    return;
-                };
-                queue
-                    .entries
-                    .iter()
-                    .map(|entry| {
-                        let opportunity = instant_for(now, now_ns, entry.opportunity_ns);
-                        entry
-                            .ticket
-                            .hard_deadline
-                            .map_or(opportunity, |bound| opportunity.min(bound.at))
-                    })
-                    .min()
-                    .expect("nonempty active queue")
-            };
-            tokio::select! { _ = &mut changed => {}, _ = tokio::time::sleep_until(wake) => {} }
-        }
-    }
-
-    fn remove(&self, key: &Key, id: u64, reason: AdmissionCancellationReason) {
-        let mut state = self.state.lock().unwrap();
-        let Some(queue) = state.scheduler.queues.get_mut(key) else {
-            return;
-        };
-        if let Some(index) = queue.entries.iter().position(|entry| entry.ticket.id == id) {
-            let entry = queue.entries.remove(index).unwrap();
-            queue.dirty = true;
-            entry.ticket.finish(Err(InvocationAdmissionError::Cancelled(
-                entry.ticket.removal(reason),
-            )));
-            if queue.entries.is_empty() {
-                state.scheduler.queues.remove(key);
             }
-            state.scheduler.settings[key].notify.notify_waiters();
-        }
-    }
-
-    /// A database read/write fence may delay refreshed rate settings, but it
-    /// cannot extend a request's absolute transport deadline.
-    fn expire_hard_deadlines(&self, key: &Key, driver_id: u64) {
-        let mut state = self.state.lock().unwrap();
-        if !state
-            .scheduler
-            .queues
-            .get(key)
-            .is_some_and(|queue| queue.driver_id == driver_id)
-        {
-            return;
-        }
-        let mut queue = state.scheduler.queues.remove(key).unwrap();
-        let now = Instant::now();
-        let now_ns = duration_ns(self.clock.monotonic());
-        let limit = queue.limit;
-        let mut expired = Vec::new();
-        queue.entries.retain(|entry| {
-            if entry
-                .ticket
-                .hard_deadline
-                .is_some_and(|bound| now >= bound.at)
-            {
-                expired.push(entry.ticket.clone());
-                false
-            } else {
-                true
-            }
-        });
-        queue.dirty |= !expired.is_empty();
-        if !queue.entries.is_empty() {
-            state.scheduler.queues.insert(key.clone(), queue);
-        }
-        let projection = project(&state, key, limit, now, now_ns);
-        for ticket in expired {
-            let rejection = self.rejection(
-                &ticket.service,
-                limit,
-                ticket.max_wait,
-                ticket.enqueued,
-                ticket.rate_deadline,
-                ticket.hard_deadline,
-                true,
-                projection.queued,
-                projection.next_ns,
-                now,
-                now_ns,
-            );
-            ticket.finish(Err(InvocationAdmissionError::RateLimited(rejection)));
-        }
-    }
-
-    fn process(
-        &self,
-        state: &mut LimiterState,
-        key: &Key,
-        limit: InvocationLimit,
-        revision: u64,
-        now: Instant,
-        now_ns: u64,
-    ) {
-        let Some(mut queue) = state.scheduler.queues.remove(key) else {
-            return;
-        };
-        let settings_changed = queue.revision != revision || queue.limit != limit;
-        queue.limit = limit;
-        if settings_changed {
-            queue.dirty = true;
-            queue.revision = revision;
-        }
-        let mut refused = Vec::new();
-        queue.entries.retain(|entry| {
-            if let Some(reason) = entry.ticket.cancellation.reason() {
-                entry.ticket.finish(Err(InvocationAdmissionError::Cancelled(
-                    entry.ticket.removal(reason),
-                )));
-                queue.dirty = true;
-                false
-            } else if entry
-                .ticket
-                .hard_deadline
-                .is_some_and(|bound| now >= bound.at)
-            {
-                refused.push(entry.ticket.clone());
-                queue.dirty = true;
-                false
-            } else {
-                true
-            }
-        });
-        // Removals cannot erase still-valid due opportunities. A settings
-        // change does invalidate them and must be reforecast before any grant.
-        if settings_changed {
-            reforecast(state, key, &mut queue, limit, now, now_ns, &mut refused);
-        }
-        // Preserve every pre-batch opportunity until ALL due FIFO heads have
-        // been evaluated. A late first grant must not invalidate its siblings.
-        let mut granted = false;
-        while queue
-            .entries
-            .front()
-            .is_some_and(|entry| entry.opportunity_ns <= now_ns)
-        {
-            let window = window_copy(state, key, limit, now_ns);
-            if window.total >= u64::from(limit.requests()) {
-                queue.dirty = true;
-                break;
-            }
-            let entry = queue.entries.pop_front().unwrap();
-            // Cancellation can arrive concurrently with the preceding checks.
-            if let Some(reason) = entry.ticket.cancellation.reason() {
-                entry.ticket.finish(Err(InvocationAdmissionError::Cancelled(
-                    entry.ticket.removal(reason),
-                )));
-                queue.dirty = true;
-                continue;
-            }
-            if entry
-                .ticket
-                .hard_deadline
-                .is_some_and(|bound| Instant::now() >= bound.at)
-            {
-                refused.push(entry.ticket);
-                queue.dirty = true;
-                continue;
-            }
-            let actual_ns = duration_ns(self.clock.monotonic());
-            record(state, key, limit, actual_ns);
-            entry.ticket.finish(Ok(InvocationAdmissionGrant {
-                waited: true,
-                waited_milliseconds: milliseconds(entry.ticket.enqueued.elapsed()),
-            }));
-            granted = true;
-        }
-        if granted || queue.dirty {
-            let actual_now = Instant::now();
-            let actual_ns = duration_ns(self.clock.monotonic());
-            reforecast(
-                state,
-                key,
-                &mut queue,
-                limit,
-                actual_now,
-                actual_ns,
-                &mut refused,
-            );
-        }
-        if !queue.entries.is_empty() {
-            state.scheduler.queues.insert(key.clone(), queue);
-        }
-        let projection = project(state, key, limit, now, now_ns);
-        for ticket in refused {
-            let rejection = self.rejection(
-                &ticket.service,
-                limit,
-                ticket.max_wait,
-                ticket.enqueued,
-                ticket.rate_deadline,
-                ticket.hard_deadline,
-                true,
-                projection.queued,
-                projection.next_ns,
-                now,
-                now_ns,
-            );
-            ticket.finish(Err(InvocationAdmissionError::RateLimited(rejection)));
         }
     }
 
@@ -967,14 +550,12 @@ impl InvocationLimiter {
     fn rejection(
         &self,
         service: &str,
-        limit: InvocationLimit,
+        projection: &Projection,
         max_wait: Duration,
         enqueued: Instant,
         rate_deadline: Instant,
         hard_deadline: Option<AdmissionDeadline>,
         was_queued: bool,
-        queued: u64,
-        next_ns: u64,
         now: Instant,
         now_ns: u64,
     ) -> InvocationRateLimited {
@@ -984,17 +565,19 @@ impl InvocationLimiter {
                 at: rate_deadline,
                 kind: InvocationDeadlineKind::RateWait,
             });
-        let seconds = next_ns
+        let seconds = projection
+            .next_ns
             .saturating_sub(now_ns)
             .div_ceil(NANOS_PER_SECOND)
             .max(1);
         InvocationRateLimited {
+            scope: projection.scope,
             service: service.to_owned(),
-            limit,
+            limit: projection.limiting_limit,
             retry_after_seconds: seconds,
             retry_at: retry_at(self.clock.wall(), seconds),
             max_wait_seconds: max_wait.as_secs(),
-            queued_requests: queued,
+            queued_requests: projection.queued,
             deadline_kind: bound.kind,
             waited_milliseconds: milliseconds(now.saturating_duration_since(enqueued)),
             remaining_wait_milliseconds: milliseconds(bound.at.saturating_duration_since(now)),
@@ -1035,7 +618,7 @@ impl InvocationLimiter {
                 .next_ns
                 .saturating_sub(now_ns)
                 .div_ceil(NANOS_PER_SECOND);
-            let observation = InvocationObservation {
+            return Ok(InvocationObservation {
                 instance_id: self.instance_id.clone(),
                 observed_at: format_retry_at(wall),
                 invocations: InvocationObservationValues {
@@ -1051,67 +634,13 @@ impl InvocationLimiter {
                     } else {
                         format_retry_at(retry_at(wall, seconds))
                     },
+                    blocking_scope: (projection.available == 0).then_some(projection.scope),
                 },
-            };
-            drop(state);
-            return Ok(observation);
+            });
         }
     }
 }
 
-pub(crate) struct InvocationLimitUpdate {
-    limiter: Arc<InvocationLimiter>,
-    key: Key,
-    finished: bool,
-}
-impl InvocationLimitUpdate {
-    pub(crate) fn finish(mut self, success: bool) {
-        self.complete(success);
-    }
-    fn complete(&mut self, success: bool) {
-        if self.finished {
-            return;
-        }
-        self.finished = true;
-        let mut state = self.limiter.state.lock().unwrap();
-        let settings = state
-            .scheduler
-            .settings
-            .get_mut(&self.key)
-            .expect("write fence exists");
-        settings.changing -= 1;
-        if success {
-            settings.revision = settings
-                .revision
-                .checked_add(1)
-                .expect("settings revision exhausted");
-            settings.cached = None;
-        }
-        settings.notify.notify_waiters();
-        // A read may have been abandoned while this write kept its fence
-        // alive. The final writer also retires an otherwise unused key.
-        if !state
-            .keys
-            .get(&self.key.0)
-            .is_some_and(|services| services.contains_key(&self.key.1))
-            && !state.scheduler.queues.contains_key(&self.key)
-            && state
-                .scheduler
-                .settings
-                .get(&self.key)
-                .is_some_and(|settings| {
-                    settings.changing == 0 && Arc::strong_count(&settings.identity) == 1
-                })
-        {
-            state.scheduler.settings.remove(&self.key);
-        }
-    }
-}
-impl Drop for InvocationLimitUpdate {
-    fn drop(&mut self) {
-        self.complete(false);
-    }
-}
 struct PendingGuard {
     limiter: Arc<InvocationLimiter>,
     key: Key,
@@ -1150,8 +679,49 @@ fn settings_current(state: &SchedulerState, key: &Key, resolved: &Resolved) -> b
             && Arc::ptr_eq(&s.identity, &resolved.lease.identity)
     })
 }
+
+fn cached_limit(state: &SchedulerState, key: &Key) -> Option<InvocationLimit> {
+    let settings = state.settings.get(key)?;
+    (settings.changing == 0).then_some(())?;
+    settings
+        .cached
+        .filter(|(epoch, _)| *epoch == state.epoch)
+        .map(|(_, limit)| limit)
+}
+
+fn queue_usable(state: &SchedulerState, key: &Key) -> bool {
+    let Some(queue) = state.queues.get(key) else {
+        return false;
+    };
+    cached_limit(state, key)
+        .is_some_and(|limit| limit == queue.limit && state.settings[key].revision == queue.revision)
+}
+
+fn service_keys(state: &SchedulerState, service: &str) -> Vec<Key> {
+    state
+        .services
+        .get(service)
+        .map(|queue| {
+            queue
+                .ring
+                .iter()
+                .map(|principal| (principal.clone(), service.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn notify_service(state: &SchedulerState, service: &str) {
+    if let Some(queue) = state.services.get(service) {
+        queue.notify.notify_waiters();
+    }
+}
 fn invalidate_pending(state: &mut SchedulerState, reason: AdmissionCancellationReason) {
+    for (_, service) in state.services.drain() {
+        service.notify.notify_waiters();
+    }
     for (_, queue) in state.queues.drain() {
+        queue.refresh_stop.cancel();
         for entry in queue.entries {
             entry.ticket.finish(Err(InvocationAdmissionError::Cancelled(
                 entry.ticket.removal(reason),
@@ -1177,6 +747,36 @@ fn window_copy(state: &LimiterState, key: &Key, limit: InvocationLimit, now_ns: 
     window.expire(now_ns);
     window
 }
+
+fn aggregate_window_copy(
+    state: &LimiterState,
+    service: &str,
+    limit: InvocationLimit,
+    now_ns: u64,
+) -> KeyWindow {
+    let window_ns = u64::from(limit.window_seconds()) * NANOS_PER_SECOND;
+    let mut window = state
+        .aggregate_windows
+        .get(service)
+        .filter(|window| window.window_ns == window_ns)
+        .cloned()
+        .unwrap_or_else(|| KeyWindow::new(window_ns));
+    window.expire(now_ns);
+    window
+}
+
+fn capacity_available(
+    state: &LimiterState,
+    key: &Key,
+    limit: InvocationLimit,
+    now_ns: u64,
+) -> bool {
+    window_copy(state, key, limit, now_ns).total < u64::from(limit.requests())
+        && state.aggregate_limits.get(&key.1).is_none_or(|shared| {
+            aggregate_window_copy(state, &key.1, *shared, now_ns).total
+                < u64::from(shared.requests())
+        })
+}
 fn record(state: &mut LimiterState, key: &Key, limit: InvocationLimit, now_ns: u64) {
     state.maybe_sweep(now_ns);
     let window_ns = u64::from(limit.window_seconds()) * NANOS_PER_SECOND;
@@ -1186,6 +786,15 @@ fn record(state: &mut LimiterState, key: &Key, limit: InvocationLimit, now_ns: u
     }
     window.expire(now_ns);
     window.record(now_ns);
+    if let Some(aggregate) = state.aggregate_limits.get(&key.1).copied() {
+        let window_ns = u64::from(aggregate.window_seconds()) * NANOS_PER_SECOND;
+        let shared = state
+            .aggregate_windows
+            .entry(key.1.clone())
+            .or_insert_with(|| KeyWindow::new(window_ns));
+        shared.expire(now_ns);
+        shared.record(now_ns);
+    }
 }
 fn next_capacity(window: &mut KeyWindow, requests: u32, cursor: u64) -> u64 {
     window.expire(cursor);
@@ -1193,94 +802,6 @@ fn next_capacity(window: &mut KeyWindow, requests: u32, cursor: u64) -> u64 {
         cursor
     } else {
         cursor.saturating_add(window.wait_ns(requests, cursor))
-    }
-}
-fn fits(ticket: &Ticket, opportunity: Instant, now: Instant) -> bool {
-    opportunity <= ticket.rate_deadline
-        && ticket
-            .hard_deadline
-            .is_none_or(|bound| opportunity < bound.at && now < bound.at)
-}
-fn reforecast(
-    state: &LimiterState,
-    key: &Key,
-    queue: &mut Queue,
-    limit: InvocationLimit,
-    now: Instant,
-    now_ns: u64,
-    refused: &mut Vec<Arc<Ticket>>,
-) {
-    let mut window = window_copy(state, key, limit, now_ns);
-    let mut cursor = now_ns;
-    queue.entries.retain_mut(|entry| {
-        let opportunity_ns = next_capacity(&mut window, limit.requests(), cursor);
-        if !fits(&entry.ticket, instant_for(now, now_ns, opportunity_ns), now) {
-            refused.push(entry.ticket.clone());
-            return false;
-        }
-        entry.opportunity_ns = opportunity_ns;
-        window.expire(opportunity_ns);
-        window.record(opportunity_ns);
-        cursor = opportunity_ns;
-        true
-    });
-    queue.dirty = false;
-}
-struct Projection {
-    counted: u64,
-    queued: u64,
-    available: u32,
-    next_ns: u64,
-}
-fn project(
-    state: &LimiterState,
-    key: &Key,
-    limit: InvocationLimit,
-    now: Instant,
-    now_ns: u64,
-) -> Projection {
-    let mut window = window_copy(state, key, limit, now_ns);
-    let counted = window.total;
-    let mut cursor = now_ns;
-    let mut queued = 0;
-    if let Some(queue) = state.scheduler.queues.get(key) {
-        let settings_changed = queue.limit != limit
-            || state
-                .scheduler
-                .settings
-                .get(key)
-                .is_some_and(|settings| settings.revision != queue.revision);
-        for entry in &queue.entries {
-            if entry.ticket.cancellation.reason().is_some()
-                || entry
-                    .ticket
-                    .hard_deadline
-                    .is_some_and(|bound| now >= bound.at)
-            {
-                continue;
-            }
-            let at_ns = next_capacity(&mut window, limit.requests(), cursor);
-            let valid_due = !settings_changed && entry.opportunity_ns <= now_ns && at_ns == now_ns;
-            if !valid_due && !fits(&entry.ticket, instant_for(now, now_ns, at_ns), now) {
-                continue;
-            }
-            window.expire(at_ns);
-            window.record(at_ns);
-            cursor = at_ns;
-            queued += 1;
-        }
-    }
-    let available = if cursor == now_ns {
-        u64::from(limit.requests()).saturating_sub(window.total) as u32
-    } else {
-        0
-    };
-    let next_ns = next_capacity(&mut window, limit.requests(), cursor);
-    Projection {
-        counted,
-        queued,
-        available,
-        next_ns,
     }
 }
 

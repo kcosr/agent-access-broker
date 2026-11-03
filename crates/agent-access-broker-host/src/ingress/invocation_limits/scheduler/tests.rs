@@ -2,6 +2,8 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_util::sync::CancellationToken;
 
+mod aggregate;
+
 struct Cancellation(CancellationToken);
 impl AdmissionCancellation for Cancellation {
     fn reason(&self) -> Option<AdmissionCancellationReason> {
@@ -65,7 +67,7 @@ fn limit(requests: u64, window: u64) -> InvocationLimit {
 
 #[tokio::test(start_paused = true)]
 async fn fifo_forecasts_include_accepted_tickets_and_late_batch_charges_actual_time() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(2, 10);
     for _ in 0..2 {
         limiter.admit(request(&limiter, rate, 10)).await.unwrap();
@@ -116,7 +118,7 @@ async fn fifo_forecasts_include_accepted_tickets_and_late_batch_charges_actual_t
 
 #[tokio::test(start_paused = true)]
 async fn late_rate_opportunity_cannot_cross_strict_body_deadline() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 10)).await.unwrap();
     let mut waiting = request(&limiter, rate, 10);
@@ -139,7 +141,7 @@ async fn late_rate_opportunity_cannot_cross_strict_body_deadline() {
 
 #[tokio::test(start_paused = true)]
 async fn cancellation_releases_fifo_reservation_without_charging() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 30)).await.unwrap();
     let token = CancellationToken::new();
@@ -169,13 +171,13 @@ async fn cancellation_releases_fifo_reservation_without_charging() {
 
 #[tokio::test(start_paused = true)]
 async fn publication_fences_initial_reads_and_preserves_admitted_history() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 20)).await.unwrap();
     let waiter = spawn(&limiter, request(&limiter, rate, 20));
     queued(&limiter, 1).await;
     let stale = request(&limiter, rate, 0);
-    limiter.publish_runtime(|epoch| assert_eq!(epoch, 1));
+    limiter.publish_runtime(&BTreeMap::new(), |epoch| assert_eq!(epoch, 1));
     for result in [waiter.await.unwrap(), limiter.admit(stale).await] {
         let Err(InvocationAdmissionError::Cancelled(removal)) = result else {
             panic!("old snapshot cannot admit");
@@ -197,7 +199,7 @@ async fn publication_fences_initial_reads_and_preserves_admitted_history() {
 
 #[tokio::test(start_paused = true)]
 async fn shutdown_and_abandoned_future_remove_pending_without_a_charge() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 20)).await.unwrap();
     let abandoned = spawn(&limiter, request(&limiter, rate, 20));
@@ -235,7 +237,7 @@ fn request_after_close(
 
 #[tokio::test(start_paused = true)]
 async fn observations_are_pure_even_when_opportunities_are_due() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(2, 10);
     let empty = limiter
         .observe(0, "unseen", "jira", Duration::from_secs(10), resolver(rate))
@@ -286,7 +288,7 @@ async fn observations_are_pure_even_when_opportunities_are_due() {
 
 #[tokio::test(start_paused = true)]
 async fn successful_key_updates_refresh_only_that_key_and_failed_updates_keep_opportunities() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = Arc::new(Mutex::new(limit(1, 10)));
     let reads = Arc::new(AtomicUsize::new(0));
     let dynamic: InvocationLimitResolver = {
@@ -326,7 +328,7 @@ async fn successful_key_updates_refresh_only_that_key_and_failed_updates_keep_op
 
 #[tokio::test(start_paused = true)]
 async fn stale_store_read_cannot_reset_a_newer_window() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let reads = Arc::new(AtomicUsize::new(0));
@@ -367,7 +369,7 @@ async fn stale_store_read_cannot_reset_a_newer_window() {
 
 #[tokio::test(start_paused = true)]
 async fn hard_deadline_removes_a_ticket_while_its_settings_write_is_in_progress() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 20)).await.unwrap();
     let mut waiting = request(&limiter, rate, 20);
@@ -390,7 +392,7 @@ async fn hard_deadline_removes_a_ticket_while_its_settings_write_is_in_progress(
 
 #[tokio::test(start_paused = true)]
 async fn changed_window_resets_history_once_and_reforecasts_pending_fifo() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = Arc::new(Mutex::new(limit(1, 10)));
     let dynamic: InvocationLimitResolver = {
         let rate = rate.clone();
@@ -430,7 +432,7 @@ async fn changed_window_resets_history_once_and_reforecasts_pending_fifo() {
 
 #[tokio::test(start_paused = true)]
 async fn lower_request_count_keeps_history_and_refuses_a_now_infeasible_tail() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = Arc::new(Mutex::new(limit(2, 10)));
     let dynamic: InvocationLimitResolver = {
         let rate = rate.clone();
@@ -468,7 +470,7 @@ async fn lower_request_count_keeps_history_and_refuses_a_now_infeasible_tail() {
 
 #[tokio::test(start_paused = true)]
 async fn cancellation_before_enqueue_and_after_grant_have_distinct_charge_outcomes() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     let token = CancellationToken::new();
     token.cancel();
@@ -497,7 +499,7 @@ async fn cancellation_before_enqueue_and_after_grant_have_distinct_charge_outcom
 
 #[tokio::test(start_paused = true)]
 async fn failed_and_abandoned_observation_reads_leave_no_unseen_key_metadata() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let failure: InvocationLimitResolver = Arc::new(|| {
         Box::pin(async {
             Err(ProviderError::error(
@@ -542,7 +544,7 @@ async fn failed_and_abandoned_observation_reads_leave_no_unseen_key_metadata() {
 
 #[tokio::test(start_paused = true)]
 async fn publication_during_observation_preserves_read_fence_then_cleans_it() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let blocked: InvocationLimitResolver = {
@@ -567,7 +569,7 @@ async fn publication_during_observation_preserves_read_fence_then_cleans_it() {
         })
     };
     started.notified().await;
-    limiter.publish_runtime(|_| {});
+    limiter.publish_runtime(&BTreeMap::new(), |_| {});
     assert_eq!(
         limiter.state.lock().unwrap().scheduler.settings.len(),
         1,
@@ -584,7 +586,7 @@ async fn publication_during_observation_preserves_read_fence_then_cleans_it() {
 
 #[tokio::test(start_paused = true)]
 async fn cancelled_ticket_keeps_its_non_cancelable_settings_read_owned_until_completion() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 20)).await.unwrap();
     let started = Arc::new(Notify::new());
@@ -644,7 +646,7 @@ async fn cancelled_ticket_keeps_its_non_cancelable_settings_read_owned_until_com
 
 #[tokio::test(start_paused = true)]
 async fn final_write_fence_cleans_an_observation_abandoned_during_mutation() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let write = limiter.begin_update("unseen", "jira");
     let task = {
         let limiter = limiter.clone();
@@ -708,7 +710,7 @@ async fn late_removals_preserve_valid_due_opportunities_in_projection_and_schedu
                 before.queued, 1,
                 "the surviving due opportunity remains valid"
             );
-            limiter.process(&mut state, &key, rate, 0, now, now_ns);
+            limiter.process_service(&mut state, &key.1, now, now_ns);
             let after = project(&state, &key, rate, now, now_ns);
             assert_eq!(before.next_ns, after.next_ns);
             assert_eq!(before.available, after.available);
@@ -742,7 +744,7 @@ async fn late_removals_preserve_valid_due_opportunities_in_projection_and_schedu
 
 #[tokio::test(start_paused = true)]
 async fn granted_head_does_not_keep_its_permits_while_the_driver_waits_for_a_successor() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     limiter.admit(request(&limiter, rate, 30)).await.unwrap();
     let keepalive = Arc::new(());
@@ -772,7 +774,7 @@ async fn granted_head_does_not_keep_its_permits_while_the_driver_waits_for_a_suc
 
 #[tokio::test(start_paused = true)]
 async fn new_admission_and_observation_fail_closed_after_a_cached_success() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(2, 10);
     limiter.admit(request(&limiter, rate, 0)).await.unwrap();
     let failure: InvocationLimitResolver = Arc::new(|| {
@@ -811,7 +813,7 @@ async fn new_admission_and_observation_fail_closed_after_a_cached_success() {
 
 #[tokio::test(start_paused = true)]
 async fn fresh_observation_projects_changed_settings_without_publishing_them() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let original = limit(1, 10);
     limiter
         .admit(request(&limiter, original, 10))
@@ -854,7 +856,7 @@ async fn fresh_observation_projects_changed_settings_without_publishing_them() {
 
 #[tokio::test(start_paused = true)]
 async fn newly_observed_rate_change_preserves_existing_fifo_precedence() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let original = limit(1, 10);
     limiter
         .admit(request(&limiter, original, 10))
@@ -880,7 +882,7 @@ async fn newly_observed_rate_change_preserves_existing_fifo_precedence() {
 
 #[tokio::test(start_paused = true)]
 async fn fresh_admission_rate_change_fences_an_older_concurrent_read() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let original = limit(2, 60);
     let changed = limit(3, 10);
     limiter.admit(request(&limiter, original, 0)).await.unwrap();
@@ -929,7 +931,7 @@ async fn fresh_admission_rate_change_fences_an_older_concurrent_read() {
 
 #[tokio::test(start_paused = true)]
 async fn observation_timestamps_always_use_whole_second_utc_z() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let rate = limit(1, 10);
     let empty = limiter
         .observe(0, "alice", "jira", Duration::ZERO, resolver(rate))
@@ -961,7 +963,7 @@ async fn initial_write_fence_observes_deadlines_and_cancellation_without_startin
         Some(InvocationDeadlineKind::Operation),
         None,
     ] {
-        let limiter = Arc::new(InvocationLimiter::new());
+        let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
         let write = limiter.begin_update("alice", "jira");
         let reads = Arc::new(AtomicUsize::new(0));
         let token = CancellationToken::new();
@@ -1014,7 +1016,7 @@ async fn initial_write_fence_observes_deadlines_and_cancellation_without_startin
 
 #[tokio::test(start_paused = true)]
 async fn initial_read_timeout_returns_while_retaining_original_permits_and_registration() {
-    let limiter = Arc::new(InvocationLimiter::new());
+    let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
     let guards = Arc::new(crate::ingress::guards::IngressGuards::new());
     let permits = crate::state::RequestPermits {
         _global: guards.try_global_concurrency(1).unwrap(),
@@ -1110,7 +1112,7 @@ async fn deadline_elapsed_just_after_initial_read_neither_charges_nor_queues() {
         InvocationDeadlineKind::Operation,
     ] {
         for exhausted in [false, true] {
-            let limiter = Arc::new(InvocationLimiter::new());
+            let limiter = Arc::new(InvocationLimiter::new(&BTreeMap::new()));
             let rate = limit(1, 10);
             if exhausted {
                 limiter.admit(request(&limiter, rate, 0)).await.unwrap();

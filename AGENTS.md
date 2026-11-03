@@ -183,13 +183,20 @@ actions and exposes typed wrappers for supported services.
 
 ## Invocation admission and discovery
 
-Keep one FIFO rate queue per principal/service across tokens and transports.
-Waiting retains existing request permits and charges quota only at admission;
-post-admission denials still count. Resolve `max_wait` from service, default,
-then zero independently of principal requests/window overrides. Validate the
+Keep one FIFO rate queue per principal/service across tokens and transports,
+with fair service-level arbitration among eligible heads. Charge personal and
+optional aggregate histories together only at admission; waiting retains
+existing request permits and post-admission denials still count. Aggregate
+`[limits.invocations.aggregate.<service>]` policy is TOML-owned and independent
+of personal overrides and managed imported rates. Resolve `max_wait` from service,
+default, then zero independently of principal requests/window overrides. Validate the
 source TOML service names against the complete native/imported catalog after
-managed-store loading; catalog edits preserve TOML wait policy while imported
-managed rates override requests/window. Revalidate the
+managed-store loading; catalog edits preserve TOML wait and aggregate policies
+while imported managed rates override personal requests/window. Install aggregate
+policy with the runtime epoch: count changes retain history, window changes
+reset it, removing a cap discards it and enabling starts empty. Forecasts share
+actual arbitration rules, reserve no capacity and never extend deadlines;
+new contention can make an accepted request infeasible. Revalidate the
 original identity after a wait, never remap it, and preserve absolute request
 and operation deadlines. Observed pending cancellation and runtime publication
 remove tickets without dispatch; delivery loss after admission does not cancel
@@ -198,7 +205,11 @@ owned operations. Client timeout alone cannot prove nonapplication.
 Expose live limits only in the caller-filtered single-service detail response
 and its existing CLI/MCP describe projections. Omit them for anonymous callers;
 keep service lists, SDK capabilities, action catalogs and `/v1/me.serviceLimits`
-static. Observation must not change limiter state or contact an upstream.
+static. Expose aggregate policy and joint eligibility, with no explicit other-user
+counts or queue inventory; document that numeric availability and timing can
+reveal shared usage. Admission refusals precede service policy and have a broader
+disclosure boundary than caller-filtered detail. Observation must not change
+limiter state or contact an upstream.
 Retain independent bounded detail capacity when invocation slots are full.
 Keep CLI/stdio `service.request_timeout_ms` separate from the download body's
 30-second idle timeout and report uncertain invocation outcomes on timeout.

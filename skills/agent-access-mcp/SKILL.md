@@ -168,6 +168,11 @@ OAuth reconnect belongs to the human owner, not an agent credential change.
 
 ## Rate waiting and limits
 
+Personal allowances and optional shared service caps both apply. Detail may
+include `limits.aggregate` policy and `limits.invocations.blockingScope`; availability
+and next-admission estimates account for both. New contention can remove an
+infeasible queued request with 429 before its unchanged deadline.
+
 Optional Broker waiting keeps the original request in FIFO order and occupies
 request capacity. Do not resubmit a pending call. Service detail can expose
 caller `limits`, including `maxWaitSeconds`, queued requests and next admission;

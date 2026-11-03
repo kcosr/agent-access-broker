@@ -7,8 +7,8 @@ use crate::ingress::invocation_limits::{
 use crate::ingress::source::auth_source_key;
 use crate::state::{AppState, RuntimeSnapshot};
 use agent_access_core::{
-    BrokerResponse, DiscoveredService, IdentityContext, OperationContext, SourceContext,
-    new_broker_request_id,
+    BrokerResponse, DiscoveredService, IdentityContext, InvocationLimit, OperationContext,
+    SourceContext, new_broker_request_id,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -34,6 +34,10 @@ struct ServiceLimits {
     instance_id: String,
     observed_at: String,
     invocations: InvocationObservationValues,
+    /// Configured policy only. Joint availability below can reveal remaining
+    /// shared capacity, but no other caller's identity or queue is projected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregate: Option<InvocationLimit>,
     capacity: ServiceCapacity,
 }
 
@@ -111,6 +115,10 @@ pub(crate) async fn service_detail(
         )
         .await?;
     let configured = snapshot.runtime.limits();
+    let aggregate = snapshot
+        .runtime
+        .configured_invocation_limits()
+        .aggregate_limit(&service.service);
     let capacity = ServiceCapacity {
         max_concurrent_requests: configured.max_concurrent_requests,
         max_concurrent_requests_per_principal: configured.max_concurrent_requests_per_principal,
@@ -131,6 +139,7 @@ pub(crate) async fn service_detail(
             instance_id: observed.instance_id,
             observed_at: observed.observed_at,
             invocations: observed.invocations,
+            aggregate,
             capacity,
         }),
     })

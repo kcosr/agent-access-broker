@@ -457,6 +457,69 @@ async fn imports_mcp_credentials_policy_context_and_audit_use_real_host_boundary
 }
 
 #[tokio::test]
+async fn imported_mcp_shared_caps_span_principals_and_keep_service_ids_independent() {
+    let fixture = fixture(Some(10)).await;
+    let mut config = fixture.runtime.config().clone();
+    for service in ["one", "two"] {
+        config
+            .limits
+            .invocations
+            .aggregate
+            .insert(service.into(), super::aggregate_limits::aggregate(1, "1m"));
+    }
+    fixture.broker.reload_config(&config).await;
+    let (status, body) = fixture
+        .invoke("alice", "one", "inspect", "internal", "import-shared-first")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let calls = fixture.upstream.requests.lock().unwrap().len();
+    let (status, body) = fixture
+        .invoke("bob", "one", "inspect", "internal", "import-shared-limited")
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    assert_eq!(body["reasonCode"], "rate_limited");
+    assert_eq!(body["service"], "broker");
+    assert_eq!(body["action"], "request.admit");
+    assert!(body.get("result").is_none());
+    assert_eq!(
+        fixture.upstream.requests.lock().unwrap().len(),
+        calls,
+        "shared refusal must not contact the imported MCP server"
+    );
+    let (status, body) = fixture
+        .invoke(
+            "bob",
+            "two",
+            "inspect",
+            "internal",
+            "import-other-shared-service",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(fixture.upstream.requests.lock().unwrap().len() > calls);
+    let records = require_audit_request(
+        &fixture.audit_path,
+        "import-shared-limited",
+        "one",
+        "inspect",
+    );
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["principal"], "bob");
+    assert_eq!(
+        records[0]["providerAudit"]["rateLimit"]["limitScope"],
+        "service"
+    );
+    let history = fixture.broker.state().shared_invocations.state_for_test();
+    assert!(
+        !history
+            .iter()
+            .any(|(principal, service, count)| principal == "bob"
+                && service == "one"
+                && *count != 0)
+    );
+}
+
+#[tokio::test]
 async fn imports_mcp_service_limit_rejects_before_upstream_dispatch() {
     let fixture = fixture(Some(1)).await;
     let (status, body) = fixture

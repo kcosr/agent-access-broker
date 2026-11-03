@@ -176,12 +176,15 @@ All notable changes to this project are documented in this file.
   Broker before rollback to a binary without those capabilities.
   ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
-- **Bounded invocation waiting and live limits.** Optional `max_wait` holds
-  service invocations in FIFO order within existing request capacity; existing
-  service describe interfaces expose caller-specific limits and process-local
-  observations. Principal overrides still change only requests/window. Imported
-  service TOML waits survive catalog edits alongside managed requests/window settings; startup
-  and reload validate their names against the retained catalog. See
+- **Bounded invocation waiting, shared service caps and live limits.** Optional
+  `[limits.invocations.aggregate.<service>]` caps combined admissions across
+  callers while personal limits still apply. Native, imported and command-backed
+  services share the same process-local enforcement. Optional `max_wait` retains
+  each caller's FIFO within existing request capacity and takes turns among
+  eligible callers; changed forecasts can refuse a queued request before its
+  deadline. Service describe reports shared policy and joint admission estimates;
+  the portal displays TOML caps read-only. Imported TOML waits and aggregate caps
+  survive catalog edits alongside managed personal requests/window settings. See
   [invocation limits](docs/configuration.md#service-invocation-limits).
   ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
 

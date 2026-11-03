@@ -295,6 +295,71 @@ async fn rest_waits_fifo_across_tokens_without_reading_bodies_or_preparing_provi
 }
 
 #[tokio::test]
+async fn shared_wait_cancellation_leaves_personal_quota_and_body_untouched() {
+    let fixture = fixture("1m", "5s", |config| {
+        config
+            .limits
+            .invocations
+            .services
+            .get_mut("fake")
+            .unwrap()
+            .requests = 10;
+        config
+            .limits
+            .invocations
+            .aggregate
+            .insert("fake".into(), super::aggregate_limits::aggregate(1, "2s"));
+    })
+    .await;
+    complete(pending(&fixture.app, "shared-cancel-seed", ALICE).0).await;
+    let (abandoned, abandoned_polls) = pending(&fixture.app, "shared-cancel-bob", BOB);
+    let observed = queued(&fixture.app, "Authorization", BOB, 1).await;
+    assert_eq!(observed["limits"]["invocations"]["countedRequests"], 0);
+    assert_eq!(
+        observed["limits"]["invocations"]["blockingScope"],
+        "service"
+    );
+    assert_eq!(
+        observed["limits"]["aggregate"],
+        json!({"requests":1,"windowSeconds":2})
+    );
+    let (successor, successor_polls) =
+        pending(&fixture.app, "shared-cancel-successor", ALICE_OTHER_TOKEN);
+    queued(&fixture.app, "Authorization", ALICE, 1).await;
+    assert_eq!(abandoned_polls.load(Ordering::SeqCst), 0);
+    assert_eq!(successor_polls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.provider.scope_resolutions.load(Ordering::SeqCst), 1);
+
+    abandoned.abort();
+    assert!(abandoned.await.unwrap_err().is_cancelled());
+    let bob = queued(&fixture.app, "Authorization", BOB, 0).await;
+    assert_eq!(bob["limits"]["invocations"]["countedRequests"], 0);
+    let cancelled = terminal_audit(&fixture, "shared-cancel-bob").await;
+    assert_eq!(cancelled["reasonCode"], "operation_cancelled");
+    assert_eq!(
+        cancelled["providerAudit"]["executionState"],
+        "not_dispatched"
+    );
+    assert_eq!(
+        cancelled["providerAudit"]["admission"]["outcome"],
+        "cancelled"
+    );
+    assert_eq!(abandoned_polls.load(Ordering::SeqCst), 0);
+
+    complete(successor).await;
+    assert_eq!(
+        *fixture.provider.calls.lock().unwrap(),
+        ["shared-cancel-seed", "shared-cancel-successor"]
+    );
+    assert_eq!(fixture.provider.scope_resolutions.load(Ordering::SeqCst), 2);
+    assert!(successor_polls.load(Ordering::SeqCst) > 0);
+    assert_eq!(
+        detail(&fixture.app, "Authorization", BOB).await["limits"]["invocations"]["countedRequests"],
+        0
+    );
+}
+
+#[tokio::test]
 async fn dropping_queued_rest_request_removes_it_without_body_dispatch_or_charge() {
     let fixture = fixture("1s", "2s", |_| {}).await;
     complete(pending(&fixture.app, "cancel-seed", ALICE).0).await;
@@ -558,6 +623,11 @@ async fn managed_limit_change_wakes_queued_requests_without_waiting_for_window_e
 #[tokio::test]
 async fn anonymous_detail_omits_live_limits_without_allocating_rate_state() {
     let fixture = fixture("1s", "2s", |config| {
+        config
+            .limits
+            .invocations
+            .aggregate
+            .insert("fake".into(), super::aggregate_limits::aggregate(1, "1m"));
         config.identity.mode = "anonymous".into();
         config.identity.sources.clear();
         config.policy.grants[0].subjects = vec!["group:anonymous".into()];

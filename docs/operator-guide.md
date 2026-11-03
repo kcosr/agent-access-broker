@@ -1238,7 +1238,8 @@ roles and token-class admission are defined in [roles](roles.md).
 ## Service invocation limits
 
 Service invocations (`POST /v1/invoke`, HTTP MCP action tools, and Git gateway
-pack POSTs) are limited per principal and service; discovery, specs,
+pack POSTs) are limited per principal and service, with optional shared service
+caps across principals; discovery, specs,
 management, MCP protocol traffic, and Git ref discovery are not. Every Git pack
 POST counts, including protocol v2 `ls-refs` POSTs, extra fetch negotiation
 rounds, and a push's probe POST, so one fetch or clone typically costs two or
@@ -1250,7 +1251,8 @@ default in `[limits.invocations]` and per-service values in
 `[limits.invocations.services.<service>]`; see
 [configuration](configuration.md#service-invocation-limits).
 
-Per-principal overrides take precedence over both. With
+Per-principal overrides take precedence over the personal default and service
+values. They never bypass a shared service cap. With
 `identity.authority = "toml"`, configure them as
 `[[limits.invocations.principal_overrides]]`. With managed identity, they live
 in the managed store's `principal_service_limits` table (see
@@ -1278,20 +1280,45 @@ agent-access admin principals service-limits set alice jira --requests 10 --wind
 agent-access admin principals service-limits clear alice jira
 ```
 
+To cap combined traffic, add a separate TOML entry keyed by the exact service ID:
+
+```toml
+[limits.invocations.aggregate.jira]
+requests = 200
+window = "1m"
+```
+
+This caps all callers at 200 admitted Jira requests per trailing minute in one
+Broker process, while their individual allowances still apply. The same setting
+covers native SDK services, imported MCP/OpenAPI services, commands and gateway
+service IDs. It has no personal override, inherited default or separate wait
+budget. With no entry, the service has no shared cap. The portal's **Catalog >
+service > Limits** tab displays the cap read-only for administrators and auditors;
+change TOML and reload to update it. Imported managed rate settings do not replace
+this cap.
+
 Set optional `max_wait` in the service limit or `limits.invocations.default` to
-hold calls in FIFO order; omission resolves to `0s`, immediate rate refusal.
+hold calls in FIFO order per principal; omission resolves to `0s`, immediate rate
+refusal. One waiting budget covers both personal and shared allowances, which
+are charged together only when admitted. Eligible principals take round-robin
+turns; a caller waiting for its personal quota or fresh settings does not block
+others. The anonymous principal's traffic shares one FIFO and turn.
 Principal overrides change requests/window only and inherit that waiting policy.
 Imported services use their stored service ID in the same TOML table; their
 managed rate setting overrides requests/window while the TOML wait survives
 catalog edits. See [import setup](imported-services.md#operator-setup).
 Waiting uses existing global/per-principal request slots (defaults 100/10), so it
 can block new invocations across services or principals through concurrency
-saturation. No aggregate service quota is enforced.
+saturation. Shared rate caps do not provide concurrency isolation between services.
+Wait estimates are not reservations: new contention or changed settings can make
+a pending request infeasible, returning 429 before its original deadline without
+charging either allowance. The waiting deadline is never extended.
 
 Use `agent-access services describe SERVICE`, HTTP service detail or MCP
 `services_describe` for [live limits](http-api.md#live-service-limits): effective
-policy, counted/queued requests, the next unreserved admission and approximate
-principal occupancy. Describe has independent bounded capacity; lists and the
+personal and shared policy, personal counted/queued requests, the next joint
+admission estimate and approximate principal occupancy. `blockingScope` identifies
+personal or shared blockage. Describe has independent bounded capacity; lists and the
 Account page remain static. Observations are local to one Broker process and
 reserve no capacity.
 
@@ -1304,10 +1331,23 @@ observes the disconnect; reconcile a mutation before resubmitting it.
 Managed override changes reforecast pending requests without extending deadlines.
 Runtime publication, including reload or imported-catalog replacement, cancels
 pending admission without dispatch; failed reloads change nothing. Already
-admitted operations keep their existing ownership. Limiter history is process-local
-and survives reloads; changing only `requests` keeps it, and changing a key's window resets
-that key. Size limits for the upstream service's own quotas: one admitted
-request may still make several upstream calls.
+admitted operations keep their existing ownership. Personal and shared histories
+survive reloads and count-only changes. Lowering a count below current usage holds
+new admission until enough history expires. A window change resets that history;
+removing a shared cap discards its history and enabling it starts empty. Restart
+clears all rate state. These are process-local invocation caps, not distributed
+or persistent vendor quotas: one admitted request may make several upstream calls,
+and the complete allowance can be consumed in a burst.
+
+Accounting precedes service/action policy, so later-denied requests can consume
+shared capacity. Keep personal limits low for callers that should contribute
+little, including `anonymous`. The
+`managed_store.require_registered_principal_for_invocation` check follows rate
+admission: it restricts execution but does not prevent these charges.
+Shared rate refusals can disclose cap
+policy and contention before a service grant is checked; numeric live availability
+can reveal remaining shared capacity to callers who can describe the service.
+See [residual risks](security-model.md#residual-risks).
 
 ## Upgrade and rollback
 
@@ -1733,8 +1773,10 @@ lower the ledger version in place.
 
 ## Common failures
 
-A rate refusal includes the limiting wait/body/operation budget and projected
-retry time after accepted FIFO waiters. A concurrency refusal has no retry time;
+A rate refusal identifies the personal or shared service allowance, the limiting
+wait/body/operation budget and projected retry time after accepted waiters.
+Audit and service events use `limitScope = "principal"` or `"service"`;
+upstream throttling remains separate. A concurrency refusal has no retry time;
 waiters may be holding the shared slots. Do not resubmit calls still pending.
 Use service describe to inspect this principal's local queue and capacity.
 For HTTP 429 responses, distinguish `rate_limited` from `concurrency_limited`,

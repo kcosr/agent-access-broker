@@ -43,6 +43,13 @@ struct Fixture {
 }
 
 async fn fixture() -> Fixture {
+    fixture_with_limits(
+        "[limits.invocations]\ndefault = { requests = 1, window = '1s', max_wait = '5s' }\n",
+    )
+    .await
+}
+
+async fn fixture_with_limits(limits: &str) -> Fixture {
     let application = isolated_broker();
     let directory = application.directory().clone();
     let token = "rate-wait-agent-one".to_owned();
@@ -56,7 +63,8 @@ async fn fixture() -> Fixture {
     let document = fake_document(&directory, &first, &second).replace(
         "\"env:FAKE_SERVICE_TOKEN\"",
         &toml_string(format_args!("file:{}", credential.display())),
-    ) + "\nmax_concurrent_requests = 1\nmax_concurrent_requests_per_principal = 1\n\n[limits.invocations]\ndefault = { requests = 1, window = '1s', max_wait = '5s' }\n";
+    ) + "\nmax_concurrent_requests = 1\nmax_concurrent_requests_per_principal = 1\n\n"
+        + limits;
     let calls = Arc::new(Mutex::new(Vec::new()));
     let release_queued = Arc::new(tokio::sync::Notify::new());
     let broker = application
@@ -165,6 +173,82 @@ fn assert_limits(value: &Value) {
     assert_eq!(limits["invocations"]["maxWaitSeconds"], 5);
     assert_eq!(limits["capacity"]["maxConcurrentRequests"], 1);
     assert_eq!(limits["capacity"]["maxConcurrentRequestsPerPrincipal"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn shared_caps_reach_real_cli_and_both_stdio_views_without_retries() {
+    let fixture = fixture_with_limits(
+        "[limits.invocations]\ndefault = { requests = 20, window = '1m', max_wait = '0s' }\n[limits.invocations.aggregate.fake]\nrequests = 1\nwindow = '1m'\n",
+    ).await;
+    let mut aggregate = McpProcess::start(&fixture.client);
+    let mut scoped = McpProcess::start_scoped(&fixture.client, "fake");
+    aggregate.initialize().await;
+    scoped.initialize().await;
+    successful(&invoke(&fixture.client, "shared-first").await);
+
+    let refused = invoke(&fixture.client, "shared-cli-refused").await;
+    assert_eq!(refused.status.code(), Some(7));
+    let body: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(body["reasonCode"], "rate_limited");
+    assert_eq!(body["service"], "broker");
+    assert_eq!(body["action"], "request.admit");
+    assert!(body.get("result").is_none());
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("Shared rate limit reached for service \"fake\""));
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr)
+            .lines()
+            .filter(|line| line.starts_with("rate limited: "))
+            .collect::<Vec<_>>(),
+        [format!("rate limited: {message}")],
+    );
+    let console = successful(
+        &cli(&fixture.client, &["services", "describe", "fake"])
+            .output()
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        console["limits"]["aggregate"],
+        json!({"requests":1,"windowSeconds":60})
+    );
+    assert_eq!(console["limits"]["invocations"]["countedRequests"], 1);
+    assert_eq!(console["limits"]["invocations"]["blockingScope"], "service");
+
+    for (process, name) in [(&mut aggregate, "fake_echo"), (&mut scoped, "echo")] {
+        let described = process
+            .request(
+                "tools/call",
+                json!({
+                    "name":"services_describe", "arguments":{"service":"fake"}
+                }),
+            )
+            .await;
+        let detail = &described["result"]["structuredContent"];
+        assert_eq!(
+            detail["limits"]["aggregate"],
+            console["limits"]["aggregate"]
+        );
+        assert_eq!(detail["limits"]["invocations"]["blockingScope"], "service");
+        assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 0);
+        let response = process.request("tools/call", json!({
+            "name":name, "arguments":{"inputs":{"project":"TEST","message":"shared-stdio-refused"}}
+        })).await;
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        let envelope = &response["result"]["structuredContent"];
+        assert_eq!(envelope["reasonCode"], "rate_limited");
+        assert!(
+            envelope["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Shared rate limit")
+        );
+        assert!(envelope.get("result").is_none());
+    }
+    assert_eq!(&*fixture.calls.lock().unwrap(), &["shared-first"]);
+    aggregate.finish().await;
+    scoped.finish().await;
+    stop(fixture.broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

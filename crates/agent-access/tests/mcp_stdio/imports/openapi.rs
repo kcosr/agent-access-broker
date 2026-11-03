@@ -1259,5 +1259,99 @@ async fn exercise_basic_import(swagger: bool) {
         assert_form_request(&requests, before, is_personal);
     }
     assert_eq!(definition_requests.lock().unwrap().len(), 2);
+    // Add caps after both retained service IDs exist. Reload must preserve the
+    // accepted OpenAPI plans while starting new shared histories for each ID.
+    broker.rewrite_config(import_document(
+        &directory, &permissions, &format!("{restarted_base}/mcp"),
+    ) + "\n[limits.invocations.aggregate.readers]\nrequests = 1\nwindow = '1m'\n[limits.invocations.aggregate.writers]\nrequests = 1\nwindow = '1m'\n").unwrap();
+    assert!(broker.reload().await.unwrap().is_success());
+    let first_config = config_file(directory.path(), "shared-agent", &restarted_base, &agent);
+    let peer_config = config_file(
+        directory.path(),
+        "shared-personal",
+        &restarted_base,
+        &personal,
+    );
+    let before = requests.len();
+    run(
+        &first_config,
+        &[
+            "invoke",
+            "readers.item.search",
+            "--input-json",
+            &form_inputs().to_string(),
+        ],
+    );
+    assert_form_request(&requests, before, false);
+    let refused = command(&peer_config)
+        .args([
+            "invoke",
+            "readers.item.search",
+            "--input-json",
+            &form_inputs().to_string(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        refused.status.code(),
+        Some(7),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let refused: Value = serde_json::from_slice(&refused.stdout).unwrap();
+    assert_eq!(refused["reasonCode"], "rate_limited");
+    assert_eq!(refused["service"], "broker");
+    assert_eq!(refused["action"], "request.admit");
+    assert!(refused.get("result").is_none());
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Shared rate limit")
+    );
+    for scoped in [false, true] {
+        let mut http = HttpMcp::start(&restarted_base, &personal, scoped).await;
+        let name = if scoped {
+            "searchItems".into()
+        } else {
+            agent_access_core::mcp::tool_name("readers", "item.search")
+        };
+        let refused = http
+            .call(
+                "tools/call",
+                json!({
+                    "name":name,"arguments":{"inputs":form_inputs()}
+                }),
+            )
+            .await;
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let body = &refused["result"]["structuredContent"];
+        assert_eq!(body["reasonCode"], "rate_limited");
+        assert!(body.get("result").is_none());
+    }
+    assert_eq!(
+        requests.len(),
+        before + 1,
+        "shared-cap refusals must not contact the OpenAPI endpoint"
+    );
+    run(
+        &first_config,
+        &[
+            "invoke",
+            "writers.item.create",
+            "--input-json",
+            r#"{"body":[1,2]}"#,
+        ],
+    );
+    assert_eq!(
+        requests.len(),
+        before + 2,
+        "another service ID at the same endpoint retains independent capacity"
+    );
+    assert_eq!(
+        definition_requests.lock().unwrap().len(),
+        2,
+        "reload and admissions must not rediscover OpenAPI"
+    );
     stop(broker).await;
 }

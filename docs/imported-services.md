@@ -65,13 +65,22 @@ After creating the service or draft, configure its wait by stored service ID:
 requests = 20
 window = "1m"
 max_wait = "10s"
+
+# Optional combined allowance across all principals.
+[limits.invocations.aggregate.observability]
+requests = 200
+window = "1m"
 ```
 
 The import's managed `invocationLimit`, if set, overrides this `requests`/`window`
 pair; without it, the TOML pair is the service default. Waiting policy stays in
 TOML: service `max_wait`, then `limits.invocations.default.max_wait`, then `0s`.
-Principal rate overrides do not change it. Reload TOML changes; catalog edits
-preserve the configured wait. Offline validation defers unknown service names
+Principal rate overrides do not change it. The optional aggregate cap is also
+TOML-owned: neither an imported `invocationLimit` nor a personal override can
+replace it. One waiting budget covers both allowances, charged together only at
+admission. The service Limits tab displays this shared cap read-only. Reload
+TOML changes; catalog edits preserve the configured wait and aggregate cap.
+Offline validation defers unknown service names
 when a managed store is configured, and startup/reload rejects any name missing
 from the complete catalog. Disabled and retired records still count as retained
 names, so disabling or retiring an import does not invalidate its TOML entry.

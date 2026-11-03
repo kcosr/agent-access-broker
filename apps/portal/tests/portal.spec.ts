@@ -2049,6 +2049,50 @@ test("local browser login supports administration, self-service credentials, tok
   expect(pageErrors).toEqual([]);
 });
 
+test("catalog shared service caps are read-only for admins and auditors", async ({ page, browser }, testInfo) => {
+  const pageErrors = watchPageErrors(page);
+  await signInAsAdmin(page);
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/jira/limits`);
+  const shared = page.getByRole("region", { name: "Shared service cap", exact: true });
+  await expect(shared).toContainText("20000 requests per 1m");
+  await expect(shared).toContainText("Broker TOML");
+  await expect(shared).toContainText("[limits.invocations.aggregate.jira]");
+  await expect(shared.getByRole("button")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Invocation limits", exact: true })).toContainText("each principal");
+  await expectNoHorizontalOverflow(page);
+
+  await page.goto(`${baseUrl}/ui/admin/catalog/services/confluence/limits`);
+  await expect(page.getByRole("region", { name: "Shared service cap", exact: true })).toContainText("No shared cap");
+
+  // A fresh auditor has no invocation grants or upstream credentials. Policy
+  // visibility comes from administration independently of personal access.
+  const auditorId = `shared-cap-auditor-${testInfo.project.name}`;
+  const password = "shared-cap-auditor-password";
+  await browserManagementRequest(page, "/v1/admin/principals", {
+    method: "POST", body: { principalId: auditorId, kind: "user", displayName: "Shared Cap Auditor", role: "auditor" }
+  });
+  await browserManagementRequest(page, `/v1/admin/principals/${auditorId}/login-methods/local-password/enable`, {
+    method: "POST", body: { password, mustChangePassword: false, acknowledgeSeparateSignIn: true }
+  });
+  const context = await browser.newContext();
+  const auditor = await context.newPage();
+  const auditorErrors = watchPageErrors(auditor);
+  try {
+    expect(await apiSignIn(auditor, auditorId, password)).not.toBeNull();
+    await auditor.goto(`${baseUrl}/ui/admin/catalog/services/jira/limits`);
+    const readOnlyShared = auditor.getByRole("region", { name: "Shared service cap", exact: true });
+    await expect(readOnlyShared).toContainText("20000 requests per 1m");
+    await expect(readOnlyShared).toContainText("Broker TOML");
+    await expect(readOnlyShared.getByRole("button")).toHaveCount(0);
+    await expect(readOnlyShared.getByRole("textbox")).toHaveCount(0);
+    await expectNoHorizontalOverflow(auditor);
+    expect(auditorErrors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+  expect(pageErrors).toEqual([]);
+});
+
 test("the catalog adds, filters, groups, and deletes resources with live references", async ({ page }, testInfo) => {
   const pageErrors = watchPageErrors(page);
   const toast = (text: string) => page.getByRole("status").filter({ hasText: text });
@@ -3135,6 +3179,10 @@ upload_spool_dir = ${tomlString(path.join(root, "upload-spool"))}
 
 [limits.invocations]
 default = { requests = 1000, window = "1m" }
+
+[limits.invocations.aggregate.jira]
+requests = 20000
+window = "1m"
 `;
 }
 

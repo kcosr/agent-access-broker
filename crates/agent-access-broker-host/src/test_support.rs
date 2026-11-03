@@ -915,6 +915,8 @@ pub fn portal_service_catalog(
         &config.credentials,
         descriptor.capabilities(),
         Some(&descriptor.credentials),
+        agent_access_core::ConfiguredInvocationLimits::from_config(&config)
+            .aggregate_limit(service),
     );
     Ok(serde_json::to_value(catalog)?)
 }

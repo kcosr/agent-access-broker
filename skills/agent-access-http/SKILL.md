@@ -163,6 +163,11 @@ the stated access remedy; personal OAuth reconnect belongs to the human owner.
 
 ## Rate waiting and limits
 
+Personal allowances and optional shared service caps both apply. Detail may
+include `limits.aggregate` policy and `limits.invocations.blockingScope`; availability
+and next-admission estimates account for both. New contention can remove an
+infeasible queued request with 429 before its unchanged deadline.
+
 Service detail can expose caller `limits`, including `maxWaitSeconds`, queued
 requests and next admission. These process-local observations reserve nothing
 and are optional guidance. FIFO waiting holds the original request and capacity;
