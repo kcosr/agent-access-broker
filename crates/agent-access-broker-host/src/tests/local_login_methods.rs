@@ -411,7 +411,14 @@ async fn login_admitted_before_registry_reload_reports_conflict_without_mutating
                 },
                 |_, _, _, _| {
                     held_tx.take().unwrap().send(()).unwrap();
-                    release_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+                    release_rx
+                        .recv_timeout(Duration::from_secs(30))
+                        .map_err(|_| {
+                            agent_access_core::ManagedStoreError::Unavailable(
+                                "stale-registry test released its read barrier before completion"
+                                    .into(),
+                            )
+                        })?;
                     Ok(())
                 },
             )
@@ -442,6 +449,13 @@ async fn login_admitted_before_registry_reload_reports_conflict_without_mutating
             allowed_values: vec!["default".into(), "new-context".into()],
             default_context: Some("default".into()),
         });
+        // The fixture's original implicit grant applied only to default. Make
+        // that same scope explicit when introducing a configured registry.
+        for grant in &mut config.policy.grants {
+            if grant.execution_contexts.is_none() {
+                grant.execution_contexts = Some(vec!["default".into()]);
+            }
+        }
         let token_path = fixture
             ._broker
             .running()

@@ -597,7 +597,6 @@ async fn policy_edits_and_rejected_retirement_preserve_aggregate_history_and_exi
     fixture.policy("write_capable").await;
     let issued = fixture.issue(true).await;
     let token = issued["token"].as_str().unwrap();
-    let session = fixture.initialize(token).await;
     assert_eq!(
         fixture.invoke(token, "echo", "TEST").await.0,
         StatusCode::OK
@@ -613,6 +612,7 @@ async fn policy_edits_and_rejected_retirement_preserve_aggregate_history_and_exi
         .allowed_values
         .push("retired".into());
     fixture.broker.reload_config(&config).await;
+    let session = fixture.initialize(token).await;
     fixture.admin_ok(Method::POST, "/v1/admin/groups", Some(json!({
         "groupId":"retained-policy", "agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["retired"]},
     }))).await;
@@ -659,6 +659,8 @@ async fn policy_edits_and_rejected_retirement_preserve_aggregate_history_and_exi
         .await;
     assert_eq!(detail["limits"]["aggregate"]["requests"], 1);
     assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 0);
+    let listed = fixture.rpc(token, &session, "tools/list", json!({})).await;
+    assert!(!listed["result"]["tools"].as_array().unwrap().is_empty());
     assert_eq!(
         fixture.invoke(token, "echo", "TEST").await.0,
         StatusCode::TOO_MANY_REQUESTS
@@ -689,6 +691,26 @@ async fn policy_edits_and_rejected_retirement_preserve_aggregate_history_and_exi
         .await;
     assert_eq!(detail["limits"]["aggregate"]["requests"], 5);
     assert_eq!(detail["limits"]["invocations"]["availableImmediately"], 4);
+    // Accepted registry changes invalidate the MCP security profile. Unlike
+    // policy edits or rejected reloads, they require session initialization.
+    // Check it at request time instead of racing the background session reaper.
+    let expired = fixture
+        .app
+        .clone()
+        .oneshot(mcp::request(
+            Method::POST,
+            Some(token),
+            Some(&session),
+            Some(json!({"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}})),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response_json(expired).await["error"],
+        "MCP session unavailable; initialize again"
+    );
+    let session = fixture.initialize(token).await;
     let listed = fixture.rpc(token, &session, "tools/list", json!({})).await;
     assert!(!listed["result"]["tools"].as_array().unwrap().is_empty());
     assert_eq!(
