@@ -190,7 +190,7 @@ All notable changes to this project are documented in this file.
   throttling's `upstream` scope. Messages distinguish `for this principal` from
   `Shared rate limit reached` with an allowance `across all principals`. See
   [invocation limits](docs/configuration.md#service-invocation-limits).
-  ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
+  ([#67](https://github.com/kcosr/agent-access-broker/pull/67), [#98](https://github.com/kcosr/agent-access-broker/pull/98))
 
 - **Configurable CLI and stdio MCP request timeout.** Set
   `[service].request_timeout_ms` to allow waiting plus execution; the default
