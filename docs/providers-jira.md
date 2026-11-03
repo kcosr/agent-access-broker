@@ -441,8 +441,8 @@ optional release and start dates. Components include ID, name and description. I
 types add a `subtask` flag; statuses are deduplicated by ID and may include
 `statusCategory`. Statuses do not report per-issue-type mappings.
 
-The `project` and `key` rows can advertise `!=` and `NOT IN` when Jira reports
-those operators. The issue-key row has REST `id: "issuekey"` and
+The `project`, `key` and `parent` rows can advertise `!=` and `NOT IN` when Jira
+reports those operators. The issue-key row has REST `id: "issuekey"` and
 `jqlReference: "key"`; its grammar also accepts the `issuekey` alias. Discovery
 keeps the intersection of Jira and Broker capabilities, so unsupported upstream
 operators are not added merely because Broker parses them.
@@ -654,9 +654,10 @@ and object identifiers.
   non-zero, non-leading-zero issue number.
 
 The same key rules apply to registered project resources, explicit search
-projects, JQL project/key operands, issue URLs, and returned issues. An
-authorized issue such as `OPS_TOOLS-12345` remains valid on continuation pages;
-underscores do not bypass project exclusions or key/project consistency checks.
+projects, JQL project/key operands, parent operands supplied as issue keys,
+issue URLs, and returned issues. An authorized issue such as `OPS_TOOLS-12345`
+remains valid on continuation pages; underscores do not bypass project exclusions
+or key/project consistency checks.
 
 An issue may be supplied as a key or as a URL. A URL locator
 (`issue_locator_from_url`) requires `https`, a host equal to the configured
@@ -1399,7 +1400,7 @@ Omit `projects` to search the caller's effective broker scope,
 including grant exclusions and token restrictions; explicit projects only narrow
 that scope. A project clause in JQL is optional. Use canonical uppercase project
 keys in `projects`; empty arrays and wildcard entries such as `["*"]` are
-invalid. Wildcards are also invalid as JQL project or issue-key operands,
+invalid. Wildcards are also invalid as JQL project, issue-key or parent operands,
 including quoted `"*"`. Omission is the way to search effective access.
 
 MCP tool definitions carry concise input descriptions. For complete grammar,
@@ -1530,11 +1531,11 @@ Scope composition:
   Jira's rules. Other nonempty filters, including `status != Done`, retain
   existing behavior and Jira remains responsible for evaluating its
   endpoint-specific query bounds.
-- Caller project and issue-key exclusions are query filters, never sources of
-  authority. They may name keys outside the caller's access without granting
-  it, and do not cause resource lookups. Jira evaluates those operands, including
-  aliases; Broker does not subtract caller-written keys from returned results.
-  The actual current project must still pass authorization on every page.
+- Caller project, issue-key and parent exclusions are query filters, never
+  sources of authority. They may name keys outside the caller's access without
+  granting it, and do not cause resource lookups. Jira evaluates those operands,
+  including aliases; Broker does not subtract caller-written keys from returned
+  results. The actual current project must still pass authorization on every page.
 
 A `text` query is converted to a `key = <value>` clause when the value is a valid
 issue key, otherwise to a `text ~ "<value>"` clause. Text wildcards follow Jira's

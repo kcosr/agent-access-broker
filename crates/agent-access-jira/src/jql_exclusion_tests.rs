@@ -260,40 +260,43 @@ async fn exclusion_filters_preserve_full_page_containment_and_current_issue_iden
             ("PROJ", "PRIVATE-9"),
             ("PROJ", "invalid"),
         ] {
-            let backend = empty_backend();
-            let mut denied = visible_issue();
-            denied.project = project.into();
-            denied.key = key.into();
-            denied.summary = Some("private-result-marker".into());
-            let mut page = backend.search_page.lock().unwrap().take().unwrap();
-            page.issues = vec![visible_issue(), denied];
-            page.total = Some(2);
-            *backend.search_page.lock().unwrap() = Some(page);
-            let provider = JiraProvider::with_backend(
-                jira_config(),
-                ProviderLimits::default(),
-                backend.clone(),
-            );
-            let error = provider
-                .invoke(invocation(
-                    json!({"query":{"type":"jql","value":"(project != ARCHIVE AND summary !~ 'obsolete') OR parent = PRIVATE-9"}}),
-                    scope.clone(),
-                ))
-                .await
-                .unwrap_err();
-            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
-            assert!(error.result.is_none());
-            assert!(!format!("{error:?}").contains("private-result-marker"));
-            assert!(
-                backend
-                    .last_search
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .jql
-                    .ends_with(expected_predicate)
-            );
+            for clause in ["key = PRIVATE-9", "parent = PRIVATE-9"] {
+                let backend = empty_backend();
+                let mut denied = visible_issue();
+                denied.project = project.into();
+                denied.key = key.into();
+                denied.summary = Some("private-result-marker".into());
+                let mut page = backend.search_page.lock().unwrap().take().unwrap();
+                page.issues = vec![visible_issue(), denied];
+                page.total = Some(2);
+                *backend.search_page.lock().unwrap() = Some(page);
+                let provider = JiraProvider::with_backend(
+                    jira_config(),
+                    ProviderLimits::default(),
+                    backend.clone(),
+                );
+                let query = format!("(project != ARCHIVE AND summary !~ 'obsolete') OR {clause}");
+                let error = provider
+                    .invoke(invocation(
+                        json!({"query":{"type":"jql","value":query}}),
+                        scope.clone(),
+                    ))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+                assert!(error.result.is_none());
+                assert!(!format!("{error:?}").contains("private-result-marker"));
+                assert!(
+                    backend
+                        .last_search
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .jql
+                        .ends_with(expected_predicate)
+                );
+            }
         }
     }
 }
