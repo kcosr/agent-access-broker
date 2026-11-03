@@ -210,7 +210,7 @@ async fn jira_exclusions_keep_token_scope_across_cli_send_http_and_mcp() {
         "jira",
         "search",
         &inputs(QUERY)["query"],
-        4,
+        5,
         &[
             ("summary", "obsolete"),
             ("description", "deprecated"),
@@ -364,5 +364,73 @@ async fn jira_exclusions_keep_all_except_policy_and_reject_unbounded_dispatch() 
         .await,
         "scope_unresolved",
     );
+    stop(broker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jira_parent_filters_use_search_only_authority_across_cli_and_mcp() {
+    let server = MockServer::start().await;
+    let returned = mount(&server).await;
+    let (broker, tokens) = start(&server, GrantShape::Finite).await;
+    access::documentation(&broker, &tokens.narrowed, "jira", "search", &["parent"]);
+    assert!(server.received_requests().await.unwrap().is_empty());
+    for query in [
+        "parent = PRIVATE-100",
+        "parent != 10001",
+        "parent IN (PRIVATE-100, 10001)",
+        "parent NOT IN (PRIVATE-100, 10001)",
+    ] {
+        let value = access::run(
+            &broker,
+            &tokens.narrowed,
+            &["jira", "issue", "search", "--jql", query],
+            true,
+        );
+        allowed(&value);
+        let issue = &value["result"]["issues"][0];
+        assert!(issue.get("fields").is_none());
+        assert!(issue.get("parent").is_none());
+        last_query(&server, &format!("({query}) AND project IN (PROJ)")).await;
+    }
+    let mut mcp = list_mcp::StdioMcp::start(access::cli(&broker, &tokens.narrowed));
+    mcp.request("initialize",json!({"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"jira-parent","version":"1"}})).await;
+    mcp.notify("notifications/initialized", json!({}));
+    let listing = mcp.request("tools/list", json!({})).await;
+    let tool = listing["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["_meta"]["agent-access/action"] == "search")
+        .unwrap();
+    let query = "parent = PRIVATE-100";
+    let called = mcp
+        .request(
+            "tools/call",
+            json!({"name":tool["name"],"arguments":{"inputs":inputs(query)}}),
+        )
+        .await;
+    assert_eq!(called["result"]["isError"], false);
+    allowed(&called["result"]["structuredContent"]);
+    mcp.finish().await;
+    last_query(&server, "(parent = PRIVATE-100) AND project IN (PROJ)").await;
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 5);
+    for request in requests {
+        assert_eq!(request.url.path(), ROUTE);
+        let fields = request
+            .url
+            .query_pairs()
+            .find(|(key, _)| key == "fields")
+            .unwrap()
+            .1;
+        assert_eq!(
+            fields,
+            "project,summary,status,issuetype,created,updated,creator,reporter,assignee,priority,labels"
+        );
+    }
+    *returned.lock().unwrap() = "OTHER".into();
+    let denied = access::http(&broker, &tokens.narrowed, "jira", "search", &inputs(query)).await;
+    access::denied(&denied, "scope_unresolved");
+    assert!(!denied.to_string().contains("DENIED_CONTENT"));
     stop(broker).await;
 }

@@ -85,14 +85,19 @@ stable JQL references, such as `cf[12345]`, in the existing issue search action;
 supported operators come from both Jira and Broker's bounded grammar. Project
 view and search have independent grants.
 
+Jira search supports direct-parent filters such as `parent = PROJ-100` and
+`parent IN (PROJ-100, 10001)` within authorized child projects. Parent references
+can be keys or numeric IDs; they do not trigger parent lookups or add parent
+metadata to results. See [parent filters](docs/providers-jira.md#direct-parent-filters).
+
 Jira and Confluence searches accept `!=` and `NOT IN` for project/space and
 issue-key/content-ID filters. Jira supports `!~` text negation on `summary`,
 `description`, and compatible custom fields; Confluence supports it on `title`
 and `text` for pages and blogs. Omit `projects` or `spaces` to search effective
 access, including token restrictions and policy exclusions; wildcard scope
 entries are unsupported. Caller exclusions only filter that authorized search.
-Jira queries containing only project/issue-key exclusions, text negation, or a
-combination of those clauses need a finite project scope or an additional filter
+Jira queries containing only project/issue-key/parent exclusions, text negation,
+or a combination of those clauses need a finite project scope or an additional filter
 such as `updated >= -7d`. See the
 [JQL](docs/providers-jira.md#search-and-jql) and
 [CQL](docs/providers-confluence.md#search-and-cql) contracts.

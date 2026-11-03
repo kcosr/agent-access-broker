@@ -526,3 +526,29 @@ async fn upstream_errors_redirects_and_byte_limits_fail_closed() {
         ReasonCode::UpstreamProtocolFailed
     );
 }
+
+#[test]
+fn parent_discovery_intersects_operators_and_omits_descendant_fields() {
+    let field = |name: &str, operators: Value| {
+        json!({
+            "value":name,"displayName":name,"searchable":"true",
+            "operators":operators,"types":["issue"]
+        })
+    };
+    let items = searchable_fields(&json!({"visibleFieldNames":[
+        field("parent", json!(["=","!=","in","not in","is","is not","~",">"])),
+        field("parentEpic", json!(["="]))
+    ]}))
+    .unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["jqlReference"], "parent");
+    assert_eq!(items[0]["operators"], json!(["=", "!=", "IN", "NOT IN"]));
+    let limited =
+        searchable_fields(&json!({"visibleFieldNames":[field("parent", json!(["="]))]})).unwrap();
+    assert_eq!(limited[0]["operators"], json!(["="]));
+    assert!(
+        searchable_fields(&json!({"visibleFieldNames":[field("parent", json!(["is"]))]}))
+            .unwrap()
+            .is_empty()
+    );
+}

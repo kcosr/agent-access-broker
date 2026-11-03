@@ -787,3 +787,46 @@ async fn text_negation_continuation_rechecks_authority_without_invalidating_unch
     assert!(error.result.is_none());
     assert!(!format!("{error:?}").contains("privateMovedIssue"));
 }
+
+#[tokio::test]
+async fn parent_search_continuations_bind_references_operators_and_lists() {
+    for (original, equivalent, changed) in [
+        (
+            "parent = 'PRIVATE-100'",
+            "PARENT = PRIVATE-100",
+            "parent = PRIVATE-101",
+        ),
+        ("parent = '10001'", "parent = 10001", "parent != 10001"),
+        (
+            "parent IN ('PRIVATE-100', '10001')",
+            "parent IN (PRIVATE-100, 10001)",
+            "parent IN (PRIVATE-100, 10002)",
+        ),
+    ] {
+        let harness = Harness::new();
+        let inputs = |value: &str| json!({"query":{"type":"jql","value":value}});
+        let token = harness
+            .first_page(search(inputs(original), finite(&["PROJ"]), None).build())
+            .await;
+        let response = harness
+            .provider
+            .invoke(search(inputs(equivalent), finite(&["PROJ"]), Some(&token)).build())
+            .await
+            .unwrap();
+        assert_eq!(response.result["issues"][0]["key"], "PROJ-1");
+        assert!(response.result["issues"][0].get("parent").is_none());
+        assert_eq!(
+            harness.last_search().next_page_token.as_deref(),
+            Some(UPSTREAM)
+        );
+        let before = harness.upstream_searches();
+        assert_rejected_token(
+            harness
+                .provider
+                .invoke(search(inputs(changed), finite(&["PROJ"]), Some(&token)).build())
+                .await
+                .unwrap_err(),
+        );
+        assert_eq!(harness.upstream_searches(), before);
+    }
+}

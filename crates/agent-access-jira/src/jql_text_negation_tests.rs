@@ -177,7 +177,7 @@ async fn text_negation_search_uses_only_execution_search_and_redacts_diagnostics
         format!("({}) AND project IN (PROJ)", canonical_jql(query))
     );
     let audit = response.audit.unwrap();
-    assert_eq!(audit["queryAstVersion"], 4);
+    assert_eq!(audit["queryAstVersion"], 5);
     assert_eq!(
         audit["textOperandHashes"],
         json!([
