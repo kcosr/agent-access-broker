@@ -1054,6 +1054,7 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::regis
 pub mod agent_access_core::managed_store
 pub mod agent_access_core::managed_store::agent_token_issuance
 #[non_exhaustive] pub enum agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial
+pub agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial::ContextNotAllowed
 pub agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial::Disabled
 pub agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial::ReadOnlyRequired
 impl agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial

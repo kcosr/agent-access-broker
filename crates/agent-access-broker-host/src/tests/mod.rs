@@ -110,6 +110,7 @@ mod service_limits;
 mod state_lock_lifetime;
 mod token_issuance_owner;
 mod token_issuance_policy;
+mod token_issuance_policy_owner;
 mod trusted_user_mcp;
 
 fn resource_id(scope: &str, value: &str) -> String {
@@ -6282,18 +6283,22 @@ async fn managed_store_admin_and_user_token_smoke() {
     });
     let managed_store = agent_access_core::ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     managed_store
-        .create_group(agent_access_core::GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "users".to_string(),
-            display_name: Some("Users".to_string()),
-            description: Some("Policy users".to_string()),
-            auto_enroll_new_microsoft_users: false,
-            created_by: "system".to_string(),
-        })
+        .create_group(
+            agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "users".to_string(),
+                display_name: Some("Users".to_string()),
+                description: Some("Policy users".to_string()),
+                auto_enroll_new_microsoft_users: false,
+                created_by: "system".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let browser_token_hasher =
         agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
@@ -6367,7 +6372,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(admin_login_body["result"]["passwordChangeRequired"], true);
     assert_eq!(
         admin_login_body["result"]["tokenIssuancePolicy"]["selfAgentInvoke"],
-        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"],"access":{"mode":"disabled","source":"default","groupIds":[]}})
+        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"],"access":{"source":"default","contexts":[]}})
     );
     assert_eq!(
         admin_login_body["result"]["tokenIssuancePolicy"]["administered"],
@@ -6766,7 +6771,7 @@ async fn managed_store_admin_and_user_token_smoke() {
                 .header("Authorization", &admin_authorization)
                 .header("Content-Type", "application/json")
                 .body(Body::from(
-                    r#"{"principalId":"alice","kind":"user","agentTokenIssuance":"write_capable"}"#,
+                    r#"{"principalId":"alice","kind":"user","agentTokenIssuance":{"mode":"write_capable","allowedExecutionContexts":["default"]}}"#,
                 ))
                 .unwrap(),
         )
@@ -7157,7 +7162,7 @@ async fn managed_store_admin_and_user_token_smoke() {
     assert_eq!(login_body["result"]["passwordChangeRequired"], true);
     assert_eq!(
         login_body["result"]["tokenIssuancePolicy"]["selfAgentInvoke"],
-        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"],"access":{"mode":"write_capable","source":"user","groupIds":[]}})
+        json!({"defaultTtl":"30d","maxTtl":"30d","options":["8h","7d","30d"],"access":{"source":"user","contexts":[{"executionContext":"default","mode":"write_capable","groupIds":[]}]}})
     );
     assert!(
         login_body["result"]["tokenIssuancePolicy"]
@@ -11953,17 +11958,20 @@ async fn browser_login_audit_failure_does_not_issue_cookie() {
     let store = runtime.managed_store().unwrap().clone();
     let password_hasher = runtime.local_password_hasher().unwrap().clone();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .enable_local_password(
@@ -12076,17 +12084,20 @@ async fn browser_login_enforces_origin_and_sets_session_cookie() {
     let store = runtime.managed_store().unwrap().clone();
     let password_hasher = runtime.local_password_hasher().unwrap().clone();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .enable_local_password(
@@ -12280,43 +12291,53 @@ async fn browser_rate_fixture_with(
     configure(&mut config);
     let store = agent_access_core::ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "admin".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "admin".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let broker = TestBroker::start_config(&config).await;
     let runtime = broker.runtime();
@@ -12510,15 +12531,22 @@ async fn browser_rate_isolation_covers_provisioning_discovery_specs_session_and_
         .runtime
         .managed_store()
         .unwrap()
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: None,
-            self_service_enabled: None,
-            agent_token_issuance: Some(
-                agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
-            ),
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(
+                    agent_access_core::PrincipalAgentTokenIssuanceSetting::new(
+                        agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+                        vec!["default".into()],
+                    )
+                    .unwrap(),
+                ),
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     // Login has already exhausted the independent authentication budgets.
     // Browsing and authenticated discovery are never counted.
@@ -12812,17 +12840,20 @@ async fn managed_jira_verify_marks_upstream_verified_after_provider_probe() {
     let runtime = runtime_broker.runtime();
     let store = runtime.managed_store().unwrap().clone();
     store
-        .create_or_update_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_or_update_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .upsert_user_credential(
@@ -12909,17 +12940,20 @@ async fn managed_jira_verify_does_not_mark_credential_after_upstream_failure() {
     let runtime = runtime_broker.runtime();
     let store = runtime.managed_store().unwrap().clone();
     store
-        .create_or_update_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_or_update_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .upsert_user_credential(
@@ -12988,17 +13022,20 @@ async fn managed_verify_does_not_mark_credential_after_local_failure() {
     let runtime = runtime_broker.runtime();
     let store = runtime.managed_store().unwrap().clone();
     store
-        .create_or_update_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_or_update_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .upsert_user_credential(
@@ -13066,17 +13103,20 @@ async fn admin_verify_rejects_disabled_managed_credential_owner() {
     let runtime = runtime_broker.runtime();
     let store = runtime.managed_store().unwrap().clone();
     store
-        .create_or_update_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_or_update_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .upsert_user_credential(
@@ -17029,53 +17069,66 @@ async fn spec_token_fixture_with_restrictions(
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "spec-user".to_string(),
-            kind: "user".to_string(),
-            display_name: Some("Spec User".to_string()),
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "spec-user".to_string(),
+                kind: "user".to_string(),
+                display_name: Some("Spec User".to_string()),
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "spec-admin".to_string(),
-            kind: "user".to_string(),
-            display_name: Some("Spec Admin".to_string()),
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "spec-admin".to_string(),
+                kind: "user".to_string(),
+                display_name: Some("Spec Admin".to_string()),
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("spec-admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
-        .unwrap();
-    if admin_role {
-        store
-            .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
                 agent_token_issuance: None,
-                principal_id: ("spec-user").into(),
+                principal_id: ("spec-admin").into(),
                 role: Some(agent_access_core::PrincipalRole::Admin),
                 self_service_enabled: None,
                 actor: ("test").into(),
-            })
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
+        .unwrap();
+    if admin_role {
+        store
+            .patch_principal_access(
+                agent_access_core::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("spec-user").into(),
+                    role: Some(agent_access_core::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("test").into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     let hasher =
@@ -17242,69 +17295,93 @@ async fn token_context_fixture() -> TokenContextFixture {
             priority: None,
         },
     ];
+    let registry = agent_access_core::ConfiguredExecutionContexts::from_config(
+        config.execution_context.as_ref(),
+    )
+    .unwrap();
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &registry,
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     for principal in ["alice", "bob", "admin"] {
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &registry,
+            )
             .unwrap();
     }
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: None,
-            self_service_enabled: None,
-            agent_token_issuance: Some(
-                agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
-            ),
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(
+                    agent_access_core::PrincipalAgentTokenIssuanceSetting::new(
+                        agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+                        registry.allowed_values().to_vec(),
+                    )
+                    .unwrap(),
+                ),
+                actor: "test".into(),
+            },
+            &registry,
+        )
         .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "svc-app".to_string(),
-            kind: "service_account".to_string(),
-            display_name: Some("Service Application".to_string()),
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "svc-app".to_string(),
+                kind: "service_account".to_string(),
+                display_name: Some("Service Application".to_string()),
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &registry,
+        )
         .unwrap();
     store
-        .create_group(agent_access_core::GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "operators".to_string(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".to_string(),
-        })
+        .create_group(
+            agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "operators".to_string(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".to_string(),
+            },
+            &registry,
+        )
         .unwrap();
     store.add_group("alice", "operators", "test").unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "bob".into(),
-            role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "bob".into(),
+                role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &registry,
+        )
         .unwrap();
     store
         .put_service_policy_management_assignment(
@@ -17316,13 +17393,16 @@ async fn token_context_fixture() -> TokenContextFixture {
         )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &registry,
+        )
         .unwrap();
     let hasher =
         agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
@@ -17465,54 +17545,67 @@ async fn managed_policy_admin_fixture() -> ManagedPolicyAdminFixture {
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     seed_managed_fixture_resources(&store);
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "admin".to_string(),
-            kind: "user".to_string(),
-            display_name: Some("Admin".to_string()),
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "admin".to_string(),
+                kind: "user".to_string(),
+                display_name: Some("Admin".to_string()),
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "nogroups".to_string(),
-            kind: "user".to_string(),
-            display_name: Some("No Groups".to_string()),
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "nogroups".to_string(),
+                kind: "user".to_string(),
+                display_name: Some("No Groups".to_string()),
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_group(agent_access_core::GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "agents".to_string(),
-            display_name: Some("Agents".to_string()),
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".to_string(),
-        })
+        .create_group(
+            agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "agents".to_string(),
+                display_name: Some("Agents".to_string()),
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store.add_group("admin", "agents", "test").unwrap();
     let hasher =
@@ -17610,6 +17703,7 @@ async fn service_policy_management_fixture_with_policy_authority(
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -17620,49 +17714,61 @@ async fn service_policy_management_fixture_with_policy_authority(
     }
     for principal in ["admin", "alice", "bob"] {
         store
-            .create_principal(agent_access_core::PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.to_string(),
-                kind: "user".to_string(),
-                display_name: Some(format!("{principal} display")),
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                agent_access_core::PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.to_string(),
+                    kind: "user".to_string(),
+                    display_name: Some(format!("{principal} display")),
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .create_group(agent_access_core::GroupWriteRequest {
-            agent_token_issuance: Default::default(),
-            group_id: "service-managers".to_string(),
-            display_name: Some("Service Managers".to_string()),
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            created_by: "test".to_string(),
-        })
+        .create_group(
+            agent_access_core::GroupWriteRequest {
+                agent_token_issuance: Default::default(),
+                group_id: "service-managers".to_string(),
+                display_name: Some("Service Managers".to_string()),
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .add_group("alice", "service-managers", "test")
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "bob".into(),
-            role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "bob".into(),
+                role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .put_service_policy_management_assignment(
@@ -17675,13 +17781,16 @@ async fn service_policy_management_fixture_with_policy_authority(
         .unwrap();
     if policy_authority != "managed" {
         store
-            .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: "bob".into(),
-                role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
-                self_service_enabled: None,
-                actor: "test".into(),
-            })
+            .patch_principal_access(
+                agent_access_core::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: "bob".into(),
+                    role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
+                    self_service_enabled: None,
+                    actor: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store
             .put_service_policy_management_assignment(
@@ -17834,21 +17943,25 @@ where
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "gateway-user".to_string(),
-            kind: "user".to_string(),
-            display_name: Some("Gateway User".to_string()),
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "gateway-user".to_string(),
+                kind: "user".to_string(),
+                display_name: Some("Gateway User".to_string()),
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let hasher =
         agent_access_core::BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();

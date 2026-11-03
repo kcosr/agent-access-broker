@@ -260,17 +260,20 @@ async fn fixture() -> Fixture {
         ("admin", PrincipalRole::Admin),
     ] {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                principal_id: principal.into(),
-                kind: "user".into(),
-                role,
-                self_service_enabled: None,
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "fixture".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    principal_id: principal.into(),
+                    kind: "user".into(),
+                    role,
+                    self_service_enabled: None,
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "fixture".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     store

@@ -576,7 +576,8 @@ pub(crate) async fn admin_policy_catalog(
             catalog
         })
         .collect::<Vec<_>>();
-    let execution_contexts = policy_execution_context_catalog(context.snapshot.runtime.config());
+    let execution_contexts =
+        policy_execution_context_catalog(context.snapshot.runtime.execution_context_registry());
     let catalog = context
         .snapshot
         .runtime
@@ -1802,18 +1803,13 @@ fn configured_credential_modes(
         .collect()
 }
 
-fn policy_execution_context_catalog(config: &BrokerConfig) -> PolicyExecutionContextCatalog {
-    match &config.execution_context {
-        Some(execution_context) => PolicyExecutionContextCatalog {
-            allowed_values: execution_context.allowed_values.clone(),
-            default_context: execution_context.default_context.clone(),
-            context_required: execution_context.default_context.is_none(),
-        },
-        None => PolicyExecutionContextCatalog {
-            allowed_values: vec![DEFAULT_EXECUTION_CONTEXT.to_string()],
-            default_context: Some(DEFAULT_EXECUTION_CONTEXT.to_string()),
-            context_required: false,
-        },
+fn policy_execution_context_catalog(
+    registry: &agent_access_core::ConfiguredExecutionContexts,
+) -> PolicyExecutionContextCatalog {
+    PolicyExecutionContextCatalog {
+        allowed_values: registry.allowed_values().to_vec(),
+        default_context: registry.default_context().map(str::to_owned),
+        context_required: registry.context_required(),
     }
 }
 

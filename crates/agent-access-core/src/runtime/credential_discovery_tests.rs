@@ -388,17 +388,20 @@ fn discovery_checks_managed_material_without_recording_use_and_fails_closed_on_s
     };
     let store = runtime.managed_store().unwrap();
     store
-        .create_or_update_principal(crate::PrincipalWriteRequest {
-            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-            role: crate::PrincipalRole::User,
-            self_service_enabled: Some(false),
-            principal_id: "agent-one".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".into(),
-        })
+        .create_or_update_principal(
+            crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                role: crate::PrincipalRole::User,
+                self_service_enabled: Some(false),
+                principal_id: "agent-one".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     assert!(summary(&runtime).actions.is_empty());
     let request = crate::CredentialWriteRequest {

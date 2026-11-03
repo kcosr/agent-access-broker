@@ -2592,13 +2592,39 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
 }
 
 fn principal_agent_token_issuance_schema() -> Value {
-    json!({"type":"string", "enum":["inherit", "disabled", "read_only", "write_capable"],
-        "description":"Self-issued agent token permission. An explicit setting overrides groups; inherit uses the most permissive active managed group. Existing tokens are unchanged."})
+    configured_agent_token_issuance_schema(true)
 }
 
 fn group_agent_token_issuance_schema() -> Value {
-    json!({"type":"string", "enum":["disabled", "read_only", "write_capable"],
-        "description":"This group's self-issued agent token permission contribution. Disabled contributes no permission; existing tokens are unchanged."})
+    configured_agent_token_issuance_schema(false)
+}
+
+fn configured_agent_token_issuance_schema(principal: bool) -> Value {
+    let modes = if principal {
+        vec!["inherit", "disabled", "read_only", "write_capable"]
+    } else {
+        vec!["disabled", "read_only", "write_capable"]
+    };
+    json!({
+        "type":"object", "additionalProperties":false,
+        "required":["mode", "allowedExecutionContexts"],
+        "description": if principal {
+            "Complete personal issuance policy. An explicit account setting replaces group contributions; inherit resolves the most permissive active group separately for each context. Existing tokens are unchanged."
+        } else {
+            "Complete group contribution to personal issuance permission, paired with its selected contexts. Disabled contributes no permission. Existing tokens are unchanged."
+        },
+        "properties":{
+            "mode":{"type":"string", "enum":modes},
+            "allowedExecutionContexts":{
+                "type":"array", "maxItems":64, "uniqueItems":true,
+                "items":execution_context_schema(),
+                "description":"Exact configured context names, treated as a set. Required and nonempty for enabled modes; empty for inherit or disabled. New configured contexts are never added automatically."
+            }
+        },
+        "if":{"properties":{"mode":{"enum":["inherit", "disabled"]}}},
+        "then":{"properties":{"allowedExecutionContexts":{"maxItems":0}}},
+        "else":{"properties":{"allowedExecutionContexts":{"minItems":1}}}
+    })
 }
 
 fn group_auto_enrollment_schema() -> Value {
@@ -2622,7 +2648,8 @@ fn group_write_body_schema(patch: bool) -> Value {
         schema["required"] = json!(["groupId"]);
         schema["properties"]["groupId"] = json!({"type":"string","minLength":1});
         schema["properties"]["autoEnrollNewMicrosoftUsers"]["default"] = json!(false);
-        schema["properties"]["agentTokenIssuance"]["default"] = json!("disabled");
+        schema["properties"]["agentTokenIssuance"]["default"] =
+            json!({"mode":"disabled", "allowedExecutionContexts":[]});
     }
     schema
 }

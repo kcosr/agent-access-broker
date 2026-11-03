@@ -202,7 +202,7 @@ fn upgrade_preserves_import_rows(from: &str) {
         .unwrap()
         + 1;
     let previous = ManagedStore::open_with_catalog(
-        &config,
+        &config, &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         ManagedStoreMigrationCatalog {
             migrations: &MANAGED_STORE_MIGRATIONS[..through],
@@ -287,7 +287,7 @@ fn upgrade_preserves_import_rows(from: &str) {
     };
     drop(previous);
 
-    let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+    let store = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     let conn = store.connection.lock().unwrap();
     assert_eq!(slot_rows(&conn), slots_before);
     assert_eq!(slots_before.len(), 6);

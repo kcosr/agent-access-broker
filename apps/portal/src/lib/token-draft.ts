@@ -14,7 +14,7 @@ export type AgentTokenDraft = {
   resourceSelections: Record<string, ResourceSelection | undefined>;
 };
 
-export function createAgentTokenDraft(options: AgentTokenOptions, ttlPolicy: TokenTtlPolicy, services: string[] = []): AgentTokenDraft {
+export function createAgentTokenDraft(options: AgentTokenOptions, ttlPolicy: TokenTtlPolicy, services: string[] = [], executionContexts = options.executionContexts): AgentTokenDraft {
   const selectedServices = [...new Set(services)].filter((service) => options.services.some((option) => option.service === service));
   return {
     name: "",
@@ -22,11 +22,11 @@ export function createAgentTokenDraft(options: AgentTokenOptions, ttlPolicy: Tok
     lifetime: ttlPolicy.defaultTtl ?? ttlPolicy.options[0] ?? "",
     // A stale service link must still require an explicit boundary choice.
     accessMode: services.length ? "restricted" : "policy",
-    selectedExecutionContexts: [...options.executionContexts],
+    selectedExecutionContexts: [...executionContexts],
     selectedServices,
     selectedActions: Object.fromEntries(selectedServices.map((service) => [
       service,
-      options.services.find((option) => option.service === service)!.actions.filter((action) => action.readOnly === true).map((action) => action.action),
+      options.services.find((option) => option.service === service)!.actions.filter((action) => action.readOnly === true && action.executionContexts.some((context) => executionContexts.includes(context))).map((action) => action.action),
     ])),
     resourceSelections: {},
   };
@@ -72,6 +72,7 @@ export function buildAgentTokenIssuance(draft: AgentTokenDraft, options: AgentTo
   if (!draft.name.trim()) issues.push({ field: "name", message: "Enter a token name." });
   if (!draft.lifetime || !ttlPolicy.options.includes(draft.lifetime)) issues.push({ field: "lifetime", message: "Choose an available token lifetime." });
   if (!boundary.valid) issues.push(...boundary.issues);
+  if (draft.selectedExecutionContexts.some((context) => !options.executionContexts.includes(context))) issues.push({ field: "contexts", message: "Remove execution contexts that are no longer granted." });
   if (draft.readOnly && draft.accessMode === "restricted") {
     for (const service of draft.selectedServices) {
       const actions = options.services.find((option) => option.service === service)?.actions ?? [];

@@ -46,10 +46,10 @@ use crate::load_secret_ref_value;
 use crate::sqlite_support::ValidatedLedger;
 use crate::sqlite_support::{self, SqliteAdmissionError, SqliteMigration, SqliteStoreLabel};
 use crate::{
-    AgentInvokeTokenCaveats, BrokerTokensConfig, CredentialEncryptionConfig,
-    CredentialEncryptionKeyConfig, EXECUTION_CONTEXT_MAX_VALUES, ManagedStoreConfig,
-    POLICY_GRANT_MAX_SUBJECTS, ResourceSelection, is_safe_identifier, is_safe_principal,
-    is_valid_execution_context_value,
+    AgentInvokeTokenCaveats, BrokerTokensConfig, ConfiguredExecutionContexts,
+    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, EXECUTION_CONTEXT_MAX_VALUES,
+    ManagedStoreConfig, POLICY_GRANT_MAX_SUBJECTS, ResourceSelection, is_safe_identifier,
+    is_safe_principal, is_valid_execution_context_value,
 };
 use crate::{ResourceCatalog, ResourceDefinition, ResourceGroupDefinition};
 use aes_gcm::aead::{Aead, KeyInit, Payload};
@@ -85,7 +85,9 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION;
+const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION: &str =
+    "034_agent_token_issuance_contexts";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION: &str = "033_agent_token_issuance";
 const MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION: &str = "032_imported_source_documents";
 const MANAGED_STORE_OIDC_MEMBERSHIP_RENEWAL_VERSION: &str = "031_oidc_membership_renewal";
@@ -127,7 +129,7 @@ const MANAGED_STORE_LABEL: SqliteStoreLabel = SqliteStoreLabel {
 
 const MANAGED_STORE_BASELINE_SQL: &str = include_str!("managed_store/schema.sql");
 
-type ManagedStoreMigration = SqliteMigration<ManagedStoreError>;
+type ManagedStoreMigration = SqliteMigration<ManagedStoreError, ConfiguredExecutionContexts>;
 
 #[derive(Clone, Copy)]
 struct ManagedStoreMigrationCatalog<'a> {
@@ -286,6 +288,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/agent_token_issuance.sql"),
         seed: Some(agent_token_issuance::seed),
         structural_validation: agent_token_issuance::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION,
+        checksum: "9ecb9ea69ce451c70b2f0e20c214feed2781d1b02f46bb4ef85600dde14eaa72",
+        sql: include_str!("managed_store/agent_token_issuance_contexts.sql"),
+        seed: Some(agent_token_issuance::seed_contexts),
+        structural_validation: agent_token_issuance::validate_context_structure,
     },
 ];
 
@@ -639,13 +648,15 @@ impl std::fmt::Debug for ManagedStore {
 impl ManagedStore {
     pub fn open(
         config: &ManagedStoreConfig,
+        registry: &ConfiguredExecutionContexts,
         mode: ManagedStoreOpenMode,
     ) -> Result<Self, ManagedStoreError> {
-        Self::open_with_catalog(config, mode, production_migration_catalog())
+        Self::open_with_catalog(config, registry, mode, production_migration_catalog())
     }
 
     fn open_with_catalog(
         config: &ManagedStoreConfig,
+        registry: &ConfiguredExecutionContexts,
         mode: ManagedStoreOpenMode,
         catalog: ManagedStoreMigrationCatalog<'_>,
     ) -> Result<Self, ManagedStoreError> {
@@ -702,6 +713,7 @@ impl ManagedStore {
                 &conn,
                 catalog,
                 matches!(mode, ManagedStoreOpenMode::Startup) && config.auto_migrate,
+                registry,
             )?;
             conn.execute_batch("PRAGMA journal_mode = WAL;")
                 .map_err(|error| {
@@ -1701,6 +1713,7 @@ impl ManagedStore {
     pub fn create_or_update_principal(
         &self,
         request: PrincipalWriteRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<PrincipalRecord, ManagedStoreError> {
         validate_principal_write_request(&request)?;
         let self_service_enabled = request
@@ -1752,6 +1765,7 @@ impl ManagedStore {
             )
             .map_err(sql_unavailable)?;
         } else {
+            request.agent_token_issuance.validate(registry)?;
             conn.execute(
                 "INSERT INTO principals
                  (principal_id, kind, display_name, email, external_subject, status,
@@ -1767,10 +1781,16 @@ impl ManagedStore {
                     request.created_by,
                     request.role.as_str(),
                     self_service_enabled,
-                    request.agent_token_issuance.as_str()
+                    request.agent_token_issuance.mode.as_str()
                 ],
             )
             .map_err(sql_unavailable)?;
+            agent_token_issuance::replace_contexts(
+                &conn,
+                true,
+                &request.principal_id,
+                &request.agent_token_issuance.allowed_execution_contexts,
+            )?;
             self.initialize_identity_token(&conn, &request.principal_id, &request.kind)?;
         }
         let principal = principal_by_id(&conn, &request.principal_id)?;
@@ -1781,7 +1801,10 @@ impl ManagedStore {
     pub fn create_principal(
         &self,
         request: PrincipalWriteRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<PrincipalRecord, ManagedStoreError> {
+        let mut request = request;
+        request.agent_token_issuance = request.agent_token_issuance.canonicalized(registry)?;
         validate_principal_write_request(&request)?;
         let self_service_enabled = request
             .self_service_enabled
@@ -1820,10 +1843,16 @@ impl ManagedStore {
                 request.created_by,
                 request.role.as_str(),
                 self_service_enabled,
-                request.agent_token_issuance.as_str()
+                request.agent_token_issuance.mode.as_str()
             ],
         )
         .map_err(sql_unavailable)?;
+        agent_token_issuance::replace_contexts(
+            &conn,
+            true,
+            &request.principal_id,
+            &request.agent_token_issuance.allowed_execution_contexts,
+        )?;
         self.initialize_identity_token(&conn, &request.principal_id, &request.kind)?;
         let principal = principal_by_id(&conn, &request.principal_id)?;
         conn.commit().map_err(sql_unavailable)?;
@@ -1979,7 +2008,8 @@ impl ManagedStore {
     }
 
     pub fn list_principals(&self) -> Result<Vec<PrincipalRecord>, ManagedStoreError> {
-        let conn = self.connection.lock().unwrap();
+        let mut connection = self.connection.lock().unwrap();
+        let conn = connection.transaction().map_err(sql_unavailable)?;
         let mut statement = conn
             .prepare(
                 "SELECT principal_id, kind, display_name, email, external_subject, status,
@@ -1994,25 +2024,32 @@ impl ManagedStore {
         let mut principals = collect_rows(rows)?;
         let mut sign_in_methods = sign_in_methods_by_principal(&conn, None)?;
         for principal in &mut principals {
+            hydrate_principal_issuance(&conn, principal)?;
             principal.sign_in_methods = sign_in_methods
                 .remove(&principal.principal_id)
                 .unwrap_or_default();
             principal.groups = principal_groups(&conn, &principal.principal_id)?;
         }
+        drop(statement);
+        conn.commit().map_err(sql_unavailable)?;
         Ok(principals)
     }
 
     pub fn create_group(
         &self,
         request: GroupWriteRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<GroupRecord, ManagedStoreError> {
-        Ok(self.create_group_with_effect(request)?.group)
+        Ok(self.create_group_with_effect(request, registry)?.group)
     }
 
     pub fn create_group_with_effect(
         &self,
         request: GroupWriteRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<GroupMutationResult, ManagedStoreError> {
+        let mut request = request;
+        request.agent_token_issuance = request.agent_token_issuance.canonicalized(registry)?;
         validate_group_write_request(&request)?;
         let group_id = request.group_id.clone();
         let mut conn = self.connection.lock().unwrap();
@@ -2035,19 +2072,25 @@ impl ManagedStore {
                 now,
                 request.created_by,
                 request.auto_enroll_new_microsoft_users,
-                request.agent_token_issuance.as_str()
+                request.agent_token_issuance.mode.as_str()
             ],
         )
         .map_err(sql_unavailable)?;
+        agent_token_issuance::replace_contexts(
+            &tx,
+            false,
+            &group_id,
+            &request.agent_token_issuance.allowed_execution_contexts,
+        )?;
         let group = group_by_id(&tx, &group_id)?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(GroupMutationResult {
             agent_token_issuance_change: (request.agent_token_issuance
-                != AgentTokenIssuanceMode::Disabled)
-                .then_some(GroupAgentTokenIssuanceChange {
-                    previous: AgentTokenIssuanceMode::Disabled,
-                    current: request.agent_token_issuance,
-                }),
+                != GroupAgentTokenIssuanceSetting::default())
+            .then_some(GroupAgentTokenIssuanceChange {
+                previous: GroupAgentTokenIssuanceSetting::default(),
+                current: request.agent_token_issuance,
+            }),
             auto_enrollment_change: request.auto_enroll_new_microsoft_users.then_some(
                 GroupAutoEnrollmentChange {
                     previous: false,
@@ -2061,14 +2104,22 @@ impl ManagedStore {
     pub fn patch_group(
         &self,
         request: GroupPatchRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<GroupRecord, ManagedStoreError> {
-        Ok(self.patch_group_with_effect(request)?.group)
+        Ok(self.patch_group_with_effect(request, registry)?.group)
     }
 
     pub fn patch_group_with_effect(
         &self,
         request: GroupPatchRequest,
+        registry: &ConfiguredExecutionContexts,
     ) -> Result<GroupMutationResult, ManagedStoreError> {
+        let mut request = request;
+        request.agent_token_issuance = request
+            .agent_token_issuance
+            .as_ref()
+            .map(|setting| setting.canonicalized(registry))
+            .transpose()?;
         validate_group_patch_request(&request)?;
         let group_id = request.group_id.clone();
         let updated_by = request.updated_by.clone();
@@ -2088,13 +2139,19 @@ impl ManagedStore {
             .agent_token_issuance
             .filter(|value| *value != previous.agent_token_issuance)
             .map(|current| GroupAgentTokenIssuanceChange {
-                previous: previous.agent_token_issuance,
+                previous: previous.agent_token_issuance.clone(),
                 current,
             });
         let now = normalized_now_string();
         if let Some(change) = &agent_token_issuance_change {
+            agent_token_issuance::replace_contexts(
+                &tx,
+                false,
+                &group_id,
+                &change.current.allowed_execution_contexts,
+            )?;
             tx.execute("UPDATE groups SET agent_token_issuance=?2, updated_at=?3, updated_by=?4 WHERE group_id=?1",
-                params![group_id, change.current.as_str(), now, updated_by]).map_err(sql_unavailable)?;
+                params![group_id, change.current.mode.as_str(), now, updated_by]).map_err(sql_unavailable)?;
         }
         if let Some(change) = &auto_enrollment_change {
             tx.execute(
@@ -2159,7 +2216,8 @@ impl ManagedStore {
     }
 
     pub fn list_groups(&self) -> Result<Vec<GroupRecord>, ManagedStoreError> {
-        let conn = self.connection.lock().unwrap();
+        let mut connection = self.connection.lock().unwrap();
+        let conn = connection.transaction().map_err(sql_unavailable)?;
         let resolved_at = normalized_now_string();
         let mut statement = conn
             .prepare(
@@ -2190,7 +2248,13 @@ impl ManagedStore {
         let rows = statement
             .query_map(params![resolved_at], group_from_row)
             .map_err(sql_unavailable)?;
-        collect_rows(rows)
+        let mut groups = collect_rows(rows)?;
+        for group in &mut groups {
+            hydrate_group_issuance(&conn, group)?;
+        }
+        drop(statement);
+        conn.commit().map_err(sql_unavailable)?;
+        Ok(groups)
     }
 
     pub fn group_members(
@@ -2295,7 +2359,7 @@ impl ManagedStore {
         &self,
         hasher: &BrokerTokenHasher,
         request: BrokerTokenIssueRequest,
-        personal_authority: Option<AgentTokenIssuanceAuthority>,
+        personal_authority: Option<&AgentTokenIssuanceEnvironment>,
         catalog: Option<&ManagedResourceCatalog>,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
         validate_broker_token_issue_request(&request)?;
@@ -2333,7 +2397,14 @@ impl ManagedStore {
                 agent_token_issuance::policy_at_conn(&conn, &principal, authority, &resolved_at)?;
             let caveats = AgentInvokeTokenCaveats::parse_stored(&request.scopes)
                 .map_err(|error| input_invalid(error.to_string()))?;
-            agent_token_issuance::authorize(&policy, caveats.read_only)?;
+            agent_token_issuance::authorize(
+                &policy,
+                caveats.read_only,
+                caveats
+                    .allowed_execution_contexts
+                    .as_deref()
+                    .ok_or_else(|| input_invalid("agent token execution contexts are required"))?,
+            )?;
             Some(policy)
         } else {
             None
@@ -3309,7 +3380,7 @@ impl ManagedStore {
         password_hasher: &LocalPasswordHasher,
         token_hasher: &BrokerTokenHasher,
         request: LocalPasswordChangeRequest,
-        issuance_authority: Option<AgentTokenIssuanceAuthority>,
+        issuance_authority: Option<&AgentTokenIssuanceEnvironment>,
     ) -> Result<ChangedLocalPassword, ManagedStoreError> {
         let verify = &request.verification;
         validate_local_password_verify_request(verify)?;
@@ -3579,7 +3650,7 @@ impl ManagedStore {
         token_hasher: &BrokerTokenHasher,
         request: LocalPasswordVerifyRequest,
         session_ttl_seconds: u64,
-        issuance_authority: Option<AgentTokenIssuanceAuthority>,
+        issuance_authority: Option<&AgentTokenIssuanceEnvironment>,
     ) -> Result<AuthenticatedLocalPassword, ManagedStoreError> {
         validate_local_password_verify_request(&request)?;
         let _work = self.try_acquire_work()?;
@@ -3755,7 +3826,7 @@ impl ManagedStore {
         &self,
         hasher: &BrokerTokenHasher,
         request: SelfAgentTokenIssueRequest,
-        authority: AgentTokenIssuanceAuthority,
+        authority: &AgentTokenIssuanceEnvironment,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
         self.issue_self_agent_token_with_catalog(hasher, request, authority, None)
     }
@@ -3764,7 +3835,7 @@ impl ManagedStore {
         &self,
         hasher: &BrokerTokenHasher,
         request: SelfAgentTokenIssueRequest,
-        authority: AgentTokenIssuanceAuthority,
+        authority: &AgentTokenIssuanceEnvironment,
         catalog: Option<&ManagedResourceCatalog>,
     ) -> Result<IssuedBrokerToken, ManagedStoreError> {
         validate_self_agent_token_issue_request(&request)?;
@@ -4856,12 +4927,14 @@ fn admit_schema(
     conn: &Connection,
     catalog: ManagedStoreMigrationCatalog<'_>,
     allow_migration: bool,
+    registry: &ConfiguredExecutionContexts,
 ) -> Result<BTreeSet<String>, ManagedStoreError> {
     sqlite_support::admit_schema(
         conn,
         catalog.migrations,
         MANAGED_STORE_LABEL,
         allow_migration,
+        registry,
     )
 }
 
@@ -5845,7 +5918,7 @@ pub struct PrincipalRecord {
     pub groups: Vec<String>,
     pub role: PrincipalRole,
     pub self_service_enabled: bool,
-    pub agent_token_issuance: PrincipalAgentTokenIssuance,
+    pub agent_token_issuance: PrincipalAgentTokenIssuanceSetting,
     pub created_at: String,
     pub updated_at: String,
     pub disabled_at: Option<String>,
@@ -5885,7 +5958,7 @@ pub struct GroupRecord {
     pub description: Option<String>,
     pub status: String,
     pub auto_enroll_new_microsoft_users: bool,
-    pub agent_token_issuance: AgentTokenIssuanceMode,
+    pub agent_token_issuance: GroupAgentTokenIssuanceSetting,
     pub created_at: Option<String>,
     pub created_by: Option<String>,
     pub updated_at: Option<String>,
@@ -5900,7 +5973,7 @@ pub struct GroupWriteRequest {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub auto_enroll_new_microsoft_users: bool,
-    pub agent_token_issuance: AgentTokenIssuanceMode,
+    pub agent_token_issuance: GroupAgentTokenIssuanceSetting,
     pub created_by: String,
 }
 
@@ -5911,7 +5984,7 @@ pub struct GroupPatchRequest {
     pub description: Option<Option<String>>,
     pub status: Option<String>,
     pub auto_enroll_new_microsoft_users: Option<bool>,
-    pub agent_token_issuance: Option<AgentTokenIssuanceMode>,
+    pub agent_token_issuance: Option<GroupAgentTokenIssuanceSetting>,
     pub updated_by: String,
 }
 
@@ -5949,7 +6022,7 @@ pub struct PrincipalWriteRequest {
     pub role: PrincipalRole,
     pub self_service_enabled: Option<bool>,
     #[serde(default)]
-    pub agent_token_issuance: PrincipalAgentTokenIssuance,
+    pub agent_token_issuance: PrincipalAgentTokenIssuanceSetting,
     pub principal_id: String,
     pub kind: String,
     pub display_name: Option<String>,
@@ -7525,6 +7598,13 @@ fn principal_by_id_without_groups(
     conn: &Connection,
     principal_id: &str,
 ) -> Result<PrincipalRecord, ManagedStoreError> {
+    // The configured mode and child contexts must come from one read snapshot.
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction().map_err(sql_unavailable)?;
+        let principal = principal_by_id_without_groups(&tx, principal_id)?;
+        tx.commit().map_err(sql_unavailable)?;
+        return Ok(principal);
+    }
     let mut principal = conn
         .query_row(
             "SELECT principal_id, kind, display_name, email, external_subject, status,
@@ -7537,6 +7617,7 @@ fn principal_by_id_without_groups(
         .optional()
         .map_err(sql_unavailable)?
         .ok_or(ManagedStoreError::PrincipalNotFound)?;
+    hydrate_principal_issuance(conn, &mut principal)?;
     principal.sign_in_methods = sign_in_methods_by_principal(conn, Some(principal_id))?
         .remove(principal_id)
         .unwrap_or_default();
@@ -7550,6 +7631,28 @@ fn principal_by_id_for_membership(
     principal_by_id(conn, principal_id)
 }
 
+fn hydrate_principal_issuance(
+    conn: &Connection,
+    principal: &mut PrincipalRecord,
+) -> Result<(), ManagedStoreError> {
+    principal.agent_token_issuance = PrincipalAgentTokenIssuanceSetting::new(
+        principal.agent_token_issuance.mode,
+        agent_token_issuance::load_contexts(conn, true, &principal.principal_id)?,
+    )
+    .map_err(|_| agent_token_issuance::invalid_stored_policy())?;
+    Ok(())
+}
+fn hydrate_group_issuance(
+    conn: &Connection,
+    group: &mut GroupRecord,
+) -> Result<(), ManagedStoreError> {
+    group.agent_token_issuance = GroupAgentTokenIssuanceSetting::new(
+        group.agent_token_issuance.mode,
+        agent_token_issuance::load_contexts(conn, false, &group.group_id)?,
+    )
+    .map_err(|_| agent_token_issuance::invalid_stored_policy())?;
+    Ok(())
+}
 fn principal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PrincipalRecord> {
     Ok(PrincipalRecord {
         sign_in_methods: SignInMethods::default(),
@@ -7564,9 +7667,12 @@ fn principal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PrincipalReco
             rusqlite::Error::FromSqlConversionFailure(10, Type::Text, Box::new(error))
         })?,
         self_service_enabled: row.get(11)?,
-        agent_token_issuance: row.get::<_, String>(12)?.parse().map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(12, Type::Text, Box::new(error))
-        })?,
+        agent_token_issuance: PrincipalAgentTokenIssuanceSetting {
+            mode: row.get::<_, String>(12)?.parse().map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(12, Type::Text, Box::new(error))
+            })?,
+            allowed_execution_contexts: Vec::new(),
+        },
         created_at: row.get(6)?,
         updated_at: row.get(7)?,
         disabled_at: row.get(8)?,
@@ -8106,8 +8212,14 @@ where
 }
 
 fn group_by_id(conn: &Connection, group_id: &str) -> Result<GroupRecord, ManagedStoreError> {
+    if conn.is_autocommit() {
+        let tx = conn.unchecked_transaction().map_err(sql_unavailable)?;
+        let group = group_by_id(&tx, group_id)?;
+        tx.commit().map_err(sql_unavailable)?;
+        return Ok(group);
+    }
     let resolved_at = normalized_now_string();
-    conn.query_row(
+    let mut group = conn.query_row(
         "WITH effective(principal_id, group_id) AS (
            SELECT principal_id, group_id FROM principal_groups
            UNION
@@ -8135,7 +8247,9 @@ fn group_by_id(conn: &Connection, group_id: &str) -> Result<GroupRecord, Managed
     )
     .optional()
     .map_err(sql_unavailable)?
-    .ok_or(ManagedStoreError::GroupNotFound)
+    .ok_or(ManagedStoreError::GroupNotFound)?;
+    hydrate_group_issuance(conn, &mut group)?;
+    Ok(group)
 }
 
 fn group_exists(conn: &Connection, group_id: &str) -> Result<bool, ManagedStoreError> {
@@ -8164,9 +8278,12 @@ fn group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupRecord> {
         disabled_at: row.get(8)?,
         member_count: member_count as u64,
         auto_enroll_new_microsoft_users: row.get(10)?,
-        agent_token_issuance: row.get::<_, String>(11)?.parse().map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(11, Type::Text, Box::new(error))
-        })?,
+        agent_token_issuance: GroupAgentTokenIssuanceSetting {
+            mode: row.get::<_, String>(11)?.parse().map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(11, Type::Text, Box::new(error))
+            })?,
+            allowed_execution_contexts: Vec::new(),
+        },
     })
 }
 
@@ -9621,6 +9738,46 @@ fn restrict_sqlite_files(path: &Path) -> Result<(), ManagedStoreError> {
 use sqlite_support::sqlite_sidecar_paths;
 
 #[cfg(test)]
+fn test_execution_contexts() -> ConfiguredExecutionContexts {
+    ConfiguredExecutionContexts::from_config(None).unwrap()
+}
+#[cfg(test)]
+fn test_issuance_environment(
+    authority: AgentTokenIssuanceAuthority,
+) -> AgentTokenIssuanceEnvironment {
+    AgentTokenIssuanceEnvironment::new(authority, test_execution_contexts())
+}
+#[cfg(test)]
+fn test_principal_issuance(
+    mode: PrincipalAgentTokenIssuance,
+) -> PrincipalAgentTokenIssuanceSetting {
+    PrincipalAgentTokenIssuanceSetting::new(
+        mode,
+        if matches!(
+            mode,
+            PrincipalAgentTokenIssuance::ReadOnly | PrincipalAgentTokenIssuance::WriteCapable
+        ) {
+            vec!["default".into()]
+        } else {
+            vec![]
+        },
+    )
+    .unwrap()
+}
+#[cfg(test)]
+fn test_group_issuance(mode: AgentTokenIssuanceMode) -> GroupAgentTokenIssuanceSetting {
+    GroupAgentTokenIssuanceSetting::new(
+        mode,
+        if mode != AgentTokenIssuanceMode::Disabled {
+            vec!["default".into()]
+        } else {
+            vec![]
+        },
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use agent_access_provider::test_support::{
@@ -9638,6 +9795,7 @@ mod tests {
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/group_auto_enrollment_tests.rs");
     include!("managed_store/agent_token_issuance_tests.rs");
+    include!("managed_store/agent_token_issuance_contexts_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
@@ -9703,8 +9861,12 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let error =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap_err();
+        let error = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap_err();
         assert!(
             matches!(error, ManagedStoreError::SchemaInvalid(message) if message.contains("preserve the database"))
         );
@@ -9736,17 +9898,22 @@ mod tests {
 
     fn create_alice(store: &ManagedStore) {
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
     }
 
@@ -9779,14 +9946,17 @@ mod tests {
 
     fn create_test_group(store: &ManagedStore, group_id: &str) {
         store
-            .create_group(GroupWriteRequest {
-                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-                auto_enroll_new_microsoft_users: false,
-                group_id: group_id.to_string(),
-                display_name: None,
-                description: None,
-                created_by: "admin".to_string(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                    auto_enroll_new_microsoft_users: false,
+                    group_id: group_id.to_string(),
+                    display_name: None,
+                    description: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
     }
 
@@ -9903,19 +10073,26 @@ mod tests {
     fn managed_groups_are_first_class_policy_subjects() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
 
         let group = store
-            .create_group(GroupWriteRequest {
-                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-                auto_enroll_new_microsoft_users: false,
-                group_id: "users".to_string(),
-                display_name: Some("Users".to_string()),
-                description: Some("Regular users".to_string()),
-                created_by: "admin".to_string(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                    auto_enroll_new_microsoft_users: false,
+                    group_id: "users".to_string(),
+                    display_name: Some("Users".to_string()),
+                    description: Some("Regular users".to_string()),
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert_eq!(group.group_id, "users");
         assert_eq!(group.status, "active");
@@ -9924,14 +10101,17 @@ mod tests {
         assert_eq!(store.list_groups().unwrap().len(), 1);
         assert!(matches!(
             store
-                .create_group(GroupWriteRequest {
-                    agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-                    auto_enroll_new_microsoft_users: false,
-                    group_id: "users".to_string(),
-                    display_name: None,
-                    description: None,
-                    created_by: "admin".to_string(),
-                })
+                .create_group(
+                    GroupWriteRequest {
+                        agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                        auto_enroll_new_microsoft_users: false,
+                        group_id: "users".to_string(),
+                        display_name: None,
+                        description: None,
+                        created_by: "admin".to_string(),
+                    },
+                    &test_execution_contexts()
+                )
                 .unwrap_err(),
             ManagedStoreError::VersionConflict
         ));
@@ -9966,15 +10146,18 @@ mod tests {
         assert_eq!(resolved.policy_groups, vec!["users".to_string()]);
 
         let disabled = store
-            .patch_group(GroupPatchRequest {
-                agent_token_issuance: None,
-                auto_enroll_new_microsoft_users: None,
-                group_id: "users".to_string(),
-                display_name: Some(None),
-                description: Some(Some("Disabled users".to_string())),
-                status: Some("disabled".to_string()),
-                updated_by: "admin".to_string(),
-            })
+            .patch_group(
+                GroupPatchRequest {
+                    agent_token_issuance: None,
+                    auto_enroll_new_microsoft_users: None,
+                    group_id: "users".to_string(),
+                    display_name: Some(None),
+                    description: Some(Some("Disabled users".to_string())),
+                    status: Some("disabled".to_string()),
+                    updated_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert_eq!(disabled.status, "disabled");
         assert!(disabled.disabled_at.is_some());
@@ -9994,21 +10177,30 @@ mod tests {
     fn managed_principals_reject_reserved_anonymous_id() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
 
         let error = store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "anonymous".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "anonymous".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap_err();
         assert!(matches!(
             error,
@@ -10020,18 +10212,25 @@ mod tests {
     fn managed_group_membership_requires_existing_principal_and_group() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
         store
-            .create_group(GroupWriteRequest {
-                agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-                auto_enroll_new_microsoft_users: false,
-                group_id: "users".to_string(),
-                display_name: None,
-                description: None,
-                created_by: "admin".to_string(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                    auto_enroll_new_microsoft_users: false,
+                    group_id: "users".to_string(),
+                    display_name: None,
+                    description: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
 
         assert!(matches!(
@@ -10067,14 +10266,17 @@ mod tests {
         ));
         assert!(matches!(
             store
-                .create_group(GroupWriteRequest {
-                    agent_token_issuance: AgentTokenIssuanceMode::Disabled,
-                    auto_enroll_new_microsoft_users: false,
-                    group_id: "anonymous".to_string(),
-                    display_name: None,
-                    description: None,
-                    created_by: "admin".to_string(),
-                })
+                .create_group(
+                    GroupWriteRequest {
+                        agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+                        auto_enroll_new_microsoft_users: false,
+                        group_id: "anonymous".to_string(),
+                        display_name: None,
+                        description: None,
+                        created_by: "admin".to_string(),
+                    },
+                    &test_execution_contexts()
+                )
                 .unwrap_err(),
             ManagedStoreError::InputInvalid(_)
         ));
@@ -10142,7 +10344,12 @@ mod tests {
     }
 
     fn create_latest_with_ledger(path: &Path) -> Connection {
-        ManagedStore::open(&store_config(path), ManagedStoreOpenMode::Startup).unwrap();
+        ManagedStore::open(
+            &store_config(path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         Connection::open(path).unwrap()
     }
 
@@ -10274,7 +10481,12 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert_eq!(
             store.status().unwrap().schema_version,
             MANAGED_STORE_SCHEMA_VERSION
@@ -10305,8 +10517,12 @@ mod tests {
     fn fresh_store_initializes_complete_resource_policy_baseline() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert_eq!(
             store.status().unwrap().schema_version,
             MANAGED_STORE_SCHEMA_VERSION
@@ -10367,8 +10583,12 @@ mod tests {
         }
         drop(conn);
 
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert!(store.migration_applied_this_open(MANAGED_STORE_REMOVE_SHELL_APPROVAL_VERSION));
         assert!(store.migration_applied_this_open(MANAGED_STORE_SCHEMA_VERSION));
         assert_eq!(store.policy_revision().unwrap().generation, 7);
@@ -10388,6 +10608,7 @@ mod tests {
         };
         let previous = ManagedStore::open_with_catalog(
             &config,
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             previous_catalog,
         )
@@ -10410,12 +10631,22 @@ mod tests {
             "2d945372e95a4d7545f88ee4463f3b742b903a533a08611eead4845d2fc102c7"
         );
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::MigrationRequired
         ));
         assert_eq!(migration_rows(&path), before);
 
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert_eq!(
             store.status().unwrap().schema_version,
             MANAGED_STORE_SCHEMA_VERSION
@@ -10437,7 +10668,12 @@ mod tests {
             assert!(!sqlite_object_exists(&conn, "table", "shell_approval_revisions").unwrap());
         }
         drop(store);
-        let reopened = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let reopened = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
         assert!(!reopened.migration_applied_this_open(MANAGED_STORE_SCHEMA_VERSION));
         assert_eq!(migration_rows(&path), after);
     }
@@ -10452,6 +10688,7 @@ mod tests {
         };
         let previous = ManagedStore::open_with_catalog(
             &config,
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             previous_catalog,
         )
@@ -10477,7 +10714,12 @@ mod tests {
         }
         drop(previous);
 
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert!(store.migration_applied_this_open(MANAGED_STORE_SCHEMA_VERSION));
         let catalog = store.load_policy_snapshot().unwrap().catalog;
         assert_eq!(
@@ -10510,8 +10752,12 @@ mod tests {
     fn policy_grants_load_from_managed_store() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let now = now_string();
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
@@ -10581,8 +10827,12 @@ mod tests {
     fn policy_grant_mutations_increment_revision_and_enforce_versions() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let grant_id = "jira-eng-search".to_string();
 
         let created = store
@@ -10814,8 +11064,12 @@ mod tests {
     fn scoped_policy_mutations_authorize_stored_service_before_version_checks() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let mut request = policy_grant_create_request("grant-scoped".to_string());
         request.service = "jira".to_string();
         let grant = store
@@ -10874,8 +11128,12 @@ mod tests {
     fn scoped_policy_patch_allows_unchanged_service_and_rejects_moves() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let mut create = policy_grant_create_request("grant-service-lock".to_string());
         create.service = "jira".to_string();
         let grant = store
@@ -10945,6 +11203,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -10961,13 +11220,16 @@ mod tests {
             Err(ManagedStoreError::InputInvalid(_))
         ));
         store
-            .patch_principal_access(PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: "alice".into(),
-                role: Some(PrincipalRole::ServicePolicyManager),
-                self_service_enabled: None,
-                actor: "admin".into(),
-            })
+            .patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: "alice".into(),
+                    role: Some(PrincipalRole::ServicePolicyManager),
+                    self_service_enabled: None,
+                    actor: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let direct = store
             .put_service_policy_management_assignment(request.clone())
@@ -11016,8 +11278,12 @@ mod tests {
     fn policy_grant_candidate_validation_runs_before_commit() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
 
         let error = store
             .create_policy_grant(
@@ -11043,8 +11309,12 @@ mod tests {
     fn malformed_policy_grant_json_is_schema_invalid() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let now = now_string();
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
@@ -11100,8 +11370,12 @@ mod tests {
     fn malformed_policy_grant_context_rows_are_schema_invalid() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let grant_id = "grant-context-corruption".to_string();
         store
             .create_policy_grant(
@@ -11174,12 +11448,22 @@ mod tests {
     fn current_store_admits_without_rewriting_ledger() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let before = migration_rows(&path);
 
         let mut config = store_config(&path);
         config.auto_migrate = false;
-        ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
 
         assert_eq!(migration_rows(&path), before);
     }
@@ -11194,6 +11478,7 @@ mod tests {
 
         let error = ManagedStore::open(
             &raw_store_config(&path, false),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap_err();
@@ -11224,7 +11509,9 @@ mod tests {
             drop(conn);
             let before = fs::read(&path).unwrap();
             for mode in [ManagedStoreOpenMode::Startup, ManagedStoreOpenMode::Reload] {
-                let error = ManagedStore::open(&store_config(&path), mode).unwrap_err();
+                let error =
+                    ManagedStore::open(&store_config(&path), &test_execution_contexts(), mode)
+                        .unwrap_err();
                 let ManagedStoreError::SchemaInvalid(message) = error else {
                     panic!("expected an incompatible-schema error");
                 };
@@ -11255,7 +11542,8 @@ mod tests {
         let before = fs::read(&path).unwrap();
         let before_ledger = migration_rows(&path);
         for mode in [ManagedStoreOpenMode::Startup, ManagedStoreOpenMode::Reload] {
-            let error = ManagedStore::open(&store_config(&path), mode).unwrap_err();
+            let error = ManagedStore::open(&store_config(&path), &test_execution_contexts(), mode)
+                .unwrap_err();
             let ManagedStoreError::SchemaInvalid(message) = error else {
                 panic!("expected a newer-schema error");
             };
@@ -11292,8 +11580,12 @@ mod tests {
             let path = temp.path().join(format!("{name}.sqlite"));
             create_latest_with_ledger(&path).execute_batch(sql).unwrap();
             assert!(matches!(
-                ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup)
-                    .unwrap_err(),
+                ManagedStore::open(
+                    &store_config(&path),
+                    &test_execution_contexts(),
+                    ManagedStoreOpenMode::Startup
+                )
+                .unwrap_err(),
                 ManagedStoreError::SchemaInvalid(_)
             ));
         }
@@ -11315,7 +11607,12 @@ mod tests {
             conn.execute_batch(sql).unwrap();
             drop(conn);
             assert!(matches!(
-                ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+                ManagedStore::open(
+                    &store_config(&path),
+                    &test_execution_contexts(),
+                    ManagedStoreOpenMode::Reload
+                )
+                .unwrap_err(),
                 ManagedStoreError::SchemaInvalid(_)
             ));
         }
@@ -11330,7 +11627,12 @@ mod tests {
             .execute("DROP TABLE rights", [])
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
 
@@ -11341,7 +11643,12 @@ mod tests {
             .execute("DROP TABLE policy_grant_contexts", [])
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
 
@@ -11350,7 +11657,12 @@ mod tests {
             .execute("DROP INDEX idx_credentials_owner", [])
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
 
@@ -11361,7 +11673,12 @@ mod tests {
             .execute("DROP INDEX idx_policy_grant_contexts_context", [])
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
 
@@ -11373,7 +11690,12 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
 
@@ -11385,7 +11707,12 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
     }
@@ -11399,7 +11726,7 @@ mod tests {
             .execute("DELETE FROM policy_revisions", [])
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(&store_config(&path), &test_execution_contexts(), ManagedStoreOpenMode::Reload).unwrap_err(),
             ManagedStoreError::SchemaInvalid(message)
                 if message.contains("policy revision singleton row is missing")
         ));
@@ -11409,7 +11736,12 @@ mod tests {
             .execute("DROP TABLE policy_revisions", [])
             .unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
     }
@@ -11438,7 +11770,12 @@ mod tests {
             let path = temp.path().join(name);
             create_latest_with_ledger(&path).execute(sql, []).unwrap();
             assert!(matches!(
-                ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+                ManagedStore::open(
+                    &store_config(&path),
+                    &test_execution_contexts(),
+                    ManagedStoreOpenMode::Reload
+                )
+                .unwrap_err(),
                 ManagedStoreError::SchemaInvalid(_)
             ));
         }
@@ -11494,7 +11831,12 @@ PRAGMA foreign_keys = ON;
         .unwrap();
         drop(conn);
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
 
@@ -11525,7 +11867,12 @@ PRAGMA foreign_keys = ON;
         .unwrap();
         drop(conn);
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
     }
@@ -11534,8 +11881,12 @@ PRAGMA foreign_keys = ON;
     fn structural_validation_rejects_malformed_secret_material_without_decrypting() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         create_alice(&store);
         let metadata = put_alice_jira_credential(&store, &ring, "pat");
@@ -11552,7 +11903,12 @@ PRAGMA foreign_keys = ON;
         drop(store);
 
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
     }
@@ -11561,8 +11917,12 @@ PRAGMA foreign_keys = ON;
     fn check_schema_ready_is_cheap_and_does_not_run_structural_validation() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         {
             let conn = store.connection.lock().unwrap();
             conn.execute("DROP INDEX idx_credentials_owner", [])
@@ -11571,7 +11931,12 @@ PRAGMA foreign_keys = ON;
 
         store.check_schema_ready().unwrap();
         assert!(matches!(
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::SchemaInvalid(_)
         ));
     }
@@ -11589,7 +11954,9 @@ PRAGMA foreign_keys = ON;
         let tx = reader.unchecked_transaction().unwrap();
         assert!(!migrations_table_exists(&tx).unwrap());
         assert_eq!(
-            admit_schema(&writer, catalog, true).unwrap().len(),
+            admit_schema(&writer, catalog, true, &test_execution_contexts())
+                .unwrap()
+                .len(),
             catalog.migrations.len()
         );
         // The later query must not see the newly committed tables and misclassify
@@ -11606,7 +11973,11 @@ PRAGMA foreign_keys = ON;
             ValidatedLedger::Prefix(count) if count == catalog.migrations.len()
         ));
         assert!(reader.is_autocommit());
-        assert!(admit_schema(&reader, catalog, true).unwrap().is_empty());
+        assert!(
+            admit_schema(&reader, catalog, true, &test_execution_contexts())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -11619,7 +11990,9 @@ PRAGMA foreign_keys = ON;
         ));
         assert!(conn.is_autocommit());
         assert_eq!(
-            admit_schema(&conn, catalog, true).unwrap().len(),
+            admit_schema(&conn, catalog, true, &test_execution_contexts())
+                .unwrap()
+                .len(),
             catalog.migrations.len()
         );
         assert!(conn.is_autocommit());
@@ -11638,7 +12011,12 @@ PRAGMA foreign_keys = ON;
                 let config = config.clone();
                 thread::spawn(move || {
                     barrier.wait();
-                    ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+                    ManagedStore::open(
+                        &config,
+                        &test_execution_contexts(),
+                        ManagedStoreOpenMode::Startup,
+                    )
+                    .unwrap();
                 })
             })
             .collect::<Vec<_>>();
@@ -11652,8 +12030,12 @@ PRAGMA foreign_keys = ON;
     fn migrates_and_reports_status() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let status = store.status().unwrap();
         assert_eq!(status.schema_version, MANAGED_STORE_SCHEMA_VERSION);
         assert_eq!(status.principals, 0);
@@ -11703,6 +12085,7 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -11774,22 +12157,28 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         create_alice(&store);
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let mut hasher = local_password_hasher_for_test(21);
         store
@@ -11856,14 +12245,24 @@ PRAGMA foreign_keys = ON;
     fn local_password_request_admission_is_shared_across_reload_without_queuing() {
         let temp = TempDir::new().unwrap();
         let config = store_config(&temp.path().join("store.sqlite"));
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let first = store.try_admit_local_password_request().unwrap();
         let second = store.clone().try_admit_local_password_request().unwrap();
         let hash_first = store.try_acquire_work().unwrap();
         let hash_second = store.try_acquire_work().unwrap();
         let admin_hash = store.try_acquire_admin_password_work().unwrap();
         // Reopen as hot reload does while old-snapshot jobs retain permits.
-        let reloaded = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let reloaded = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
         assert!(matches!(
             reloaded.try_admit_local_password_request(),
             Err(ManagedStoreError::LocalPasswordBusy)
@@ -11901,6 +12300,7 @@ PRAGMA foreign_keys = ON;
             let temp = TempDir::new().unwrap();
             let store = ManagedStore::open(
                 &store_config(&temp.path().join("store.sqlite")),
+                &test_execution_contexts(),
                 ManagedStoreOpenMode::Startup,
             )
             .unwrap();
@@ -11964,6 +12364,7 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -12011,6 +12412,7 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -12101,6 +12503,7 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -12160,6 +12563,7 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let store = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -12170,14 +12574,17 @@ PRAGMA foreign_keys = ON;
             .enable_local_password(&hasher, local_write("first-password"))
             .unwrap();
         store
-            .create_group(GroupWriteRequest {
-                group_id: "issuers".into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                agent_token_issuance: AgentTokenIssuanceMode::ReadOnly,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                GroupWriteRequest {
+                    group_id: "issuers".into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    agent_token_issuance: test_group_issuance(AgentTokenIssuanceMode::ReadOnly),
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store.add_group("alice", "issuers", "admin").unwrap();
         let authenticated = store
@@ -12186,13 +12593,18 @@ PRAGMA foreign_keys = ON;
                 &tokens,
                 local_change("first-password", false).verification,
                 3600,
-                Some(AgentTokenIssuanceAuthority::Managed),
+                Some(&test_issuance_environment(
+                    AgentTokenIssuanceAuthority::Managed,
+                )),
             )
             .unwrap();
         let captured_policy = AgentTokenIssuancePolicy {
-            mode: AgentTokenIssuanceMode::ReadOnly,
             source: AgentTokenIssuanceSource::Groups,
-            group_ids: vec!["issuers".into()],
+            contexts: vec![AgentTokenIssuanceContextPolicy {
+                execution_context: "default".into(),
+                mode: AgentTokenIssuanceMode::ReadOnly,
+                group_ids: vec!["issuers".into()],
+            }],
         };
         assert_eq!(
             authenticated.agent_token_issuance_policy,
@@ -12221,7 +12633,9 @@ PRAGMA foreign_keys = ON;
                         &tokens,
                         local_change("first-password", false).verification,
                         3600,
-                        Some(AgentTokenIssuanceAuthority::Managed),
+                        Some(&test_issuance_environment(
+                            AgentTokenIssuanceAuthority::Managed,
+                        )),
                     )
                     .map(|_| ())
             } else {
@@ -12230,12 +12644,14 @@ PRAGMA foreign_keys = ON;
                         &hasher,
                         &tokens,
                         local_change("first-password", operation == "local_change"),
-                        Some(AgentTokenIssuanceAuthority::Managed),
+                        Some(&test_issuance_environment(
+                            AgentTokenIssuanceAuthority::Managed,
+                        )),
                     )
                     .map(|_| ())
             };
             assert!(
-                matches!(result, Err(ManagedStoreError::InputInvalid(_))),
+                matches!(result, Err(ManagedStoreError::SchemaInvalid(_))),
                 "{operation}"
             );
             assert_eq!(
@@ -12287,7 +12703,9 @@ PRAGMA foreign_keys = ON;
                     &tokens,
                     request,
                     3600,
-                    Some(AgentTokenIssuanceAuthority::Managed),
+                    Some(&test_issuance_environment(
+                        AgentTokenIssuanceAuthority::Managed,
+                    )),
                 );
                 assert!(
                     match result {
@@ -12313,7 +12731,9 @@ PRAGMA foreign_keys = ON;
                 &hasher,
                 &tokens,
                 local_change("first-password", true),
-                Some(AgentTokenIssuanceAuthority::Managed),
+                Some(&test_issuance_environment(
+                    AgentTokenIssuanceAuthority::Managed,
+                )),
             )
             .unwrap();
         assert_eq!(changed.agent_token_issuance_policy, Some(captured_policy));
@@ -12355,13 +12775,23 @@ PRAGMA foreign_keys = ON;
 
         let temp = TempDir::new().unwrap();
         let config = store_config(&temp.path().join("store.sqlite"));
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
         let hasher = local_password_hasher_for_test(25);
         store
             .enable_local_password(&hasher, local_write("first-password"))
             .unwrap();
-        let other = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let other = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
         let admin_hash = hasher.hash_password("admin-password").unwrap();
         let mut conn = store.connection.lock().unwrap();
         let tx = conn
@@ -12481,8 +12911,12 @@ PRAGMA foreign_keys = ON;
     fn local_password_reset_revokes_existing_browser_sessions() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
         let password_hasher = local_password_hasher_for_test(11);
         let token_hasher = broker_token_hasher_for_test(12);
@@ -12597,8 +13031,12 @@ PRAGMA foreign_keys = ON;
     fn local_password_admin_methods_work_for_disabled_principals() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
         store.set_principal_enabled("alice", false).unwrap();
         let password_hasher = local_password_hasher_for_test(17);
@@ -12644,22 +13082,31 @@ PRAGMA foreign_keys = ON;
     fn service_accounts_are_noninteractive_and_only_receive_agent_tokens() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let password_hasher = local_password_hasher_for_test(71);
         let token_hasher = broker_token_hasher_for_test(72);
         let service_account = store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "svc-reporter".to_string(),
-                kind: "service_account".to_string(),
-                display_name: Some("Reporting service".to_string()),
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "svc-reporter".to_string(),
+                    kind: "service_account".to_string(),
+                    display_name: Some("Reporting service".to_string()),
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert_eq!(service_account.kind, "service_account");
 
@@ -12686,13 +13133,16 @@ PRAGMA foreign_keys = ON;
             Err(ManagedStoreError::InputInvalid(_))
         ));
         assert!(matches!(
-            store.patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("svc-reporter").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("admin").into()
-            }),
+            store.patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("svc-reporter").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("admin").into()
+                },
+                &test_execution_contexts()
+            ),
             Err(ManagedStoreError::InputInvalid(_))
         ));
         create_test_group(&store, "configured-admins");
@@ -12764,17 +13214,22 @@ PRAGMA foreign_keys = ON;
         drop(conn);
 
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "legacy-service".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "legacy-service".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let method = store
             .enable_local_password(
@@ -12790,13 +13245,16 @@ PRAGMA foreign_keys = ON;
             .unwrap()
             .method;
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("legacy-service").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("admin").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("legacy-service").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("admin").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert_eq!(store.active_admin_principal_count().unwrap(), 1);
         let session = store
@@ -12835,17 +13293,22 @@ PRAGMA foreign_keys = ON;
             })
             .unwrap();
         assert!(matches!(
-            store.create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "legacy-service".to_string(),
-                kind: "service_account".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            }),
+            store.create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "legacy-service".to_string(),
+                    kind: "service_account".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts()
+            ),
             Err(ManagedStoreError::InputInvalid(_))
         ));
         // Simulate legacy corruption predating the human-kind guard. Normal writes
@@ -12936,8 +13399,12 @@ PRAGMA foreign_keys = ON;
     fn initial_admin_bootstrap_creates_forced_reset_admin_login() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let password_hasher = local_password_hasher_for_test(21);
         let token_hasher = broker_token_hasher_for_test(22);
 
@@ -12999,17 +13466,24 @@ PRAGMA foreign_keys = ON;
     fn last_active_admin_guards_disable_role_and_local_password() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("alice").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("admin").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("alice").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("admin").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let password_hasher = local_password_hasher_for_test(23);
         store
@@ -13031,13 +13505,16 @@ PRAGMA foreign_keys = ON;
         ));
         assert!(matches!(
             store
-                .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                    agent_token_issuance: None,
-                    principal_id: ("alice").into(),
-                    role: Some(crate::PrincipalRole::User),
-                    self_service_enabled: None,
-                    actor: "test".into()
-                })
+                .patch_principal_access(
+                    crate::PrincipalAccessPatchRequest {
+                        agent_token_issuance: None,
+                        principal_id: ("alice").into(),
+                        role: Some(crate::PrincipalRole::User),
+                        self_service_enabled: None,
+                        actor: "test".into()
+                    },
+                    &test_execution_contexts()
+                )
                 .unwrap_err(),
             ManagedStoreError::InputInvalid(_)
         ));
@@ -13047,26 +13524,34 @@ PRAGMA foreign_keys = ON;
         ));
 
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("bob").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("alice").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("bob").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("alice").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
 
         store.set_principal_enabled("alice", false).unwrap();
@@ -13080,8 +13565,12 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let dir = temp.path().join("store");
         let path = dir.join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
 
         assert_eq!(mode(&dir), 0o700);
@@ -13104,13 +13593,23 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
         let config = store_config(&path);
-        let created = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let created = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&created);
         crate::sqlite_support::lock_probe::assert_sqlite_locks_held(&path, "creating the store");
         drop(created);
 
         // A restart opens the existing WAL-mode store.
-        let restarted = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let restarted = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         crate::sqlite_support::lock_probe::assert_sqlite_locks_held(
             &path,
             "reopening the store at startup",
@@ -13124,7 +13623,12 @@ PRAGMA foreign_keys = ON;
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
         let config = store_config(&path);
-        let live = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let live = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&live);
         crate::sqlite_support::lock_probe::assert_sqlite_locks_held(&path, "opening the store");
         let files = std::iter::once(path.clone())
@@ -13134,7 +13638,12 @@ PRAGMA foreign_keys = ON;
             fs::set_permissions(file, fs::Permissions::from_mode(0o644)).unwrap();
         }
 
-        let reloaded = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let reloaded = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
 
         for file in &files {
             assert_eq!(mode(file), 0o600, "{}", file.display());
@@ -13144,17 +13653,22 @@ PRAGMA foreign_keys = ON;
             "a reload-mode open while the first store is live",
         );
         reloaded
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert_eq!(live.principal("bob").unwrap().principal_id, "bob");
         assert_eq!(reloaded.principal("alice").unwrap().principal_id, "alice");
@@ -13174,8 +13688,12 @@ PRAGMA foreign_keys = ON;
         fs::write(&target, b"not a sqlite database").unwrap();
         symlink(&target, &link).unwrap();
 
-        let error =
-            ManagedStore::open(&store_config(&link), ManagedStoreOpenMode::Reload).unwrap_err();
+        let error = ManagedStore::open(
+            &store_config(&link),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -13196,8 +13714,12 @@ PRAGMA foreign_keys = ON;
         fs::write(&target, b"not a sqlite database").unwrap();
         fs::hard_link(&target, &link).unwrap();
 
-        let error =
-            ManagedStore::open(&store_config(&link), ManagedStoreOpenMode::Reload).unwrap_err();
+        let error = ManagedStore::open(
+            &store_config(&link),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -13219,8 +13741,12 @@ PRAGMA foreign_keys = ON;
         fs::write(&sidecar_target, b"sidecar target").unwrap();
         symlink(&sidecar_target, temp.path().join("store.sqlite-wal")).unwrap();
 
-        let error =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err();
+        let error = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -13240,8 +13766,12 @@ PRAGMA foreign_keys = ON;
         fs::write(&sidecar_target, b"sidecar target").unwrap();
         fs::hard_link(&sidecar_target, temp.path().join("store.sqlite-wal")).unwrap();
 
-        let error =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload).unwrap_err();
+        let error = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap_err();
 
         assert!(matches!(
             error,
@@ -13260,6 +13790,7 @@ PRAGMA foreign_keys = ON;
 
         let error = ManagedStore::open(
             &raw_store_config(&path, false),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap_err();
@@ -13280,7 +13811,12 @@ PRAGMA foreign_keys = ON;
         Connection::open(&path).unwrap();
         let mut config = store_config(&path);
         config.auto_migrate = false;
-        let error = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap_err();
+        let error = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap_err();
         assert!(matches!(error, ManagedStoreError::MigrationRequired));
     }
 
@@ -13394,8 +13930,12 @@ PRAGMA foreign_keys = ON;
     fn broker_token_issue_can_require_active_principal_role() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let key_path = temp.path().join("hash-key");
         fs::write(&key_path, key(9)).unwrap();
         let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
@@ -13408,17 +13948,22 @@ PRAGMA foreign_keys = ON;
         })
         .unwrap();
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let request = BrokerTokenIssueRequest {
             principal_id: "alice".to_string(),
@@ -13435,29 +13980,37 @@ PRAGMA foreign_keys = ON;
             ManagedStoreError::InputInvalid(_)
         ));
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("alice").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("admin").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("alice").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("admin").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let issued = store.issue_broker_token(&hasher, request).unwrap();
         assert_eq!(issued.record.token_class, BrokerTokenClass::Admin);
 
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
             .patch_principal(PrincipalPatchRequest {
@@ -13487,20 +14040,35 @@ PRAGMA foreign_keys = ON;
 
     #[test]
     fn agent_token_issuance_validates_class_specific_caveats_before_insert() {
+        let registry = context_registry(&["workstation", "external"]);
+        let environment = AgentTokenIssuanceEnvironment::new(
+            AgentTokenIssuanceAuthority::Managed,
+            registry.clone(),
+        );
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &registry,
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let hasher = broker_token_hasher_for_test(41);
         create_alice(&store);
         store
-            .patch_principal_access(PrincipalAccessPatchRequest {
-                principal_id: "alice".into(),
-                role: None,
-                self_service_enabled: None,
-                agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
-                actor: "admin".into(),
-            })
+            .patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    principal_id: "alice".into(),
+                    role: None,
+                    self_service_enabled: None,
+                    agent_token_issuance: Some(context_principal(
+                        PrincipalAgentTokenIssuance::WriteCapable,
+                        &["workstation", "external"],
+                    )),
+                    actor: "admin".into(),
+                },
+                &registry,
+            )
             .unwrap();
 
         for scopes in [
@@ -13566,7 +14134,7 @@ PRAGMA foreign_keys = ON;
                         expires_at: None,
                         created_by: "alice".to_string(),
                     },
-                    AgentTokenIssuanceAuthority::Managed,
+                    &environment,
                 )
                 .unwrap_err();
             assert!(matches!(error, ManagedStoreError::InputInvalid(_)));
@@ -13583,7 +14151,7 @@ PRAGMA foreign_keys = ON;
                     expires_at: None,
                     created_by: "alice".to_string(),
                 },
-                AgentTokenIssuanceAuthority::Managed,
+                &environment,
             )
             .unwrap();
         assert_eq!(
@@ -13614,18 +14182,27 @@ PRAGMA foreign_keys = ON;
     fn agent_token_pause_resume_is_idempotent_and_preserves_the_token() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let hasher = broker_token_hasher_for_test(43);
         create_alice(&store);
         store
-            .patch_principal_access(PrincipalAccessPatchRequest {
-                principal_id: "alice".into(),
-                role: None,
-                self_service_enabled: None,
-                agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
-                actor: "admin".into(),
-            })
+            .patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    principal_id: "alice".into(),
+                    role: None,
+                    self_service_enabled: None,
+                    agent_token_issuance: Some(test_principal_issuance(
+                        PrincipalAgentTokenIssuance::WriteCapable,
+                    )),
+                    actor: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let issued = store
             .issue_self_agent_token(
@@ -13637,7 +14214,7 @@ PRAGMA foreign_keys = ON;
                     expires_at: None,
                     created_by: "alice".to_string(),
                 },
-                AgentTokenIssuanceAuthority::Managed,
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
             )
             .unwrap();
 
@@ -13691,22 +14268,31 @@ PRAGMA foreign_keys = ON;
     fn agent_token_pause_conceals_scope_and_rejects_terminal_or_other_classes() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let hasher = broker_token_hasher_for_test(44);
         create_alice(&store);
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let issued = store
             .issue_broker_token(
@@ -13793,8 +14379,12 @@ PRAGMA foreign_keys = ON;
     fn concurrent_resume_and_revoke_leave_the_token_revoked() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let issuing_store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let issuing_store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let hasher = broker_token_hasher_for_test(45);
         create_alice(&issuing_store);
         let issued = issuing_store
@@ -13815,10 +14405,18 @@ PRAGMA foreign_keys = ON;
             .unwrap();
         drop(issuing_store);
 
-        let resume_store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
-        let revoke_store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let resume_store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        let revoke_store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let barrier = Arc::new(Barrier::new(2));
         let resume_barrier = barrier.clone();
         let resume_token_id = issued.record.token_id.clone();
@@ -13834,8 +14432,12 @@ PRAGMA foreign_keys = ON;
         let resume_result = resume.join().unwrap();
         revoke.join().unwrap().unwrap();
 
-        let final_store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let final_store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let record = final_store.broker_token(&issued.record.token_id).unwrap();
         assert!(record.revoked_at.is_some());
         assert!(matches!(
@@ -13851,8 +14453,12 @@ PRAGMA foreign_keys = ON;
     fn malformed_broker_token_pause_metadata_fails_closed() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let hasher = broker_token_hasher_for_test(46);
         create_alice(&store);
         let issued = store
@@ -13887,8 +14493,12 @@ PRAGMA foreign_keys = ON;
     fn stored_agent_token_rows_reject_obsolete_and_corrupt_caveats() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let hasher = broker_token_hasher_for_test(42);
         create_alice(&store);
         let issued = store
@@ -13935,8 +14545,12 @@ PRAGMA foreign_keys = ON;
     fn broker_token_resolution_rejects_corrupt_class_and_scopes_rows() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let key_path = temp.path().join("hash-key");
         fs::write(&key_path, key(9)).unwrap();
         let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
@@ -13949,17 +14563,22 @@ PRAGMA foreign_keys = ON;
         })
         .unwrap();
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let issued = store
             .issue_broker_token(
@@ -14029,21 +14648,30 @@ PRAGMA foreign_keys = ON;
     fn rejects_malformed_expiry_and_nested_secret_metadata() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
 
         let bad_right = store.grant_right(RightGrantRequest {
@@ -14085,21 +14713,30 @@ PRAGMA foreign_keys = ON;
     fn stores_and_resolves_user_credential() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let metadata = store
             .upsert_user_credential(
@@ -14182,8 +14819,12 @@ PRAGMA foreign_keys = ON;
     fn failed_credential_verification_records_attempt_without_success_time() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         create_alice(&store);
         put_alice_jira_credential(&store, &ring, "pat");
@@ -14237,8 +14878,12 @@ PRAGMA foreign_keys = ON;
     fn credential_secret_material_is_split_and_deleted_with_metadata() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         create_alice(&store);
         let metadata = put_alice_jira_credential(&store, &ring, "pat");
@@ -14291,8 +14936,12 @@ PRAGMA foreign_keys = ON;
     fn updating_secret_changes_material_version_and_preserves_secret_ref() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         create_alice(&store);
         let first = put_alice_jira_credential(&store, &ring, "old-pat");
@@ -14336,23 +14985,32 @@ PRAGMA foreign_keys = ON;
     fn upsert_rejects_material_ref_owned_by_another_credential() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         create_alice(&store);
         let alice = put_alice_jira_credential(&store, &ring, "alice-pat");
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
 
         let bob_credential_id = Uuid::new_v4().to_string();
@@ -14410,8 +15068,12 @@ PRAGMA foreign_keys = ON;
     fn rewrap_preserves_material_version_and_metadata_timestamp() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring_with_keys("k1", &[("k1", 7), ("k2", 8)]);
         create_alice(&store);
         let before = put_alice_jira_credential(&store, &ring, "pat");
@@ -14466,8 +15128,12 @@ PRAGMA foreign_keys = ON;
     fn rewrap_counts_conflict_when_material_no_longer_matches_metadata_ref() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring_with_keys("k1", &[("k1", 7), ("k2", 8)]);
         create_alice(&store);
         let metadata = put_alice_jira_credential(&store, &ring, "pat");
@@ -14500,8 +15166,12 @@ PRAGMA foreign_keys = ON;
     fn persisted_secret_material_aad_rejects_metadata_tampering() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         create_alice(&store);
         let metadata = put_alice_jira_credential(&store, &ring, "pat");
@@ -14527,8 +15197,12 @@ PRAGMA foreign_keys = ON;
 
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_alice(&store);
         let metadata = put_alice_jira_credential(&store, &ring, "pat");
         let replacement_ref = new_sqlite_secret_ref();
@@ -14562,8 +15236,12 @@ PRAGMA foreign_keys = ON;
         fn populated_store() -> (TempDir, ManagedStore, CredentialKeyRing, CredentialMetadata) {
             let temp = TempDir::new().unwrap();
             let path = temp.path().join("store.sqlite");
-            let store =
-                ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+            let store = ManagedStore::open(
+                &store_config(&path),
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Startup,
+            )
+            .unwrap();
             let ring = key_ring("k1");
             create_alice(&store);
             let metadata = put_alice_jira_credential(&store, &ring, "pat");
@@ -14730,21 +15408,30 @@ PRAGMA foreign_keys = ON;
     fn credential_verification_target_must_match_current_secret_version() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = key_ring("k1");
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
             .upsert_user_credential(
@@ -14866,8 +15553,12 @@ PRAGMA foreign_keys = ON;
     fn oidc_flow_capacity_claim_and_replay_are_durable() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let provider = reconcile_test_oidc_provider(&store, true, 3_600, "flow-config");
         let expires_at = normalized_timestamp(Utc::now() + Duration::minutes(5));
         let flow_request = |state_byte| OidcFlowCreateRequest {
@@ -14952,8 +15643,12 @@ PRAGMA foreign_keys = ON;
     fn oidc_completion_normalizes_fractional_timestamps_before_expiry_checks() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let provider = reconcile_test_oidc_provider(&store, true, 3_600, "time-config");
         let callback = DateTime::<Utc>::from_timestamp(1_800_000_000, 500_000_000).unwrap();
         let evidence = callback - Duration::seconds(3_600);
@@ -15042,8 +15737,12 @@ PRAGMA foreign_keys = ON;
     fn oidc_denials_commit_subject_watermarks_in_strict_flow_order() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let provider = reconcile_test_oidc_provider(&store, true, 3_600, "watermark-config");
         let now = normalized_now_string();
         let hasher = broker_token_hasher_for_test(41);
@@ -15112,8 +15811,12 @@ PRAGMA foreign_keys = ON;
     fn oidc_jit_completion_is_atomic_and_effective_membership_dedupes_and_expires() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let provider = reconcile_test_oidc_provider(&store, true, 7_200, "jit-config");
         create_test_group(&store, "team-a");
         create_test_group(&store, "team-b");
@@ -15357,22 +16060,31 @@ PRAGMA foreign_keys = ON;
     fn bound_oidc_empty_groups_login_succeeds_and_link_conflicts_unlink_session() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("store.sqlite");
-        let store =
-            ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let provider = reconcile_test_oidc_provider(&store, true, 3_600, "link-config");
         create_alice(&store);
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "bob".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "bob".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert!(matches!(
             store.link_oidc_login_method(OidcLoginMethodLinkRequest {

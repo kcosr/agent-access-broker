@@ -390,6 +390,7 @@ mod tests {
                 require_registered_principal_for_invocation: false,
                 auto_migrate: true,
             },
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
@@ -398,17 +399,22 @@ mod tests {
     }
     fn user(store: &ManagedStore, id: &str) {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: id.into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: id.into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
     }
     #[test]
@@ -492,17 +498,22 @@ mod tests {
         );
         store.remove_identity_token("alice").unwrap();
         store
-            .create_or_update_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_or_update_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert!(!store.identity_token_metadata("alice").unwrap().configured);
     }
@@ -553,15 +564,28 @@ mod migration_tests {
             auto_migrate: false,
         };
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Startup),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Startup
+            ),
             Err(ManagedStoreError::MigrationRequired)
         ));
         config.auto_migrate = true;
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Reload),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            ),
             Err(ManagedStoreError::MigrationRequired)
         ));
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert_eq!(store.principal_count().unwrap(), 1);
         assert_eq!(store.principal("legacy").unwrap().kind, "user");
         assert!(!store.identity_token_metadata("legacy").unwrap().configured);

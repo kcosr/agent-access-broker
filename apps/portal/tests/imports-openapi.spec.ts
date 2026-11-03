@@ -228,7 +228,7 @@ test("administrator imports public and private OpenAPI definitions with separate
   await dialog.getByRole("button", { name: "Accept selected operations" }).click(); await expect(dialog).not.toBeVisible();
   await enable(page, "inventory");
   await grant(page, "inventory", "admin", "service", ["get_item", "create_item"]);
-  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: "write_capable" } });
+  await browserManagementRequest(page, "/v1/admin/principals/admin/access", { method: "PATCH", body: { agentTokenIssuance: { mode: "write_capable", allowedExecutionContexts: ["internal"] } } });
   const admin = await browserManagementRequest<{ token: string }>(page, "/v1/tokens", { method: "POST", body: { readOnly: false, name: "openapi-admin", ttl: "8h", allowedServices: ["inventory"], allowedExecutionContexts: ["internal"] } });
   const read = await invoke(admin.token, "inventory", "get_item", { path: { id: "one" }, query: { limit: 2 } });
   expect(read.ok, await read.text()).toBe(true);

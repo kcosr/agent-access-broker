@@ -482,7 +482,7 @@ test("token boundaries use live resource references and allow empty effective ac
     { id: "eng", resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, allowedExecutionContexts: ["internal", "external"], enabled: true },
   ];
   const options = {
-    policyGeneration: 5, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
+    policyGeneration: 5, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
     services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
       internal: [{ included: [{ kind: "all" }], excluded: [] }],
       external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }]
@@ -491,7 +491,7 @@ test("token boundaries use live resource references and allow empty effective ac
   };
   await mockUnlistedApis(page);
   await mockResourceTypes(page);
-  await page.route("**/v1/auth/session", (route) => route.fulfill({ contentType: "application/json", body: envelope({ role: "user", selfServiceEnabled: true, authenticated: true, principal: "boundary-user",  csrfHeader: "x-csrf-token", csrfToken: "csrf-token", tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } }) }));
+  await page.route("**/v1/auth/session", (route) => route.fulfill({ contentType: "application/json", body: envelope({ role: "user", selfServiceEnabled: true, authenticated: true, principal: "boundary-user",  csrfHeader: "x-csrf-token", csrfToken: "csrf-token", tokenIssuancePolicy: { selfAgentInvoke: { access: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } }) }));
   await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope(options) }));
   await page.route("**/v1/tokens/effective-access", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 5, access: [] }) }));
   await page.route(/\/v1\/tokens(?:\?.*)?$/, async (route) => {
@@ -618,7 +618,7 @@ test("scoped policy managers retain self-service navigation and only receive the
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens", "/v1/tokens/options"]) {
     await page.route(`**${path}`, (route) => route.fulfill({
       contentType: "application/json",
-      body: managementResult(path === "/v1/tokens/options" ? { policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] } : path === "/v1/credentials" ? EMPTY_CREDENTIALS : [])
+      body: managementResult(path === "/v1/tokens/options" ? { policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: [], services: [] } : path === "/v1/credentials" ? EMPTY_CREDENTIALS : [])
     }));
   }
 
@@ -701,7 +701,7 @@ test("audit navigation and pages stay hidden when the audit store cannot be quer
   for (const path of ["/v1/credentials/targets", "/v1/credentials", "/v1/tokens"]) {
     await page.route(`**${path}`, (route) => route.fulfill({ contentType: "application/json", body: envelope(path === "/v1/credentials" ? EMPTY_CREDENTIALS : []) }));
   }
-  await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] }) }));
+  await page.route("**/v1/tokens/options", (route) => route.fulfill({ contentType: "application/json", body: envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: [], services: [] }) }));
   const auditRequests: string[] = [];
   page.on("request", (request) => {
     if (/\/v1\/(admin\/)?audit\//.test(new URL(request.url()).pathname)) auditRequests.push(request.url());
@@ -837,7 +837,7 @@ test("global admins assign and revoke a service policy manager with whole-servic
   });
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
-    body: managementResult({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] })
+    body: managementResult({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: [], services: [] })
   }));
 
   // Managers are listed on the service's Managers tab in the Catalog.
@@ -1063,6 +1063,7 @@ test("local browser login supports administration, self-service credentials, tok
     await dialog.getByLabel("Email").fill(`${principalId}@example.com`);
     await expect(dialog.getByLabel("Agent token issuance", { exact: true })).toHaveValue("inherit");
     await dialog.getByLabel("Agent token issuance", { exact: true }).selectOption("write_capable");
+    for (const context of ["default", "internal", "external"]) await dialog.getByRole("group", { name: "Permitted issuance contexts", exact: true }).getByLabel(context, { exact: true }).check();
     await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).not.toBeChecked();
     await dialog.getByLabel("Enable local password sign-in", { exact: true }).check();
     await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
@@ -2313,7 +2314,7 @@ test("audit and activity show real broker records by visibility tier", async ({ 
     await signInAsAdmin(page);
     await page.goto(`${baseUrl}/ui`);
     for (const principalId of [userId, ownerId]) {
-      await browserManagementRequest(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: principalId, agentTokenIssuance: "write_capable", role: principalId === ownerId ? "service_policy_manager" : "user" } });
+      await browserManagementRequest(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: principalId, agentTokenIssuance: { mode: "write_capable", allowedExecutionContexts: ["default"] }, role: principalId === ownerId ? "service_policy_manager" : "user" } });
       await browserManagementRequest(page, `/v1/admin/principals/${principalId}/login-methods/local-password/enable`, {
         method: "POST",
         body: { password, mustChangePassword: false, acknowledgeSeparateSignIn: true }
@@ -2572,7 +2573,7 @@ async function mockPolicyGrants(page: Page) {
   }
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
-    body: managementResult({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] }),
+    body: managementResult({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: [], services: [] }),
   }));
   await page.route("**/v1/admin/policy/status", (route) => route.fulfill({
     contentType: "application/json",
@@ -2796,7 +2797,7 @@ test("access resource details disclose exclusions with their own alternative", a
   await page.route("**/v1/tokens/options", (route) => route.fulfill({
     contentType: "application/json",
     body: envelope({
-      policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
+      policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
       services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{
         action: "issue.view", description: "View issues", readOnly: true, resourceType: "jira_project", executionContexts: ["internal"],
         effectiveAccessByExecutionContext: { internal: [
@@ -3214,10 +3215,10 @@ test("managed issuance policy controls new tokens while inherited reads and exis
   const password = "issuance-user-password";
   await signInAsAdmin(page);
   await page.goto(`${baseUrl}/ui/admin/principals`);
-  const created = await browserManagementRequest<{ agentTokenIssuance: string }>(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: "Issuance Reader" } });
-  expect(created.agentTokenIssuance).toBe("inherit");
-  const group = await browserManagementRequest<{ agentTokenIssuance: string }>(page, "/v1/admin/groups", { method: "POST", body: { groupId, displayName: "Issuance readers" } });
-  expect(group.agentTokenIssuance).toBe("disabled");
+  const created = await browserManagementRequest<{ agentTokenIssuance: { mode: string; allowedExecutionContexts: string[] } }>(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user", displayName: "Issuance Reader" } });
+  expect(created.agentTokenIssuance).toEqual({ mode: "inherit", allowedExecutionContexts: [] });
+  const group = await browserManagementRequest<{ agentTokenIssuance: { mode: string; allowedExecutionContexts: string[] } }>(page, "/v1/admin/groups", { method: "POST", body: { groupId, displayName: "Issuance readers" } });
+  expect(group.agentTokenIssuance).toEqual({ mode: "disabled", allowedExecutionContexts: [] });
   await browserManagementRequest(page, `/v1/admin/groups/${groupId}/members/${principalId}`, { method: "PUT" });
   await browserManagementRequest(page, `/v1/admin/principals/${principalId}/login-methods/local-password/enable`, { method: "POST", body: { password, mustChangePassword: false, acknowledgeSeparateSignIn: true } });
   const resource = await browserManagementRequest<{ record: { id: string } }>(page, "/v1/admin/policy/resources", { method: "POST", body: { id: `${suffix}-projects`, displayName: "Issuance project", resourceType: "jira_project", selector: { kind: "exact", value: "TOKENISSUANCE" }, allowedExecutionContexts: ["default"], enabled: true } });
@@ -3226,6 +3227,7 @@ test("managed issuance policy controls new tokens while inherited reads and exis
   await page.goto(`${baseUrl}/ui/admin/groups/${groupId}`);
   const groupSection = page.getByRole("region", { name: "Token issuance", exact: true });
   await groupSection.getByLabel("Agent token issuance", { exact: true }).selectOption("read_only");
+  await groupSection.getByRole("checkbox", { name: "default", exact: true }).check();
   await groupSection.getByRole("button", { name: "Save token issuance", exact: true }).click();
   await expect(groupSection.getByRole("button", { name: "Save token issuance", exact: true })).toBeDisabled();
   await page.goto(`${baseUrl}/ui/admin/principals/${principalId}`);
@@ -3287,4 +3289,73 @@ test("managed issuance policy controls new tokens while inherited reads and exis
   await administered.getByRole("textbox", { name: "Name", exact: true }).fill("Administrative write ceiling");
   await administered.getByRole("button", { name: "Issue token", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Token created", exact: true }).getByText("Write-capable", { exact: true })).toBeVisible();
+});
+
+// Real local Broker fixture: policy edits and a runtime registry reload, with no
+// upstream calls. This final scenario leaves its test-owned registry until teardown.
+test("mixed group contexts and registry reload preserve a personal draft for explicit correction", async ({ page, browser }, testInfo) => {
+  const prefix = `context-policy-${testInfo.project.name}`;
+  const principalId = `${prefix}-user`;
+  const readers = `${prefix}-readers`;
+  const writers = `${prefix}-writers`;
+  await signInAsAdmin(page);
+  await page.goto(`${baseUrl}/ui/admin/principals`);
+  await browserManagementRequest(page, "/v1/admin/principals", { method: "POST", body: { principalId, kind: "user" } });
+  await browserManagementRequest(page, `/v1/admin/principals/${principalId}/login-methods/local-password/enable`, { method: "POST", body: { password: "context-policy-password", mustChangePassword: false, acknowledgeSeparateSignIn: true } });
+  for (const [groupId, mode, context] of [[readers, "read_only", "external"], [writers, "write_capable", "internal"]]) {
+    await browserManagementRequest(page, "/v1/admin/groups", { method: "POST", body: { groupId, agentTokenIssuance: { mode, allowedExecutionContexts: [context] } } });
+    await browserManagementRequest(page, `/v1/admin/groups/${groupId}/members/${principalId}`, { method: "PUT" });
+  }
+  const addGrant = async (context: string) => {
+    const id = `${prefix}-${context}`;
+    await browserManagementRequest(page, "/v1/admin/policy/resources", { method: "POST", body: { id, displayName: id, resourceType: "jira_project", selector: { kind: "exact", value: `CONTEXT${context.toUpperCase()}` }, allowedExecutionContexts: [context], enabled: true } });
+    await browserManagementRequest(page, "/v1/admin/policy/grants", { method: "POST", body: { grantId: id, subjects: [`user:${principalId}`], service: "jira", actions: ["issue.view", "issue.update"], credentialMode: "per_user", executionContexts: [context], resources: { resourceIds: [id], resourceGroupIds: [] }, status: "active" } });
+  };
+  await addGrant("internal");
+  await addGrant("external");
+  await page.goto(`${baseUrl}/ui/admin/principals/${principalId}`);
+  const account = page.getByRole("region", { name: "Account access", exact: true });
+  await expect(account).toContainText(`internal: Write-capable, inherited from ${writers}`);
+  await expect(account).toContainText(`external: Read-only, inherited from ${readers}`);
+  const userContext = await browser.newContext();
+  const user = await userContext.newPage();
+  try {
+    expect(await apiSignIn(user, principalId, "context-policy-password")).not.toBeNull();
+    await user.goto(`${baseUrl}/ui/tokens/new`);
+    const editor = user.getByRole("main", { name: "Issue agent token", exact: true });
+    await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Preserved across reload");
+    await expect(editor.getByRole("checkbox", { name: "Read-only", exact: true })).toHaveCount(0);
+    await editor.getByRole("checkbox", { name: "external", exact: true }).uncheck();
+    await editor.getByRole("checkbox", { name: "Read-only", exact: true }).uncheck();
+    await browserManagementRequest(page, `/v1/admin/groups/${writers}`, { method: "PATCH", body: { agentTokenIssuance: { mode: "read_only", allowedExecutionContexts: ["internal"] } } });
+    const refresh = async () => {
+      await user.clock.setFixedTime(new Date(await user.evaluate(() => Date.now()) + 120_000));
+      await user.evaluate(() => { window.dispatchEvent(new Event("offline")); window.dispatchEvent(new Event("online")); });
+    };
+    await refresh();
+    await expect(editor.getByRole("button", { name: "Issue token", exact: true })).toBeDisabled();
+    await expect(editor.getByRole("complementary", { name: "Token summary", exact: true })).toContainText("Write-capable");
+    await editor.getByRole("button", { name: "Apply read-only restriction", exact: true }).click();
+    await browserManagementRequest(page, `/v1/admin/groups/${writers}`, { method: "PATCH", body: { agentTokenIssuance: { mode: "disabled", allowedExecutionContexts: [] } } });
+    const configPath = path.join(tempDir, "broker.toml");
+    const config = await fs.readFile(configPath, "utf8");
+    expect(config).toContain('allowed_values = ["default", "internal", "external"]');
+    await fs.writeFile(configPath, config.replace('allowed_values = ["default", "internal", "external"]', 'allowed_values = ["default", "internal", "external", "future"]'));
+    await browserManagementRequest(page, "/v1/admin/config/reload", { method: "POST" });
+    await addGrant("future");
+    await browserManagementRequest(page, `/v1/admin/groups/${readers}`, { method: "PATCH", body: { agentTokenIssuance: { mode: "read_only", allowedExecutionContexts: ["external", "future"] } } });
+    await refresh();
+    await expect(editor.getByRole("checkbox", { name: "future", exact: true })).not.toBeChecked();
+    await expect(editor.getByRole("checkbox", { name: "internal", exact: true })).toBeChecked();
+    await expect(editor).toContainText("No longer permitted for personal issuance");
+    await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Preserved across reload");
+    await expect(editor.getByRole("button", { name: "Issue token", exact: true })).toBeDisabled();
+    await editor.getByRole("checkbox", { name: "internal", exact: true }).click();
+    await expect(editor.getByRole("checkbox", { name: "internal", exact: true })).toHaveCount(0);
+    await editor.getByRole("checkbox", { name: "external", exact: true }).check();
+    await editor.getByRole("button", { name: "Issue token", exact: true }).click();
+    await expect(user.getByRole("dialog", { name: "Token created", exact: true })).toBeVisible();
+    const records = await browserManagementRequest<Array<{ scopes: { readOnly: boolean; allowedExecutionContexts: string[] } }>>(user, "/v1/tokens");
+    expect(records[0].scopes).toEqual({ readOnly: true, allowedExecutionContexts: ["external"] });
+  } finally { await userContext.close(); }
 });

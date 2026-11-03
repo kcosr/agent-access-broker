@@ -684,14 +684,23 @@ personal issuance permission. Without it the policy is `{}` and issuance is
 unavailable; no missing-member fallback enables issuance. Admin sessions
 additionally receive `tokenIssuancePolicy.administered`
 with `agentInvoke`, `userManage`, and `admin` policies; that object is omitted
-for non-admins. Each policy contains the ordered `options` projected from the
-corresponding `[broker_tokens]` list, a `defaultTtl` string or `null`, and a
+for non-admins. Personal forms require valid current access projections in both
+session and token options. Administrative forms display the owner's policy but
+do not use it as a ceiling; missing/malformed owner policy is display-only.
+Both forms still require valid lifetime/permission metadata and target options,
+and failed metadata requests block issuance. Each policy contains the ordered
+`options` projected from the corresponding `[broker_tokens]` list, a `defaultTtl` string or `null`, and a
 `maxTtl` string or `null`:
 
 ```json
 {
   "selfAgentInvoke": {
-    "access": {"mode": "read_only", "source": "groups", "groupIds": ["engineering-readers"]},
+    "access": {
+      "source": "groups",
+      "contexts": [
+        {"executionContext": "default", "mode": "read_only", "groupIds": ["engineering-readers"]}
+      ]
+    },
     "defaultTtl": "8h",
     "maxTtl": "30d",
     "options": ["8h", "7d", "30d"]
@@ -998,7 +1007,11 @@ Self-service token management:
 | `POST` | `/v1/tokens/{token_id}/resume` |
 
 `GET /v1/tokens/options` includes `agentTokenIssuancePolicy` and returns ordered
-execution-context and service choices from the calling principal's effective policy. Each service reports its
+execution-context and service choices from the calling principal's current grants.
+The raw context/service/resource inventory is not filtered by issuance policy;
+My Access and existing-token previews retain it when personal issuance is denied.
+New personal token forms intersect those choices with the current session and
+options policy maps by context, taking the less permissive mode. Each service reports its
 `service` ID, configured `displayName` (built-in or imported), `brokerHosts`
 (the hosts agents use to reach a gateway service such as Git; `[]` for other
 services), eligible contexts, and its currently eligible actions. Each action
@@ -1071,14 +1084,26 @@ need an effective invocation grant, but not a usable read or credential today.
 
 Personal issuance checks the account's current [issuance permission](roles.md#agent-token-issuance)
 inside the insertion transaction, after ordinary validation and prerequisites.
-A refusal is 403 `token_issuance_denied`, with `details.category` equal to
-`disabled` ("Agent token issuance is disabled for this account") or
-`read_only_required` ("This account may issue only read-only agent tokens").
+Every selected context must have permission; `readOnly: false` additionally
+requires Write-capable permission in every selected context. A refusal is HTTP
+403 `token_issuance_denied`. The policy check chooses `details.category` in this
+order:
+
+| Category | Condition | Message |
+| --- | --- | --- |
+| `disabled` | No enabled policy contexts | Agent token issuance is disabled for this account |
+| `context_not_allowed` | At least one requested context has no permission | Personal agent tokens are not allowed in every requested execution context |
+| `read_only_required` | Otherwise, false `readOnly` with any requested Read-only context | The selected execution contexts require a read-only agent token |
+
+Only requested contexts participate in the last check. Broker rejects the whole
+request without changing its Boolean, trimming contexts, or splitting tokens.
 Body/name validation, token hasher availability, the empty-grants check, scope
-validation, expiry and audit preflight precede transactional active-account,
-self-service and issuance-policy checks. Thus no grants still returns the
-existing grant denial, and an explicitly selected write with `readOnly: true`
-returns 400 before the policy check. Disabling issuance does not prevent token
+and target-option validation, expiry and audit preflight precede transactional
+active-account, self-service and issuance-policy checks. Unconfigured
+context names and contexts outside target grant options still produce HTTP 400
+`input_invalid`; no grants still returns `service_action_denied`. An explicitly
+selected write with `readOnly: true` returns 400 before the policy check. Snapshot
+conflicts remain HTTP 409 `version_conflict`. Disabling issuance does not prevent
 inspection, preview, pause/resume or revocation under their existing permissions.
 
 `POST /v1/tokens` accepts at most one of `ttl`, `expiresAt`, or
@@ -1247,38 +1272,65 @@ services, credential, policy, and `agent-tokens` routes remain available to
 global administrators. Management-class tokens owned by service accounts fail
 with `broker_token_class_denied` at resolution and cannot enable login.
 
-Principal create accepts optional `agentTokenIssuance`: `inherit` (default),
-`disabled`, `read_only`, or `write_capable`. `POST /v1/admin/principals` is
-create-only: an existing principal returns HTTP 409, even when the body supplies
-different settings, and remains unchanged. Internal onboarding upserts preserve
-existing issuance overrides. Change existing settings through
-`PATCH /v1/admin/principals/{principal}/access`, whose optional fields are `role`,
-`selfServiceEnabled`, and `agentTokenIssuance`. Any one suffices; omitted fields
-are unchanged, and null/unknown values are invalid. An issuance-only no-op writes
-nothing; an actual issuance-only edit has no role-change side effects.
-Personal account-profile updates cannot change the setting.
-
-Principal records include configured `agentTokenIssuance`; detail and both
-personal and administrative token-options responses include
-`agentTokenIssuancePolicy`, for example:
+Principal create accepts optional `agentTokenIssuance` as a complete object:
 
 ```json
-{"mode":"read_only","source":"groups","groupIds":["engineering-readers"]}
+{"agentTokenIssuance":{"mode":"read_only","allowedExecutionContexts":["external","internal"]}}
 ```
 
-`mode` is `disabled`, `read_only`, or `write_capable`; `source` is `user`,
-`groups`, or `default`. Sorted, deduplicated `groupIds` contains only active
-contributing groups at the winning mode, or is empty for an override/default.
-This reports permission for the owner's next personal token, not whether all
-other issuance prerequisites hold. Session
-`tokenIssuancePolicy.selfAgentInvoke.access` carries the same projection.
+Both inner fields are required. Account modes are `inherit`, `disabled`,
+`read_only`, and `write_capable`; groups accept the last three. Inherit and
+Disabled require an empty context list; enabled modes require one or more
+configured contexts. Contexts must be unique and match `[a-z][a-z0-9_-]{0,63}`,
+with at most 64 entries. Unknown members, nulls, malformed names, wrong types and
+unconfigured contexts are rejected. Sets serialize in lexical order; reordering
+an equal set is a no-op. The full dynamic registry is available through the
+existing `GET /v1/admin/policy/catalog` under PolicyRead authorization.
 
-Managed group create and PATCH accept `agentTokenIssuance` with `disabled`
-(default on create), `read_only`, or `write_capable`; groups reject `inherit`.
-Omission on PATCH preserves the value. Every group record includes the field.
-TOML identity group reads report `disabled`, and group writes remain refused:
-file-owned groups provide no issuance contribution. See
-[resolution and membership](roles.md#agent-token-issuance).
+Omitting the whole field on creation gives an account
+`{"mode":"inherit","allowedExecutionContexts":[]}` or a group
+`{"mode":"disabled","allowedExecutionContexts":[]}`. `POST /v1/admin/principals`
+is create-only: an existing principal returns HTTP 409 and remains unchanged.
+Internal onboarding upserts preserve existing pairs. Change account settings
+through `PATCH /v1/admin/principals/{principal}/access`, whose optional fields are
+`role`, `selfServiceEnabled`, and `agentTokenIssuance`. Any one suffices. Omitted
+fields stay unchanged; presence replaces the complete pair atomically, with no
+nested partial PATCH. API/CLI replacement is last-writer-wins, without a version
+precondition. Personal account-profile updates cannot change issuance policy.
+An issuance-only no-op writes nothing; an actual issuance-only edit has no
+role-change token-revocation or assignment-removal effects. Disabling an account
+or group preserves its pair.
+
+Every principal/group record includes its configured object. Principal detail
+and both personal and administrative token options include the effective
+`agentTokenIssuancePolicy`:
+
+```json
+{
+  "source": "groups",
+  "contexts": [
+    {"executionContext":"internal","mode":"write_capable","groupIds":["internal-writers"]},
+    {"executionContext":"external","mode":"read_only","groupIds":["external-readers"]}
+  ]
+}
+```
+
+`contexts` contains only enabled rows in configured registry order; missing rows
+mean Disabled. Each row is unique and has mode `read_only` or `write_capable`.
+For inheritance, each row lists sorted unique IDs of groups tied at that
+context's winning mode. An explicit override has source `user` and empty row
+`groupIds`; inheritance with any enabled row has source `groups`. Inheritance
+without permission has `{"source":"default","contexts":[]}`; explicit Disabled
+has `{"source":"user","contexts":[]}`. Owners can see their assigned issuance
+contexts even without a current grant there. No unrelated registry values or
+disabled rows are disclosed to personal callers. Session
+`tokenIssuancePolicy.selfAgentInvoke.access` carries this same projection.
+
+Managed group POST/PATCH uses the same whole-object replacement contract. TOML
+identity group reads report `{"mode":"disabled","allowedExecutionContexts":[]}`
+and group writes remain refused. Managed group settings are dormant under TOML
+identity; explicit account overrides remain available under either identity or
+policy authority. See [resolution and membership](roles.md#agent-token-issuance).
 
 `PUT /v1/admin/principals/{principal}/login-methods/local-password` resets an
 existing active local password. It accepts
@@ -1449,9 +1501,10 @@ are calculated for the target principal, not the administrative actor. The
 response has the same shape as `GET /v1/tokens/options`, including each
 service's `displayName` and `brokerHosts` and each action's `readOnly`. Its
 `mcp` is `null` for auditors, who cannot issue the token. Its
-`agentTokenIssuancePolicy` describes the target owner's personal permission;
-administrative issuance uses administrator write authority and may select either
-Boolean regardless of the owner's personal mode or self-service flag. An admin
+`agentTokenIssuancePolicy` describes the target owner's personal per-context
+permission. Administrative issuance uses administrator write authority and may
+select either Boolean and any target-granted context independently of the owner's
+personal mode, context list or self-service flag. An admin
 using the personal route still follows the personal policy.
 
 `POST /v1/admin/principals/{principal}/tokens` is the generic admin broker-token
@@ -1491,7 +1544,12 @@ canonical safe boundary, actor, target owner, token metadata, and sanitized
 result, but never the raw token secret. Agent-token completion
 `providerAudit.management.target` includes
 `boundary.readOnly`, `issuanceAuthority` (`personal` or `administrative`), and
-`agentTokenIssuancePolicy` only for personal issuance, captured with insertion.
+`agentTokenIssuancePolicy` only for personal issuance, with the exact full effective
+context policy captured with insertion. Administrative issuance bypasses personal
+mode, context-list and read-only limits while retaining target grants and ordinary
+token validation. Principal creation completion captures the initial configured
+pair, including creation defaults; policy-edit completion captures the previous
+and current complete pairs. No-op replacements do not report a policy change.
 A policy refusal carries `providerAudit.management.details.category`; the API exposes
 `details.category`. Commit and the completion attempt survive disconnect. If
 completion fails after commit, the response is audit-unavailable without the
@@ -1807,9 +1865,8 @@ role changes, token revocation, credential classes, and database operations.
 An assignment is management authority only. It does not create an invocation
 grant or permit issuing tokens for another principal. Managers retain normal
 self-service token issuance, but a self-issued `agent_invoke` token still
-requires explicit issuance permission and at least one effective invocation
-grant; the assignment alone is not
-enough.
+requires issuance permission in every selected context and at least one
+effective invocation grant; the assignment alone is not enough.
 
 ### Config reload and status
 

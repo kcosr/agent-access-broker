@@ -12,11 +12,11 @@ const envelope = (result: unknown) => ({ ok: true, result });
 const stamp = { createdAt: "2026-10-14T00:00:00Z", updatedAt: "2026-10-14T00:00:00Z", createdBy: "viewer", updatedBy: "viewer" };
 const ttlPolicy = { defaultTtl: "1h", maxTtl: "8h", options: ["1h", "8h"] };
 const rawToken = "aab_test_one_time_token_page_secret";
-const owner = (principalId: string, status = "active") => ({ agentTokenIssuance: "write_capable", agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, principalId, kind: "user", displayName: principalId, role: "user", selfServiceEnabled: true, status, groups: [], signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [], ...stamp });
+const owner = (principalId: string, status = "active") => ({ agentTokenIssuance: { mode: "write_capable", allowedExecutionContexts: ["default"] }, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, principalId, kind: "user", displayName: principalId, role: "user", selfServiceEnabled: true, status, groups: [], signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [], ...stamp });
 const action = (action: string, readOnly: boolean, executionContexts = ["internal", "external"]) => ({ action, readOnly, description: `${action} description`, executionContexts, requiredScopeTypes: ["project"], resourceType: "jira_project" as const, effectiveAccessByExecutionContext: Object.fromEntries(executionContexts.map((context) => [context, [{ included: [{ kind: "all" as const }], excluded: [] }]])) });
 function tokenOptions(): AgentTokenOptions {
   return {
-    policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] },
+    policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] },
     executionContexts: ["internal", "external"],
     resources: [{ id: "project", displayName: "Example project", resourceType: "jira_project", selector: { kind: "exact", value: "EXAMPLE" }, allowedExecutionContexts: ["internal", "external"], enabled: true }],
     resourceGroups: [{ id: "empty-group", name: "Empty group" }],
@@ -36,7 +36,7 @@ test.afterAll(async () => { await assets.close(); });
 
 async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnabled = true) {
   const model = {
-    session: { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: [], csrfHeader: "x-csrf-token", csrfToken: "fixture", loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { mode: "write_capable", source: "user", groupIds: [] } }, administered: { agentInvoke: ttlPolicy, userManage: ttlPolicy, admin: ttlPolicy } } } as Session,
+    session: { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: [], csrfHeader: "x-csrf-token", csrfToken: "fixture", loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] } }, administered: { agentInvoke: ttlPolicy, userManage: ttlPolicy, admin: ttlPolicy } } } as Session,
     options: tokenOptions(),
     principalStatus: "active",
     requests: [] as string[],
@@ -501,7 +501,7 @@ test("an initialized owner draft survives empty grant and lifetime-policy refres
   await expect.poll(() => model.optionReads).toBeGreaterThan(previous);
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("retained-draft");
   await expect(editor(page).getByRole("button", { name: "Issue token", exact: true })).toBeDisabled();
-  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { mode: "write_capable", source: "user", groupIds: [] } } } };
+  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { ...ttlPolicy, access: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] } } } };
   const sessionReads = model.sessionReads;
   await refreshQueries(page);
   await expect.poll(() => model.sessionReads).toBeGreaterThan(sessionReads);
@@ -668,7 +668,7 @@ test("a removed lifetime remains explicit and can be replaced after policy refre
   await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("updated-lifetime");
   const lifetime = editor(page).getByLabel("Lifetime", { exact: true });
   await lifetime.selectOption("8h");
-  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "1h", options: ["1h"] } } };
+  model.session = { ...model.session, tokenIssuancePolicy: { selfAgentInvoke: { access: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, defaultTtl: "1h", maxTtl: "1h", options: ["1h"] } } };
   await refreshQueries(page);
   await expect(lifetime).toHaveValue("8h");
   await expect(lifetime.locator('option[value="8h"]')).toContainText("no longer available");
@@ -775,7 +775,7 @@ test("a password-required redirect suppresses a pending issuance success and its
 });
 
 function setIssuanceMode(model: Awaited<ReturnType<typeof fixture>>, mode: "disabled" | "read_only" | "write_capable") {
-  const access = { mode, source: "user" as const, groupIds: [] };
+  const access = { source: "user" as const, contexts: mode === "disabled" ? [] : model.options.executionContexts.map((executionContext) => ({ executionContext, mode, groupIds: [] })) };
   model.options = { ...model.options, agentTokenIssuancePolicy: access };
   model.session = { ...model.session, tokenIssuancePolicy: { ...model.session.tokenIssuancePolicy, selfAgentInvoke: { ...ttlPolicy, access } } };
 }
@@ -859,7 +859,7 @@ test("disabled policy refresh preserves the draft and a completed one-time secre
   await readOnlyCheckbox(page).uncheck();
   setIssuanceMode(model, "disabled");
   await refreshQueries(page);
-  await expect(editor(page).getByText("Agent token issuance is disabled for this account.", { exact: true }).first()).toBeVisible();
+  await expect(editor(page).getByText("No granted execution contexts permit personal agent token issuance.", { exact: true }).first()).toBeVisible();
   await expect(issueButton(page)).toBeDisabled();
   await expect(readOnlyCheckbox(page)).not.toBeChecked();
   await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("preserve-draft");
@@ -969,3 +969,114 @@ for (const failed of ["session", "options"] as const) {
     expect(model.errors).toEqual([]);
   });
 }
+
+function setContextPolicy(model: Awaited<ReturnType<typeof fixture>>, contexts: AgentTokenOptions["agentTokenIssuancePolicy"]["contexts"]) {
+  const access = { source: "user" as const, contexts };
+  model.options = { ...model.options, agentTokenIssuancePolicy: access };
+  model.session = { ...model.session, tokenIssuancePolicy: { ...model.session.tokenIssuancePolicy, selfAgentInvoke: { ...ttlPolicy, access } } };
+}
+
+test("mixed context modes require read-only only while a read-only context is selected", async ({ page }) => {
+  const model = await fixture(page);
+  setContextPolicy(model, [
+    { executionContext: "internal", mode: "write_capable", groupIds: [] },
+    { executionContext: "external", mode: "read_only", groupIds: [] },
+  ]);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("internal-writes");
+  await expect(readOnlyCheckbox(page)).toHaveCount(0);
+  await expect(editor(page).getByRole("region", { name: "Token restriction" })).toContainText("Required by your account");
+  await editor(page).getByRole("checkbox", { name: "external", exact: true }).uncheck();
+  await expect(readOnlyCheckbox(page)).toBeChecked();
+  await readOnlyCheckbox(page).uncheck();
+  await issueButton(page).click();
+  expect(model.issued[0].body).toMatchObject({ readOnly: false, allowedExecutionContexts: ["internal"] });
+});
+
+test("a newly permitted context stays unchecked and a stale selection needs explicit removal", async ({ page }) => {
+  const model = await fixture(page);
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("preserved-name");
+  await editor(page).getByRole("combobox", { name: "Lifetime", exact: true }).selectOption("8h");
+  await readOnlyCheckbox(page).uncheck();
+  model.options.executionContexts = ["internal", "external", "future"];
+  setContextPolicy(model, [
+    { executionContext: "internal", mode: "write_capable", groupIds: [] },
+    { executionContext: "future", mode: "write_capable", groupIds: [] },
+  ]);
+  await refreshQueries(page);
+  await expect(editor(page).getByRole("checkbox", { name: "future", exact: true })).not.toBeChecked();
+  await expect(editor(page).getByRole("checkbox", { name: "external", exact: true })).toBeChecked();
+  await expect(editor(page)).toContainText("No longer permitted for personal issuance");
+  await expect(issueButton(page)).toBeDisabled();
+  await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveValue("preserved-name");
+  await expect(editor(page).getByRole("combobox", { name: "Lifetime", exact: true })).toHaveValue("8h");
+  await expect(readOnlyCheckbox(page)).not.toBeChecked();
+  await editor(page).getByRole("checkbox", { name: "external", exact: true }).click();
+  await expect(editor(page).getByRole("checkbox", { name: "external", exact: true })).toHaveCount(0);
+  await issueButton(page).click();
+  expect(model.issued[0].body).toEqual({ name: "preserved-name", ttl: "8h", readOnly: false, allowedExecutionContexts: ["internal"] });
+});
+
+for (const first of ["session", "options"] as const) {
+  test(`a fresh personal draft waits for both initial refreshes when ${first} answers first`, async ({ page }) => {
+    const model = await fixture(page);
+    setContextPolicy(model, [{ executionContext: "internal", mode: "write_capable", groupIds: [] }]);
+    await page.goto(`${baseUrl}/ui/tokens`);
+    const open = page.getByRole("button", { name: "Issue token", exact: true }).first();
+    await expect(open).toBeEnabled();
+    setContextPolicy(model, [{ executionContext: "external", mode: "read_only", groupIds: [] }]);
+    let releaseSession!: () => void;
+    let releaseOptions!: () => void;
+    const sessionGate = new Promise<void>((resolve) => { releaseSession = resolve; });
+    const optionsGate = new Promise<void>((resolve) => { releaseOptions = resolve; });
+    let sessionStarted = false;
+    let optionsStarted = false;
+    await page.route("**/v1/auth/session", async (route) => { sessionStarted = true; await sessionGate; await route.fulfill({ json: { ok: true, result: model.session } }); });
+    await page.route("**/v1/tokens/options", async (route) => { optionsStarted = true; await optionsGate; await route.fulfill({ json: { ok: true, result: model.options } }); });
+    try {
+      await open.click();
+      await expect.poll(() => sessionStarted && optionsStarted).toBe(true);
+      await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveCount(0);
+      const firstResponse = page.waitForResponse((response) => new URL(response.url()).pathname === (first === "session" ? "/v1/auth/session" : "/v1/tokens/options"));
+      (first === "session" ? releaseSession : releaseOptions)();
+      await (await firstResponse).finished();
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(editor(page).getByRole("textbox", { name: "Name", exact: true })).toHaveCount(0);
+      expect(model.previews).toEqual([]);
+      (first === "session" ? releaseOptions : releaseSession)();
+      await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("fresh-policy");
+      const contexts = editor(page).getByRole("group", { name: "Execution contexts", exact: true });
+      await expect(contexts.getByText("external", { exact: true })).toBeVisible();
+      await expect(contexts.getByRole("checkbox")).toHaveCount(0);
+      await expect(readOnlyCheckbox(page)).toHaveCount(0);
+      await issueButton(page).click();
+      expect(model.issued[0].body).toMatchObject({ readOnly: true, allowedExecutionContexts: ["external"] });
+      expect(model.errors).toEqual([]);
+    } finally { releaseSession(); releaseOptions(); }
+  });
+}
+
+for (const invalid of [undefined, { mode: "write_capable", source: "user", groupIds: [] }]) {
+  test(`administrative issuance treats ${invalid ? "malformed" : "missing"} owner policy as display-only`, async ({ page }) => {
+    const model = await fixture(page, "admin");
+    model.options.agentTokenIssuancePolicy = invalid as unknown as AgentTokenOptions["agentTokenIssuancePolicy"];
+    await page.goto(`${baseUrl}/ui/admin/principals/target/tokens/new`);
+    await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("administrative");
+    await expect(editor(page)).toContainText("Owner issuance policy unavailable");
+    await readOnlyCheckbox(page).uncheck();
+    await issueButton(page).click();
+    expect(model.issued[0].body).toMatchObject({ readOnly: false, allowedExecutionContexts: ["internal", "external"] });
+  });
+}
+
+test("a service-prefilled personal draft selects reads only in its eligible context", async ({ page }) => {
+  const model = await fixture(page);
+  setContextPolicy(model, [{ executionContext: "external", mode: "read_only", groupIds: [] }]);
+  await page.goto(`${baseUrl}/ui/tokens/new?service=jira`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("external-reads");
+  await expect(service(page, "Jira").getByLabel("issue.internal", { exact: true })).toHaveCount(0);
+  await expect(service(page, "Jira").getByLabel("issue.view", { exact: true })).toBeChecked();
+  await issueButton(page).click();
+  expect(model.issued[0].body).toMatchObject({ allowedExecutionContexts: ["external"], serviceRestrictions: { jira: { actions: ["comment.view", "issue.view"] } } });
+});

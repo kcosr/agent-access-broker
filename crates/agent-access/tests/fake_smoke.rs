@@ -3353,6 +3353,13 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
     let fixture_dir = application.directory().clone();
     let document = fake_document(&fixture_dir, FakeAccess::Managed);
     // Seed the managed store before the broker opens and locks it.
+    let issuance_contexts = agent_access_core::ConfiguredExecutionContexts::from_config(Some(
+        &agent_access_core::ExecutionContextConfig {
+            allowed_values: vec!["default".into(), "internal".into()],
+            default_context: Some("default".into()),
+        },
+    ))
+    .unwrap();
     let store = ManagedStore::open(
         &ManagedStoreConfig {
             kind: "sqlite".to_string(),
@@ -3363,30 +3370,37 @@ async fn cli_managed_resource_groups_update_existing_token_access_and_report_ref
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &issuance_contexts,
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "admin".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".to_string(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "admin".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".to_string(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "admin".into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "admin".into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &issuance_contexts,
+        )
         .unwrap();
     let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
         hash_key_ref: format!("file:{}", fixture_dir.join("hash-key").display()),

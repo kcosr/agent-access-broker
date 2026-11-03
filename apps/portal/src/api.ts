@@ -1,4 +1,4 @@
-import type { AgentTokenIssuanceMode, PrincipalAgentTokenIssuance } from "./types";
+import type { GroupAgentTokenIssuanceSetting, PrincipalAgentTokenIssuanceSetting } from "./types";
 import type { ImportAcceptResult, ImportActionStatus, ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
 import type { CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
@@ -385,7 +385,7 @@ export const brokerApi = {
     ),
   adminCreateGroup: (
     session: Session,
-    body: { groupId: string; displayName?: string; description?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: AgentTokenIssuanceMode }
+    body: { groupId: string; displayName?: string; description?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting }
   ) =>
     managementRequest<GroupRecord>(
       "/v1/admin/groups",
@@ -398,7 +398,7 @@ export const brokerApi = {
   adminPatchGroup: (
     session: Session,
     groupId: string,
-    body: { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: AgentTokenIssuanceMode }
+    body: { displayName?: string | null; description?: string | null; status?: string; autoEnrollNewMicrosoftUsers?: boolean; agentTokenIssuance?: GroupAgentTokenIssuanceSetting }
   ) =>
     managementRequest<GroupRecord>(
       `/v1/admin/groups/${enc(groupId)}`,
@@ -432,7 +432,7 @@ export const brokerApi = {
     managementRequest<PrincipalDetail>(`/v1/admin/principals/${enc(principalId)}`, {}, session),
   adminCreatePrincipal: (
     session: Session,
-    body: { principalId: string; kind?: "user" | "service_account"; displayName?: string; email?: string; role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuance }
+    body: { principalId: string; kind?: "user" | "service_account"; displayName?: string; email?: string; role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }
   ) =>
     managementRequest<PrincipalRecord>(
       "/v1/admin/principals",
@@ -491,7 +491,7 @@ export const brokerApi = {
       },
       session
     ),
-  adminSetAccess: (session: Session, principalId: string, body: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuance }) =>
+  adminSetAccess: (session: Session, principalId: string, body: { role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }) =>
     managementRequest<PrincipalRecord>(`/v1/admin/principals/${enc(principalId)}/access`, { method: "PATCH", body: JSON.stringify(body) }, session),
   adminAddGroup: (session: Session, principalId: string, group: string) =>
     managementRequest<{ ok: boolean }>(

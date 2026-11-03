@@ -68,29 +68,40 @@ async fn managed_mcp_checks_token_class_and_revocation_on_existing_sessions() {
         .token_ref = Some(format!("file:{}", upstream_token.display()));
     config.mcp.enabled = true;
     config.mcp.public_url = Some("https://broker.example.test/mcp".into());
-    let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
+    let store = ManagedStore::open(
+        &store_config,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "mcp-managed-user".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "mcp-managed-user".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     // Even an administrator's valid management tokens must not become invoke tokens.
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("mcp-managed-user").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("mcp-managed-user").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let hasher = BrokerTokenHasher::load(config.broker_tokens.as_ref().unwrap()).unwrap();
     let catalog = ManagedResourceCatalog {

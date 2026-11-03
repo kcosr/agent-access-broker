@@ -1,4 +1,4 @@
-import { agentTokenIssuanceDescription, selfTokenIssuanceMode, tokenIssuanceBlocker } from "../../lib/token-issuance-policy";
+import { agentTokenIssuanceDescription, eligibleTokenContexts, isAgentTokenIssuancePolicy, selfTokenIssuanceContexts, tokenIssuanceBlocker, validTokenTtlPolicy } from "../../lib/token-issuance-policy";
 import { TokenEffect, TokenReadOnlyControl } from "./token-effect";
 // A local token draft shares boundary validation between preview and issuance.
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -30,19 +30,27 @@ const fieldElementId = (field: AgentTokenDraftField) => `token-${field.replace("
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 export function TokenEditorPage() {
-  const { session } = useSession();
+  const { session, refreshSession } = useSession();
   const { principalId } = useParams();
   const [params] = useSearchParams();
   const subject: AccountSubject = { administered: principalId !== undefined, principalId: principalId ?? session.principal ?? "" };
-  const invalidate = usePortalInvalidation();
-  useEffect(() => { void invalidate.session(); }, [invalidate]);
+
   const initializedOwner = useRef<string | null>(null);
   const ownerKey = `${subject.administered}:${subject.principalId}:${params.toString()}`;
   const initialized = initializedOwner.current === ownerKey;
+  const [initialRefresh, setInitialRefresh] = useState<{ key: string; ready: boolean; error?: unknown }>({ key: "", ready: false });
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setInitialRefresh({ key: ownerKey, ready: false });
+    void refreshSession().then(() => { if (active) setInitialRefresh({ key: ownerKey, ready: true }); }, (error: unknown) => { if (active) setInitialRefresh({ key: ownerKey, ready: false, error }); });
+    return () => { active = false; };
+  }, [ownerKey, refreshSession, retry]);
   const owner = useAdminPrincipal(subject.principalId, subject.administered);
   const ownerActive = !subject.administered || owner.data?.status === "active";
   const { query, options } = useAgentTokenOptions(subject, ownerActive, true);
-  const ttlPolicy = subject.administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
+  const suppliedTtl = subject.administered ? session.tokenIssuancePolicy?.administered?.agentInvoke : session.tokenIssuancePolicy?.selfAgentInvoke;
+  const ttlPolicy = validTokenTtlPolicy(suppliedTtl) ? suppliedTtl : null;
   const explicitReturn = portalReturnTo(params.get("returnTo"));
   const returnTo = explicitReturn ?? tokenListPath(subject);
   const back = { href: returnTo, label: explicitReturn ? "Back" : "Tokens" };
@@ -50,8 +58,16 @@ export function TokenEditorPage() {
   const meta = subject.administered
     ? `For ${ownerName && ownerName !== subject.principalId ? `${ownerName} · ` : ""}${subject.principalId}`
     : "Agent tokens let a CLI or MCP client act for you, within the limits you set here.";
+  const initialPolicyError = initialRefresh.error ?? query.error;
+  const initialReady = initialRefresh.key === ownerKey && initialRefresh.ready && query.isFetchedAfterMount && !query.isFetching && !query.isPlaceholderData && query.isSuccess;
   let state: ReactNode;
-  if ((subject.administered && !owner.data && owner.isPending) || (ownerActive && !options && query.isPending)) {
+  if (!canWriteSubject(session, subject) || !subject.principalId) {
+    state = <EmptyState icon="lock" title="Token issuance unavailable">You do not have permission to issue tokens here.</EmptyState>;
+  } else if (!initialized && initialPolicyError) {
+    state = <ErrorState title="Couldn’t load token issuance policy" error={initialPolicyError} onRetry={() => { setRetry((value) => value + 1); void query.refetch(); }} />;
+  } else if (!initialized && ownerActive && !initialReady) {
+    state = <SkeletonBlock lines={8} label="Loading token options and issuance policy" />;
+  } else if ((subject.administered && !owner.data && owner.isPending) || (ownerActive && !options && query.isPending)) {
     state = <SkeletonBlock lines={8} label="Loading token options" />;
   } else if ((subject.administered && !owner.data && owner.error) || (ownerActive && !options && query.error)) {
     state = <ErrorState title="Couldn’t load token options" error={owner.error ?? query.error} onRetry={() => { if (subject.administered) void owner.refetch(); void query.refetch(); }} />;
@@ -63,6 +79,8 @@ export function TokenEditorPage() {
     state = <EmptyState icon="key" title="Token issuance unavailable">Token issuance policy is unavailable.</EmptyState>;
   } else if (!options || (options.executionContexts.length === 0 && !initialized)) {
     state = <EmptyState icon="shield" title="No active grants">{subject.administered ? "This principal needs" : "You need"} an active policy grant before an execution-context-bound token can be issued.</EmptyState>;
+  } else if (!initialized && tokenIssuanceBlocker(session, subject.administered, options)) {
+    state = <EmptyState icon="key" title="Token issuance unavailable">{tokenIssuanceBlocker(session, subject.administered, options)}</EmptyState>;
   } else {
     initializedOwner.current = ownerKey;
     return <TokenEditor key={ownerKey} subject={subject} options={options} ttlPolicy={ttlPolicy ?? null} services={params.getAll("service")} returnTo={returnTo} header={<PageHeader title="Issue agent token" back={back} meta={meta} />} optionsError={query.error} optionsRefreshing={query.isFetching} retryOptions={() => { void query.refetch(); }} />;
@@ -84,7 +102,8 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   optionsRefreshing: boolean;
   retryOptions: () => void;
 }) {
-  const [initial] = useState(() => createAgentTokenDraft(options, ttlPolicy!, services));
+  const { session, getSession, sessionRefreshError, retryingSession, retrySession } = useSession();
+  const [initial] = useState(() => createAgentTokenDraft(options, ttlPolicy!, services, eligibleTokenContexts(session, subject.administered, options)));
   const [draft, setDraft] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   // Presentation only: collapsing a service never changes the draft.
@@ -92,7 +111,6 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   const saved = useRef(false);
   const submitting = useRef(false);
   const mounted = useRef(true);
-  const { session, getSession, sessionRefreshError, retryingSession, retrySession } = useSession();
   const { setModal } = useModal();
   const issuance = useTokenIssuance();
   const invalidate = usePortalInvalidation();
@@ -101,12 +119,15 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
   const boundary = buildAgentTokenBoundary(draft, options);
   const policyBlocker = tokenIssuanceBlocker(session, subject.administered, options);
-  const readOnlyRequired = !subject.administered && selfTokenIssuanceMode(session, options) === "read_only";
+  const eligibleContexts = eligibleTokenContexts(session, subject.administered, options);
+  const contextModes = selfTokenIssuanceContexts(session, options);
+  const readOnlyRequired = !subject.administered && draft.selectedExecutionContexts.some((context) => contextModes?.get(context) === "read_only");
+  const staleContexts = draft.selectedExecutionContexts.some((context) => !eligibleContexts.includes(context));
   const currentBlocker = optionsError || sessionRefreshError
     ? "Token issuance policy could not be refreshed."
     : optionsRefreshing || retryingSession
       ? "Refreshing token issuance policy."
-      : policyBlocker ?? (readOnlyRequired && !draft.readOnly
+      : policyBlocker ?? (staleContexts ? "Remove execution contexts that are no longer granted or permitted for personal issuance." : null) ?? (readOnlyRequired && !draft.readOnly
         ? "Your account now requires read-only tokens. Apply the read-only restriction to continue."
         : options.executionContexts.length === 0
           ? `${subject.administered ? "This principal needs" : "You need"} an active policy grant before a token can be issued.`
@@ -225,11 +246,11 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
             {optionsError ? <ErrorState compact title="Couldn’t refresh token options" error={optionsError} onRetry={retryOptions} /> : null}
             {sessionRefreshError ? <ErrorState compact title="Couldn’t refresh token issuance policy" error={sessionRefreshError} onRetry={retrySession} /> : null}
             {currentBlocker ? <Banner tone="warning" slim>{currentBlocker}</Banner> : null}
-            <TokenDetails draft={draft} options={options} ttlPolicy={ttlPolicy} disabled={pending} update={update} />
+            <TokenDetails draft={draft} fixedSingle={!subject.administered} eligibleContexts={eligibleContexts} options={options} ttlPolicy={ttlPolicy} disabled={pending} update={update} />
             <Card title="Token restriction">
               <div className="pt-card-body">
                 <TokenReadOnlyControl readOnly={draft.readOnly} required={readOnlyRequired} disabled={pending || Boolean(policyBlocker)} onChange={(readOnly) => update({ ...draft, readOnly })} />
-                {subject.administered ? <p className="pt-prose">Owner’s self-issuance policy: {agentTokenIssuanceDescription(options.agentTokenIssuancePolicy)}. Administrative issuance can choose either restriction.</p> : null}
+                {subject.administered ? <p className="pt-prose">{isAgentTokenIssuancePolicy(options.agentTokenIssuancePolicy) ? `Owner’s self-issuance policy: ${agentTokenIssuanceDescription(options.agentTokenIssuancePolicy)}.` : "Owner issuance policy unavailable."} Administrative issuance can choose either restriction.</p> : null}
               </div>
             </Card>
             <TokenAccess subject={subject} draft={draft} options={options} disabled={pending} update={update} collapsed={collapsed} setServiceOpen={setServiceOpen} />
@@ -256,8 +277,8 @@ function TokenEditor({ subject, options, ttlPolicy, services, returnTo, header, 
   );
 }
 
-function TokenDetails({ draft, options, ttlPolicy, disabled, update }: {
-  draft: AgentTokenDraft; options: AgentTokenOptions; ttlPolicy: TokenTtlPolicy | null; disabled: boolean; update: (next: AgentTokenDraft) => void;
+function TokenDetails({ draft, options, eligibleContexts, fixedSingle, ttlPolicy, disabled, update }: {
+  draft: AgentTokenDraft; options: AgentTokenOptions; eligibleContexts: string[]; fixedSingle: boolean; ttlPolicy: TokenTtlPolicy | null; disabled: boolean; update: (next: AgentTokenDraft) => void;
 }) {
   const lifetimes = ttlPolicy?.options ?? [];
   const lifetimeOptions = [
@@ -283,9 +304,9 @@ function TokenDetails({ draft, options, ttlPolicy, disabled, update }: {
         </div>
         <fieldset className="pt-fieldset pt-fieldset--plain" id={fieldElementId("contexts")} disabled={disabled}>
           <legend>Execution contexts</legend>
-          <div className="pt-inline-checks">{[...new Set([...options.executionContexts, ...draft.selectedExecutionContexts])].map((context) => (
-            <Checkbox key={context} label={<span className="wb-mono">{context}</span>} aria-label={context} description={options.executionContexts.includes(context) ? undefined : "Not currently granted"} checked={draft.selectedExecutionContexts.includes(context)} onChange={(event) => update({ ...draft, selectedExecutionContexts: event.target.checked ? [...draft.selectedExecutionContexts, context] : draft.selectedExecutionContexts.filter((value) => value !== context) })} />
-          ))}</div>
+          {fixedSingle && eligibleContexts.length === 1 && draft.selectedExecutionContexts.length === 1 && draft.selectedExecutionContexts[0] === eligibleContexts[0] ? <p className="wb-mono">{eligibleContexts[0]}</p> : <div className="pt-inline-checks">{[...new Set([...eligibleContexts, ...draft.selectedExecutionContexts])].map((context) => (
+            <Checkbox key={context} label={<span className="wb-mono">{context}</span>} aria-label={context} description={!options.executionContexts.includes(context) ? "No longer granted" : !eligibleContexts.includes(context) ? "No longer permitted for personal issuance" : undefined} checked={draft.selectedExecutionContexts.includes(context)} onChange={(event) => update({ ...draft, selectedExecutionContexts: event.target.checked ? [...draft.selectedExecutionContexts, context] : draft.selectedExecutionContexts.filter((value) => value !== context) })} />
+          ))}</div>}
           <p className="wb-field-hint">Where the token may be used. This narrows access and never grants it; contexts granted later are not added to the token.</p>
         </fieldset>
       </div>

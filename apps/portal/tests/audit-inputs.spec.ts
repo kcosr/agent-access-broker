@@ -70,7 +70,7 @@ async function openRecord(page: Page, record: AuditRecord) {
     }
     else if (pathname === "/v1/resource-types") body = { resourceTypes: RESOURCE_TYPES };
     else if (pathname === "/v1/admin/policy/catalog") body = envelope(CATALOG);
-    else if (pathname === "/v1/tokens/options") body = envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: [], services: [] });
+    else if (pathname === "/v1/tokens/options") body = envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: [], services: [] });
     else if (pathname === "/v1/credentials") body = envelope({ connections: [], retained: [] });
     else body = envelope([]);
     await route.fulfill({ json: body });

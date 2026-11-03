@@ -80,6 +80,7 @@ fn store_at(path: &Path, through: Option<&str>) -> ManagedStore {
     };
     ManagedStore::open_with_catalog(
         &config,
+        &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         ManagedStoreMigrationCatalog { migrations },
     )
@@ -326,7 +327,11 @@ fn structural_validator_rejects_a_drifted_revocation_table() {
         };
         assert!(
             matches!(
-                ManagedStore::open(&config, ManagedStoreOpenMode::Startup),
+                ManagedStore::open(
+                    &config,
+                    &test_execution_contexts(),
+                    ManagedStoreOpenMode::Startup
+                ),
                 Err(ManagedStoreError::SchemaInvalid(_))
             ),
             "{drift}"

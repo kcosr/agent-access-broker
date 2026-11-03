@@ -56,17 +56,20 @@ impl Fixture {
         let runtime = BrokerRuntime::new(config).unwrap();
         let store = runtime.managed_store().unwrap();
         store
-            .create_principal(crate::PrincipalWriteRequest {
-                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::Admin,
-                self_service_enabled: None,
-                principal_id: "human-alice".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "operator".into(),
-            })
+            .create_principal(
+                crate::PrincipalWriteRequest {
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                    role: crate::PrincipalRole::Admin,
+                    self_service_enabled: None,
+                    principal_id: "human-alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "operator".into(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store
             .create_username_binding("human-alice", "linux", "Alice", false, "operator")

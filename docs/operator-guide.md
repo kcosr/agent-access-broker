@@ -841,11 +841,15 @@ token ID/class/name/expiry, allowed services and contexts, and
 canonical per-service action/resource restrictions. Completion
 `providerAudit.management.target` includes `boundary.readOnly` and
 `issuanceAuthority` (`personal` or `administrative`). Personal success records
-`agentTokenIssuancePolicy` with the mode, source and contributing group IDs
-captured inside the insertion transaction; administrative success identifies its administrative authority independently.
-Permission changes record their actual previous/new configured settings.
-Personal refusal uses `token_issuance_denied` with category `disabled` or
-`read_only_required`. Audit never includes the raw token secret.
+`agentTokenIssuancePolicy` with source and the complete enabled-context rows,
+including each mode and winning group IDs captured inside the insertion
+transaction. Administrative success identifies its separate authority.
+Permission changes record the actual previous/current complete configured pairs;
+principal creation records its initial pair, including defaults. No-op replacements
+do not report a policy change. These records are globally scoped; context names
+do not supply service scope. Personal refusal uses `token_issuance_denied` with
+category `disabled`, `context_not_allowed`, or `read_only_required`. Audit never
+includes the raw token secret.
 
 Token insertion and the completion audit attempt survive a client disconnect.
 If completion audit fails after insertion, issuance returns the existing
@@ -1460,8 +1464,9 @@ Uploaded documents are retained in the database and its backups; URL imports
 continue to fetch only for discovery or manual refresh. Rolling back across
 `032` requires the pre-migration backup, even if no document has been uploaded.
 See [uploaded documents](imported-openapi.md#uploading-and-replacing-a-document).
-The next migration, `033_agent_token_issuance`, requires explicit permission for
-new personal issuance; follow [its upgrade and collision recovery procedure](#agent-token-issuance-upgrade).
+Migrations `033_agent_token_issuance` and `034_agent_token_issuance_contexts`
+require explicit context permission for new personal issuance; follow the
+[issuance upgrade and recovery procedures](#agent-token-issuance-upgrade).
 
 Command imports can opt resource types out of exclusions with
 `supportsExclusions: false`. Before deploying a command version that cannot
@@ -1709,6 +1714,82 @@ states and service log events.
 
 ### Agent token issuance upgrade
 
+Upgrade Broker, CLI and portal together. Configured `agentTokenIssuance` is a
+complete `{mode, allowedExecutionContexts}` object; enabled modes require explicit
+contexts. Effective permission is `{source, contexts}`, with a mode and winning
+group IDs per enabled context. API and CLI policy writes replace the complete
+pair and are last-writer-wins. See [HTTP contracts](http-api.md) and
+[CLI commands](cli.md).
+
+Migration `034_agent_token_issuance_contexts` follows 033. Take the matched
+pre-upgrade backup and retain the previous binary. Apply 034 at startup with
+`auto_migrate = true` and the **unchanged pre-upgrade context registry**. The
+transaction seeds each existing enabled account/group policy with all contexts
+in that configuration, including inactive owners and groups without grants.
+Inherit and Disabled retain empty lists. With no `[execution_context]` section,
+the seed writes the real context `default`. Verify the resulting policies before
+changing the registry, then return `auto_migrate` to `false`.
+
+The seed runs only once, atomically with SQL, validation and the ledger update.
+A failed 034 transaction leaves schema 033 intact; a concurrent initializer must
+recheck the ledger before applying it. It preserves modes, account data and all
+token rows byte-for-byte. Reopening, reloading or adding a context never expands
+the saved lists. New accounts default to Inherit with no contexts and new groups
+to Disabled with no contexts. Reload cannot apply pending migrations, and an
+older binary refuses schema 034. Rollback requires the matching pre-upgrade backup
+and binary, never a manual ledger edit.
+
+### Issuance context retirement and recovery
+
+Before removing a configured context, use normal account/group policy controls to
+replace each applicable enabled policy with its intended remaining contexts. If
+none remain, select Disabled, or Inherit for an account. Do not edit database
+rows or rely on startup to trim them. Startup and candidate reload validate:
+
+- Every principal reference under either identity authority, including inactive
+  principals.
+- Every managed group reference when the candidate uses managed identity,
+  including disabled groups.
+- Under TOML identity, managed groups remain structurally validated but dormant;
+  they cannot contribute permission or block retirement. Group management remains
+  unavailable under that authority. Policy authority does not change these rules.
+
+If introducing an explicit registry after running without `[execution_context]`,
+first add the desired contexts **alongside `default`** in `allowed_values`.
+Preserve `default_context = "default"` while direct clients still depend on that
+fallback, for example:
+
+```toml
+[execution_context]
+allowed_values = ["default", "internal", "external"]
+default_context = "default"
+```
+
+Reload, then explicitly edit every applicable policy to its intended contexts.
+Only then remove `default`, after reviewing grants, resources, token usage and
+caller configuration. At that point choose the intended new direct default, or
+omit it if governed requests must have a trusted context. A new context appears
+unchecked in administrator editors; no policy follows future registry additions.
+Reordering the registry changes presentation only.
+
+Before switching from TOML back to managed identity, check retained group policies.
+A dormant group referencing a removed context blocks that switch. A rejected
+reload preserves the active TOML runtime; a rejected startup refuses to run.
+For either failure, temporarily restore the referenced names in the candidate
+registry, switch to managed identity, edit the now-visible groups, then retire the
+names. Alternatively, clean groups before switching away from managed identity.
+Principal references must always be cleaned through the ordinary account controls.
+
+Diagnostics identify bounded owner IDs and context names. Offline `config validate`
+checks the file without opening the managed store, so it cannot detect stored
+reference blockers. Startup/reload perform this additional check. A rejected
+reload preserves the runtime, registry and aggregate invocation limiter state.
+Changing issuance policy alone leaves existing tokens usable; removing a context
+from configuration can invalidate existing tokens that name it. Plan replacements
+before registry removal.
+
+### Read-only token backfill and collision recovery
+
 Migration `033_agent_token_issuance` follows `032_imported_source_documents`.
 Take the matched pre-upgrade backup described above before attempting it, and
 retain the previous binary. Deploy matching Broker, CLI and portal artifacts:
@@ -1716,21 +1797,22 @@ agent-token issue and preview bodies now require an explicit Boolean `readOnly`,
 and CLI issuance requires `--read-only true|false` for `agent_invoke`.
 Management token classes reject that flag/field.
 
-Both existing and new accounts default to `agentTokenIssuance = inherit`, and
-managed groups to `disabled`. This disables new personal issuance until an
-administrator explicitly grants permission, including for administrator accounts.
-Roles, self-service and existing tokens remain unchanged. Configure intended
-access after startup, for example:
+Migration 033 initializes account modes to Inherit and group modes to Disabled.
+After the complete upgrade, these have empty context lists. An administrator
+must explicitly grant personal issuance permission, including for administrator
+accounts. Roles, self-service and existing tokens remain unchanged. Configure
+intended access after startup, for example (with `default` configured):
 
 ```bash
-agent-access admin groups update engineering-readers --agent-token-issuance read_only
+agent-access admin groups update engineering-readers --agent-token-issuance read_only --agent-token-issuance-context default
 agent-access admin principals access set alice --agent-token-issuance inherit
-agent-access admin principals access set automation-owner --agent-token-issuance write_capable
+agent-access admin principals access set automation-owner --agent-token-issuance write_capable --agent-token-issuance-context default
 ```
 
 The group example assumes Alice is a current member. An explicit account
 setting overrides every group; otherwise the most permissive active effective
-managed group wins. TOML identity groups do not contribute. See
+managed group wins separately in each selected context. TOML identity groups do
+not contribute. See
 [issuance rules](roles.md#agent-token-issuance). Administrative issuance remains
 available under administrator write authority independently of personal mode.
 
@@ -1821,7 +1903,7 @@ thresholds; raising invocation limits does not raise login budgets.
 | `audit_query_timeout` | The audit query exceeded its 5-second budget. Narrow the time range or filters. |
 | `input_invalid` with `cursor is invalid or stale` | The cursor belongs to another route, caller, or audit database (for example after `audit.path` changed). Repeat the query without `--cursor`. |
 | `broker_token_not_found` | Confirm the caller is using the raw token shown at issuance time and that the hash key has not changed. |
-| `token_issuance_denied` | Personal issuance is Disabled or requires Read-only. Check `details.category` and the account/group setting; existing tokens are unchanged. Administrative issuance uses its separate authority. |
+| `token_issuance_denied` | Check `details.category`: `disabled` means no enabled context, `context_not_allowed` means a selected context has no permission, and `read_only_required` means a selected context requires Read-only. Existing tokens are unchanged. Administrative issuance uses its separate authority. |
 | `service_action_denied` with `broker token is read-only` | The token's stored ceiling blocks this write. Changing issuance permission cannot change the token; an authorized owner or administrator must deliberately issue a replacement if writes are needed. |
 | `broker_token_class_denied` | Use a token class allowed for the operation: `admin`, `user_manage`, or `agent_invoke`. |
 | `caller_authentication_required` / `caller_authentication_invalid` | Configure the attesting service as a named trusted caller and verify its injected credential matches Broker's loaded secret. Protected context/fingerprint headers always require valid caller authentication. |

@@ -1485,7 +1485,8 @@ pub(super) fn validate_imported_source_documents_structure(
     super::imported_documents::check_rows(conn)
 }
 /// The structure every migration through `version` creates, with readable
-/// imported records, including their accepted metadata.
+/// imported records, including their accepted metadata. Replay only SQL: the
+/// expected schema never runs data seeds or requires a configuration registry.
 pub(super) fn validate_structure_through(
     conn: &Connection,
     version: &str,
@@ -1656,7 +1657,12 @@ mod tests {
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         };
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         let ring = CredentialKeyRing {
             active_key: "old".into(),
             keys: Arc::new(BTreeMap::from([
@@ -1665,26 +1671,34 @@ mod tests {
             ])),
         };
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "admin".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "admin".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("admin").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("test").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("admin").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("test").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         (temp, config, store, ring)
     }
@@ -1798,7 +1812,12 @@ mod tests {
             1
         );
         drop(store);
-        let reopened = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let reopened = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
         assert_eq!(reopened.imported_catalog().unwrap(), result.catalog);
         assert!(
             reopened
@@ -2144,7 +2163,12 @@ mod tests {
                 .count(),
             600
         );
-        let reopened = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let reopened = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert_eq!(reopened.imported_catalog().unwrap(), replaced);
     }
 
@@ -2417,6 +2441,7 @@ mod tests {
         };
         let old = ManagedStore::open_with_catalog(
             &config,
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &MANAGED_STORE_MIGRATIONS[..9],
@@ -2433,10 +2458,19 @@ mod tests {
         );
         drop(old);
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Reload),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            ),
             Err(ManagedStoreError::MigrationRequired)
         ));
-        let migrated = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let migrated = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert!(migrated.migration_applied_this_open(MANAGED_STORE_SCHEMA_VERSION));
         assert_eq!(
             migrated.imported_catalog().unwrap(),
@@ -2451,35 +2485,46 @@ mod tests {
             .unwrap()
             .catalog;
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "second-admin".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "second-admin".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("second-admin").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("test").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("second-admin").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("test").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("admin").into(),
-                role: Some(crate::PrincipalRole::User),
-                self_service_enabled: None,
-                actor: "test".into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("admin").into(),
+                    role: Some(crate::PrincipalRole::User),
+                    self_service_enabled: None,
+                    actor: "test".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         assert!(matches!(
             store.update_imported_service(update(&draft), accept),
@@ -2633,26 +2678,34 @@ mod tests {
     fn personal_discovery_requires_its_owner_for_selection_observation_and_acceptance() {
         let (_temp, _config, store, ring) = fixture();
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "second-admin".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "second-admin".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         store
-            .patch_principal_access(crate::PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: ("second-admin").into(),
-                role: Some(crate::PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: ("test").into(),
-            })
+            .patch_principal_access(
+                crate::PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: ("second-admin").into(),
+                    role: Some(crate::PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: ("test").into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         let mut personal = definition();
         personal
@@ -2801,7 +2854,12 @@ mod tests {
             .unwrap();
         }
         drop(store);
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
         let retained = store.imported_catalog().unwrap();
         let disabled = store
             .update_imported_service(update(&retained), accept)

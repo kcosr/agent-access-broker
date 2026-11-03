@@ -6,16 +6,24 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- **Agent token issuance now requires explicit permission and a read-only choice.**
-  Back up before migration `033_agent_token_issuance` and upgrade Broker, CLI and
-  portal together. Existing and new accounts default to no self-issuance until
-  an administrator permits it. Existing tokens retain their behavior. Agent-token
-  issue and preview requests require `readOnly`; CLI issuance requires
-  `--read-only true|false`. Downstream host `test-support` users must handle
-  `ManagedStoreError::TokenIssuanceDenied { category }` in exhaustive matches;
-  its `TokenIssuanceDenial` category is non-exhaustive. See
+- **Agent token issuance requires explicit context permission and a read-only choice.**
+  Upgrade Broker, CLI and portal together. `agentTokenIssuance` is now a complete
+  `{mode, allowedExecutionContexts}` object; scalar writes are rejected. Effective
+  permission reports `{source, contexts}` with per-context modes and group IDs.
+  Enabled modes require context selections; CLI management adds repeatable
+  `--agent-token-issuance-context`. Back up before migrations
+  `033_agent_token_issuance` and `034_agent_token_issuance_contexts`; apply 034 with
+  the unchanged context registry so its atomic seed preserves existing permission.
+  New accounts inherit, new groups are Disabled, and new registry values do not
+  expand saved policies. Existing tokens retain their behavior. Agent-token issue
+  and preview requests require `readOnly`; CLI issuance requires
+  `--read-only true|false`. Downstream managed-store/test-support callers must
+  supply the validated context registry and trusted identity authority for policy
+  operations. Handle `ManagedStoreError::TokenIssuanceDenied { category }` in
+  exhaustive matches; non-exhaustive `TokenIssuanceDenial` includes a context
+  refusal. See
   [upgrade and collision recovery](docs/operator-guide.md#agent-token-issuance-upgrade).
-  ([#97](https://github.com/kcosr/agent-access-broker/pull/97))
+  ([#97](https://github.com/kcosr/agent-access-broker/pull/97), [#99](https://github.com/kcosr/agent-access-broker/pull/99))
 
 - **Jira and Confluence attachment downloads allow all media types by default.**
   This also widens downloads for existing configurations that omitted
@@ -115,14 +123,19 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **Account/group issuance controls and read-only agent tokens.** Explicit account
-  overrides or the most permissive active group permit Read-only or Write-capable
-  personal issuance. Read-only tokens can follow current grants and future reads
-  while blocking writes; permission changes leave existing tokens unchanged.
-  Administrative issuance stays independent. SDK `ReasonCode::TokenIssuanceDenied`
+- **Context-limited account/group issuance and read-only agent tokens.** A mode
+  dropdown and dynamic context checklist define each enabled policy. Explicit
+  account overrides replace group permission; inheritance resolves the most
+  permissive active group separately in each context. Personal issuance requires
+  permission in every selected context and is read-only if any selected context
+  requires it. Read-only tokens can follow current grants and future reads while
+  blocking writes; permission changes leave existing tokens and MCP sessions
+  unchanged. Portal forms preserve stale drafts for explicit correction and warn
+  about observed concurrent edits. Administrative issuance stays independent.
+  SDK `ReasonCode::TokenIssuanceDenied`
   adds the host-only HTTP 403 reason `token_issuance_denied`. See
   [issuance rules](docs/roles.md#agent-token-issuance).
-  ([#97](https://github.com/kcosr/agent-access-broker/pull/97))
+  ([#97](https://github.com/kcosr/agent-access-broker/pull/97), [#99](https://github.com/kcosr/agent-access-broker/pull/99))
 
 - **Jira and Confluence search exclusions and text negation.** JQL `project`
   and `key`/`issuekey`, and CQL `space` and `id`/`content.id`, accept `!=` and

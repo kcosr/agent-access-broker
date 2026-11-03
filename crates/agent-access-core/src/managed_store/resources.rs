@@ -1046,7 +1046,12 @@ mod tests {
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         };
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         (temp, store)
     }
 
@@ -1107,17 +1112,22 @@ mod tests {
 
     fn token_setup(store: &ManagedStore) -> BrokerTokenHasher {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: test_principal_issuance(
+                        PrincipalAgentTokenIssuance::Inherit,
+                    ),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &test_execution_contexts(),
+            )
             .unwrap();
         BrokerTokenHasher {
             key: Arc::new([7; 32]),
@@ -1365,6 +1375,7 @@ mod tests {
                 auto_migrate: false,
                 require_registered_principal_for_invocation: false,
             },
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Reload,
         )
         .unwrap();

@@ -41,8 +41,8 @@ test("profile patches clear edited metadata explicitly and omit unchanged blank 
 });
 
 test.each([false, true])("group creation preserves Microsoft enrollment %s", async (autoEnrollNewMicrosoftUsers) => {
-  await actions().create({ groupId: " onboarding ", displayName: " Onboarding ", description: " ", agentTokenIssuance: "disabled", autoEnrollNewMicrosoftUsers });
-  expect(mocks.create).toHaveBeenCalledWith({}, { groupId: "onboarding", displayName: "Onboarding", description: undefined, agentTokenIssuance: "disabled", autoEnrollNewMicrosoftUsers });
+  await actions().create({ groupId: " onboarding ", displayName: " Onboarding ", description: " ", agentTokenIssuance: { mode: "disabled", allowedExecutionContexts: [] }, autoEnrollNewMicrosoftUsers });
+  expect(mocks.create).toHaveBeenCalledWith({}, { groupId: "onboarding", displayName: "Onboarding", description: undefined, agentTokenIssuance: { mode: "disabled", allowedExecutionContexts: [] }, autoEnrollNewMicrosoftUsers });
   expect(mocks.admin).toHaveBeenCalledOnce();
   expect(mocks.setModal).toHaveBeenCalledWith(null);
   expect(mocks.navigate).toHaveBeenCalledWith("/ui/admin/groups/onboarding");
@@ -56,7 +56,7 @@ test("clearing Microsoft enrollment sends false and refreshes group state", asyn
 
 test("failed group creation leaves the form open without successful navigation", async () => {
   mocks.create.mockRejectedValueOnce(new Error("Group creation refused"));
-  await expect(actions().create({ groupId: "onboarding", displayName: "", description: "", agentTokenIssuance: "disabled", autoEnrollNewMicrosoftUsers: true })).rejects.toThrow("Group creation refused");
+  await expect(actions().create({ groupId: "onboarding", displayName: "", description: "", agentTokenIssuance: { mode: "disabled", allowedExecutionContexts: [] }, autoEnrollNewMicrosoftUsers: true })).rejects.toThrow("Group creation refused");
   expect(mocks.setModal).not.toHaveBeenCalled();
   expect(mocks.navigate).not.toHaveBeenCalled();
   expect(mocks.admin).not.toHaveBeenCalled();

@@ -97,42 +97,55 @@ pub(super) async fn audit_fixture_with(
 
     let store = agent_access_core::ManagedStore::open(
         &managed_store,
+        &agent_access_core::ConfiguredExecutionContexts::from_config(
+            config.execution_context.as_ref(),
+        )
+        .unwrap(),
         agent_access_core::ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     seed_managed_fixture_resources(&store);
     for principal in ["admin", "alice", "bob", "carol"] {
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: Default::default(),
-                role: agent_access_core::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".to_string(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: agent_access_core::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".to_string(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: ("admin").into(),
-            role: Some(agent_access_core::PrincipalRole::Admin),
-            self_service_enabled: None,
-            actor: ("test").into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: ("admin").into(),
+                role: Some(agent_access_core::PrincipalRole::Admin),
+                self_service_enabled: None,
+                actor: ("test").into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            agent_token_issuance: None,
-            principal_id: "bob".into(),
-            role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
-            self_service_enabled: None,
-            actor: "test".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                agent_token_issuance: None,
+                principal_id: "bob".into(),
+                role: Some(agent_access_core::PrincipalRole::ServicePolicyManager),
+                self_service_enabled: None,
+                actor: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .put_service_policy_management_assignment(
@@ -518,15 +531,22 @@ async fn visibility_follows_admin_service_manager_and_self_tiers() {
         .runtime
         .managed_store()
         .unwrap()
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: None,
-            self_service_enabled: None,
-            agent_token_issuance: Some(
-                agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
-            ),
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(
+                    agent_access_core::PrincipalAgentTokenIssuanceSetting::new(
+                        agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+                        vec!["default".into()],
+                    )
+                    .unwrap(),
+                ),
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     // Real requests: the admin grants alice fake.echo (policy records
     // scoped to fake), alice invokes it with her agent token and issues

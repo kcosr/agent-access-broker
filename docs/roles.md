@@ -36,43 +36,62 @@ work for authorized invocation. Disabling self-service does not revoke them.
 
 ## Agent token issuance
 
-`agentTokenIssuance` is a separate administrator-owned setting for new personal
-`agent_invoke` tokens. It does not change role, self-service, invocation grants,
-or any existing token. New and existing accounts start at `inherit`; managed
-groups start at `disabled`. An administrator must explicitly permit self-issuance,
-including for administrator accounts. Existing tokens keep their restrictions,
-expiry and lifecycle state.
+`agentTokenIssuance` is an administrator-owned object for new personal
+`agent_invoke` tokens. It contains a `mode` and an explicit
+`allowedExecutionContexts` list. It does not change role, self-service,
+invocation grants, or any existing token. New accounts default to
+`{"mode":"inherit","allowedExecutionContexts":[]}`; new managed groups default
+to `{"mode":"disabled","allowedExecutionContexts":[]}`. An administrator must
+permit personal issuance, including for administrator accounts.
 
-| Account setting | Effect on new personal tokens |
-| --- | --- |
-| `inherit` (Inherit from groups) | Use the most permissive active effective group; no contribution means Disabled |
-| `disabled` (Disabled) | Refuse personal issuance regardless of group settings |
-| `read_only` (Read-only) | Require the token's stored `readOnly: true` restriction |
-| `write_capable` (Write-capable) | Permit either `readOnly: true` or `false` |
+| Account mode | Context list | Effect on new personal tokens |
+| --- | --- | --- |
+| `inherit` (Inherit from groups) | Empty | Resolve active effective group permission separately in each context |
+| `disabled` (Disabled) | Empty | Refuse personal issuance regardless of groups |
+| `read_only` (Read-only) | Nonempty configured contexts | Require `readOnly: true` in every listed context; all other contexts are disabled |
+| `write_capable` (Write-capable) | Nonempty configured contexts | Permit either Boolean in every listed context; all other contexts are disabled |
 
-Groups accept the three modes without `inherit`. Their contributions combine as
-Disabled < Read-only < Write-capable: a Disabled group does not veto another
-group's permission. Any explicit account setting overrides all groups. Disabled
-groups and expired Microsoft membership evidence do not contribute; a current
-local membership can still contribute. Under TOML identity authority, groups
-contribute nothing and `inherit` resolves to Disabled; only an explicit managed
-account override can permit issuance. There is no TOML group issuance setting.
+Groups accept the three modes without `inherit`. Within each context, only groups
+that list that context contribute. Their modes combine as Disabled < Read-only <
+Write-capable; Disabled does not veto another group's permission. An explicit
+account setting replaces group permission completely, including outside its
+selected contexts. Disabled groups and expired Microsoft membership evidence do
+not contribute; a current local membership can still contribute. Under TOML
+identity authority, managed groups contribute nothing and `inherit` resolves to
+Disabled. Explicit account overrides still work under either identity or policy
+authority; there is no TOML group issuance setting.
+
+For example, a member of an internal Write-capable group and an external Read-only
+group can issue a write-capable token for `internal`. A token selecting both
+`internal` and `external` must be read-only. Selecting any context without
+permission rejects the entire request; Broker never trims or splits it.
 
 ```bash
-agent-access admin groups create engineering-readers --agent-token-issuance read_only
-agent-access admin principals groups add alice engineering-readers
+agent-access admin groups create external-readers --agent-token-issuance read_only --agent-token-issuance-context external
+agent-access admin groups create internal-writers --agent-token-issuance write_capable --agent-token-issuance-context internal
+agent-access admin principals groups add alice external-readers
+agent-access admin principals groups add alice internal-writers
 agent-access admin principals access set alice --agent-token-issuance inherit
-agent-access admin principals access set bob --agent-token-issuance write_capable
+agent-access admin principals access set bob --agent-token-issuance write_capable --agent-token-issuance-context internal
 ```
+
+These examples require `internal` and `external` in the configured registry.
+Repeat `--agent-token-issuance-context` to select more contexts. Enabled modes
+require at least one selection; Inherit and Disabled require an empty list.
+New registry values never expand saved issuance policies automatically. Context
+names are unique, use `[a-z][a-z0-9_-]{0,63}`, and have a maximum of 64 selections.
+Saved sets serialize in lexical order; the portal shows choices in configuration
+order. Reordering the same set does not change a policy.
 
 Active-account, self-service, personal-management authority, grant, context,
 lifetime and resource-reference checks still apply. Eligible `system` principals
 use the same rule; service accounts cannot self-issue. An administrator using
 `POST /v1/tokens` follows this personal rule. Administrative issuance through
 `/v1/admin/principals/{principal}/agent-tokens` or the generic `/tokens` route
-uses administrator write authority independently of the owner's issuance mode
-or self-service flag. Auditors and service policy managers cannot use that bypass
-or change issuance settings.
+uses administrator write authority independently of the owner's issuance mode,
+context list, read-only requirement, or self-service flag. Target grants, active
+owner, configured contexts, expiry and token-boundary checks still apply. Auditors
+and service policy managers cannot use that bypass or change issuance settings.
 
 A read-only token may **Follow current grants**: later reads become usable while
 writes remain blocked. `readOnly: false` removes only that extra ceiling; it
@@ -122,7 +141,18 @@ existing principal again is refused with HTTP 409 and changes no settings.
 Internal onboarding upserts also preserve existing issuance overrides; only
 this access PATCH changes them. An unchanged issuance
 setting is a no-op, and a policy-only edit never revokes tokens or removes
-service-manager assignments.
+service-manager assignments. A supplied `agentTokenIssuance` must include both
+fields and replaces the whole object atomically; nested partial updates are not
+supported. Omission preserves both fields. API and CLI writes are last-writer-wins
+without a version precondition, so reread the current object before replacing it.
+
+`agentTokenIssuancePolicy` reports `source` (`user`, `groups`, or `default`) and
+`contexts`: enabled rows with `executionContext`, `mode`, and winning `groupIds`.
+Missing contexts are disabled. Only groups tied at each context's winning mode
+appear in its sorted unique `groupIds`; account overrides have no group IDs.
+Explicit Disabled reports source `user` with no rows; inheritance without any
+permission reports source `default` with no rows. The rows follow registry order
+and can include assigned issuance contexts without current invocation grants.
 
 A real role change revokes all of the account's `admin` tokens, including a token
 used for the change itself. This prevents a previously issued auditor token from

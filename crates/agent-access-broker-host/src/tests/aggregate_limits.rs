@@ -678,13 +678,16 @@ async fn aggregate_policy_catalog_preserves_administrator_auditor_and_scoped_man
     let runtime = fixture._broker.runtime();
     let store = runtime.managed_store().unwrap();
     store
-        .patch_principal_access(agent_access_core::PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: Some(agent_access_core::PrincipalRole::Auditor),
-            self_service_enabled: None,
-            agent_token_issuance: None,
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: Some(agent_access_core::PrincipalRole::Auditor),
+                self_service_enabled: None,
+                agent_token_issuance: None,
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let auditor = store
         .issue_broker_token(

@@ -204,6 +204,17 @@ The broker resolves this attribute for governed invocation, discovery, and Git-g
 lookup, or credential selection. Management, browser login, health, readiness,
 and reload routes do not acquire service-policy authority from this header.
 
+The same registry supplies the explicit choices for account/group agent-token
+issuance policies. Adding a value never expands saved policies automatically.
+Startup and reload reject removed values still referenced by any principal
+policy, including inactive principals, and by any group policy under managed
+identity, including disabled groups. Managed group policies are dormant under
+TOML identity; switching back checks them. Policy authority does not affect this
+rule. Normal policy edits must clear references before retirement. Offline
+`config validate` does not open the managed store and cannot detect these
+stored-reference blockers. Follow [context retirement and recovery](operator-guide.md#issuance-context-retirement-and-recovery),
+including the staged `default` transition when introducing an explicit registry.
+
 ## `[mcp]`
 
 Optional downstream Streamable HTTP MCP uses `/mcp` and `/mcp/{service}` on the public listener.
@@ -774,12 +785,14 @@ hash_key_ref = "env:AGENT_ACCESS_BROKER_TOKEN_HASH_KEY"
   not rewrite, expire, or revoke existing token rows.
 - Personal issuance additionally requires the administrator-owned
   [account/group permission](roles.md#agent-token-issuance), separate from these
-  lifetime lists. Principals default to `inherit`, groups to `disabled`; both
-  new and existing accounts need explicit permission. There is no global or
-  TOML group issuance switch. TOML identity groups contribute nothing.
-  Session `tokenIssuancePolicy.selfAgentInvoke.access` reports current personal
-  permission; without `[broker_tokens]`, `tokenIssuancePolicy` is `{}` and issuance
-  is unavailable.
+  lifetime lists. Configured objects contain `mode` and `allowedExecutionContexts`;
+  new principals default to Inherit with an empty list, groups to Disabled with
+  an empty list. Enabled modes require explicit configured contexts. Account
+  overrides win; inherited group permission resolves separately in each context.
+  There is no global or TOML group issuance switch. TOML identity groups contribute
+  nothing. Session `tokenIssuancePolicy.selfAgentInvoke.access` reports `source`
+  and enabled `contexts` rows with each context's mode and winning group IDs.
+  Without `[broker_tokens]`, `tokenIssuancePolicy` is `{}` and issuance is unavailable.
 - Every issued `agent_invoke` token requires a Boolean `readOnly` in `scopes`.
   API clients and CLI callers must select it explicitly; portal forms start
   checked. True limits actions to current reviewed reads, including when the
@@ -789,8 +802,9 @@ hash_key_ref = "env:AGENT_ACCESS_BROKER_TOKEN_HASH_KEY"
 - Every newly issued `agent_invoke` token must also carry a finite
   `allowedExecutionContexts` caveat in `scopes`: one or more contexts for both
   self-service and administrative issuance. Choices come from active effective
-  grants for the principal, and selected services must be visible in at least
-  one selected context. A token caveat can only narrow matching grants. Stored agent tokens without valid contexts or `readOnly` fail closed.
+  grants for the principal; personal issuance also requires permission in every
+  selected context. Selected services must be visible in at least one selected
+  context. A token caveat can only narrow matching grants. Stored agent tokens without valid contexts or `readOnly` fail closed.
   Stored token caveats cannot be amended.
 - Issuance may add the request-level `serviceRestrictions` caveat to constrain
   selected services to immutable action lists and finite canonical resource

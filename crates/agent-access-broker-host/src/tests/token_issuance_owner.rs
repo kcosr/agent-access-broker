@@ -7,8 +7,8 @@ use crate::handlers::management::common::{
     management_write_audit_preflight,
 };
 use agent_access_core::{
-    AgentTokenIssuanceAuthority, BrokerTokenClass, BrokerTokenIssueRequest,
-    PrincipalAccessPatchRequest, PrincipalAgentTokenIssuance, SelfAgentTokenIssueRequest,
+    BrokerTokenClass, BrokerTokenIssueRequest, PrincipalAccessPatchRequest,
+    SelfAgentTokenIssueRequest,
 };
 use axum::http::{HeaderMap, HeaderValue};
 
@@ -21,13 +21,22 @@ async fn permit_personal_issuance(fixture: &AuditFixture) {
         .unwrap()
         .clone();
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: None,
-            self_service_enabled: None,
-            agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(
+                    agent_access_core::PrincipalAgentTokenIssuanceSetting::new(
+                        agent_access_core::PrincipalAgentTokenIssuance::WriteCapable,
+                        vec!["default".into()],
+                    )
+                    .unwrap(),
+                ),
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let (status, body) = fixture.request(Method::POST, &fixture.admin,
         "/v1/admin/policy/grants",
@@ -102,7 +111,7 @@ async fn token_issuance_owner_completes_once_after_waiter_cancellation() {
             operation,
             target,
             personal,
-            move |store, catalog| {
+            move |store, catalog, environment| {
                 let scopes = json!({"allowedExecutionContexts":["default"],"readOnly":true});
                 let token = if personal {
                     store.issue_self_agent_token_with_catalog(
@@ -114,7 +123,7 @@ async fn token_issuance_owner_completes_once_after_waiter_cancellation() {
                             expires_at: None,
                             created_by: "alice".into(),
                         },
-                        AgentTokenIssuanceAuthority::Managed,
+                        &environment,
                         catalog.as_ref(),
                     )?
                 } else {
@@ -149,13 +158,22 @@ async fn token_issuance_owner_completes_once_after_waiter_cancellation() {
             .runtime
             .managed_store()
             .unwrap()
-            .patch_principal_access(PrincipalAccessPatchRequest {
-                principal_id: "alice".into(),
-                role: None,
-                self_service_enabled: None,
-                agent_token_issuance: Some(PrincipalAgentTokenIssuance::Disabled),
-                actor: "admin".into(),
-            })
+            .patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    principal_id: "alice".into(),
+                    role: None,
+                    self_service_enabled: None,
+                    agent_token_issuance: Some(
+                        agent_access_core::PrincipalAgentTokenIssuanceSetting::new(
+                            agent_access_core::PrincipalAgentTokenIssuance::Disabled,
+                            vec![],
+                        )
+                        .unwrap(),
+                    ),
+                    actor: "admin".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         release_tx.send(()).unwrap();
         let events = tokio::time::timeout(Duration::from_secs(10), async {
@@ -187,7 +205,7 @@ async fn token_issuance_owner_completes_once_after_waiter_cancellation() {
         if personal {
             assert_eq!(
                 captured["agentTokenIssuancePolicy"],
-                json!({"mode":"write_capable","source":"user","groupIds":[]})
+                json!({"source":"user","contexts":[{"executionContext":"default","mode":"write_capable","groupIds":[]}]})
             );
         } else {
             assert!(captured.get("agentTokenIssuancePolicy").is_none());
@@ -333,7 +351,7 @@ async fn token_issuance_owner_rejects_a_stale_snapshot_before_insertion() {
         "admin.tokens.issue",
         None,
         false,
-        move |_, _| {
+        move |_, _, _| {
             entered_owner.store(true, Ordering::SeqCst);
             panic!("stale token issuance must not enter its store write")
         },
@@ -381,14 +399,21 @@ async fn browser_token_issuance_under_toml_ignores_dormant_groups_and_honors_acc
         .unwrap()
         .clone();
     store
-        .create_group(agent_access_core::GroupWriteRequest {
-            group_id: "dormant-writers".into(),
-            display_name: None,
-            description: None,
-            auto_enroll_new_microsoft_users: false,
-            agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::WriteCapable,
-            created_by: "admin".into(),
-        })
+        .create_group(
+            agent_access_core::GroupWriteRequest {
+                group_id: "dormant-writers".into(),
+                display_name: None,
+                description: None,
+                auto_enroll_new_microsoft_users: false,
+                agent_token_issuance: agent_access_core::GroupAgentTokenIssuanceSetting::new(
+                    agent_access_core::AgentTokenIssuanceMode::WriteCapable,
+                    vec!["default".into()],
+                )
+                .unwrap(),
+                created_by: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .add_group("alice", "dormant-writers", "admin")
@@ -399,7 +424,7 @@ async fn browser_token_issuance_under_toml_ignores_dormant_groups_and_honors_acc
     assert_eq!(session.status(), StatusCode::OK);
     assert_eq!(
         response_json(session).await["result"]["tokenIssuancePolicy"]["selfAgentInvoke"]["access"],
-        json!({"mode":"disabled","source":"default","groupIds":[]})
+        json!({"source":"default","contexts":[]})
     );
     let options = fixture
         .browser_request(Method::GET, "/v1/tokens/options", None)
@@ -408,7 +433,7 @@ async fn browser_token_issuance_under_toml_ignores_dormant_groups_and_honors_acc
     let options = response_json(options).await;
     assert_eq!(
         options["result"]["agentTokenIssuancePolicy"],
-        json!({"mode":"disabled","source":"default","groupIds":[]})
+        json!({"source":"default","contexts":[]})
     );
     assert!(!options["result"]["services"].as_array().unwrap().is_empty());
     for read_only in [true, false] {
@@ -421,13 +446,22 @@ async fn browser_token_issuance_under_toml_ignores_dormant_groups_and_honors_acc
         assert_eq!(denied["details"]["category"], "disabled");
     }
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: None,
-            self_service_enabled: None,
-            agent_token_issuance: Some(PrincipalAgentTokenIssuance::ReadOnly),
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: None,
+                self_service_enabled: None,
+                agent_token_issuance: Some(
+                    agent_access_core::PrincipalAgentTokenIssuanceSetting::new(
+                        agent_access_core::PrincipalAgentTokenIssuance::ReadOnly,
+                        vec!["default".into()],
+                    )
+                    .unwrap(),
+                ),
+                actor: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let session = fixture
         .browser_request(Method::GET, "/v1/auth/session", None)
@@ -435,7 +469,7 @@ async fn browser_token_issuance_under_toml_ignores_dormant_groups_and_honors_acc
     assert_eq!(session.status(), StatusCode::OK);
     assert_eq!(
         response_json(session).await["result"]["tokenIssuancePolicy"]["selfAgentInvoke"]["access"],
-        json!({"mode":"read_only","source":"user","groupIds":[]})
+        json!({"source":"user","contexts":[{"executionContext":"default","mode":"read_only","groupIds":[]}]})
     );
     for read_only in [false, true] {
         let issued = fixture.browser_request(Method::POST, "/v1/tokens", Some(json!({

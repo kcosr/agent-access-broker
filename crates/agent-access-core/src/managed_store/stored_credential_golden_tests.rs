@@ -90,7 +90,7 @@ fn golden_hex(value: &str) -> Vec<u8> {
 fn store_with_golden_stored_credentials() -> (TempDir, ManagedStore) {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(
-        &store_config(&temp.path().join("store.sqlite")),
+        &store_config(&temp.path().join("store.sqlite")), &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();

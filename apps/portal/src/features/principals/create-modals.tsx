@@ -1,6 +1,7 @@
-import { PRINCIPAL_TOKEN_ISSUANCE_OPTIONS, GROUP_TOKEN_ISSUANCE_OPTIONS } from "../../lib/token-issuance-policy";
+import { issuanceSettingBlocker } from "../../lib/token-issuance-policy";
+import { TokenIssuanceControls, useIssuanceRegistry } from "./token-issuance-controls";
 import { AdminButton } from "../../components/admin-access";
-import type { AgentTokenIssuanceMode, PrincipalAgentTokenIssuance, PrincipalRole } from "../../types";
+import type { GroupAgentTokenIssuanceSetting, PrincipalAgentTokenIssuanceSetting, PrincipalRole } from "../../types";
 import { ROLE_LABELS } from "../../lib/capabilities";
 // Short create forms: user or service account, and group.
 import { LOCAL_SIGN_IN_EXPLANATION, LOCAL_SIGN_IN_ACKNOWLEDGMENT } from "./sign-in-methods";
@@ -24,21 +25,24 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
   const [email, setEmail] = useState("");
   const [memberOf, setMemberOf] = useState<string[]>([]);
   const [role, setRole] = useState<PrincipalRole>("user");
-  const [agentTokenIssuance, setAgentTokenIssuance] = useState<PrincipalAgentTokenIssuance>("inherit");
+  const [agentTokenIssuance, setAgentTokenIssuance] = useState<PrincipalAgentTokenIssuanceSetting>({ mode: "inherit", allowedExecutionContexts: [] });
   const [selfServiceEnabled, setSelfServiceEnabled] = useState(!serviceAccount);
   const [enableLocalPassword, setEnableLocalPassword] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
+  const registry = useIssuanceRegistry();
+  const policyError = issuanceSettingBlocker(agentTokenIssuance, registry.contexts);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
-    if (!principalId.trim() || (enableLocalPassword && !acknowledged)) return;
+    if (!principalId.trim() || policyError || (enableLocalPassword && !acknowledged)) return;
     setPending(true);
     setError(null);
     try {
       await principals.create({ kind, principalId, displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, agentTokenIssuance, enableLocalPassword });
     } catch (failure) {
       setError(errorMessage(failure));
+      void registry.query.refetch();
       setPending(false);
     }
   }
@@ -60,7 +64,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
           <Button onClick={onClose} disabled={pending}>
             Cancel
           </Button>
-          <AdminButton type="submit" variant="primary" disabled={!principalId.trim() || (enableLocalPassword && !acknowledged)} pending={pending}>
+          <AdminButton type="submit" variant="primary" disabled={!principalId.trim() || Boolean(policyError) || (enableLocalPassword && !acknowledged)} pending={pending}>
             {title}
           </AdminButton>
         </>
@@ -96,7 +100,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
         {!serviceAccount ? (
           <>
             <Field label="Role"><Select value={role} onChange={(event) => setRole(event.target.value as PrincipalRole)} options={Object.entries(ROLE_LABELS).map(([value, label]) => ({ value, label }))} /></Field>
-            <Field label="Agent token issuance"><Select value={agentTokenIssuance} onChange={(event) => setAgentTokenIssuance(event.target.value as PrincipalAgentTokenIssuance)} options={PRINCIPAL_TOKEN_ISSUANCE_OPTIONS} /></Field>
+            <Field label="Agent token issuance"><TokenIssuanceControls value={agentTokenIssuance} onChange={setAgentTokenIssuance} registry={registry} /></Field>
             <Checkbox label="Self-service enabled" description="Manage personal tokens, credentials, connections and activity." checked={selfServiceEnabled} onChange={(event) => setSelfServiceEnabled(event.target.checked)} />
           </>
         ) : null}
@@ -113,8 +117,10 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
   const [groupId, setGroupId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
-  const [agentTokenIssuance, setAgentTokenIssuance] = useState<AgentTokenIssuanceMode>("disabled");
+  const [agentTokenIssuance, setAgentTokenIssuance] = useState<GroupAgentTokenIssuanceSetting>({ mode: "disabled", allowedExecutionContexts: [] });
   const [autoEnrollNewMicrosoftUsers, setAutoEnrollNewMicrosoftUsers] = useState(false);
+  const registry = useIssuanceRegistry();
+  const policyError = issuanceSettingBlocker(agentTokenIssuance, registry.contexts);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -124,13 +130,14 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       dismissible={!pending}
       onSubmit={async () => {
-        if (!groupId.trim()) return;
+        if (!groupId.trim() || policyError) return;
         setPending(true);
         setError(null);
         try {
           await groups.create({ groupId, displayName, description, autoEnrollNewMicrosoftUsers, agentTokenIssuance });
         } catch (failure) {
           setError(errorMessage(failure));
+          void registry.query.refetch();
           setPending(false);
         }
       }}
@@ -139,7 +146,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
           <Button onClick={onClose} disabled={pending}>
             Cancel
           </Button>
-          <AdminButton type="submit" variant="primary" disabled={!groupId.trim() || !groupWritesEnabled} pending={pending}>
+          <AdminButton type="submit" variant="primary" disabled={!groupId.trim() || !groupWritesEnabled || Boolean(policyError)} pending={pending}>
             Create group
           </AdminButton>
         </>
@@ -160,7 +167,7 @@ export function CreateGroupModal({ onClose }: { onClose: () => void }) {
         <Field label="Description" optional>
           <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
         </Field>
-        {groupWritesEnabled ? <Field label="Agent token issuance" hint="Disabled does not override another group’s permission. An explicit account setting wins."><Select value={agentTokenIssuance} onChange={(event) => setAgentTokenIssuance(event.target.value as AgentTokenIssuanceMode)} options={GROUP_TOKEN_ISSUANCE_OPTIONS} /></Field> : <p className="pt-prose">Group token issuance is unavailable under {identityAuthority} identity authority.</p>}
+        {groupWritesEnabled ? <Field label="Agent token issuance" hint="Disabled does not override another group’s permission. An explicit account setting wins."><TokenIssuanceControls group value={agentTokenIssuance} onChange={(value) => setAgentTokenIssuance(value as GroupAgentTokenIssuanceSetting)} registry={registry} /></Field> : <p className="pt-prose">Group token issuance is unavailable under {identityAuthority} identity authority.</p>}
         <GroupEnrollmentCheckbox checked={autoEnrollNewMicrosoftUsers} onChange={(event) => setAutoEnrollNewMicrosoftUsers(event.target.checked)} disabled={!groupWritesEnabled} />
         <FormError error={error} />
       </div>

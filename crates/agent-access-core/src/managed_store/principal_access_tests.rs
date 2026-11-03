@@ -6,7 +6,7 @@ fn access_principal(
     self_service_enabled: Option<bool>,
 ) -> Result<PrincipalRecord, ManagedStoreError> {
     store.create_principal(PrincipalWriteRequest {
-        agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
+        agent_token_issuance: test_principal_issuance(PrincipalAgentTokenIssuance::Inherit),
         principal_id: id.into(),
         kind: kind.into(),
         role,
@@ -15,7 +15,7 @@ fn access_principal(
         email: None,
         external_subject: None,
         created_by: "test".into(),
-    })
+    }, &test_execution_contexts())
 }
 fn access_patch(
     store: &ManagedStore,
@@ -29,7 +29,7 @@ fn access_patch(
         role,
         self_service_enabled: enabled,
         actor: "test".into(),
-    })
+    }, &test_execution_contexts())
 }
 fn access_token(
     store: &ManagedStore,
@@ -57,7 +57,7 @@ fn access_token(
 fn principal_access_roles_and_personal_permission_are_independent() {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(
-        &store_config(&temp.path().join("store.sqlite")),
+        &store_config(&temp.path().join("store.sqlite")), &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -158,7 +158,7 @@ fn principal_access_roles_and_personal_permission_are_independent() {
 fn principal_access_role_changes_revoke_admin_tokens_and_remove_direct_scope_only_on_change() {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(
-        &store_config(&temp.path().join("store.sqlite")),
+        &store_config(&temp.path().join("store.sqlite")), &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -261,7 +261,7 @@ fn principal_access_role_changes_revoke_admin_tokens_and_remove_direct_scope_onl
 fn self_service_disablement_blocks_transactional_writes_without_changing_invocation_material() {
     let temp = TempDir::new().unwrap();
     let config = store_config(&temp.path().join("store.sqlite"));
-    let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+    let store = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     create_alice(&store);
     let ring = key_ring("k1");
     let credential = || CredentialWriteRequest {
@@ -295,7 +295,7 @@ fn self_service_disablement_blocks_transactional_writes_without_changing_invocat
         created_by: "alice".into(),
     };
     assert!(matches!(
-        store.issue_self_agent_token(&broker_token_hasher_for_test(9), self_issue(), AgentTokenIssuanceAuthority::Managed),
+        store.issue_self_agent_token(&broker_token_hasher_for_test(9), self_issue(), &test_issuance_environment(AgentTokenIssuanceAuthority::Managed)),
         Err(ManagedStoreError::SelfServiceDisabled)
     ));
     assert!(matches!(
@@ -350,7 +350,7 @@ fn principal_access_upgrade_preserves_admins_and_dependents_and_rejects_existing
         let path = temp.path().join("store.sqlite");
         let config = store_config(&path);
         let previous = ManagedStore::open_with_catalog(
-            &config,
+            &config, &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &MANAGED_STORE_MIGRATIONS[..MANAGED_STORE_MIGRATIONS
@@ -375,7 +375,7 @@ fn principal_access_upgrade_preserves_admins_and_dependents_and_rejects_existing
         }
         drop(previous);
         let before = migration_rows(&path);
-        let result = ManagedStore::open(&config, ManagedStoreOpenMode::Startup);
+        let result = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup);
         if has_assignment {
             assert!(result.is_err());
             assert_eq!(migration_rows(&path), before);
@@ -418,7 +418,7 @@ fn principal_access_upgrade_preserves_admins_and_dependents_and_rejects_existing
         ));
         run_foreign_key_check(&store.connection.lock().unwrap()).unwrap();
         drop(store);
-        let reopened = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let reopened = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
         assert!(!reopened.migration_applied_this_open(MANAGED_STORE_SCHEMA_VERSION));
         assert_eq!(&migration_rows(&path)[..before.len()], before.as_slice());
     }
@@ -428,7 +428,7 @@ fn principal_access_upgrade_preserves_admins_and_dependents_and_rejects_existing
 fn principal_access_administrative_token_and_credential_cleanup_remain_available() {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(
-        &store_config(&temp.path().join("store.sqlite")),
+        &store_config(&temp.path().join("store.sqlite")), &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();

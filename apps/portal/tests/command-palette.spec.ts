@@ -16,8 +16,8 @@ const stamp = { createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:
 const resource = { id: "engineering-repository", displayName: "Payments repository", resourceType: "git_repository", selector: { kind: "exact", value: "engineering/payments" }, allowedExecutionContexts: ["default"], enabled: true, version: 1, ...stamp };
 const excludedResource = { ...resource, id: "private-repository", displayName: "Restricted repository", selector: { kind: "exact", value: "engineering/private" }, enabled: false };
 const resourceGroups = Array.from({ length: 8 }, (_, i) => ({ id: `portfolio-${i + 1}`, name: `Portfolio ${i + 1}`, includedResourceIds: [resource.id], excludedResourceIds: [excludedResource.id], version: 1, ...stamp }));
-const userGroup = { groupId: "engineering-team", displayName: "Platform operators", description: "Incident response staff", status: "active", autoEnrollNewMicrosoftUsers: false, agentTokenIssuance: "disabled", memberCount: 1, ...stamp };
-const principal = { agentTokenIssuance: "inherit", principalId: "viewer", kind: "user", role: "admin", selfServiceEnabled: true, displayName: "Morgan Example", email: "morgan@example.test", groups: [userGroup.groupId], status: "active", signInMethods: { localPassword: "active", microsoft: "absent" }, ...stamp };
+const userGroup = { groupId: "engineering-team", displayName: "Platform operators", description: "Incident response staff", status: "active", autoEnrollNewMicrosoftUsers: false, agentTokenIssuance: { mode: "disabled", allowedExecutionContexts: [] }, memberCount: 1, ...stamp };
+const principal = { agentTokenIssuance: { mode: "inherit", allowedExecutionContexts: [] }, principalId: "viewer", kind: "user", role: "admin", selfServiceEnabled: true, displayName: "Morgan Example", email: "morgan@example.test", groups: [userGroup.groupId], status: "active", signInMethods: { localPassword: "active", microsoft: "absent" }, ...stamp };
 const action = { action: "issue.inspect", description: "Inspect issue details", readOnly: true, requiredScopeTypes: [], credentialModes: ["service"], lookupRequired: false, inputSchema: { type: "object", properties: {} } };
 const service = { service: "jira", displayName: "Jira", surface: "http", actions: [action], resourceScopes: {}, configuredCredentialModes: ["service"], lookupCredentialConfigured: false };
 const catalog = { services: [service], subjects: { users: [principal], groups: [userGroup], anonymous: false }, resources: [resource, excludedResource], resourceGroups, executionContexts: { allowedValues: ["default"], defaultContext: "default", contextRequired: false } };
@@ -49,7 +49,7 @@ test.afterAll(async () => {
 });
 
 async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEnabled = true) {
-  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: role === "service_policy_manager" ? ["jira"] : [], auditQueryable: true, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { access: { mode: "write_capable", source: "user", groupIds: [] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
+  const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled, policyManagementServices: role === "service_policy_manager" ? ["jira"] : [], auditQueryable: true, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { access: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
   const requests: string[] = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -70,7 +70,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEna
     else if (pathname === "/v1/admin/policy/resources") result = [resource, excludedResource];
     else if (pathname === "/v1/admin/policy/resource-groups") result = resourceGroups;
     else if (pathname.endsWith("/effective-access")) result = { policyGeneration: 1, access: [] };
-    else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
+    else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = [target];
     else if (pathname === "/v1/credentials") result = credentialList;
     else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [draftImport] };

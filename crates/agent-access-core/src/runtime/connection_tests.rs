@@ -54,17 +54,20 @@ fn connection_config(connection: &str) -> (BrokerConfig, PathBuf) {
 fn store_token(runtime: &BrokerRuntime, service: &str, token: &str) {
     let store = runtime.managed_store().unwrap();
     store
-        .create_or_update_principal(crate::PrincipalWriteRequest {
-            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-            role: crate::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "agent-one".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".into(),
-        })
+        .create_or_update_principal(
+            crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                role: crate::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "agent-one".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .upsert_user_credential(
@@ -508,16 +511,24 @@ fn managed_matrix() -> (
         auto_migrate: true,
     };
     // Managed policy subjects must exist before the runtime validates them.
-    let store = ManagedStore::open(&store_config, ManagedStoreOpenMode::Startup).unwrap();
+    let store = ManagedStore::open(
+        &store_config,
+        &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     store
-        .create_group(crate::GroupWriteRequest {
-            agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
-            auto_enroll_new_microsoft_users: false,
-            group_id: "agents".into(),
-            display_name: None,
-            description: None,
-            created_by: "admin".into(),
-        })
+        .create_group(
+            crate::GroupWriteRequest {
+                agent_token_issuance: crate::GroupAgentTokenIssuanceSetting::default(),
+                auto_enroll_new_microsoft_users: false,
+                group_id: "agents".into(),
+                display_name: None,
+                description: None,
+                created_by: "admin".into(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     for (principal, kind) in [
         ("alice", "user"),
@@ -525,17 +536,20 @@ fn managed_matrix() -> (
         ("sys", "system"),
     ] {
         store
-            .create_principal(crate::PrincipalWriteRequest {
-                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: principal.into(),
-                kind: kind.into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_principal(
+                crate::PrincipalWriteRequest {
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: principal.into(),
+                    kind: kind.into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store.add_group(principal, "agents", "admin").unwrap();
     }
@@ -844,7 +858,7 @@ async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
             .unwrap();
     let store = runtime.managed_store().unwrap();
     let principal = |kind: &str| crate::PrincipalWriteRequest {
-        agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
+        agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
         role: crate::PrincipalRole::User,
         self_service_enabled: None,
         principal_id: "agent-one".into(),
@@ -855,7 +869,10 @@ async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
         created_by: "admin".into(),
     };
     store
-        .create_or_update_principal(principal("service_account"))
+        .create_or_update_principal(
+            principal("service_account"),
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -873,7 +890,10 @@ async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
     );
 
     store
-        .create_or_update_principal(principal("system"))
+        .create_or_update_principal(
+            principal("system"),
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let stale = runtime.command_caller(&identity).await.unwrap_err();
     assert_eq!(stale.reason_code(), ReasonCode::ServiceActionDenied);
@@ -894,17 +914,20 @@ async fn command_dispatch_refuses_a_static_principal_whose_kind_changed() {
 fn store_git_token(runtime: &BrokerRuntime, profile: &str) {
     let store = runtime.managed_store().unwrap();
     store
-        .create_or_update_principal(crate::PrincipalWriteRequest {
-            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-            role: crate::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "agent-one".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".into(),
-        })
+        .create_or_update_principal(
+            crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                role: crate::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "agent-one".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let basic = matches!(
         profile,

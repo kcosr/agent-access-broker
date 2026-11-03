@@ -11,7 +11,7 @@ import { RESOURCE_TYPES } from "./resource-types.fixture";
 const types = indexResourceTypes(RESOURCE_TYPES);
 
 const options: AgentTokenOptions = {
-  policyGeneration: 4, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
+  policyGeneration: 4, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
   services: [{ service: "gitlab", displayName: "Gitlab", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{
     action: "repository.tree", description: "Read files", readOnly: true, resourceType: "git_repository", requiredScopeTypes: ["repository"], executionContexts: ["internal", "external"],
     effectiveAccessByExecutionContext: {
@@ -99,6 +99,6 @@ describe("resource type metadata", () => {
 });
 
 test("scope-free actions remain visible with explicit action grants", () => {
-  const gmail: AgentTokenOptions = {policyGeneration:1,agentTokenIssuancePolicy:{mode:"write_capable",source:"user",groupIds:[]},resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],resourceType:null,executionContexts:["default"],effectiveAccessByExecutionContext:{default:[]}}]}],mcp:null};
+  const gmail: AgentTokenOptions = {policyGeneration:1,agentTokenIssuancePolicy:{ source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] },resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],resourceType:null,executionContexts:["default"],effectiveAccessByExecutionContext:{default:[]}}]}],mcp:null};
   expect(buildAccessSummary(gmail)[0].actions[0]).toMatchObject({action:"thread.trash",resourceType:null,contexts:["default"]});
 });

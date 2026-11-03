@@ -84,7 +84,7 @@ function token(overrides: Partial<BrokerTokenRecord>): BrokerTokenRecord {
 }
 
 const tokenOptions: AgentTokenOptions = {
-  policyGeneration: 1, agentTokenIssuancePolicy: { mode: "write_capable", source: "user", groupIds: [] }, resources: [], resourceGroups: [],
+  policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [],
   executionContexts: ["workstation", "internal", "external"],
   services: [
     { service: "github", displayName: "Github", brokerHosts: [], executionContexts: ["workstation", "internal"], actions: [{ action: "issues.list", readOnly: false, description: "List issues", requiredScopeTypes: ["project"], resourceType: "jira_project", executionContexts: ["workstation", "internal"], effectiveAccessByExecutionContext: { internal: [{ included: [{ kind: "all" }], excluded: [] }] } }] },

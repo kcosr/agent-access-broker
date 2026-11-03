@@ -1168,17 +1168,20 @@ async fn a_service_account_token_on_the_connection_is_presented_as_basic() {
     let fixture = gateway_fixture(&gitlab).await;
     let store = fixture.runtime.managed_store().unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "robot".into(),
-            kind: "service_account".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "robot".into(),
+                kind: "service_account".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let robot = store
         .issue_broker_token(

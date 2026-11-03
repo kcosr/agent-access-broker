@@ -407,21 +407,25 @@ upload_spool_dir = {spool}
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_principal(PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "git-tester".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "test".into(),
-        })
+        .create_principal(
+            PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "git-tester".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let hasher = BrokerTokenHasher::load(&BrokerTokensConfig {
         hash_key_ref: format!("file:{}", root.join("hash-key").display()),

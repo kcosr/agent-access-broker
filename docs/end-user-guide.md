@@ -240,16 +240,26 @@ page. Issuance must be permitted by your administrator, independently of
 self-service and service grants. Disabled issuance leaves existing tokens and
 their inspection, preview, pause, resume and revocation available.
 
-Set a descriptive name, finite lifetime, and one or more effective execution
-contexts. New tokens start read-only and can use only actions classified as reads.
-If your account may issue only read-only tokens, the form shows plain
-**Read-only** text and a note that your issuance policy requires it. With
-Write-capable issuance permission, the form shows a checked **Read-only** checkbox
-that you can clear explicitly. The restriction belongs to this token and cannot
-be edited after issuance. Changing your account's issuance permission does not
-change existing tokens. **Follow current grants** follows your grants within the
-selected contexts, including later reads; a read-only token continues to block
-writes.
+Wait for the page to refresh your session and token options before creating the
+draft. Set a descriptive name, finite lifetime, and one or more eligible execution
+contexts. A context must be both granted and permitted for personal issuance.
+The page distinguishes having no invocation grants from having grants but no
+permitted issuance contexts. A fresh form initially selects all eligible contexts; a single eligible context
+appears as fixed text. The choices describe where this token may be used, not a
+way to change the context of your connection.
+
+New tokens start read-only. If any selected context requires Read-only, the form
+shows plain **Read-only** text with an explanation. If every selected context
+permits writes, a checked **Read-only** checkbox can be cleared explicitly.
+An internal Write-capable/external Read-only policy therefore permits a writable
+internal-only token, but a token covering both must be read-only. One Boolean
+applies to the whole token; Broker does not silently split or narrow a request.
+
+The restriction cannot be edited after issuance. Changing issuance permission
+does not change existing tokens. **Follow current grants** follows your grants
+within the selected contexts, including later reads; a read-only token continues
+to block writes.
+
 **Restrict to selected** adds service, action, and resource/group restrictions as
 a ceiling. Choose the smallest useful boundary for dedicated automation.
 
@@ -259,9 +269,14 @@ to change only matching actions; other selections remain. Actions without
 reviewed read-only metadata are write-capable. A selected action that is no
 longer available stays visible so you can remove it. A read-only draft cannot
 select new write actions; already selected writes remain visible for correction.
-If your permission changes to Read-only while the draft allows writes, choose
-**Apply read-only restriction** and correct its selections before submitting.
-Disabled permission blocks submission while preserving the draft.
+If a selected context changes to Read-only while the draft allows writes, its
+summary still shows the actual Write-capable choice. Choose **Apply read-only
+restriction** and correct its selections before submitting. Contexts that are no
+longer granted or permitted remain visible until you remove them explicitly.
+Newly eligible contexts are not selected automatically. Refresh failures or no
+eligible contexts block submission without changing the name, lifetime, resources,
+contexts, or Read-only choice. A policy refusal refreshes the current permission
+and preserves the draft for correction.
 
 Each restricted service has its own collapsible section. Its resource choices
 list only the resource types the service's actions use.
@@ -456,7 +471,7 @@ report.
 | Symptom | Next step |
 | --- | --- |
 | `broker_token_class_denied` during management | Use your browser session or `user_manage` token; the agent token is invocation-only |
-| `token_issuance_denied` | Check the account's token issuance permission. `disabled` needs administrator configuration; `read_only_required` needs an explicit Read-only choice. Existing tokens are unchanged |
+| `token_issuance_denied` | `disabled` needs administrator configuration; `context_not_allowed` needs the disallowed selected context removed or permission restored; `read_only_required` needs an explicit Read-only choice. Existing tokens are unchanged |
 | `self_service_disabled` | Ask an administrator to manage your credentials/tokens or enable personal self-service |
 | **Revocation failed** or **Revocation unconfirmed** on an OAuth connection | An ended connection's tokens may still be valid at the provider. Revoke the Broker application in the settings of the account that connection used (GitLab: **Preferences**, **Applications**, **Authorized applications**), or ask its administrator; this also ends a current connection of that account, so reconnect afterwards |
 | OAuth Connect/Reconnect unavailable | Ask the administrator to check self-service, your active direct/group `per_user` grant on a service using the connection, and the connection's OAuth registration; an existing owned connection can still be disconnected after grant loss |

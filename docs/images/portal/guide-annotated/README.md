@@ -5,13 +5,15 @@ Orange highlights, arrows, and callouts identify the controls discussed in the
 [portal walkthroughs](../../../portal-guide/index.md); they are documentation
 overlays, not application controls.
 
-The copies were annotated with the built-in image generation tool and visually
-reviewed. The [manifest](manifest.json) records each source checksum, copy
-checksum, annotation description, and review status. Original captures are
-retained unchanged. Generated copies may have a different image size.
+The copies use reviewed image-generation annotations or deterministic vector
+overlays, as identified in the [manifest](manifest.json). It records each source
+checksum, copy checksum, annotation description, and review status. Original
+captures are retained separately. Vector overlays preserve source pixels outside
+their annotation masks; image-generation copies may have a different image size.
 
-The [prompt set](prompts.json) retains the full instructions used for each
-reviewed copy. Each manifest entry identifies its original guide image.
+The [annotation instructions](prompts.json) retain the prompts or vector overlay
+specifications used for each reviewed copy. Each manifest entry identifies its
+original guide image.
 
 All accounts and audit data are synthetic. Creation and confirmation forms are
 unsubmitted examples. Credential verification success and failure are simulated

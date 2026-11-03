@@ -348,9 +348,12 @@ pub(crate) async fn auth_local_login(
     let login_source = auth_source_key(&source);
     let session_ttl_seconds =
         parse_ttl_seconds(&snapshot.runtime.config().browser_auth.session_ttl).unwrap_or(8 * 3600);
-    let issuance_authority = snapshot.runtime.config().broker_tokens.as_ref().map(|_| {
-        super::management::common::agent_token_issuance_authority(snapshot.runtime.config())
-    });
+    let issuance_environment = snapshot
+        .runtime
+        .config()
+        .broker_tokens
+        .as_ref()
+        .map(|_| snapshot.runtime.agent_token_issuance_environment());
     let work = match store.try_admit_local_password_request() {
         Ok(work) => work,
         Err(_) => {
@@ -378,7 +381,7 @@ pub(crate) async fn auth_local_login(
                     lockout_ttl_seconds,
                 },
                 session_ttl_seconds,
-                issuance_authority,
+                issuance_environment.as_ref(),
             )
         })
         .await
@@ -585,9 +588,12 @@ pub(crate) async fn auth_password_change(
     let session_ttl_seconds =
         parse_ttl_seconds(&snapshot.runtime.config().browser_auth.session_ttl).unwrap_or(8 * 3600);
     let replace_local_session = cookie_identity.login_method == "local_password";
-    let issuance_authority = snapshot.runtime.config().broker_tokens.as_ref().map(|_| {
-        super::management::common::agent_token_issuance_authority(snapshot.runtime.config())
-    });
+    let issuance_environment = snapshot
+        .runtime
+        .config()
+        .broker_tokens
+        .as_ref()
+        .map(|_| snapshot.runtime.agent_token_issuance_environment());
     let principal_for_change = principal_id.clone();
     if let Err(response) =
         auth_write_audit_preflight(response_context, &cookie_identity.identity).await
@@ -626,7 +632,7 @@ pub(crate) async fn auth_password_change(
                     replace_local_session,
                     session_ttl_seconds,
                 },
-                issuance_authority,
+                issuance_environment.as_ref(),
             )
         })
         .await
@@ -1252,12 +1258,11 @@ async fn session_result(
 ) -> Result<Value, ManagedStoreError> {
     let access = if snapshot.runtime.config().broker_tokens.is_some() {
         let principal = cookie_identity.identity.principal.clone();
-        let authority =
-            super::management::common::agent_token_issuance_authority(snapshot.runtime.config());
+        let environment = snapshot.runtime.agent_token_issuance_environment();
         Some(
             snapshot
                 .managed_store_call(move |store| {
-                    store.agent_token_issuance_policy(&principal, authority)
+                    store.agent_token_issuance_policy(&principal, &environment)
                 })
                 .await?,
         )
@@ -1988,9 +1993,7 @@ fn auth_response(status: StatusCode, envelope: AuthEnvelope) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_core::{
-        AgentTokenIssuanceMode, AgentTokenIssuancePolicy, AgentTokenIssuanceSource,
-    };
+    use agent_access_core::AgentTokenIssuancePolicy;
 
     #[test]
     fn session_token_policy_preserves_ttl_and_omits_all_policy_when_tokens_unconfigured() {
@@ -2014,17 +2017,15 @@ upload_spool_dir = "upload-spool"
             &Arc::new(crate::backend_registry()),
         )
         .unwrap();
-        let access = AgentTokenIssuancePolicy {
-            mode: AgentTokenIssuanceMode::ReadOnly,
-            source: AgentTokenIssuanceSource::Groups,
-            group_ids: vec!["readers".into()],
-        };
+        let access: AgentTokenIssuancePolicy = serde_json::from_value(json!({
+            "source":"groups", "contexts":[{"executionContext":"default","mode":"read_only","groupIds":["readers"]}]
+        })).unwrap();
         let policy = token_issuance_policy(&config, false, Some(&access));
         assert_eq!(
             policy,
             json!({"selfAgentInvoke":{
                 "defaultTtl":"8h", "maxTtl":"1d", "options":["8h","1d"],
-                "access":{"mode":"read_only","source":"groups","groupIds":["readers"]},
+                "access":{"source":"groups","contexts":[{"executionContext":"default","mode":"read_only","groupIds":["readers"]}]},
             }})
         );
         let admin = token_issuance_policy(&config, true, Some(&access));

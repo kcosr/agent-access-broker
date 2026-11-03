@@ -752,17 +752,20 @@ async fn resource_attribute_fixture(fail_audit: bool) -> ResourceAttributeFixtur
         )
         .unwrap();
     store
-        .create_principal(agent_access_core::PrincipalWriteRequest {
-            agent_token_issuance: Default::default(),
-            role: agent_access_core::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".into(),
-            kind: "user".into(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".into(),
-        })
+        .create_principal(
+            agent_access_core::PrincipalWriteRequest {
+                agent_token_issuance: Default::default(),
+                role: agent_access_core::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     let issue = |principal: &str, class| {
         store

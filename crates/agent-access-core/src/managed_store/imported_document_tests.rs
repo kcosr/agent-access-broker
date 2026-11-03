@@ -68,7 +68,7 @@ fn uploaded_document_atomic_preview_and_exact_bytes_survive_restart() {
     assert_eq!(preview.service_version, saved.services[0].version);
     assert_eq!(preview.catalog_revision, saved.revision);
     drop(store);
-    let reopened = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+    let reopened = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     assert_eq!(reopened.imported_catalog().unwrap(), saved);
     assert_eq!(
         reopened.imported_document(&saved.services[0]).unwrap(),
@@ -228,7 +228,7 @@ fn uploaded_document_corrupt_content_is_rejected_on_load_and_reopen() {
         .unwrap();
     assert!(store.imported_document(&saved.services[0]).is_err());
     drop(store);
-    assert!(ManagedStore::open(&config, ManagedStoreOpenMode::Startup).is_err());
+    assert!(ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).is_err());
 }
 
 #[test]
@@ -250,7 +250,7 @@ fn uploaded_document_schema_031_upgrade_preserves_durable_rows() {
             .unwrap()],
     };
     let old =
-        ManagedStore::open_with_catalog(&config, ManagedStoreOpenMode::Startup, previous).unwrap();
+        ManagedStore::open_with_catalog(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup, previous).unwrap();
     let bytes = GOLDEN_SERVICE_ROWS[2].1;
     {
         let conn = old.connection.lock().unwrap();
@@ -264,7 +264,7 @@ fn uploaded_document_schema_031_upgrade_preserves_durable_rows() {
         );
     }
     drop(old);
-    let upgraded = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+    let upgraded = ManagedStore::open(&config, &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     assert!(upgraded.migration_applied_this_open(MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION));
     let catalog = upgraded.imported_catalog().unwrap();
     assert!(catalog.services[0].document.is_none());

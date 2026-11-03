@@ -28,6 +28,7 @@ type SessionValue = {
   /** Includes a failed refresh while an older session remains cached. */
   sessionRefreshError: unknown;
   retrySession: () => void;
+  refreshSession: () => Promise<Session>;
   retryingSession: boolean;
   setSession: (next: Session | ((current: Session) => Session)) => void;
   /**
@@ -70,6 +71,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     queryFn: () => brokerApi.session()
   });
   const session = sessionQuery.data ?? SIGNED_OUT;
+  const refreshSession = useCallback(async () => {
+    const result = await sessionQuery.refetch({ throwOnError: true });
+    if (!result.data) throw new Error("Session refresh returned no session.");
+    return result.data;
+  }, [sessionQuery.refetch]);
   const setSession = useCallback(
     (next: Session | ((current: Session) => Session)) =>
       queryClient.setQueryData<Session>(portalQueryKeys.session, (current) => {
@@ -176,6 +182,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       loading: sessionQuery.isPending,
       sessionError: sessionQuery.isError && !sessionQuery.data ? sessionQuery.error : null,
       sessionRefreshError: sessionQuery.isError ? sessionQuery.error : null,
+      refreshSession,
       retrySession: () => { void sessionQuery.refetch(); },
       retryingSession: sessionQuery.isFetching,
       setSession,
@@ -188,7 +195,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       signInNotice,
       setSignInNotice
     }),
-    [session, getSession, sessionQuery.isPending, sessionQuery.isError, sessionQuery.error, sessionQuery.isFetching, sessionQuery.refetch, setSession, attempt, reportError, clearPortalData, pendingReturnTo, signInNotice]
+    [session, refreshSession, getSession, sessionQuery.isPending, sessionQuery.isError, sessionQuery.error, sessionQuery.isFetching, sessionQuery.refetch, setSession, attempt, reportError, clearPortalData, pendingReturnTo, signInNotice]
   );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

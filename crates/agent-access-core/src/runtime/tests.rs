@@ -6,6 +6,8 @@ mod connection;
 mod credential_discovery;
 #[path = "identity_path_controls_tests.rs"]
 mod identity_path_controls;
+#[path = "issuance_context_tests.rs"]
+mod issuance_contexts;
 #[path = "trusted_user_tests.rs"]
 mod trusted_user;
 use crate::{
@@ -324,6 +326,7 @@ fn seed_test_resource_catalog(store_path: &Path) {
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -405,6 +408,10 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         scoped_mcp: runtime.scoped_mcp.clone(),
         oauth: runtime.oauth.clone(),
         invocation_limits: Arc::new(crate::ConfiguredInvocationLimits::from_config(&config)),
+        execution_context_registry: crate::ConfiguredExecutionContexts::from_config(
+            config.execution_context.as_ref(),
+        )
+        .unwrap(),
         config: Arc::new(config),
         providers: Arc::clone(&runtime.providers),
         command_providers: Arc::clone(&runtime.command_providers),
@@ -4739,6 +4746,8 @@ fn install_test_callers(runtime: &mut BrokerRuntime, fixed: bool, forwarding: bo
         default_context: Some("default".into()),
     });
     runtime.trusted_callers = load_trusted_callers(&config).unwrap();
+    runtime.execution_context_registry =
+        crate::ConfiguredExecutionContexts::from_config(config.execution_context.as_ref()).unwrap();
     runtime.config = Arc::new(config);
     fs::remove_file(path).unwrap();
 }
@@ -6713,17 +6722,20 @@ async fn readiness_accepts_broker_token_source_with_active_managed_credentials()
     let runtime = BrokerRuntime::new(config).unwrap();
     let store = runtime.managed_store().unwrap();
     store
-        .create_or_update_principal(crate::PrincipalWriteRequest {
-            agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-            role: crate::PrincipalRole::User,
-            self_service_enabled: None,
-            principal_id: "alice".to_string(),
-            kind: "user".to_string(),
-            display_name: None,
-            email: None,
-            external_subject: None,
-            created_by: "admin".to_string(),
-        })
+        .create_or_update_principal(
+            crate::PrincipalWriteRequest {
+                agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                role: crate::PrincipalRole::User,
+                self_service_enabled: None,
+                principal_id: "alice".to_string(),
+                kind: "user".to_string(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "admin".to_string(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     store
         .upsert_user_credential(
@@ -6835,31 +6847,38 @@ fn managed_identity_toml_policy_accepts_existing_db_subjects() {
     {
         let store = ManagedStore::open(
             config.managed_store.as_ref().unwrap(),
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_group(crate::GroupWriteRequest {
-                agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
-                auto_enroll_new_microsoft_users: false,
-                group_id: "agents".to_string(),
-                display_name: None,
-                description: None,
-                created_by: "system".to_string(),
-            })
+            .create_group(
+                crate::GroupWriteRequest {
+                    agent_token_issuance: crate::GroupAgentTokenIssuanceSetting::default(),
+                    auto_enroll_new_microsoft_users: false,
+                    group_id: "agents".to_string(),
+                    display_name: None,
+                    description: None,
+                    created_by: "system".to_string(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store
-            .create_or_update_principal(crate::PrincipalWriteRequest {
-                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-                role: crate::PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".to_string(),
-                kind: "user".to_string(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".to_string(),
-            })
+            .create_or_update_principal(
+                crate::PrincipalWriteRequest {
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".to_string(),
+                    kind: "user".to_string(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".to_string(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
     }
 
@@ -7402,18 +7421,22 @@ async fn managed_policy_mutation_validates_non_anonymous_subject_without_relocki
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
     store
-        .create_group(crate::GroupWriteRequest {
-            agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
-            auto_enroll_new_microsoft_users: false,
-            group_id: "agents".to_string(),
-            display_name: None,
-            description: None,
-            created_by: "admin".to_string(),
-        })
+        .create_group(
+            crate::GroupWriteRequest {
+                agent_token_issuance: crate::GroupAgentTokenIssuanceSetting::default(),
+                auto_enroll_new_microsoft_users: false,
+                group_id: "agents".to_string(),
+                display_name: None,
+                description: None,
+                created_by: "admin".to_string(),
+            },
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
         .unwrap();
     drop(store);
     let config = managed_policy_fake_config(&store_path);
@@ -8014,6 +8037,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         scoped_mcp: runtime.scoped_mcp.clone(),
         oauth: runtime.oauth.clone(),
         invocation_limits: runtime.invocation_limits.clone(),
+        execution_context_registry: runtime.execution_context_registry.clone(),
         config: Arc::new(invalid_config),
         providers: runtime.providers.clone(),
         command_providers: runtime.command_providers.clone(),
@@ -8860,6 +8884,7 @@ fn seed_managed_policy_grant(store_path: &Path, seed: ManagedPolicyGrantSeed<'_>
             require_registered_principal_for_invocation: false,
             auto_migrate: true,
         },
+        &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
@@ -9446,31 +9471,38 @@ fn personal_setup_admission_uses_transaction_groups_and_exclusive_policy_authori
         );
         let store = ManagedStore::open(
             config.managed_store.as_ref().unwrap(),
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_group(crate::GroupWriteRequest {
-                agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
-                auto_enroll_new_microsoft_users: false,
-                group_id: "agents".into(),
-                display_name: None,
-                description: None,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                crate::GroupWriteRequest {
+                    agent_token_issuance: crate::GroupAgentTokenIssuanceSetting::default(),
+                    auto_enroll_new_microsoft_users: false,
+                    group_id: "agents".into(),
+                    display_name: None,
+                    description: None,
+                    created_by: "admin".into(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store
-            .create_or_update_principal(crate::PrincipalWriteRequest {
-                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-                principal_id: "agent-one".into(),
-                kind: "user".into(),
-                role: crate::PrincipalRole::User,
-                self_service_enabled: Some(true),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_or_update_principal(
+                crate::PrincipalWriteRequest {
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                    principal_id: "agent-one".into(),
+                    kind: "user".into(),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: Some(true),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store.add_group("agent-one", "agents", "admin").unwrap();
         drop(store);
@@ -9584,31 +9616,38 @@ fn personal_setup_admission_uses_toml_identity_groups_instead_of_store_membershi
         });
         let store = ManagedStore::open(
             config.managed_store.as_ref().unwrap(),
+            &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_group(crate::GroupWriteRequest {
-                agent_token_issuance: crate::AgentTokenIssuanceMode::Disabled,
-                auto_enroll_new_microsoft_users: false,
-                group_id: "agents".into(),
-                display_name: None,
-                description: None,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                crate::GroupWriteRequest {
+                    agent_token_issuance: crate::GroupAgentTokenIssuanceSetting::default(),
+                    auto_enroll_new_microsoft_users: false,
+                    group_id: "agents".into(),
+                    display_name: None,
+                    description: None,
+                    created_by: "admin".into(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         store
-            .create_or_update_principal(crate::PrincipalWriteRequest {
-                agent_token_issuance: crate::PrincipalAgentTokenIssuance::Inherit,
-                principal_id: "agent-one".into(),
-                kind: "user".into(),
-                role: crate::PrincipalRole::User,
-                self_service_enabled: Some(true),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "admin".into(),
-            })
+            .create_or_update_principal(
+                crate::PrincipalWriteRequest {
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                    principal_id: "agent-one".into(),
+                    kind: "user".into(),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: Some(true),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                },
+                &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         if !toml_member {
             store.add_group("agent-one", "agents", "admin").unwrap();
@@ -9835,6 +9874,7 @@ fn initial_admin_bootstrap_rejects_reload_candidate_without_mutating_store() {
             auto_migrate: true,
             require_registered_principal_for_invocation: false,
         },
+        &crate::ConfiguredExecutionContexts::from_config(None).unwrap(),
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();

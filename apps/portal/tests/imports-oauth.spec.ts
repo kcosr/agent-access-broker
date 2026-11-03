@@ -344,7 +344,7 @@ test("administrator connects an OAuth discovery draft, reviews tools and explici
   await page.getByRole("alertdialog", { name: "Enable metrics?", exact: true }).getByRole("button", { name: "Enable service" }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
   await managementRequest(page, "/v1/admin/policy/grants", { grantId: "metrics-user", service: "metrics", subjects: ["user:admin"], actions: ["query", "update"], credentialMode: "per_user", executionContexts: ["internal"], resources: { resourceIds: [], resourceGroupIds: [] }, status: "active" });
-  await managementRequest(page, "/v1/admin/principals/admin/access", { agentTokenIssuance: "write_capable" }, "PATCH");
+  await managementRequest(page, "/v1/admin/principals/admin/access", { agentTokenIssuance: { mode: "write_capable", allowedExecutionContexts: ["internal"] } }, "PATCH");
   const issued = await managementRequest(page, "/v1/tokens", { readOnly: false, name: "oauth-browser-agent", ttl: "8h", allowedServices: ["metrics"], allowedExecutionContexts: ["internal"] }) as { token: string };
   const invoke = (action: string) => fetch(`${baseUrl}/v1/invoke/metrics/${action}`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${issued.token}`, "X-Agent-Access-Request-Id": randomUUID() }, body: JSON.stringify({ inputs: {} }) });
   const read = await invoke("query");

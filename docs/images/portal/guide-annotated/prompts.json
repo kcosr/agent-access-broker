@@ -1,15 +1,45 @@
 {
-  "method": "built-in imagegen",
+  "method": "built-in imagegen unless an annotation declares another tool",
   "annotations": [
     {
       "file": "admin-account-access-light.png",
       "original": "../guide/admin-account-access-light.png",
-      "sourceSha256": "b113e782492788cc01726a49a5203fa9bf4725adfed8a81d4cc6eb8d2ac059a6",
-      "outputSha256": "e541bfe1b7db66ccfb6a9f0d4c0b77051e580d8f23ad300d9e42102601af9052",
-      "description": "Independent role and self-service controls",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Keep original 1440x960 canvas. Highlight only the Role dropdown and Self-service checkbox rows approximately x=44,y=670,width=756,height=90. Put callout on empty right margin x=913,y=648,width=475,height=100. Exact text: 'Two independent controls' then 'Role and personal self-service'. Arrow to right edge of highlighted rows. Preserve the Auditor role and unchecked Self-service enabled checkbox exactly.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "7caa43240ef6e0ced7f49986082e80de2c7e2a88836e45aa6da742b40d14d119",
+      "outputSha256": "e92dade5487bf22b7f661eb695a140e34b840ad11aa5358baeb4e6af631b3d38",
+      "description": "Synthetic auditor account with independent role and self-service controls, Disabled personal token issuance and its current saved explicit account override.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            37,
+            753,
+            780,
+            95
+          ]
+        ],
+        "box": [
+          910,
+          688,
+          484,
+          118
+        ],
+        "lines": [
+          "Personal issuance is Disabled",
+          "Existing tokens remain unchanged."
+        ],
+        "arrow": [
+          [
+            910,
+            754
+          ],
+          [
+            820,
+            801
+          ]
+        ]
+      }
     },
     {
       "file": "admin-audit-denied-light.png",
@@ -64,12 +94,47 @@
     {
       "file": "admin-create-group-light.png",
       "original": "../guide/admin-create-group-light.png",
-      "sourceSha256": "c4a5010194384d306262ffb3b4984a0bd88b8124089b87e5b0440990060be62e",
-      "outputSha256": "7d47c2cf0acc3f4e8aef0b0d3321a53385fc1a464320135c2d58ed93b489aefd",
-      "description": "Choose a stable group ID and review the unsaved group draft.",
-      "prompt": "Use case: precise-object-edit. Add documentation annotations only to this authentic screenshot. Preserve all original UI text, numbers, labels, colors, layout, and 3:2 canvas ratio, with no crop or redesign. Highlight the Group ID label and project-readers field with a thin orange rounded outline and very faint transparent orange fill (original coords x450 y153 to990 y219). Place one small white card with thin orange border in empty gray area below and right of modal (x1040 y500 to1360 y592), exact two lines \"Choose a stable group ID\" and \"Review before saving\". One thin orange arrow points from callout to the highlighted Group ID field via empty gray area, never covering form labels or table content. Keep every underlying UI character unchanged and legible. This is an unsaved draft; do not imply successful creation.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "a6b9ac11d8f9248201c66be43681d3cb339f9f042c4bfea4fe0a98433758e6c0",
+      "outputSha256": "6c239c1a190fcb2cba6de256c556d517ddc1997915f3a6c32c9e8c399d821a18",
+      "description": "Synthetic unsubmitted policy-group draft with Read-only token issuance in the explicitly selected external context.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            451,
+            417,
+            538,
+            212
+          ]
+        ],
+        "box": [
+          1040,
+          434,
+          370,
+          126
+        ],
+        "lines": [
+          "Read-only in external",
+          "This group contributes only",
+          "in its selected context."
+        ],
+        "arrow": [
+          [
+            1040,
+            499
+          ],
+          [
+            1007,
+            499
+          ],
+          [
+            991,
+            519
+          ]
+        ]
+      }
     },
     {
       "file": "admin-create-resource-light.png",
@@ -94,12 +159,47 @@
     {
       "file": "admin-create-user-light.png",
       "original": "../guide/admin-create-user-light.png",
-      "sourceSha256": "6b6dc0d453e26f0d6ed47271f25c4cdd79be9180face794b1b28161468cfa889",
-      "outputSha256": "a911c77a161574ab7912554d61d125b7bf8f59e15c68beda3177a456735e4d5a",
-      "description": "Review the selected Jira group, User role, and self-service before creating Morgan.",
-      "prompt": "Use case: precise-object-edit. Edit target: the supplied authentic portal screenshot. Produce an annotated COPY for a user guide. Preserve the entire original screenshot exactly: all UI text, labels, numeric counts, account names, colors, controls, canvas 1440x960 and layout. Do not redraw, paraphrase, simplify, blur or remove any UI. Add ONLY two thin orange rounded-rectangle outlines with extremely light transparent orange fill: one around Groups label and selected Jira Users field (x451 y414 to989 y477), one around Role and Self-service enabled controls (x451 y697 to989 y805). Add ONE small white callout card with orange border and short dark text in empty gray area to right of modal x1040 y650 to1390 y746, exact two-line text \"Check group and role\" / \"Review before creating\". Add a thin orange arrow from card toward Role control without covering labels, passing through empty space. Keep annotations restrained and match a clean documentation preview style. No claims this draft was saved. All original UI must remain unmodified and legible.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "66acac5b4bd0479b285d2320451b8d3c9c3ce3d79d7b14794833ee2a9fe6430c",
+      "outputSha256": "deb4343696368795c846950b4d1889eeecc908a23d5a4fcc029e9f2f7238eebd",
+      "description": "Synthetic unsubmitted user draft with Read-only personal token issuance in explicitly selected default and internal contexts, group selection, independent local password sign-in and self-service.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            451,
+            574,
+            538,
+            187
+          ]
+        ],
+        "box": [
+          1040,
+          602,
+          370,
+          126
+        ],
+        "lines": [
+          "Choose mode and contexts",
+          "This account override permits",
+          "Read-only in default and internal."
+        ],
+        "arrow": [
+          [
+            1040,
+            665
+          ],
+          [
+            1007,
+            665
+          ],
+          [
+            991,
+            665
+          ]
+        ]
+      }
     },
     {
       "file": "admin-disable-user-light.png",
@@ -334,42 +434,204 @@
     {
       "file": "user-token-access-light.png",
       "original": "../guide/user-token-access-light.png",
-      "sourceSha256": "7262e286ef487fc4a38540beee06f2004738a5060a150bc9d9f4f229aab4a5ff",
-      "outputSha256": "b34c6a32d65e4628d2ae24fe60684852f5e9e7c817cd81789fe00b6ab7e34a48",
-      "description": "Shared read-only and write-capable action selector",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 screenshot of an unsubmitted synthetic token draft. Add only orange tutorial annotation overlays. Preserve ALL original UI text, numbers, icons, selected and unchecked controls, layout, positions, and canvas. Do not redraw, rewrite, crop, blur, recolor, move, or fabricate the application UI. Use thin 3px orange rounded highlight outlines, extremely light transparent orange tint, one white callout box with orange border and subtle shadow, crisp dark sans-serif text with bold first line and regular second line. Place the callout only in specified empty space. Keep arrow routes clear of original text and controls. No watermark. Preserve the original screenshot outside the annotation overlay. Do not imply issuance occurred. Highlight both action columns together with one outline at x=55,y=410,width=812,height=340, preserving the Read-only and Write-capable legends, 1 of 6 and 0 of 2 counts, checked issue.view and unchecked write actions. Put the callout in empty lower-right space at x=936,y=670,width=420,height=90. Exact two-line callout text: 'Separate reads from writes' then 'All / None affect only matching actions'. One orange arrow from the callout's left edge goes through the empty gap at x=904 to the right edge of the columns highlight near y=715. Preserve the selected action and effective-access table exactly.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "6da6038314fb4046720a49dd32c50d160fd4694badad4c83c96e476b4b4d8964",
+      "outputSha256": "3fec212d6f131449cbb6476dec1fd810a1a607323f9096d506d6e4ad0e715385",
+      "description": "Synthetic unsubmitted read-only token restricted to Jira issue.view; write-capable actions remain unavailable despite granted authority.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            548,
+            277,
+            479,
+            100
+          ]
+        ],
+        "box": [
+          1088,
+          445,
+          320,
+          125
+        ],
+        "lines": [
+          "Write actions stay blocked",
+          "The token's ceiling applies",
+          "even with a write grant."
+        ],
+        "arrow": [
+          [
+            1088,
+            479
+          ],
+          [
+            1066,
+            479
+          ],
+          [
+            1066,
+            317
+          ],
+          [
+            1031,
+            317
+          ]
+        ]
+      }
     },
     {
       "file": "user-token-details-light.png",
       "original": "../guide/user-token-details-light.png",
-      "sourceSha256": "bedfd1027ea21b4c19226688d07153872305c2ce072664b34177fe56ecae6053",
-      "outputSha256": "e3496a6caca755d56b168928b4fbbe5503195402f7be0b5c989c230c22f76a85",
-      "description": "Finite lifetime and restricted access on the token creation page",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 screenshot of an unsubmitted synthetic token draft. Add only orange tutorial annotation overlays. Preserve ALL original UI text, numbers, icons, selected and unchecked controls, layout, positions, and canvas. Do not redraw, rewrite, crop, blur, recolor, move, or fabricate the application UI. Use thin 3px orange rounded highlight outlines, extremely light transparent orange tint, one white callout box with orange border and subtle shadow, crisp dark sans-serif text with bold first line and regular second line. Place the callout only in specified empty space. Keep arrow routes clear of original text and controls. No watermark. Preserve the original screenshot outside the annotation overlay. Do not imply issuance occurred. Highlight the Lifetime select at x=41,y=409,width=840,height=33 and the selected Restrict to selected control at x=191,y=702,width=136,height=31. Put the callout in empty lower-right space at x=936,y=650,width=420,height=90. Exact two-line callout text: 'Choose a finite token lifetime' then 'Restrict services and actions below'. One orange arrow from the callout's left edge goes left to x=905, up through the empty gutter to y=425, then left to the Lifetime outline's right edge. Never cross the Boundary or Effective access cards. Preserve the 30d value and the incomplete-boundary guidance exactly.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "b3ccecc7f303f87d8de23e0cf7e7b749e82a98b1189144874bf7fcba8a5b704b",
+      "outputSha256": "ca8193c5eaf28f2d050d1298aa5ca1dfb26e0efdde1774df81219adfee16d0e1",
+      "description": "Synthetic unsubmitted read-only token draft with the default context admitted by both current grants and personal issuance policy; the enabled policy permits write-capable issuance so Read-only is selectable.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            31,
+            337,
+            1018,
+            79
+          ]
+        ],
+        "box": [
+          1088,
+          480,
+          320,
+          125
+        ],
+        "lines": [
+          "Only eligible contexts",
+          "Both grants and issuance",
+          "permission must allow them."
+        ],
+        "arrow": [
+          [
+            1088,
+            524
+          ],
+          [
+            1067,
+            524
+          ],
+          [
+            1067,
+            377
+          ],
+          [
+            1053,
+            377
+          ]
+        ]
+      }
     },
     {
       "file": "user-token-resources-light.png",
       "original": "../guide/user-token-resources-light.png",
-      "sourceSha256": "86adf1de44003660f3557eda62a0bee67ff861785730d7e0f138a4b68cdfe882",
-      "outputSha256": "2741bf0f6d77546b06000766e77082899b3572e3b6da503f4cc0939362763cc8",
-      "description": "Exact Jira project resource restriction",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 screenshot of an unsubmitted synthetic token draft. Add only orange tutorial annotation overlays. Preserve ALL original UI text, numbers, icons, selected and unchecked controls, layout, positions, and canvas. Do not redraw, rewrite, crop, blur, recolor, move, or fabricate the application UI. Use thin 3px orange rounded highlight outlines, extremely light transparent orange tint, one white callout box with orange border and subtle shadow, crisp dark sans-serif text with bold first line and regular second line. Place the callout only in specified empty space. Keep arrow routes clear of original text and controls. No watermark. Preserve the original screenshot outside the annotation overlay. Do not imply issuance occurred. Highlight only the selected DEMO Jira project row at x=69,y=604,width=781,height=43. Keep the nearby Fake project DEMO, Git repository demo/app, Confluence space DEMO and Demo resources group unchecked. Put the callout in empty lower-right space at x=936,y=670,width=420,height=90. Exact two-line callout text: 'Limit resources to Jira DEMO' then 'Leave broader groups unselected'. Route one orange arrow from the callout left edge to x=904 through the empty gutter, up to y=625, then left to the selected row outline's right edge. Do not cross UI labels, the resource selector, or the summary table. Preserve all original texts and selected resource exactly.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "471eba5bff5d9df809a30bd52d5dbd43b2c0052d12f0f665eecc9dd36761028e",
+      "outputSha256": "8f805cb09e0a162b1751009b06628dd5ec8528084e4badbab3ee5870dcbb7a93",
+      "description": "Synthetic unsubmitted read-only Jira token selecting only the exact DEMO Jira project resource in default.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            47,
+            601,
+            490,
+            49
+          ]
+        ],
+        "box": [
+          1088,
+          487,
+          320,
+          125
+        ],
+        "lines": [
+          "Select the DEMO project",
+          "Resource choices narrow",
+          "the token's current grants."
+        ],
+        "arrow": [
+          [
+            1088,
+            551
+          ],
+          [
+            1062,
+            551
+          ],
+          [
+            1062,
+            625
+          ],
+          [
+            541,
+            625
+          ]
+        ]
+      }
     },
     {
       "file": "user-token-boundary-light.png",
       "original": "../guide/user-token-boundary-light.png",
-      "sourceSha256": "68bb871bbd0b2377adc40aa0ec4e7f84e66e8eedeff86fdc2366f8f5315b467a",
-      "outputSha256": "74d9e6ffd82e50e4a8145e6fe2f5ef7517672289eecb716b2962d7f67a6ef0c1",
-      "description": "Review live boundary and effective access before issuance",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the sole exact EDIT TARGET, a real 1440x960 screenshot of an unsubmitted synthetic token draft. Add only orange tutorial annotation overlays. Preserve ALL original UI text, numbers, icons, selected and unchecked controls, layout, positions, and canvas. Do not redraw, rewrite, crop, blur, recolor, move, or fabricate the application UI. Use thin 3px orange rounded highlight outlines, extremely light transparent orange tint, one white callout box with orange border and subtle shadow, crisp dark sans-serif text with bold first line and regular second line. Place the callout only in specified empty space. Keep arrow routes clear of original text and controls. No watermark. Preserve the original screenshot outside the annotation overlay. Do not imply issuance occurred. Highlight the Jira Actions/Resources summary at x=933,y=343,width=347,height=81 and the Effective access table at x=932,y=597,width=348,height=51. Preserve Actions issue.view, Resources DEMO, default context, and all other UI values. Put a callout in empty lower-right space at x=930,y=720,width=425,height=90. Exact two-line callout text: 'Review before issuing' then 'Only issue.view on Jira project DEMO'. Route one orange arrow from the callout right edge through empty right margin x=1380 upward to y=398, then left to the summary outline's right edge. Do not cross existing cards or labels. Keep Issue token button unclicked and preserve the full page.",
-      "tool": "built-in imagegen",
-      "reviewed": true
+      "sourceSha256": "3a84d5c023bf075a932dc5c9bf5f9062a3b09982cec8ad15aaf3c3b9e1459528",
+      "outputSha256": "e8098b3d61791f6414f29bcc890c07c8be7d21e42e3cebda24da4c1f74243eff",
+      "description": "Synthetic unsubmitted read-only token with its current effective access and summary; action selection is collapsed and no token is issued.",
+      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
+      "tool": "Deterministic SVG overlay",
+      "reviewed": true,
+      "overlay": {
+        "highlights": [
+          [
+            1084,
+            109,
+            315,
+            29
+          ],
+          [
+            33,
+            716,
+            1014,
+            134
+          ]
+        ],
+        "box": [
+          1088,
+          540,
+          320,
+          125
+        ],
+        "lines": [
+          "Review the current result",
+          "Read-only and grants",
+          "bound this token's access."
+        ],
+        "arrow": [
+          [
+            1088,
+            625
+          ],
+          [
+            1067,
+            625
+          ],
+          [
+            1067,
+            797
+          ],
+          [
+            1051,
+            797
+          ]
+        ]
+      }
     },
     {
       "file": "user-token-revoke-light.png",

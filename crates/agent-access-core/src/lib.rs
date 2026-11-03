@@ -603,6 +603,69 @@ pub struct ExecutionContextConfig {
     pub default_context: Option<String>,
 }
 
+/// The validated execution-context registry for one runtime configuration.
+///
+/// Iteration retains configuration order. An absent configuration contains the
+/// single real context `default`; it never represents unrestricted membership.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfiguredExecutionContexts {
+    allowed_values: Vec<String>,
+    membership: BTreeSet<String>,
+    default_context: Option<String>,
+}
+
+impl ConfiguredExecutionContexts {
+    pub fn from_config(config: Option<&ExecutionContextConfig>) -> Result<Self, ConfigError> {
+        let mut errors = Vec::new();
+        validate_execution_context_config(config, &mut errors);
+        finish_validation(errors)?;
+        let (allowed_values, default_context) = config.map_or_else(
+            || {
+                (
+                    vec![DEFAULT_EXECUTION_CONTEXT.to_string()],
+                    Some(DEFAULT_EXECUTION_CONTEXT.to_string()),
+                )
+            },
+            |config| {
+                (
+                    config.allowed_values.clone(),
+                    config.default_context.clone(),
+                )
+            },
+        );
+        Ok(Self {
+            membership: allowed_values.iter().cloned().collect(),
+            allowed_values,
+            default_context,
+        })
+    }
+
+    pub fn allowed_values(&self) -> &[String] {
+        &self.allowed_values
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.allowed_values.iter().map(String::as_str)
+    }
+
+    pub fn contains(&self, value: &str) -> bool {
+        self.membership.contains(value)
+    }
+
+    /// Compare registry membership independently of presentation order/defaults.
+    pub fn has_same_membership(&self, other: &Self) -> bool {
+        self.membership == other.membership
+    }
+
+    pub fn default_context(&self) -> Option<&str> {
+        self.default_context.as_deref()
+    }
+
+    pub fn context_required(&self) -> bool {
+        self.default_context.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {

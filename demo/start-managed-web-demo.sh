@@ -175,13 +175,19 @@ seed_principal() {
   local display_name="$2"
   local password="$3"
   local agent_token_issuance="$4"
-  local principal_path response
+  local principal_path response policy_catalog issuance_contexts
   principal_path="$(urlencode "$principal")"
+  policy_catalog="$(api_with_session GET "/v1/admin/policy/catalog")"
+  expect_ok "$policy_catalog" "read execution contexts for $principal"
+  issuance_contexts="$(jq -ec '.result.executionContexts.allowedValues' <<<"$policy_catalog")"
   response="$(api_with_session POST "/v1/admin/principals" "$(jq -n \
     --arg principal "$principal" \
     --arg displayName "$display_name" \
     --arg agentTokenIssuance "$agent_token_issuance" \
-    '{principalId:$principal, kind:"user", displayName:$displayName, agentTokenIssuance:$agentTokenIssuance}')")"
+    --argjson contexts "$issuance_contexts" \
+    '{principalId:$principal, kind:"user", displayName:$displayName,
+      agentTokenIssuance:{mode:$agentTokenIssuance, allowedExecutionContexts:
+        (if $agentTokenIssuance == "inherit" or $agentTokenIssuance == "disabled" then [] else $contexts end)}}')")"
   expect_ok "$response" "create principal $principal"
   response="$(api_with_session POST "/v1/admin/principals/$principal_path/login-methods/local-password/enable" "$(AAB_DEMO_ENCODE_PASSWORD="$password" jq -n \
     '{password:env.AAB_DEMO_ENCODE_PASSWORD, mustChangePassword:false, acknowledgeSeparateSignIn:true}')")"

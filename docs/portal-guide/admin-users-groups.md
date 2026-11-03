@@ -23,9 +23,12 @@ an administrator. See [account roles](../roles.md).
    **Self-service enabled** so they can manage their own credentials, tokens,
    connections, and activity. A role and the self-service setting do not grant
    upstream service access; [grants](admin-grants.md) provide that access. Choose
-   **Read-only** under **Agent token issuance** for this example. The default,
-   **Inherit from groups**, permits no issuance until an active group contributes
-   permission. An explicit user setting overrides every group.
+   **Read-only** under **Agent token issuance** and check **default** and
+   **internal** in its execution-context checklist for this demo. At least one
+   context is required.
+   The default, **Inherit from groups**, permits no issuance until an active
+   group contributes permission for a context. An explicit user setting
+   replaces every group contribution.
 4. Choose the sign-in method. For the local-password example, select
    **Enable local password sign-in** and its acknowledgement. Then select
    **Create user**. The portal displays a fresh temporary password once;
@@ -33,9 +36,10 @@ an administrator. See [account roles](../roles.md).
 
 ![Draft Morgan user with Jira group membership, local sign-in acknowledgement, and self-service enabled](../images/portal/guide-annotated/admin-create-user-light.png)
 
-*The populated form is a draft. Local sign-in creates an independent broker
-password; it does not authenticate through Microsoft or evaluate Microsoft MFA
-and Conditional Access.*
+*The populated form is a draft, with Read-only issuance selected for `default`
+and `internal`. Local sign-in creates an independent broker password; it does
+not authenticate through Microsoft or evaluate Microsoft MFA and Conditional
+Access.*
 
 If Microsoft sign-in is configured, an administrator can create the account
 without enabling a local password and link Microsoft from the account's
@@ -50,8 +54,8 @@ as **Groups renew automatically**, **Renewal blocked** with its reason, or
 explains each one.
 
 **Expected outcome:** the new user opens on its account page. Confirm the
-principal ID, role, self-service setting, token issuance setting and resolved
-mode, sign-in method, and **Groups** tab.
+principal ID, role, self-service setting, token issuance mode and context list,
+current saved effective context summaries, sign-in method, and **Groups** tab.
 The account is ready for a [resource and grant review](admin-grants.md), followed
 by the [user's credential setup](user.md). Creating the account does not provision an
 upstream Jira account or credential.
@@ -85,14 +89,18 @@ policy-management assignment. Review the user's **Access** tab and the
 2. Enter a stable **Group ID**, a **Display name**, and a useful **Description**.
    For example, use `project-readers`, **Project Readers**, and a description
    explaining which project and operations members need. Set **Agent token
-   issuance** to **Read-only** to let inheriting members issue read-only tokens;
-   its default is Disabled.
+   issuance** to **Read-only**, then check **external** for this demo to let
+   inheriting members issue read-only tokens there. Its default is Disabled;
+   enabling a mode never selects contexts automatically.
    Select **Automatically add new Microsoft users** only if new accounts
    admitted through Microsoft should receive persistent local membership.
 3. Select **Create group**, then use **Members** to add existing accounts.
    Create a grant for that group before expecting it to provide service access.
 
 ![Unsaved Project Readers group form](../images/portal/guide-annotated/admin-create-group-light.png)
+
+*This draft contributes Read-only issuance in `external`; the other configured
+contexts are unchecked.*
 
 **Expected outcome:** the group opens on its own page and appears in the group
 list. A new group starts without members or invocation grants unless you add
@@ -102,18 +110,35 @@ principal groups collect accounts; resource groups collect selectable scopes.
 ## Review token issuance permission
 
 On a user's **Overview > Account access**, choose **Inherit from groups**,
-**Disabled**, **Read-only**, or **Write-capable** and review the resolved mode
-and source. On a managed group's **Overview > Token issuance**, choose one of
-the three group modes. The most permissive active effective group contributes;
-a Disabled group does not veto another group, while an explicit user Disabled
-setting does. A disabled group retains its setting without contributing it.
-TOML identity groups cannot supply issuance permission.
+**Disabled**, **Read-only**, or **Write-capable**. Read-only and Write-capable
+require explicit choices from the configured context checklist; Inherit and
+Disabled clear it. A managed group's **Overview > Token issuance** offers the
+three group modes. An explicit user setting replaces group permission. Otherwise,
+the most permissive active effective group wins separately for each context.
+A Disabled group does not veto another group. Disabled groups retain their
+settings without contributing them; TOML identity groups contribute nothing.
 
-Both existing and newly created accounts need explicit permission. Read-only
-permission still allows **Follow current grants**, including future reads while
-blocking writes. Changing permission leaves all existing tokens unchanged.
-Administrators can issue either token type from a principal's Tokens tab under
-their separate administrative authority; service accounts always use that path.
+Review the **current saved** effective context summaries and group provenance.
+They are read-only results, not an editor or a preview of an unsaved switch to
+Inherit. Save and refresh to see that inherited result. Newly configured contexts
+remain unchecked; removed selected contexts stay visible as **No longer
+configured** until you deselect them. A valid enabled policy always has at least
+one context.
+
+If an edited field changed since you opened the form, choose **Discard draft**
+or **Keep my draft** before saving. Both preserve your opportunity to review;
+neither submits automatically. Unedited fields adopt the latest saved values.
+A failed save retains your edits. API and CLI writes replace the submitted
+complete object without a version precondition; the portal's final refresh can
+detect observed conflicts but cannot prevent a later concurrent write.
+
+Read-only permission allows **Follow current grants**, including future reads
+while blocking writes. A token covering a mix of Read-only and Write-capable
+contexts must be read-only; a token selecting only Write-capable contexts may
+allow writes. Changing permission leaves all existing tokens unchanged.
+Administrators can issue either token type for the target's granted contexts from
+its Tokens tab under separate administrative authority; service accounts always
+use that path.
 
 ## Automatically add new Microsoft users
 

@@ -1,11 +1,14 @@
-import { AGENT_TOKEN_ISSUANCE_LABELS, PRINCIPAL_TOKEN_ISSUANCE_OPTIONS, agentTokenIssuanceDescription } from "../../lib/token-issuance-policy";
+import { AGENT_TOKEN_ISSUANCE_LABELS, agentTokenIssuanceDescription, issuanceSettingBlocker } from "../../lib/token-issuance-policy";
 import { AdminForm, AdminButton } from "../../components/admin-access";
 import { canWriteAdmin, ROLE_LABELS } from "../../lib/capabilities";
 import { AdminOnly } from "../../components/admin-access";
-import { useAdminGroups, useConfigStatus, usePolicyCatalog, useServicePolicyManagers } from "../../data/queries";
+import { useAdminGroups, useAdminPrincipal, useConfigStatus, usePolicyCatalog, useServicePolicyManagers } from "../../data/queries";
 import { usePolicyActions } from "../../mutations/policy";
 import { useModal } from "../../app/modal";
-import type { PrincipalAgentTokenIssuance, PrincipalRole } from "../../types";
+import type { PrincipalRecord, PrincipalRole } from "../../types";
+import { accessDraftPatch } from "../../lib/access-draft";
+import { useAccessDraft } from "./use-access-draft";
+import { AccessDraftConflict, TokenIssuanceControls, useIssuanceRegistry } from "./token-issuance-controls";
 // User page › Overview: profile, status and role, sign-in methods, identity token.
 import { LOCAL_SIGN_IN_EXPLANATION, LOCAL_SIGN_IN_ACKNOWLEDGMENT } from "./sign-in-methods";
 import { useEffect, useState } from "react";
@@ -137,43 +140,84 @@ function RoleSection({ principal }: { principal: PrincipalDetail }) {
   const configQuery = useConfigStatus();
   const assignmentsAvailable = configQuery.data?.identityAuthority === "managed" && configQuery.data.policyAuthority === "managed";
   const assignmentsQuery = useServicePolicyManagers(assignmentsAvailable && principal.role === "service_policy_manager");
-  const assignments = assignmentsQuery.data ?? [];
   const groups = useAdminGroups().data ?? [];
-  const [agentTokenIssuance, setAgentTokenIssuance] = useState(principal.agentTokenIssuance);
-  useEffect(() => { setAgentTokenIssuance(principal.agentTokenIssuance); }, [principal.agentTokenIssuance]);
-  const [role, setRole] = useState(principal.role);
-  const [selfServiceEnabled, setSelfServiceEnabled] = useState(principal.selfServiceEnabled);
-  useEffect(() => { setRole(principal.role); setSelfServiceEnabled(principal.selfServiceEnabled); }, [principal.role, principal.selfServiceEnabled]);
+  const fields = (value: PrincipalRecord) => ({ role: value.role, selfServiceEnabled: value.selfServiceEnabled, agentTokenIssuance: value.agentTokenIssuance });
+  const draft = useAccessDraft(fields(principal));
+  const { role, selfServiceEnabled, agentTokenIssuance } = draft.value;
+  const record = useAdminPrincipal(principal.principalId);
+  const registry = useIssuanceRegistry();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const policyError = accessDraftPatch(draft).agentTokenIssuance ? issuanceSettingBlocker(agentTokenIssuance, registry.contexts) : null;
   const self = principal.principalId === session.principal;
   const writable = canWriteAdmin(session);
   const roles = Object.entries(ROLE_LABELS).filter(([value]) => principal.kind !== "system" || value === "user" || value === "service_policy_manager");
-  const scopes = assignments.filter((assignment) => assignment.principalId === principal.principalId).map((assignment) => assignment.service);
   const changedRole = role !== principal.role;
   const leavingManager = changedRole && principal.role === "service_policy_manager";
   const scopePreviewReady = configQuery.isSuccess && (!assignmentsAvailable || assignmentsQuery.isSuccess);
-  const scopeWarning = !leavingManager ? "" : assignmentsAvailable
-    ? ` Direct management assignments will be removed: ${scopes.join(", ") || "none"}.`
-    : " Any stored direct management assignments will be removed. Assignment names are unavailable while policy is file-owned.";
-  const save = () => confirm({
-    title: "Update account access?",
-    body: `${principal.principalId} will have the ${ROLE_LABELS[role]} role and self-service ${selfServiceEnabled ? "enabled" : "disabled"}, with agent token issuance set to ${AGENT_TOKEN_ISSUANCE_LABELS[agentTokenIssuance]}. Existing token restrictions stay unchanged.${changedRole ? " All administrative API tokens for this account will be revoked." : ""}${scopeWarning}`,
-    confirmLabel: "Update access", tone: "primary",
-    onConfirm: () => principals.setAccess(principal.principalId, { role, selfServiceEnabled, agentTokenIssuance })
-  });
+  async function prepare() {
+    const result = await record.refetch({ throwOnError: true });
+    if (!result.data) throw new Error("Current account settings are unavailable.");
+    const next = draft.refresh(fields(result.data));
+    if (next.conflicts.length) throw new Error("Review the changed saved settings before saving.");
+    return next;
+  }
+  const save = async () => {
+    setPending(true); setError(null);
+    try {
+      const next = await prepare();
+      const values = next.value;
+      const roleChanged = values.role !== next.base.role;
+      let scopeWarning = "";
+      if (roleChanged && next.base.role === "service_policy_manager") {
+        if (assignmentsAvailable) {
+          const refreshed = await assignmentsQuery.refetch({ throwOnError: true });
+          const scopes = (refreshed.data ?? []).filter((assignment) => assignment.principalId === principal.principalId).map((assignment) => assignment.service);
+          scopeWarning = ` Direct management assignments will be removed: ${scopes.join(", ") || "none"}.`;
+        } else scopeWarning = " Any stored direct management assignments will be removed. Assignment names are unavailable while policy is file-owned.";
+      }
+      confirm({
+        title: "Update account access?",
+        body: `${principal.principalId} will have the ${ROLE_LABELS[values.role]} role and self-service ${values.selfServiceEnabled ? "enabled" : "disabled"}, with agent token issuance set to ${AGENT_TOKEN_ISSUANCE_LABELS[values.agentTokenIssuance.mode]}${values.agentTokenIssuance.allowedExecutionContexts.length ? ` in ${values.agentTokenIssuance.allowedExecutionContexts.join(", ")}` : ""}. Existing token restrictions stay unchanged.${roleChanged ? " All administrative API tokens for this account will be revoked." : ""}${scopeWarning}`,
+        confirmLabel: "Update access", tone: "primary",
+        onConfirm: async () => {
+          try {
+            const current = await prepare();
+            const patch = accessDraftPatch(current);
+            if (!Object.keys(patch).length) return;
+            const saved = await principals.setAccess(principal.principalId, patch);
+            draft.committed(fields(saved));
+          } catch (failure) {
+            setError(errorMessage(failure));
+            void registry.query.refetch();
+            throw failure;
+          }
+        }
+      });
+    } catch (failure) { setError(errorMessage(failure)); }
+    finally { setPending(false); }
+  };
   return (
     <SettingsSection title="Account access" description="One administrative role, with independent access to personal tokens, credentials and connections.">
       <SettingsRow label="Role" help={self ? "You cannot change your own role here." : undefined}>
-        {writable ? <Select aria-label="Role" value={role} disabled={self} onChange={(event) => setRole(event.target.value as PrincipalRole)} options={roles.map(([value, label]) => ({ value, label }))} /> : <span>{ROLE_LABELS[principal.role]}</span>}
+        {writable ? <Select aria-label="Role" value={role} disabled={self} onChange={(event) => draft.edit({ ...draft.value, role: event.target.value as PrincipalRole })} options={roles.map(([value, label]) => ({ value, label }))} /> : <span>{ROLE_LABELS[principal.role]}</span>}
       </SettingsRow>
       <SettingsRow label="Self-service">
-        {writable ? <Checkbox label="Self-service enabled" checked={selfServiceEnabled} onChange={(event) => setSelfServiceEnabled(event.target.checked)} /> : <span>{principal.selfServiceEnabled ? "Enabled" : "Disabled"}</span>}
+        {writable ? <Checkbox label="Self-service enabled" checked={selfServiceEnabled} onChange={(event) => draft.edit({ ...draft.value, selfServiceEnabled: event.target.checked })} /> : <span>{principal.selfServiceEnabled ? "Enabled" : "Disabled"}</span>}
       </SettingsRow>
-      <SettingsRow label="Agent token issuance" help={agentTokenIssuanceDescription(principal.agentTokenIssuancePolicy, groups)}>
-        {writable ? <Select aria-label="Agent token issuance" value={agentTokenIssuance} onChange={(event) => setAgentTokenIssuance(event.target.value as PrincipalAgentTokenIssuance)} options={PRINCIPAL_TOKEN_ISSUANCE_OPTIONS} /> : <span>{AGENT_TOKEN_ISSUANCE_LABELS[principal.agentTokenIssuance]}</span>}
+      <SettingsRow label="Agent token issuance" alignTop>
+        <div className="wb-form-stack">
+          {writable ? <TokenIssuanceControls value={agentTokenIssuance} registry={registry} disabled={pending} onChange={(value) => draft.edit({ ...draft.value, agentTokenIssuance: value })} /> : <span>{AGENT_TOKEN_ISSUANCE_LABELS[principal.agentTokenIssuance.mode]}</span>}
+          <p className="wb-field-hint">Current saved policy: {agentTokenIssuanceDescription(principal.agentTokenIssuancePolicy, groups)}</p>
+          {agentTokenIssuance.mode === "inherit" && principal.agentTokenIssuance.mode !== "inherit" ? <p className="wb-field-hint">The inherited result appears after saving and refreshing.</p> : null}
+        </div>
       </SettingsRow>
+      <AccessDraftConflict conflict={draft.conflicts.length > 0} kept={draft.kept} discard={() => { draft.discard(); setError(null); }} keep={() => { draft.keep(); setError(null); }} />
+      {record.isError ? <ErrorState compact title="Couldn’t refresh saved account settings" error={record.error} onRetry={() => void record.refetch()} /> : null}
+      <FormError error={error} />
       {leavingManager && configQuery.isError ? <ErrorState error={configQuery.error} onRetry={() => void configQuery.refetch()} retrying={configQuery.isFetching} /> : null}
       {leavingManager && assignmentsAvailable && assignmentsQuery.isError ? <ErrorState error={assignmentsQuery.error} onRetry={() => void assignmentsQuery.refetch()} retrying={assignmentsQuery.isFetching} /> : null}
-      <AdminOnly><div className="wb-settings-actions"><AdminButton disabled={(!changedRole && selfServiceEnabled === principal.selfServiceEnabled && agentTokenIssuance === principal.agentTokenIssuance) || (leavingManager && !scopePreviewReady)} onClick={save}>Save access</AdminButton></div></AdminOnly>
+      <AdminOnly><div className="wb-settings-actions"><AdminButton pending={pending} disabled={!draft.changed || draft.conflicts.length > 0 || Boolean(policyError) || (leavingManager && !scopePreviewReady)} onClick={() => void save()}>Save access</AdminButton></div></AdminOnly>
     </SettingsSection>
   );
 }

@@ -410,6 +410,8 @@ impl Fixture {
         secret(&directory, "service-token", "search-service-token");
         let personal_token = secret(&directory, "personal-token", "search-personal-token");
         directory.secret_file("personal-store.json", json!({"credentials":[{"principal":"alice","type":"bearer_token","token_ref":personal_token}]}).to_string()).unwrap();
+        let issuance_contexts =
+            agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap();
         let store = ManagedStore::open(
             &ManagedStoreConfig {
                 kind: "sqlite".into(),
@@ -417,43 +419,53 @@ impl Fixture {
                 require_registered_principal_for_invocation: false,
                 auto_migrate: true,
             },
+            &issuance_contexts,
             ManagedStoreOpenMode::Startup,
         )
         .unwrap();
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-                role: PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "admin".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "admin".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
         store
-            .patch_principal_access(PrincipalAccessPatchRequest {
-                agent_token_issuance: None,
-                principal_id: "admin".into(),
-                role: Some(PrincipalRole::Admin),
-                self_service_enabled: None,
-                actor: "test".into(),
-            })
+            .patch_principal_access(
+                PrincipalAccessPatchRequest {
+                    agent_token_issuance: None,
+                    principal_id: "admin".into(),
+                    role: Some(PrincipalRole::Admin),
+                    self_service_enabled: None,
+                    actor: "test".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
         store
-            .create_principal(PrincipalWriteRequest {
-                agent_token_issuance: agent_access_core::PrincipalAgentTokenIssuance::Inherit,
-                role: PrincipalRole::User,
-                self_service_enabled: None,
-                principal_id: "alice".into(),
-                kind: "user".into(),
-                display_name: None,
-                email: None,
-                external_subject: None,
-                created_by: "test".into(),
-            })
+            .create_principal(
+                PrincipalWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    role: PrincipalRole::User,
+                    self_service_enabled: None,
+                    principal_id: "alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "test".into(),
+                },
+                &issuance_contexts,
+            )
             .unwrap();
         store
             .enable_local_password(
@@ -470,14 +482,17 @@ impl Fixture {
             .unwrap();
         for group in ["list-members", "list-nonmembers"] {
             store
-                .create_group(GroupWriteRequest {
-                    agent_token_issuance: agent_access_core::AgentTokenIssuanceMode::Disabled,
-                    group_id: group.into(),
-                    display_name: None,
-                    description: None,
-                    auto_enroll_new_microsoft_users: false,
-                    created_by: "test".into(),
-                })
+                .create_group(
+                    GroupWriteRequest {
+                        agent_token_issuance: Default::default(),
+                        group_id: group.into(),
+                        display_name: None,
+                        description: None,
+                        auto_enroll_new_microsoft_users: false,
+                        created_by: "test".into(),
+                    },
+                    &issuance_contexts,
+                )
                 .unwrap();
         }
         store.add_group("alice", "list-members", "test").unwrap();

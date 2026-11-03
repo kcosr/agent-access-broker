@@ -205,24 +205,34 @@ mod tests {
     fn create_principals(store: &ManagedStore) {
         for (principal_id, kind) in [("alice", "user"), ("robot", "service_account")] {
             store
-                .create_principal(PrincipalWriteRequest {
-                    agent_token_issuance: PrincipalAgentTokenIssuance::Inherit,
-                    role: crate::PrincipalRole::User,
-                    self_service_enabled: None,
-                    principal_id: principal_id.into(),
-                    kind: kind.into(),
-                    display_name: None,
-                    email: None,
-                    external_subject: None,
-                    created_by: "admin".into(),
-                })
+                .create_principal(
+                    PrincipalWriteRequest {
+                        agent_token_issuance: test_principal_issuance(
+                            PrincipalAgentTokenIssuance::Inherit,
+                        ),
+                        role: crate::PrincipalRole::User,
+                        self_service_enabled: None,
+                        principal_id: principal_id.into(),
+                        kind: kind.into(),
+                        display_name: None,
+                        email: None,
+                        external_subject: None,
+                        created_by: "admin".into(),
+                    },
+                    &test_execution_contexts(),
+                )
                 .unwrap();
         }
     }
 
     fn store() -> (TempDir, ManagedStore) {
         let (temp, config) = private_temp();
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         create_principals(&store);
         (temp, store)
     }
@@ -232,6 +242,7 @@ mod tests {
         let (_temp, config) = private_temp();
         let previous = ManagedStore::open_with_catalog(
             &config,
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Startup,
             ManagedStoreMigrationCatalog {
                 migrations: &MANAGED_STORE_MIGRATIONS[..8],
@@ -249,11 +260,21 @@ mod tests {
         );
         drop(previous);
         assert!(matches!(
-            ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap_err(),
+            ManagedStore::open(
+                &config,
+                &test_execution_contexts(),
+                ManagedStoreOpenMode::Reload
+            )
+            .unwrap_err(),
             ManagedStoreError::MigrationRequired
         ));
 
-        let store = ManagedStore::open(&config, ManagedStoreOpenMode::Startup).unwrap();
+        let store = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
         assert!(store.migration_applied_this_open(MANAGED_STORE_SCHEMA_VERSION));
         assert_eq!(
             store.status().unwrap().schema_version,
@@ -264,7 +285,12 @@ mod tests {
             .upsert_principal_service_limit(write("robot", "gitlab_git", 4, 60, "admin"))
             .unwrap();
         drop(store);
-        let reopened = ManagedStore::open(&config, ManagedStoreOpenMode::Reload).unwrap();
+        let reopened = ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload,
+        )
+        .unwrap();
         assert_eq!(
             reopened
                 .principal_service_limit("robot", "gitlab_git")

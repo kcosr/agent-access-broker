@@ -6,7 +6,7 @@ fn issuance_access_patch(
         principal_id: id.into(),
         role: None,
         self_service_enabled: None,
-        agent_token_issuance: Some(setting),
+        agent_token_issuance: Some(test_principal_issuance(setting)),
         actor: "admin".into(),
     }
 }
@@ -17,7 +17,7 @@ fn issuance_group_request(id: &str, mode: AgentTokenIssuanceMode) -> GroupWriteR
         display_name: None,
         description: None,
         auto_enroll_new_microsoft_users: false,
-        agent_token_issuance: mode,
+        agent_token_issuance: test_group_issuance(mode),
         created_by: "admin".into(),
     }
 }
@@ -29,7 +29,7 @@ fn issuance_group_patch(id: &str, mode: AgentTokenIssuanceMode) -> GroupPatchReq
         description: None,
         status: None,
         auto_enroll_new_microsoft_users: None,
-        agent_token_issuance: Some(mode),
+        agent_token_issuance: Some(test_group_issuance(mode)),
         updated_by: "policy-admin".into(),
     }
 }
@@ -51,9 +51,9 @@ fn agent_token_issuance_resolution_covers_all_modes_overrides_and_group_provenan
     for first in [Disabled, ReadOnly, WriteCapable] {
         for second in [Disabled, ReadOnly, WriteCapable] {
             let contributions = vec![
-                ("z".into(), first),
-                ("a".into(), second),
-                ("z".into(), first),
+                ("z".into(), test_group_issuance(first)),
+                ("a".into(), test_group_issuance(second)),
+                ("z".into(), test_group_issuance(first)),
             ];
             let mode = first.max(second);
             let expected_ids = [("a", second), ("z", first)]
@@ -70,8 +70,28 @@ fn agent_token_issuance_resolution_covers_all_modes_overrides_and_group_provenan
                     Some(WriteCapable),
                 ),
             ] {
-                let resolved = agent_token_issuance::resolve_policy(setting, contributions.clone());
-                assert_eq!(resolved.mode, override_mode.unwrap_or(mode));
+                let resolved = agent_token_issuance::resolve_policy(
+                    &test_principal_issuance(setting),
+                    contributions.clone(),
+                    &test_execution_contexts(),
+                );
+                let expected_mode = override_mode.unwrap_or(mode);
+                assert_eq!(
+                    resolved.contexts,
+                    if expected_mode == Disabled {
+                        vec![]
+                    } else {
+                        vec![AgentTokenIssuanceContextPolicy {
+                            execution_context: "default".into(),
+                            mode: expected_mode,
+                            group_ids: if override_mode.is_some() {
+                                vec![]
+                            } else {
+                                expected_ids.clone()
+                            },
+                        }]
+                    }
+                );
                 assert_eq!(
                     resolved.source,
                     if override_mode.is_some() {
@@ -82,21 +102,16 @@ fn agent_token_issuance_resolution_covers_all_modes_overrides_and_group_provenan
                         Groups
                     }
                 );
-                assert_eq!(
-                    resolved.group_ids,
-                    if override_mode.is_some() {
-                        vec![]
-                    } else {
-                        expected_ids.clone()
-                    }
-                );
             }
         }
     }
-    let empty = agent_token_issuance::resolve_policy(PrincipalAgentTokenIssuance::Inherit, []);
-    assert_eq!(empty.mode, Disabled);
+    let empty = agent_token_issuance::resolve_policy(
+        &PrincipalAgentTokenIssuanceSetting::default(),
+        [],
+        &test_execution_contexts(),
+    );
+    assert!(empty.contexts.is_empty());
     assert_eq!(empty.source, Default);
-    assert!(empty.group_ids.is_empty());
 }
 
 #[test]
@@ -117,26 +132,28 @@ fn agent_token_issuance_settings_are_strict_and_default_to_no_permission() {
     let request: PrincipalWriteRequest = serde_json::from_value(body.clone()).unwrap();
     assert_eq!(
         request.agent_token_issuance,
-        PrincipalAgentTokenIssuance::Inherit
+        test_principal_issuance(PrincipalAgentTokenIssuance::Inherit)
     );
     let mut invalid = body;
     invalid["agentTokenIssuance"] = Value::Null;
     assert!(serde_json::from_value::<PrincipalWriteRequest>(invalid).is_err());
     let (_temp, store) = identity_test_store();
-    let principal = store.create_principal(request).unwrap();
+    let principal = store
+        .create_principal(request, &test_execution_contexts())
+        .unwrap();
     assert_eq!(
         principal.agent_token_issuance,
-        PrincipalAgentTokenIssuance::Inherit
+        test_principal_issuance(PrincipalAgentTokenIssuance::Inherit)
     );
     let group = store
-        .create_group(issuance_group_request(
-            "default",
-            AgentTokenIssuanceMode::Disabled,
-        ))
+        .create_group(
+            issuance_group_request("default", AgentTokenIssuanceMode::Disabled),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert_eq!(
         serde_json::to_value(group).unwrap()["agentTokenIssuance"],
-        "disabled"
+        json!({"mode":"disabled","allowedExecutionContexts":[]})
     );
     let conn = store.connection.lock().unwrap();
     for value in ["NULL", "'unknown'", "1", "'READ_ONLY'"] {
@@ -171,16 +188,19 @@ fn agent_token_issuance_policy_writes_preserve_profile_role_memberships_and_noop
     let (_temp, store) = identity_test_store();
     let mut request = identity_user_request("alice");
     request.role = PrincipalRole::Admin;
-    request.agent_token_issuance = PrincipalAgentTokenIssuance::ReadOnly;
-    let original = store.create_principal(request.clone()).unwrap();
+    request.agent_token_issuance = test_principal_issuance(PrincipalAgentTokenIssuance::ReadOnly);
+    let original = store
+        .create_principal(request.clone(), &test_execution_contexts())
+        .unwrap();
     let admin_token = access_token(&store, "alice", BrokerTokenClass::Admin).unwrap();
-    request.agent_token_issuance = PrincipalAgentTokenIssuance::WriteCapable;
+    request.agent_token_issuance =
+        test_principal_issuance(PrincipalAgentTokenIssuance::WriteCapable);
     assert_eq!(
         store
-            .create_or_update_principal(request)
+            .create_or_update_principal(request, &test_execution_contexts())
             .unwrap()
             .agent_token_issuance,
-        PrincipalAgentTokenIssuance::ReadOnly
+        test_principal_issuance(PrincipalAgentTokenIssuance::ReadOnly)
     );
     store
         .patch_principal(PrincipalPatchRequest {
@@ -195,14 +215,14 @@ fn agent_token_issuance_policy_writes_preserve_profile_role_memberships_and_noop
         original.agent_token_issuance
     );
     let changed = store
-        .patch_principal_access(issuance_access_patch(
-            "alice",
-            PrincipalAgentTokenIssuance::Disabled,
-        ))
+        .patch_principal_access(
+            issuance_access_patch("alice", PrincipalAgentTokenIssuance::Disabled),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert_eq!(
         changed.previous_agent_token_issuance,
-        PrincipalAgentTokenIssuance::ReadOnly
+        test_principal_issuance(PrincipalAgentTokenIssuance::ReadOnly)
     );
     assert_eq!(changed.principal.role, PrincipalRole::Admin);
     assert!(changed.revoked_admin_token_ids.is_empty());
@@ -228,10 +248,10 @@ fn agent_token_issuance_policy_writes_preserve_profile_role_memberships_and_noop
         })
         .unwrap();
     let manager_change = store
-        .patch_principal_access(issuance_access_patch(
-            "manager",
-            PrincipalAgentTokenIssuance::WriteCapable,
-        ))
+        .patch_principal_access(
+            issuance_access_patch("manager", PrincipalAgentTokenIssuance::WriteCapable),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert!(manager_change.removed_services.is_empty());
     assert_eq!(
@@ -242,28 +262,30 @@ fn agent_token_issuance_policy_writes_preserve_profile_role_memberships_and_noop
     );
     let mut group_request = issuance_group_request("readers", AgentTokenIssuanceMode::ReadOnly);
     group_request.auto_enroll_new_microsoft_users = true;
-    let created = store.create_group_with_effect(group_request).unwrap();
+    let created = store
+        .create_group_with_effect(group_request, &test_execution_contexts())
+        .unwrap();
     assert_eq!(
         created.agent_token_issuance_change,
         Some(GroupAgentTokenIssuanceChange {
-            previous: AgentTokenIssuanceMode::Disabled,
-            current: AgentTokenIssuanceMode::ReadOnly
+            previous: test_group_issuance(AgentTokenIssuanceMode::Disabled),
+            current: test_group_issuance(AgentTokenIssuanceMode::ReadOnly)
         })
     );
     store.add_group("alice", "readers", "admin").unwrap();
     let changed_group = store
-        .patch_group_with_effect(issuance_group_patch(
-            "readers",
-            AgentTokenIssuanceMode::WriteCapable,
-        ))
+        .patch_group_with_effect(
+            issuance_group_patch("readers", AgentTokenIssuanceMode::WriteCapable),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert!(changed_group.group.auto_enroll_new_microsoft_users);
     assert!(changed_group.auto_enrollment_change.is_none());
     assert_eq!(
         changed_group.agent_token_issuance_change,
         Some(GroupAgentTokenIssuanceChange {
-            previous: AgentTokenIssuanceMode::ReadOnly,
-            current: AgentTokenIssuanceMode::WriteCapable
+            previous: test_group_issuance(AgentTokenIssuanceMode::ReadOnly),
+            current: test_group_issuance(AgentTokenIssuanceMode::WriteCapable)
         })
     );
     assert_eq!(store.groups("alice").unwrap(), ["readers"]);
@@ -272,17 +294,17 @@ fn agent_token_issuance_policy_writes_preserve_profile_role_memberships_and_noop
          CREATE TEMP TRIGGER forbid_group_policy_noop BEFORE UPDATE ON groups WHEN OLD.group_id='readers' BEGIN SELECT RAISE(ABORT,'unexpected write'); END;"
     ).unwrap();
     let same = store
-        .patch_principal_access(issuance_access_patch(
-            "alice",
-            PrincipalAgentTokenIssuance::Disabled,
-        ))
+        .patch_principal_access(
+            issuance_access_patch("alice", PrincipalAgentTokenIssuance::Disabled),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert_eq!(same.principal.updated_at, changed.principal.updated_at);
     let same_group = store
-        .patch_group_with_effect(issuance_group_patch(
-            "readers",
-            AgentTokenIssuanceMode::WriteCapable,
-        ))
+        .patch_group_with_effect(
+            issuance_group_patch("readers", AgentTokenIssuanceMode::WriteCapable),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert_eq!(same_group.group, changed_group.group);
     assert!(same_group.agent_token_issuance_change.is_none());
@@ -293,16 +315,16 @@ fn agent_token_issuance_membership_is_active_deduplicated_and_managed_only() {
     let (_temp, store) = identity_test_store();
     let provider = enrollment_fixture(&store);
     store
-        .patch_group(issuance_group_patch(
-            "mapped",
-            AgentTokenIssuanceMode::WriteCapable,
-        ))
+        .patch_group(
+            issuance_group_patch("mapped", AgentTokenIssuanceMode::WriteCapable),
+            &test_execution_contexts(),
+        )
         .unwrap();
     store
-        .create_group(issuance_group_request(
-            "readers",
-            AgentTokenIssuanceMode::ReadOnly,
-        ))
+        .create_group(
+            issuance_group_request("readers", AgentTokenIssuanceMode::ReadOnly),
+            &test_execution_contexts(),
+        )
         .unwrap();
     let now = normalized_now_string();
     enrollment_succeeded(
@@ -324,15 +346,38 @@ fn agent_token_issuance_membership_is_active_deduplicated_and_managed_only() {
     store.add_group("alice", "readers", "admin").unwrap();
     store.add_group("alice", "mapped", "admin").unwrap();
     let policy = store
-        .agent_token_issuance_policy("alice", AgentTokenIssuanceAuthority::Managed)
+        .agent_token_issuance_policy(
+            "alice",
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
+        )
         .unwrap();
-    assert_eq!(policy.mode, AgentTokenIssuanceMode::WriteCapable);
-    assert_eq!(policy.group_ids, ["mapped"]);
+    assert_eq!(
+        policy
+            .contexts
+            .first()
+            .map(|row| row.mode)
+            .unwrap_or(AgentTokenIssuanceMode::Disabled),
+        AgentTokenIssuanceMode::WriteCapable
+    );
+    assert_eq!(
+        policy
+            .contexts
+            .iter()
+            .flat_map(|row| row.group_ids.iter())
+            .collect::<Vec<_>>(),
+        ["mapped"]
+    );
     assert_eq!(
         store
-            .agent_token_issuance_policy("alice", AgentTokenIssuanceAuthority::Toml)
+            .agent_token_issuance_policy(
+                "alice",
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Toml)
+            )
             .unwrap()
-            .mode,
+            .contexts
+            .first()
+            .map(|row| row.mode)
+            .unwrap_or(AgentTokenIssuanceMode::Disabled),
         AgentTokenIssuanceMode::Disabled
     );
     let later = normalized_timestamp(
@@ -348,19 +393,24 @@ fn agent_token_issuance_membership_is_active_deduplicated_and_managed_only() {
         agent_token_issuance::policy_at_conn(
             &tx,
             &principal,
-            AgentTokenIssuanceAuthority::Managed,
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
             timestamp,
         )
         .unwrap()
     };
-    assert_eq!(at(&later).group_ids, ["mapped"]); // Local contribution survives external expiry.
+    assert_eq!(at(&later).contexts[0].group_ids, ["mapped"]); // Local contribution survives external expiry.
     store.remove_group("alice", "mapped").unwrap();
-    assert_eq!(at(&now).mode, AgentTokenIssuanceMode::WriteCapable);
-    assert_eq!(at(&later).group_ids, ["readers"]);
+    assert_eq!(
+        at(&now).contexts[0].mode,
+        AgentTokenIssuanceMode::WriteCapable
+    );
+    assert_eq!(at(&later).contexts[0].group_ids, ["readers"]);
     let mut patch = issuance_group_patch("mapped", AgentTokenIssuanceMode::WriteCapable);
     patch.status = Some("disabled".into());
-    store.patch_group(patch).unwrap();
-    assert_eq!(at(&now).group_ids, ["readers"]);
+    store
+        .patch_group(patch, &test_execution_contexts())
+        .unwrap();
+    assert_eq!(at(&now).contexts[0].group_ids, ["readers"]);
     for (setting, mode) in [
         (
             PrincipalAgentTokenIssuance::Disabled,
@@ -372,18 +422,35 @@ fn agent_token_issuance_membership_is_active_deduplicated_and_managed_only() {
         ),
     ] {
         store
-            .patch_principal_access(issuance_access_patch("alice", setting))
+            .patch_principal_access(
+                issuance_access_patch("alice", setting),
+                &test_execution_contexts(),
+            )
             .unwrap();
         for authority in [
-            AgentTokenIssuanceAuthority::Managed,
-            AgentTokenIssuanceAuthority::Toml,
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Toml),
         ] {
             let policy = store
                 .agent_token_issuance_policy("alice", authority)
                 .unwrap();
-            assert_eq!(policy.mode, mode);
+            assert_eq!(
+                policy
+                    .contexts
+                    .first()
+                    .map(|row| row.mode)
+                    .unwrap_or(AgentTokenIssuanceMode::Disabled),
+                mode
+            );
             assert_eq!(policy.source, AgentTokenIssuanceSource::User);
-            assert!(policy.group_ids.is_empty());
+            assert!(
+                policy
+                    .contexts
+                    .iter()
+                    .flat_map(|row| row.group_ids.iter())
+                    .collect::<Vec<_>>()
+                    .is_empty()
+            );
         }
     }
 }
@@ -413,13 +480,16 @@ fn agent_token_issuance_enforces_personal_modes_and_keeps_administrative_and_exi
         ),
     ] {
         store
-            .patch_principal_access(issuance_access_patch("alice", setting))
+            .patch_principal_access(
+                issuance_access_patch("alice", setting),
+                &test_execution_contexts(),
+            )
             .unwrap();
         for read_only in [true, false] {
             let result = store.issue_self_agent_token(
                 &hasher,
                 issuance_request("alice", read_only),
-                AgentTokenIssuanceAuthority::Managed,
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
             );
             match (mode, read_only) {
                 (AgentTokenIssuanceMode::Disabled, _) => assert!(matches!(
@@ -437,7 +507,10 @@ fn agent_token_issuance_enforces_personal_modes_and_keeps_administrative_and_exi
                 _ => {
                     let issued = result.unwrap();
                     assert_eq!(issued.record.scopes["readOnly"], read_only);
-                    assert_eq!(issued.issuance_policy.as_ref().unwrap().mode, mode);
+                    assert_eq!(
+                        issued.issuance_policy.as_ref().unwrap().contexts[0].mode,
+                        mode
+                    );
                     assert!(
                         serde_json::to_value(&issued)
                             .unwrap()
@@ -452,17 +525,17 @@ fn agent_token_issuance_enforces_personal_modes_and_keeps_administrative_and_exi
         .issue_self_agent_token(
             &hasher,
             issuance_request("alice", false),
-            AgentTokenIssuanceAuthority::Managed,
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
         )
         .unwrap();
     store
-        .patch_principal_access(issuance_access_patch(
-            "alice",
-            PrincipalAgentTokenIssuance::Disabled,
-        ))
+        .patch_principal_access(
+            issuance_access_patch("alice", PrincipalAgentTokenIssuance::Disabled),
+            &test_execution_contexts(),
+        )
         .unwrap();
     assert_eq!(
-        issued.issuance_policy.unwrap().mode,
+        issued.issuance_policy.unwrap().contexts[0].mode,
         AgentTokenIssuanceMode::WriteCapable
     );
     assert_eq!(
@@ -492,7 +565,7 @@ fn agent_token_issuance_enforces_personal_modes_and_keeps_administrative_and_exi
         store.issue_self_agent_token(
             &hasher,
             issuance_request("alice", true),
-            AgentTokenIssuanceAuthority::Managed
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed)
         ),
         Err(ManagedStoreError::SelfServiceDisabled)
     ));
@@ -501,22 +574,22 @@ fn agent_token_issuance_enforces_personal_modes_and_keeps_administrative_and_exi
         store.issue_self_agent_token(
             &hasher,
             issuance_request("alice", true),
-            AgentTokenIssuanceAuthority::Managed
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed)
         ),
         Err(ManagedStoreError::PrincipalDisabled)
     ));
     for kind in ["system", "service_account"] {
         access_principal(&store, kind, kind, PrincipalRole::User, None).unwrap();
         store
-            .patch_principal_access(issuance_access_patch(
-                kind,
-                PrincipalAgentTokenIssuance::WriteCapable,
-            ))
+            .patch_principal_access(
+                issuance_access_patch(kind, PrincipalAgentTokenIssuance::WriteCapable),
+                &test_execution_contexts(),
+            )
             .unwrap();
         let result = store.issue_self_agent_token(
             &hasher,
             issuance_request(kind, true),
-            AgentTokenIssuanceAuthority::Toml,
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Toml),
         );
         if kind == "system" {
             assert_eq!(
@@ -543,14 +616,15 @@ fn agent_token_issuance_waits_for_current_policy_and_membership_before_inserting
         let (temp, store) = identity_test_store();
         create_alice(&store);
         store
-            .create_group(issuance_group_request(
-                "writers",
-                AgentTokenIssuanceMode::WriteCapable,
-            ))
+            .create_group(
+                issuance_group_request("writers", AgentTokenIssuanceMode::WriteCapable),
+                &test_execution_contexts(),
+            )
             .unwrap();
         store.add_group("alice", "writers", "admin").unwrap();
         let other = ManagedStore::open(
             &store_config(&temp.path().join("store.sqlite")),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Reload,
         )
         .unwrap();
@@ -559,17 +633,14 @@ fn agent_token_issuance_waits_for_current_policy_and_membership_before_inserting
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
         match mutation {
-            "principal" => tx.execute(
-                "UPDATE principals SET agent_token_issuance='disabled' WHERE principal_id='alice'",
-                [],
+            "principal" => tx.execute_batch(
+                "UPDATE principals SET agent_token_issuance='disabled' WHERE principal_id='alice'; DELETE FROM principal_agent_token_issuance_contexts WHERE principal_id='alice'"
             ),
-            "group" => tx.execute(
-                "UPDATE groups SET agent_token_issuance='disabled' WHERE group_id='writers'",
-                [],
+            "group" => tx.execute_batch(
+                "UPDATE groups SET agent_token_issuance='disabled' WHERE group_id='writers'; DELETE FROM group_agent_token_issuance_contexts WHERE group_id='writers'"
             ),
-            "membership" => tx.execute(
-                "DELETE FROM principal_groups WHERE principal_id='alice'",
-                [],
+            "membership" => tx.execute_batch(
+                "DELETE FROM principal_groups WHERE principal_id='alice'"
             ),
             _ => unreachable!(),
         }
@@ -594,7 +665,7 @@ fn agent_token_issuance_waits_for_current_policy_and_membership_before_inserting
             other.issue_self_agent_token(
                 &broker_token_hasher_for_test(93),
                 issuance_request("alice", false),
-                AgentTokenIssuanceAuthority::Managed,
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
             )
         });
         ready
@@ -624,6 +695,7 @@ fn agent_token_issuance_waits_for_current_policy_and_membership_before_inserting
 fn issuance_previous_schema(path: &Path) -> ManagedStore {
     let store = ManagedStore::open_with_catalog(
         &store_config(path),
+        &test_execution_contexts(),
         ManagedStoreOpenMode::Startup,
         identity_test_catalog_through(MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION),
     )
@@ -735,30 +807,42 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
     let ledger_before = migration_rows(&path);
     drop(old);
     assert!(matches!(
-        ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Reload),
+        ManagedStore::open(
+            &store_config(&path),
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Reload
+        ),
         Err(ManagedStoreError::MigrationRequired)
     ));
-    let upgraded = ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+    let upgraded = ManagedStore::open(
+        &store_config(&path),
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     assert!(upgraded.migration_applied_this_open(MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION));
     let ledger_after = migration_rows(&path);
     assert_eq!(&ledger_after[..ledger_before.len()], ledger_before);
-    assert_eq!(
-        ledger_after.last().unwrap().0,
-        MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION
-    );
+    assert_eq!(ledger_after.last().unwrap().0, MANAGED_STORE_SCHEMA_VERSION);
     assert_eq!(
         upgraded.principal("alice").unwrap().agent_token_issuance,
-        PrincipalAgentTokenIssuance::Inherit
+        test_principal_issuance(PrincipalAgentTokenIssuance::Inherit)
     );
     assert_eq!(
         upgraded.group("existing").unwrap().agent_token_issuance,
-        AgentTokenIssuanceMode::Disabled
+        test_group_issuance(AgentTokenIssuanceMode::Disabled)
     );
     assert_eq!(
         upgraded
-            .agent_token_issuance_policy("alice", AgentTokenIssuanceAuthority::Managed)
+            .agent_token_issuance_policy(
+                "alice",
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Managed)
+            )
             .unwrap()
-            .mode,
+            .contexts
+            .first()
+            .map(|row| row.mode)
+            .unwrap_or(AgentTokenIssuanceMode::Disabled),
         AgentTokenIssuanceMode::Disabled
     );
     {
@@ -828,7 +912,12 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
         )
         .unwrap();
     drop(upgraded);
-    let reopened = ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+    let reopened = ManagedStore::open(
+        &store_config(&path),
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     assert!(!reopened.migration_applied_this_open(MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION));
     assert!(
         AgentInvokeTokenCaveats::parse_stored(&reopened.broker_token(&id).unwrap().scopes).is_err()
@@ -837,6 +926,7 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
     assert!(matches!(
         ManagedStore::open_with_catalog(
             &store_config(&path),
+            &test_execution_contexts(),
             ManagedStoreOpenMode::Reload,
             identity_test_catalog_through(MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION)
         ),
@@ -873,9 +963,13 @@ fn agent_token_issuance_migration_collision_rolls_back_and_supports_revoke_then_
     let before = issuance_table_rows(&old.connection.lock().unwrap(), "broker_tokens");
     let ledger = migration_rows(&path);
     drop(old);
-    let error = ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup)
-        .unwrap_err()
-        .to_string();
+    let error = ManagedStore::open(
+        &store_config(&path),
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap_err()
+    .to_string();
     for (id, raw) in &collisions {
         assert!(error.contains(id));
         assert!(!error.contains(raw));
@@ -886,6 +980,7 @@ fn agent_token_issuance_migration_collision_rolls_back_and_supports_revoke_then_
     assert_eq!(migration_rows(&path), ledger);
     let original = ManagedStore::open_with_catalog(
         &store_config(&path),
+        &test_execution_contexts(),
         ManagedStoreOpenMode::Reload,
         identity_test_catalog_through(MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION),
     )
@@ -910,7 +1005,12 @@ fn agent_token_issuance_migration_collision_rolls_back_and_supports_revoke_then_
     }
     let revoked_rows = issuance_table_rows(&original.connection.lock().unwrap(), "broker_tokens");
     drop(original);
-    let upgraded = ManagedStore::open(&store_config(&path), ManagedStoreOpenMode::Startup).unwrap();
+    let upgraded = ManagedStore::open(
+        &store_config(&path),
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+    )
+    .unwrap();
     let after = issuance_table_rows(&upgraded.connection.lock().unwrap(), "broker_tokens");
     for (id, raw) in collisions.into_iter().chain([revoked]) {
         let id_value = rusqlite::types::Value::Text(id);
@@ -941,6 +1041,7 @@ fn agent_token_issuance_latest_schema_validates_both_permission_columns() {
         assert!(matches!(
             ManagedStore::open(
                 &store_config(&temp.path().join("store.sqlite")),
+                &test_execution_contexts(),
                 ManagedStoreOpenMode::Reload
             ),
             Err(ManagedStoreError::SchemaInvalid(_))
@@ -958,10 +1059,10 @@ fn agent_token_issuance_uses_post_wait_time_for_external_membership_expiry() {
     let (temp, store) = identity_test_store();
     let provider = enrollment_fixture(&store);
     store
-        .patch_group(issuance_group_patch(
-            "mapped",
-            AgentTokenIssuanceMode::ReadOnly,
-        ))
+        .patch_group(
+            issuance_group_patch("mapped", AgentTokenIssuanceMode::ReadOnly),
+            &test_execution_contexts(),
+        )
         .unwrap();
     enrollment_succeeded(
         store
@@ -981,13 +1082,20 @@ fn agent_token_issuance_uses_post_wait_time_for_external_membership_expiry() {
     );
     assert_eq!(
         store
-            .agent_token_issuance_policy("alice", AgentTokenIssuanceAuthority::Managed)
+            .agent_token_issuance_policy(
+                "alice",
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Managed)
+            )
             .unwrap()
-            .mode,
+            .contexts
+            .first()
+            .map(|row| row.mode)
+            .unwrap_or(AgentTokenIssuanceMode::Disabled),
         AgentTokenIssuanceMode::ReadOnly
     );
     let other = ManagedStore::open(
         &store_config(&temp.path().join("store.sqlite")),
+        &test_execution_contexts(),
         ManagedStoreOpenMode::Reload,
     )
     .unwrap();
@@ -1015,7 +1123,7 @@ fn agent_token_issuance_uses_post_wait_time_for_external_membership_expiry() {
         other.issue_self_agent_token(
             &broker_token_hasher_for_test(95),
             issuance_request("alice", true),
-            AgentTokenIssuanceAuthority::Managed,
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
         )
     });
     ready
@@ -1080,7 +1188,11 @@ fn agent_token_issuance_strict_boolean_and_management_class_rejection_are_transa
             }
         }
         assert!(matches!(
-            store.issue_self_agent_token(&hasher, request, AgentTokenIssuanceAuthority::Managed),
+            store.issue_self_agent_token(
+                &hasher,
+                request,
+                &test_issuance_environment(AgentTokenIssuanceAuthority::Managed)
+            ),
             Err(ManagedStoreError::InputInvalid(_))
         ));
     }
@@ -1108,13 +1220,18 @@ fn agent_token_issuance_preserves_created_at_precision_and_fractional_list_order
     let (_temp, store) = identity_test_store();
     create_alice(&store);
     store
-        .patch_principal_access(PrincipalAccessPatchRequest {
-            principal_id: "alice".into(),
-            role: Some(PrincipalRole::Admin),
-            self_service_enabled: None,
-            agent_token_issuance: Some(PrincipalAgentTokenIssuance::WriteCapable),
-            actor: "admin".into(),
-        })
+        .patch_principal_access(
+            PrincipalAccessPatchRequest {
+                principal_id: "alice".into(),
+                role: Some(PrincipalRole::Admin),
+                self_service_enabled: None,
+                agent_token_issuance: Some(test_principal_issuance(
+                    PrincipalAgentTokenIssuance::WriteCapable,
+                )),
+                actor: "admin".into(),
+            },
+            &test_execution_contexts(),
+        )
         .unwrap();
     let hasher = broker_token_hasher_for_test(97);
     let assert_created_at = |record: &BrokerTokenRecord| {
@@ -1139,7 +1256,7 @@ fn agent_token_issuance_preserves_created_at_precision_and_fractional_list_order
         .issue_self_agent_token(
             &hasher,
             issuance_request("alice", true),
-            AgentTokenIssuanceAuthority::Managed,
+            &test_issuance_environment(AgentTokenIssuanceAuthority::Managed),
         )
         .unwrap();
     assert_created_at(&personal.record);

@@ -275,14 +275,17 @@ async fn imported_types_enforce_broker_and_command_authority_and_discovery_agree
     let store = runtime.managed_store().unwrap();
     for group in ["eng", "ops"] {
         store
-            .create_group(agent_access_core::GroupWriteRequest {
-                agent_token_issuance: Default::default(),
-                group_id: group.into(),
-                display_name: None,
-                description: None,
-                auto_enroll_new_microsoft_users: false,
-                created_by: "admin".into(),
-            })
+            .create_group(
+                agent_access_core::GroupWriteRequest {
+                    agent_token_issuance: Default::default(),
+                    group_id: group.into(),
+                    display_name: None,
+                    description: None,
+                    auto_enroll_new_microsoft_users: false,
+                    created_by: "admin".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
             .unwrap();
         for principal in ["alice", "charlie"] {
             store.add_group(principal, group, "admin").unwrap();
