@@ -1341,7 +1341,12 @@ and the complete allowance can be consumed in a burst.
 
 Accounting precedes service/action policy, so later-denied requests can consume
 shared capacity. Keep personal limits low for callers that should contribute
-little, including `anonymous`. The
+little. A per-`anonymous` override requires `identity.authority = "toml"`;
+managed identity does not support that override. To prevent anonymous charges,
+set `identity.mode = "required"`, which rejects anonymous callers before rate
+admission. If anonymous invocation is needed with managed identity, lower the
+default or per-service personal limit; that also lowers other callers' allowances
+unless they have an override. The
 `managed_store.require_registered_principal_for_invocation` check follows rate
 admission: it restricts execution but does not prevent these charges.
 Shared rate refusals can disclose cap

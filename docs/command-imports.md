@@ -1111,7 +1111,7 @@ logged and reported as `unfinished_command_processes`; see the
 | Error message | 1,024 bytes |
 | Post-exit pipe drain | 1 s |
 | `describe` | The command `timeout`, within the 60-second discovery deadline; 16 MiB of output |
-| Rate | The import's [invocation limit](configuration.md#service-invocation-limits) |
+| Rate | The import's personal invocation limit plus any TOML shared service cap; see [invocation limits](configuration.md#service-invocation-limits) |
 
 ## Audit and logs
 

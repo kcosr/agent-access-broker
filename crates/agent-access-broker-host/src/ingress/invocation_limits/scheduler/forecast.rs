@@ -27,6 +27,7 @@ struct ModelQueue {
     window: KeyWindow,
     entries: VecDeque<ModelTicket>,
     usable: bool,
+    enforce_personal: bool,
 }
 
 #[derive(Clone)]
@@ -105,6 +106,7 @@ impl Model {
                     // A supplied limit is an already-fenced observation/read,
                     // or the explicit stored-rate fallback for terminal audit.
                     usable: supplied.is_some() || current.is_some(),
+                    enforce_personal: true,
                 },
             );
         }
@@ -125,6 +127,7 @@ impl Model {
                     ),
                     entries: VecDeque::new(),
                     usable: true,
+                    enforce_personal: true,
                 });
         }
         model
@@ -132,7 +135,11 @@ impl Model {
 
     fn earliest(&mut self, principal: &str, cursor: u64) -> u64 {
         let queue = self.queues.get_mut(principal).unwrap();
-        let personal = next_capacity(&mut queue.window, queue.limit.requests(), cursor);
+        let personal = if queue.enforce_personal {
+            next_capacity(&mut queue.window, queue.limit.requests(), cursor)
+        } else {
+            cursor
+        };
         let shared = self.shared.as_mut().map_or(cursor, |(limit, window)| {
             next_capacity(window, limit.requests(), cursor)
         });
@@ -143,8 +150,10 @@ impl Model {
         let principal = self.ring.remove(index).unwrap();
         let queue = self.queues.get_mut(&principal).unwrap();
         let ticket = queue.entries.pop_front().unwrap();
-        queue.window.expire(at_ns);
-        queue.window.record(at_ns);
+        if queue.enforce_personal {
+            queue.window.expire(at_ns);
+            queue.window.record(at_ns);
+        }
         if let Some((_, window)) = &mut self.shared {
             window.expire(at_ns);
             window.record(at_ns);
@@ -326,9 +335,18 @@ pub(super) fn project(
     personal.settle(now, now_ns);
     personal.candidate(&key.0);
     let personal_next = personal.schedule(now, now_ns, true).opportunities[&0];
-    let scope = if next_ns > personal_next
-        || (next_ns == personal_next && personal_remaining == 0 && shared_remaining == Some(0))
-    {
+    // Empty allowances alone do not establish an equal-time constraint: the
+    // shared window may open before the personal one. Replay the same settled
+    // ring with only this caller's personal allowance unconstrained, retaining
+    // peer limits and shared contention when identifying a genuine tie.
+    let shared_tie = if next_ns == personal_next && next_ns > now_ns && joint.shared.is_some() {
+        let mut shared_only = joint.clone();
+        shared_only.queues.get_mut(&key.0).unwrap().enforce_personal = false;
+        shared_only.schedule(now, now_ns, true).opportunities[&0] == next_ns
+    } else {
+        false
+    };
+    let scope = if next_ns > personal_next || shared_tie {
         InvocationLimitScope::Service
     } else {
         InvocationLimitScope::Principal

@@ -139,10 +139,33 @@ async fn unequal_personal_and_shared_windows_hold_for_every_trailing_interval() 
 
 #[tokio::test(start_paused = true)]
 async fn scope_distinguishes_shared_delay_ties_and_personal_only_exhaustion() {
-    for (shared, personal, expected) in [
-        (limit(1, 10), limit(1, 10), InvocationLimitScope::Service),
-        (limit(10, 10), limit(1, 10), InvocationLimitScope::Principal),
-        (limit(1, 20), limit(1, 10), InvocationLimitScope::Service),
+    for (shared, personal, expected, opening) in [
+        (
+            limit(1, 10),
+            limit(1, 10),
+            InvocationLimitScope::Service,
+            10,
+        ),
+        (
+            limit(10, 10),
+            limit(1, 10),
+            InvocationLimitScope::Principal,
+            10,
+        ),
+        (
+            limit(1, 20),
+            limit(1, 10),
+            InvocationLimitScope::Service,
+            20,
+        ),
+        // Both allowances are empty, but only the personal allowance delays
+        // the next call beyond the shared window's opening at ten seconds.
+        (
+            limit(1, 10),
+            limit(1, 20),
+            InvocationLimitScope::Principal,
+            20,
+        ),
     ] {
         let limiter = capped(shared);
         let empty = limiter
@@ -163,12 +186,18 @@ async fn scope_distinguishes_shared_delay_ties_and_personal_only_exhaustion() {
             .await
             .unwrap();
         assert_eq!(observed.invocations.blocking_scope, Some(expected));
+        assert_eq!(observed.invocations.next_admission_after_seconds, opening);
+        assert_eq!(
+            serde_json::to_value(&observed.invocations).unwrap()["blockingScope"],
+            expected.as_str()
+        );
         let Err(InvocationAdmissionError::RateLimited(rejected)) =
             limiter.admit(named(&limiter, "alice", personal, 0)).await
         else {
             panic!("expected rejection")
         };
         assert_eq!(rejected.scope, expected);
+        assert_eq!(rejected.retry_after_seconds, opening);
         assert_eq!(
             rejected.limit,
             if expected == InvocationLimitScope::Service {
@@ -177,7 +206,94 @@ async fn scope_distinguishes_shared_delay_ties_and_personal_only_exhaustion() {
                 personal
             }
         );
+        assert_eq!(rejected.result()["limitScope"], expected.as_str());
+        assert_eq!(
+            rejected.result()["windowSeconds"],
+            rejected.limit.window_seconds()
+        );
+        assert_eq!(
+            rejected.audit()["rateLimit"]["limitScope"],
+            expected.as_str()
+        );
+        assert_eq!(
+            rejected.audit()["rateLimit"]["windowSeconds"],
+            rejected.limit.window_seconds()
+        );
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn scope_tie_uses_the_callers_shared_turn_with_existing_peer_contention() {
+    let shared = limit(1, 10);
+    let personal = limit(1, 20);
+    let limiter = capped(shared);
+    limiter
+        .admit(named(&limiter, "alice", personal, 0))
+        .await
+        .unwrap();
+    let bob = spawn(&limiter, named(&limiter, "bob", limit(10, 60), 50));
+    queued(&limiter, 1).await;
+    // Bob takes the shared opening at ten seconds. Alice's shared turn and
+    // personal opening now really coincide at twenty seconds, despite the
+    // different configured window lengths.
+    let observed = limiter
+        .observe(0, "alice", "jira", Duration::ZERO, resolver(personal))
+        .await
+        .unwrap();
+    assert_eq!(observed.invocations.next_admission_after_seconds, 20);
+    assert_eq!(
+        observed.invocations.blocking_scope,
+        Some(InvocationLimitScope::Service)
+    );
+    let Err(InvocationAdmissionError::RateLimited(rejected)) =
+        limiter.admit(named(&limiter, "alice", personal, 0)).await
+    else {
+        panic!("expected the shared-turn tie to reject");
+    };
+    assert_eq!(rejected.limit, shared);
+    assert_eq!(rejected.retry_after_seconds, 20);
+    assert_eq!(rejected.result()["limitScope"], "service");
+    assert_eq!(rejected.audit()["rateLimit"]["limitScope"], "service");
+    limiter.close();
+    assert!(bob.await.unwrap().is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn personal_fifo_can_open_later_than_its_shared_turn_despite_both_empty_allowances() {
+    let personal = limit(1, 20);
+    let limiter = capped(limit(1, 10));
+    limiter
+        .admit(named(&limiter, "alice", personal, 0))
+        .await
+        .unwrap();
+    let alice = spawn(&limiter, named(&limiter, "alice", personal, 50));
+    queued(&limiter, 1).await;
+    let bob = spawn(&limiter, named(&limiter, "bob", limit(10, 60), 50));
+    queued(&limiter, 2).await;
+    // With personal enforcement, the queued Alice request runs at twenty
+    // seconds and her next call at forty. Without that personal constraint,
+    // the same ring would run Alice/Bob/Alice at ten/twenty/thirty seconds.
+    let observed = limiter
+        .observe(0, "alice", "jira", Duration::ZERO, resolver(personal))
+        .await
+        .unwrap();
+    assert_eq!(observed.invocations.next_admission_after_seconds, 40);
+    assert_eq!(
+        observed.invocations.blocking_scope,
+        Some(InvocationLimitScope::Principal)
+    );
+    let Err(InvocationAdmissionError::RateLimited(rejected)) =
+        limiter.admit(named(&limiter, "alice", personal, 0)).await
+    else {
+        panic!("expected the personal FIFO to reject");
+    };
+    assert_eq!(rejected.limit, personal);
+    assert_eq!(rejected.retry_after_seconds, 40);
+    assert_eq!(rejected.result()["limitScope"], "principal");
+    assert_eq!(rejected.audit()["rateLimit"]["limitScope"], "principal");
+    limiter.close();
+    assert!(alice.await.unwrap().is_err());
+    assert!(bob.await.unwrap().is_err());
 }
 
 #[tokio::test(start_paused = true)]

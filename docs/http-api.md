@@ -2570,8 +2570,9 @@ now. These values neither reserve capacity nor promise authorization, concurrenc
 execution or delivery. There is no single window reset time. `blockingScope`
 is `principal` or `service` when capacity is unavailable, and is omitted when
 immediate admission is possible. Shared scheduling that delays the caller beyond
-its personal-only forecast uses `service`; ties with both allowances exhausted
-also use `service`. Otherwise the scope is `principal`.
+its personal-only forecast uses `service`. An equal-time personal/shared opening
+also uses `service`; when the personal allowance opens later, the scope is
+`principal`.
 
 `maxWaitSeconds` is configured policy; a request's remaining transport/operation
 budget may be shorter. Compare it with client/proxy timeouts and allow useful
@@ -3438,9 +3439,11 @@ accepts exactly `{"requests":N,"windowSeconds":S}`, with `requests` from 1 to
 item (`overridden = true`). `DELETE` accepts no body, removes the override if
 there is one, and returns the effective item that now applies (the service
 limit or default, `overridden = false`); it is idempotent. Changes apply to the
-principal's next counted request and reforecast its pending queue without a
-reload or deadline extension. Overrides select only requests/window; the
-service/default `max_wait` applies independently. Overrides apply to users,
+principal's next counted request and reforecast affected pending requests without
+a reload, including other principals' queued requests when a shared cap applies.
+A changed forecast can refuse a queued request with 429; deadlines never extend.
+Overrides select only requests/window; the service/default `max_wait` applies
+independently. Overrides apply to users,
 service accounts, and system principals, active or disabled.
 
 These routes use management envelopes and audit. `GET` permits an active human

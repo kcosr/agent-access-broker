@@ -179,12 +179,16 @@ All notable changes to this project are documented in this file.
 - **Bounded invocation waiting, shared service caps and live limits.** Optional
   `[limits.invocations.aggregate.<service>]` caps combined admissions across
   callers while personal limits still apply. Native, imported and command-backed
-  services share the same process-local enforcement. Optional `max_wait` retains
-  each caller's FIFO within existing request capacity and takes turns among
-  eligible callers; changed forecasts can refuse a queued request before its
-  deadline. Service describe reports shared policy and joint admission estimates;
+  services and Git gateway pack POSTs share the same process-local enforcement.
+  Optional `max_wait` retains each caller's FIFO within existing request capacity
+  and takes turns among eligible callers; changed forecasts can refuse a queued
+  request before its deadline. Service describe reports shared policy and joint admission estimates;
   the portal displays TOML caps read-only. Imported TOML waits and aggregate caps
-  survive catalog edits alongside managed personal requests/window settings. See
+  survive catalog edits alongside managed personal requests/window settings.
+  Admission `limitScope` can now be `service` in error results,
+  `providerAudit.rateLimit` and `request_limited` events, distinct from upstream
+  throttling's `upstream` scope. Messages distinguish `for this principal` from
+  `Shared rate limit reached` with an allowance `across all principals`. See
   [invocation limits](docs/configuration.md#service-invocation-limits).
   ([#67](https://github.com/kcosr/agent-access-broker/pull/67))
 
