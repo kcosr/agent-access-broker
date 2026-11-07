@@ -1,0 +1,22 @@
+[package]
+name = "agent-access-openapi-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[package.metadata.agent-access]
+role = "gateway"
+
+[dependencies]
+agent-access-provider = { path = "../agent-access-provider" }
+agent-access-openapi-common = { path = "../agent-access-openapi-common" }
+async-trait.workspace = true
+http.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
+bytes.workspace = true
+futures-util.workspace = true
+tokio.workspace = true

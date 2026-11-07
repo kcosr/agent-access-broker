@@ -20,6 +20,7 @@ members = [
   "crates/agent-access-openapi-upstream",
   "crates/agent-access-openapi-common",
   "crates/agent-access-openapi-gateway-import",
+  "crates/agent-access-openapi-gateway",
   "crates/agent-access-teams",
 ]
 # Templates staged as independent repositories by
