@@ -1,0 +1,1 @@
+{"version":1,"paths":{"/items/admin":{"methods":{"GET":{"source":{"operationId":"inventory_admin"},"current":false,"supported":true}}},"/items/{id}":{"methods":{"PUT":{"source":{"operationId":"inventory_update"},"current":true,"supported":true}}}}}

@@ -1,0 +1,39 @@
+{
+  "openapi": "3.1.1",
+  "info": { "title": "Synthetic inventory", "version": "1" },
+  "servers": [{ "url": "https://api.example.test/api" }],
+  "components": {
+    "securitySchemes": {
+      "inventory_key": { "type": "apiKey", "in": "header", "name": "X-Api-Key" }
+    }
+  },
+  "security": [{}, { "inventory_key": [] }],
+  "paths": {
+    "/items/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1, "maxLength": 64 } }
+      ],
+      "put": {
+        "operationId": "inventory_update",
+        "summary": "Replace an inventory item",
+        "parameters": [
+          { "name": "tag", "in": "query", "schema": { "type": "array", "items": { "type": "string", "maxLength": 32 }, "maxItems": 8 } },
+          { "name": "X-Revision", "in": "header", "required": true, "schema": { "type": "integer", "minimum": 1, "maximum": 99 } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated item",
+            "headers": { "X-Api-Version": { "schema": { "type": "string", "maxLength": 32 } } },
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          },
+          "4XX": { "description": "Rejected", "content": { "application/json": {} } },
+          "default": { "description": "Other response" }
+        }
+      }
+    }
+  }
+}

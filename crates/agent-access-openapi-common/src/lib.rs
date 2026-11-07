@@ -2,11 +2,15 @@
 //!
 //! This helper contains no Broker policy, credentials, store, or transport dependencies.
 //! Its V1 wire structs are intentionally exhaustive: changed wire semantics require a new version.
+mod compile;
+mod json;
 mod model;
 mod profile;
 mod routes;
 mod schema;
+mod source;
 
+pub use compile::compile_gateway_document;
 pub use model::*;
 pub use profile::{
     GATEWAY_COMMON_REQUEST_HEADERS, GATEWAY_COMMON_RESPONSE_HEADERS, GatewayValidatedParameters,
@@ -32,10 +36,17 @@ pub(crate) fn bounded(value: &str, max: usize) -> bool {
 }
 
 #[cfg(test)]
+mod compiler_tests;
+#[cfg(test)]
 mod tests;
 
 /// Validate the immutable approved base URL. This function performs no network access.
 pub fn validate_endpoint(raw: &str) -> Result<url::Url, String> {
+    // Inspect the raw path before URL parsing can erase dot components.
+    let authority = raw.split_once("://").ok_or("invalid gateway endpoint")?.1;
+    if let Some((_, path)) = authority.split_once('/') {
+        canonical_path(&format!("/{path}"))?;
+    }
     let url = url::Url::parse(raw).map_err(|_| "invalid gateway endpoint")?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()

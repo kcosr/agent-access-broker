@@ -275,7 +275,9 @@ pub(crate) fn scalar(raw: &str, schema: &Value) -> Result<Value, String> {
         }
         if let Some(divisor) = schema.get("multipleOf").and_then(Value::as_f64) {
             let ratio = number / divisor;
-            if (ratio - ratio.round()).abs() > f64::EPSILON * ratio.abs().max(1.0) * 4.0 {
+            if !ratio.is_finite()
+                || (ratio - ratio.round()).abs() > f64::EPSILON * ratio.abs().max(1.0) * 4.0
+            {
                 return Err("gateway parameter violates its multipleOf bound".into());
             }
         }
