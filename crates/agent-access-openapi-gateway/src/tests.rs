@@ -406,8 +406,12 @@ async fn response_validator_uses_exact_class_default_and_never_returns_reserved_
 }
 
 #[tokio::test]
-async fn response_validator_rejects_ambiguous_fields_and_preserves_encoding_and_retry_after() {
-    let protocol = build(&input(plan("GET", "/items", "list"))).unwrap();
+async fn response_validator_preserves_encoding_and_leaves_retry_after_to_host() {
+    let mut operation = plan("GET", "/items", "list");
+    operation["responses"] = json!({
+        "429":{"headers":[{"name":"Retry-After","schema":{"type":"string"}}],"contentTypes":[]}
+    });
+    let protocol = build(&input(operation)).unwrap();
     let forwarded = classify(protocol.as_ref(), &Method::GET, "/items", &HeaderMap::new())
         .unwrap()
         .into_request()
@@ -415,13 +419,38 @@ async fn response_validator_rejects_ambiguous_fields_and_preserves_encoding_and_
         .await
         .unwrap();
     let validator = forwarded.response.validator.as_ref().unwrap();
+    assert!(forwarded.response.bounded_retry_after);
+    assert!(
+        !forwarded
+            .response
+            .headers
+            .iter()
+            .any(|name| name == "retry-after")
+    );
+    assert!(
+        forwarded
+            .response
+            .status_headers
+            .iter()
+            .all(|status| !status.headers.iter().any(|name| name == "retry-after"))
+    );
     let mut upstream = HeaderMap::new();
     upstream.insert("content-encoding", HeaderValue::from_static("gzip"));
     upstream.insert("retry-after", HeaderValue::from_static("15"));
     let headers = validator.validate(429, &upstream).unwrap();
     assert_eq!(headers["content-encoding"], "gzip");
-    assert_eq!(headers["retry-after"], "15");
+    assert!(!headers.contains_key("retry-after"));
     upstream.append("retry-after", HeaderValue::from_static("30"));
+    for status in [200, 429, 503] {
+        let headers = validator.validate(status, &upstream).unwrap();
+        assert_eq!(headers.len(), 1);
+        assert!(!headers.contains_key("retry-after"));
+    }
+    upstream.insert("retry-after", HeaderValue::from_static("SECRET"));
+    let headers = validator.validate(429, &upstream).unwrap();
+    assert_eq!(headers.len(), 1);
+    assert!(headers.contains_key("content-encoding"));
+    upstream.append("content-encoding", HeaderValue::from_static("br"));
     assert_eq!(
         validator
             .validate(429, &upstream)
@@ -429,10 +458,6 @@ async fn response_validator_rejects_ambiguous_fields_and_preserves_encoding_and_
             .reason_code(),
         ReasonCode::UpstreamProtocolFailed
     );
-    upstream.insert("retry-after", HeaderValue::from_static("SECRET"));
-    let headers = validator.validate(429, &upstream).unwrap();
-    assert_eq!(headers.len(), 1);
-    assert!(headers.contains_key("content-encoding"));
 }
 
 #[tokio::test]

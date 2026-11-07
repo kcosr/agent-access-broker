@@ -90,6 +90,7 @@ impl GatewayRequest for Request {
                 response
                     .headers
                     .iter()
+                    .filter(|header| !header.name.eq_ignore_ascii_case("retry-after"))
                     .map(|header| header.name.to_ascii_lowercase())
                     .collect(),
             ));
@@ -97,6 +98,7 @@ impl GatewayRequest for Request {
         let response = GatewayResponseProfile::new(
             GATEWAY_COMMON_RESPONSE_HEADERS
                 .iter()
+                .filter(|name| **name != "retry-after")
                 .map(|name| (*name).to_owned())
                 .collect(),
         )
@@ -104,6 +106,7 @@ impl GatewayRequest for Request {
         .translate_unauthorized()
         .reject_redirects()
         .preserve_content_length()
+        .bounded_retry_after()
         .with_validator(self.operation.clone());
         let audit = json!({
             "kind": "openapi_gateway",
@@ -130,7 +133,11 @@ impl GatewayRequest for Request {
 
 impl GatewayResponseValidator for Operation {
     fn validate(&self, status: u16, headers: &HeaderMap) -> Result<HeaderMap, ProviderError> {
-        self.plan.response_headers(status, headers).map_err(|_| {
+        // The host alone interprets Retry-After, including duplicate/invalid
+        // values, its 429-only rule and its whole-second upper bound.
+        let mut ordinary = headers.clone();
+        ordinary.remove("retry-after");
+        self.plan.response_headers(status, &ordinary).map_err(|_| {
             ProviderError::error(
                 ReasonCode::UpstreamProtocolFailed,
                 "upstream response headers do not match the accepted gateway operation",
