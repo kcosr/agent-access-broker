@@ -344,6 +344,7 @@ fn record(
     actions: Vec<ImportedActionRecord>,
 ) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        gateway_routes: None,
         document: None,
         definition: ImportedServiceDefinition {
             service: SERVICE.into(),
@@ -593,6 +594,7 @@ fn import_config() -> BrokerConfig {
     let mut config = config();
     project_resources(&mut config);
     config.imports = ImportsConfig {
+        gateway_bindings: Default::default(),
         enabled: true,
         allowed_kinds: vec!["command".into()],
         ..ImportsConfig::default()

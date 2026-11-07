@@ -63,6 +63,7 @@ fn accept_command(
     let observed = store
         .write_imported_preview(
             ImportedPreviewWriteRequest {
+                gateway_routes: None,
                 service: "ticketing".into(),
                 expected_version: record.version,
                 expected_catalog_revision: catalog.revision,

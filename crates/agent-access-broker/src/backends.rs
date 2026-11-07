@@ -56,7 +56,9 @@ pub fn composition() -> Result<BrokerComposition, CompositionError> {
     for adapter in import_adapters() {
         builder = builder.import_adapter(adapter);
     }
-    builder.gateway(&agent_access_git_http::GIT_HTTP_GATEWAY).build()
+    builder
+        .gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)
+        .build()
 }
 
 #[cfg(test)]

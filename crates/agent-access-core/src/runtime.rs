@@ -35,7 +35,10 @@ mod import_control;
 mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
-pub use imports::{PreparedImportedCredentialContract, PreparedImportedDocumentUpload};
+pub use imports::{
+    GatewayExecutionBinding, ImportedGatewayDispatchFence, PreparedImportedCredentialContract,
+    PreparedImportedDocumentUpload,
+};
 mod input_explanation;
 mod lookup_access;
 mod mcp_views;
@@ -2320,17 +2323,23 @@ impl BrokerRuntime {
             &network,
         )?;
         let mut command_providers = BTreeMap::new();
+        let mut imported_gateways = BTreeMap::new();
         for (service, provider) in imported_providers {
             if let Some(command) = provider.command() {
                 command_providers.insert(service.clone(), command.clone());
             }
-            provider_map.insert(
-                service.clone(),
-                ServiceProvider::new(
-                    (**services.get(&service).expect("retained import descriptor")).clone(),
-                    provider.provider(),
-                ),
-            );
+            if let Some(gateway) = provider.gateway() {
+                imported_gateways.insert(service.clone(), gateway.clone());
+            }
+            if let Some(provider) = provider.provider() {
+                provider_map.insert(
+                    service.clone(),
+                    ServiceProvider::new(
+                        (**services.get(&service).expect("retained import descriptor")).clone(),
+                        provider,
+                    ),
+                );
+            }
         }
         let source_config = config.clone();
         imports::effective_credentials_with_contracts(
@@ -2381,7 +2390,7 @@ impl BrokerRuntime {
             &trusted_callers,
             &identity_sources,
         )?;
-        let gateways = config
+        let mut gateways = config
             .gateways
             .iter()
             .map(|(service, gateway)| {
@@ -2404,9 +2413,12 @@ impl BrokerRuntime {
                 Ok((service.clone(), protocol))
             })
             .collect::<Result<BTreeMap<_, _>, RuntimeError>>()?;
+        gateways.extend(imported_gateways);
+        let mut gateway_configs = config.gateways.clone();
+        gateway_configs.extend(imports::managed_gateway_configs(&config, &imported_catalog));
         let mut runtime = Self {
             gateways: Arc::new(gateways),
-            gateway_configs: Arc::new(config.gateways.clone()),
+            gateway_configs: Arc::new(gateway_configs),
             identity_sources: Arc::new(identity_sources),
             audit,
             effective_credentials: Arc::new(config.credentials.clone()),

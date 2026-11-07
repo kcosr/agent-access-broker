@@ -16,6 +16,7 @@ use principal_access::{
 mod imported_store;
 pub use imported_store::*;
 mod imported_documents;
+mod imported_gateway_routes;
 pub use imported_documents::ImportedDocumentMetadata;
 pub(crate) use imported_documents::{validate_document_bytes, validate_document_filename};
 mod imported_resource_types;
@@ -85,7 +86,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION;
+const MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION: &str = "035_imported_gateway_routes";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION: &str =
     "034_agent_token_issuance_contexts";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION: &str = "033_agent_token_issuance";
@@ -295,6 +297,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/agent_token_issuance_contexts.sql"),
         seed: Some(agent_token_issuance::seed_contexts),
         structural_validation: agent_token_issuance::validate_context_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION,
+        checksum: "34d8fe4dc229a986e6ba5f2bbcefb36bd150e660c1b0e3d54602fb5400954187",
+        sql: include_str!("managed_store/imported_gateway_routes.sql"),
+        seed: None,
+        structural_validation: imported_gateway_routes::validate_structure,
     },
 ];
 

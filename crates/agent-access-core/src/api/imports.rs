@@ -7,10 +7,17 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     let mut list = get_management_route(BASE, "admin.imports.list", RouteAccess::AdminRead);
     list.result_schema = Some(json!({"type":"object","additionalProperties":false,
-    "required":["catalogRevision","operatorEnabled","services","availableKinds","commandImports","importAuthentication"],"properties":{
+    "required":["catalogRevision","operatorEnabled","services","availableKinds","commandImports","importAuthentication","gatewayBindings"],"properties":{
         "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"importAuthentication":import_authentication(),
         "commandImports":{"type":"array","description":"Operator-approved command names a command import may name as command:<name>; paths are never returned.",
             "items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}},
+        "gatewayBindings":{"type":"array","description":"Reserved gateway identities; available means eligible for creating a new import.","items":{
+            "type":"object","additionalProperties":false,"required":["service","endpoint","brokerHosts","authModes","allowForwardedIdentity","available"],"properties":{
+                "service":service_name_schema(),"endpoint":{"type":"string"},"brokerHosts":{"type":"array","items":{"type":"string"}},
+                "authModes":{"type":"array","items":{"enum":["basic_broker_token","bearer_broker_token"]}},
+                "allowForwardedIdentity":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":"string"}
+            }
+        }},
         "catalogRevision":revision(),"services":{"type":"array","items":service_view()}
     }}));
     routes.push(list);

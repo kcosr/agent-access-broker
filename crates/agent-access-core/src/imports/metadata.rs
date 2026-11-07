@@ -450,6 +450,7 @@ mod tests {
     #[test]
     fn discoveries_encode_service_metadata_only_when_proposed() {
         let mut discovery = super::super::ImportedDiscovery {
+            gateway_routes: None,
             protocol_version: "openapi-3.1".into(),
             metadata: json!({"title": "Inventory"}),
             tools: Vec::new(),

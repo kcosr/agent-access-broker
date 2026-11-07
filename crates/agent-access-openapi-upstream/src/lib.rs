@@ -340,6 +340,7 @@ impl ImportedAdapter for OpenApiAdapter {
                 tools.push(tool);
             }
             Ok(ImportedDiscovery {
+                gateway_routes: None,
                 protocol_version: document.version.clone(),
                 metadata: document.metadata.clone(),
                 tools,

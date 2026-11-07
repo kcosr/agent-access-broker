@@ -439,7 +439,7 @@ async fn command_hook(
         .command()
         .cloned()
         .expect("command imports build a command hook");
-    (hook, built.provider(), metadata, actions)
+    (hook, built.provider().unwrap(), metadata, actions)
 }
 
 /// `command` running the fixture `fixture` instead.

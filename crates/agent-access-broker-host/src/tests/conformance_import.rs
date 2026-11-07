@@ -168,6 +168,7 @@ impl ImportedAdapter for ConformanceImportAdapter {
             }
         }
         Ok(ImportedDiscovery {
+            gateway_routes: None,
             protocol_version: "conformance-v1".into(),
             metadata: json!({}),
             tools: vec![ImportedDiscoveredTool {

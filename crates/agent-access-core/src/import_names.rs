@@ -113,6 +113,7 @@ mod tests {
     use serde_json::json;
     fn record() -> ImportedServiceRecord {
         ImportedServiceRecord {
+            gateway_routes: None,
             document: None,
             definition: ImportedServiceDefinition {
                 service: "search".into(),
@@ -141,6 +142,7 @@ mod tests {
     }
     fn discovery(names: &[&str]) -> ImportedDiscovery {
         ImportedDiscovery {
+            gateway_routes: None,
             protocol_version: "fixture".into(),
             metadata: json!({}),
             tools: names

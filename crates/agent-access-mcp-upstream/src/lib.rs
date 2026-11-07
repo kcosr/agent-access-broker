@@ -67,7 +67,8 @@ impl ImportedAdapter for McpAdapter {
     }
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         definition.validate()?;
-        if !definition.connection_settings.is_empty()
+        if definition.execution_bindings.is_empty()
+            || !definition.connection_settings.is_empty()
             || matches!(definition.discovery, ImportedDiscoveryCredential::Anonymous)
             || definition.execution_bindings.iter().any(|b| {
                 !matches!(
@@ -659,6 +660,7 @@ async fn discover_tools(operation: &Operation) -> Result<ImportedDiscovery, Prov
             match cursor {
                 None => {
                     return Ok(ImportedDiscovery {
+                        gateway_routes: None,
                         protocol_version: version.into(),
                         metadata: json!({"adapterKind":"mcp_http", "pages":page + 1, "listings":listing_metadata, "serverInfo":server_info}),
                         tools,

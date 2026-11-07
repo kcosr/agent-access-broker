@@ -952,7 +952,8 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         lease
             .reject_after
@@ -991,7 +992,8 @@ async fn legacy_oauth_revalidates_every_phase_and_never_recovers_or_replays() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let (request, lease) = leased_invocation(&fixture.endpoint, false);
     provider.invoke(request).await.unwrap();
     assert_eq!(lease.validations.load(Ordering::SeqCst), 6);
@@ -1033,7 +1035,8 @@ async fn oauth_401_marks_only_the_normal_request_access_version_and_cleanup_401_
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         let outcome = provider.invoke(request).await;
         if phase == "cleanup" {
@@ -1094,7 +1097,8 @@ async fn legacy_startup_failure_owns_status_and_preserves_rate_limit_details() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let (request, lease) = leased_invocation(&fixture.endpoint, false);
     lease.reject_after.store(1, Ordering::SeqCst);
     let error = provider.invoke(request).await.unwrap_err();
@@ -1128,7 +1132,8 @@ async fn concurrent_users_and_discovery_have_independent_sessions() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let mut alice = invocation(json!({"region":"east"}), "alice-private-token");
     alice = InvocationBuilder::from(alice)
         .credential_mode(CredentialMode::PerUser)
@@ -1334,7 +1339,8 @@ async fn pinned_sdk_previous_only_servers_support_sessions_and_sessionless_json_
                     &host.context(),
                 )
                 .unwrap()
-                .provider();
+                .provider()
+                .unwrap();
             let result = provider
                 .invoke(invocation(json!({"region":"sdk-east"}), "sdk-secret"))
                 .await
@@ -1437,7 +1443,8 @@ async fn pinned_sdk_both_versions_prefers_current_without_legacy_state() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let result = provider
         .invoke(invocation(json!({"region":"sdk-east"}), "sdk-secret"))
         .await
@@ -1659,7 +1666,8 @@ async fn legacy_requests_reject_changed_resource_or_audience_after_each_startup_
                     &test_host().context(),
                 )
                 .unwrap()
-                .provider();
+                .provider()
+                .unwrap();
             let error = provider.invoke(request).await.unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
             assert_write(&error, false);

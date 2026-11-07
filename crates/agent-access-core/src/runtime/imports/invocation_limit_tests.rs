@@ -278,6 +278,7 @@ fn imported_limit_publications_preserve_wait_and_restore_source_rate_fallback() 
         .unwrap()
         .write_imported_preview(
             crate::ImportedPreviewWriteRequest {
+                gateway_routes: None,
                 service: "records".into(),
                 expected_version: record.version,
                 expected_catalog_revision: runtime.import_catalog_revision(),

@@ -1,8 +1,10 @@
 use crate::imports::{COMMAND_ENDPOINT_PREFIX, ImportEndpointForm, is_command_name};
 use crate::{BrokerConfig, CommandImportsConfig};
 use agent_access_provider::{is_service_name, url_allowed_by_patterns, validate_upstream_base_url};
-use serde::Deserialize;
-use std::collections::BTreeSet;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 
 /// Operator authority over database-managed integrations.
@@ -17,6 +19,64 @@ pub struct ImportsConfig {
     pub allowed_endpoints: Vec<String>,
     #[serde(default)]
     pub disabled_services: Vec<String>,
+    #[serde(default)]
+    pub gateway_bindings: BTreeMap<String, ImportedGatewayBinding>,
+}
+
+/// Operator-reserved host and destination for one managed gateway identity.
+/// Protocol and execution authentication are selected by the accepted import.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedGatewayBinding {
+    pub endpoint: String,
+    pub broker_hosts: Vec<String>,
+    pub auth_modes: Vec<String>,
+    #[serde(default)]
+    pub allow_forwarded_identity: bool,
+    #[serde(default = "crate::gateway_config::default_basic_broker_token_username")]
+    pub basic_broker_token_username: String,
+    pub egress_proxy: Option<crate::EgressProxyConfig>,
+    #[serde(default = "crate::gateway_config::default_gateway_redirect_policy")]
+    pub redirect_policy: String,
+    pub request_body_max_bytes: Option<u64>,
+    pub response_body_max_bytes: Option<u64>,
+    pub streaming_idle_timeout_ms: Option<u64>,
+    #[serde(default = "crate::gateway_config::default_gateway_correlation_headers")]
+    pub correlation_headers: bool,
+}
+
+impl ImportedGatewayBinding {
+    /// Include private proxy references in the opaque fence hash, never in
+    /// administrative projections or diagnostics.
+    pub fn fingerprint(&self) -> String {
+        let proxy = self.egress_proxy.as_ref().map(|proxy| {
+            json!({
+                "url":proxy.url,"usernameRef":proxy.username_ref,"passwordRef":proxy.password_ref,
+            })
+        });
+        let value = json!({"endpoint":self.endpoint,"hosts":self.broker_hosts,
+            "authModes":self.auth_modes,"allowForwardedIdentity":self.allow_forwarded_identity,
+            "basicUsername":self.basic_broker_token_username,"proxy":proxy,
+            "redirectPolicy":self.redirect_policy,"requestMax":self.request_body_max_bytes,
+            "responseMax":self.response_body_max_bytes,"idleTimeout":self.streaming_idle_timeout_ms,
+            "correlation":self.correlation_headers});
+        format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
+    }
+}
+
+/// Safe administrative options. Availability refers to new import creation;
+/// a retained identity remains visible but cannot be assigned again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedGatewayBindingView {
+    pub service: String,
+    pub endpoint: String,
+    pub broker_hosts: Vec<String>,
+    pub auth_modes: Vec<String>,
+    pub allow_forwarded_identity: bool,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
 }
 
 impl ImportsConfig {
@@ -53,7 +113,7 @@ impl ImportsConfig {
 
 pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) {
     let imports = &config.imports;
-    if imports.enabled
+    if (imports.enabled || !imports.gateway_bindings.is_empty())
         && (config.identity.authority != "managed"
             || config.policy.authority != "managed"
             || config.managed_store.is_none()
@@ -93,9 +153,9 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
         config.deployment.environment != "production" && config.deployment.enable_fake_service;
     for kind in &imports.allowed_kinds {
         let adapter = config.providers.registry().imported_adapter(kind);
-        if imports.enabled && adapter.is_none() {
+        if !is_service_name(kind) {
             errors.push(format!(
-                "imports.allowed_kinds contains an unlinked adapter kind {kind}"
+                "imports.allowed_kinds contains an invalid adapter kind {kind}"
             ));
         }
         if adapter.is_some_and(|adapter| adapter.development_only())
@@ -119,6 +179,154 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
             errors.push("imports.disabled_services contains an invalid service ID".into());
         }
     }
+    validate_gateway_bindings(config, errors);
+}
+
+fn validate_gateway_bindings(config: &BrokerConfig, errors: &mut Vec<String>) {
+    let mut hosts = BTreeMap::<String, String>::new();
+    for (service, gateway) in &config.gateways {
+        for host in &gateway.broker_hosts {
+            if let Ok(host) = crate::normalize_gateway_broker_host(host) {
+                hosts.insert(host, service.clone());
+            }
+        }
+    }
+    let provider_services = crate::configured_provider_descriptors(config)
+        .into_iter()
+        .map(|descriptor| descriptor.service)
+        .collect::<BTreeSet<_>>();
+    for (service, binding) in &config.imports.gateway_bindings {
+        let label = format!("imports.gateway_bindings.{service}");
+        if service == "broker" || !is_service_name(service) {
+            errors.push(format!("{label} has an invalid service identity"));
+        }
+        if config.providers.registry().get(service).is_some()
+            || config.gateways.contains_key(service)
+            || provider_services.contains(service)
+            || config.credentials.connections.contains_key(service)
+            || config.credentials.service.contains_key(service)
+            || config.credentials.per_user.contains_key(service)
+            || config.credentials.lookup.contains_key(service)
+        {
+            errors.push(format!(
+                "{label} collides with a configured service or credential identity"
+            ));
+        }
+        if binding.broker_hosts.is_empty() {
+            errors.push(format!("{label}.broker_hosts must not be empty"));
+        }
+        for host in &binding.broker_hosts {
+            match crate::normalize_gateway_broker_host(host) {
+                Ok(host) => {
+                    if hosts.insert(host, service.clone()).is_some() {
+                        errors.push(format!(
+                            "{label}.broker_hosts contains a reserved or duplicate host"
+                        ));
+                    }
+                }
+                Err(_) => errors.push(format!("{label}.broker_hosts contains an invalid host")),
+            }
+        }
+        let endpoint = crate::imports::parse_import_endpoint(&binding.endpoint);
+        if !matches!(&endpoint, Ok(crate::imports::ImportEndpoint::Http(_)))
+            || binding.endpoint.contains(['*', '\\'])
+        {
+            errors.push(format!(
+                "{label}.endpoint must be a fixed HTTP(S) API base URL"
+            ));
+        }
+        if let Ok(crate::imports::ImportEndpoint::Http(url)) = endpoint {
+            if config.deployment.environment == "production" && url.scheme() != "https" {
+                errors.push(format!("{label}.endpoint must use HTTPS in production"));
+            }
+            if !url_allowed_by_patterns(&url, &config.imports.allowed_endpoints) {
+                errors.push(format!(
+                    "{label}.endpoint must also be approved by imports.allowed_endpoints"
+                ));
+            }
+        }
+        if binding.auth_modes.is_empty()
+            || binding.auth_modes.iter().collect::<BTreeSet<_>>().len() != binding.auth_modes.len()
+            || binding
+                .auth_modes
+                .iter()
+                .any(|mode| !matches!(mode.as_str(), "bearer_broker_token" | "basic_broker_token"))
+        {
+            errors.push(format!(
+                "{label}.auth_modes requires unique supported Broker authentication modes"
+            ));
+        }
+        if binding.basic_broker_token_username.is_empty()
+            || binding.basic_broker_token_username.contains(':')
+            || binding
+                .basic_broker_token_username
+                .chars()
+                .any(|c| !c.is_ascii() || c.is_whitespace() || c.is_control())
+        {
+            errors.push(format!("{label}.basic_broker_token_username is invalid"));
+        }
+        if binding.redirect_policy != "none" {
+            errors.push(format!("{label}.redirect_policy must be none"));
+        }
+        for (field, value, maximum) in [
+            (
+                "request_body_max_bytes",
+                binding.request_body_max_bytes,
+                Some(config.limits.max_http_body_bytes),
+            ),
+            (
+                "response_body_max_bytes",
+                binding.response_body_max_bytes,
+                Some(config.limits.max_upstream_response_bytes),
+            ),
+            (
+                "streaming_idle_timeout_ms",
+                binding.streaming_idle_timeout_ms,
+                None,
+            ),
+        ] {
+            if value
+                .is_some_and(|value| value == 0 || maximum.is_some_and(|maximum| value > maximum))
+            {
+                errors.push(format!(
+                    "{label}.{field} must be nonzero and within the host limit"
+                ));
+            }
+        }
+        agent_access_provider::validate_egress_proxy_config(
+            &format!("{label}.egress_proxy"),
+            binding.egress_proxy.as_ref(),
+            errors,
+        );
+    }
+}
+
+pub(crate) fn validate_imported_gateway_bindings(
+    config: &BrokerConfig,
+    catalog: &crate::ImportedCatalog,
+) -> Result<(), String> {
+    for (service, binding) in &config.imports.gateway_bindings {
+        let Some(record) = catalog.service(service) else {
+            continue;
+        };
+        let gateway = config
+            .providers
+            .registry()
+            .imported_adapter(&record.definition.adapter_kind)
+            .map(|adapter| adapter.gateway_kind().is_some())
+            .unwrap_or(record.gateway_routes.is_some());
+        if !gateway {
+            return Err(format!(
+                "imports.gateway_bindings.{service} collides with a retained non-gateway import"
+            ));
+        }
+        if record.definition.endpoint != binding.endpoint {
+            return Err(format!(
+                "imports.gateway_bindings.{service} endpoint differs from its retained import"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -268,6 +476,7 @@ mod tests {
     fn command_destinations_need_an_approved_command_entry() {
         use ImportEndpointForm::{Command, Http};
         let config = ImportsConfig {
+            gateway_bindings: Default::default(),
             enabled: true,
             allowed_kinds: vec!["command".into(), "remote_import".into()],
             allowed_endpoints: vec!["https://tools.example/**".into(), "command:*".into()],
@@ -358,6 +567,7 @@ mod tests {
     #[test]
     fn operator_gate_requires_every_boundary() {
         let mut config = ImportsConfig {
+            gateway_bindings: Default::default(),
             enabled: true,
             allowed_kinds: vec!["mcp_http".into()],
             allowed_endpoints: vec!["https://tools.example/mcp".into()],

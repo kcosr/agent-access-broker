@@ -200,6 +200,7 @@ mod tests {
                 .unwrap(),
         ));
         config.imports = crate::ImportsConfig {
+            gateway_bindings: Default::default(),
             enabled: true,
             allowed_kinds: vec!["document_fixture".into()],
             allowed_endpoints: vec!["https://inventory.example.test/api".into()],
@@ -209,6 +210,7 @@ mod tests {
         runtime.imported_catalog = Arc::new(ImportedCatalog {
             revision: 7,
             services: vec![ImportedServiceRecord {
+                gateway_routes: None,
                 definition: ImportedServiceDefinition {
                     service: "inventory".into(),
                     display_name: "Inventory".into(),

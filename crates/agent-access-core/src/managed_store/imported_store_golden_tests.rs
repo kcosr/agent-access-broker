@@ -210,6 +210,7 @@ fn golden_actions() -> Vec<ImportedActionWrite> {
 fn golden_discovery() -> crate::imports::ImportedDiscovery {
     let actions = golden_actions();
     crate::imports::ImportedDiscovery {
+        gateway_routes: None,
         protocol_version: "openapi-3.1".into(),
         metadata: json!({"title":"Golden Inventory","version":"1"}),
         tools: vec![
@@ -259,6 +260,7 @@ fn imported_definitions_actions_and_previews_persist_frozen_json() {
     store
         .write_imported_preview(
             ImportedPreviewWriteRequest {
+                gateway_routes: None,
                 service: "golden-openapi".into(),
                 expected_version: record.version,
                 expected_catalog_revision: catalog.revision,

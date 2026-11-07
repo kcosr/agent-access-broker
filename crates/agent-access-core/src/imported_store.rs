@@ -73,6 +73,9 @@ pub struct ImportedServiceRecord {
     /// Safe receipt for retained discovery bytes; the document itself is not a catalog field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document: Option<ImportedDocumentMetadata>,
+    /// Opaque routing state is internal, not an administrative catalog field.
+    #[serde(skip)]
+    pub gateway_routes: Option<crate::imports::ImportedGatewayRouteRecord>,
     pub created_at: String,
     pub created_by: String,
     pub updated_at: String,
@@ -145,6 +148,7 @@ pub struct ImportedPreviewWriteRequest {
     pub manifest: Value,
     /// Changed/missing accepted actions from this complete authorized observation.
     pub quarantine_actions: Vec<String>,
+    pub gateway_routes: Option<crate::imports::ImportedGatewayRouteCandidate>,
     pub actor: String,
 }
 /// The caller builds a publication candidate while the SQLite transaction is
@@ -217,6 +221,16 @@ impl ManagedStore {
         actor: &str,
         validate: impl FnOnce(&ImportedCatalog) -> Result<T, ManagedStoreError>,
     ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
+        self.create_imported_service_with_routes(definition, None, actor, validate)
+    }
+
+    pub fn create_imported_service_with_routes<T>(
+        &self,
+        definition: ImportedServiceDefinition,
+        gateway_routes: Option<crate::imports::ImportedGatewayRouteCandidate>,
+        actor: &str,
+        validate: impl FnOnce(&ImportedCatalog) -> Result<T, ManagedStoreError>,
+    ) -> Result<ImportedMutationResult<T>, ManagedStoreError> {
         definition.validate().map_err(input_invalid)?;
         validate_actor(actor)?;
         let json = bounded_json(&definition, 32768)?;
@@ -237,6 +251,9 @@ impl ManagedStore {
         }
         let now = normalized_now_string();
         tx.execute("INSERT INTO imported_services(service,definition_json,status,version,created_at,created_by,updated_at,updated_by) VALUES(?1,?2,'draft',1,?3,?4,?3,?4)", params![definition.service,json,now,actor]).map_err(sql_unavailable)?;
+        if let Some(routes) = &gateway_routes {
+            super::imported_gateway_routes::write(&tx, &definition.service, None, routes)?;
+        }
         finish(tx, validate)
     }
     /// Updates an imported service. An acceptance whose resource type
@@ -530,6 +547,14 @@ impl ManagedStore {
         if let Some(upload) = upload {
             upload.validate(&record, request.expected_catalog_revision)?;
             super::imported_documents::write(&tx, &request.service, upload)?;
+        }
+        if let Some(routes) = &request.gateway_routes {
+            super::imported_gateway_routes::write(
+                &tx,
+                &request.service,
+                record.gateway_routes.as_ref(),
+                routes,
+            )?;
         }
         let mut seen = BTreeSet::new();
         for action in &request.quarantine_actions {
@@ -945,9 +970,11 @@ enum ImportSchema {
     CommandImports,
     /// `032_imported_source_documents` and later.
     SourceDocuments,
+    /// `035_imported_gateway_routes` and later.
+    GatewayRoutes,
 }
 fn catalog(conn: &Connection) -> Result<ImportedCatalog, ManagedStoreError> {
-    catalog_at(conn, ImportSchema::SourceDocuments)
+    catalog_at(conn, ImportSchema::GatewayRoutes)
 }
 fn catalog_at(
     conn: &Connection,
@@ -989,7 +1016,7 @@ pub(crate) fn service_record(
     conn: &Connection,
     service: &str,
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
-    service_record_at(conn, service, ImportSchema::SourceDocuments)
+    service_record_at(conn, service, ImportSchema::GatewayRoutes)
 }
 fn service_record_at(
     conn: &Connection,
@@ -998,7 +1025,9 @@ fn service_record_at(
 ) -> Result<Option<ImportedServiceRecord>, ManagedStoreError> {
     let metadata_column = match schema {
         ImportSchema::BeforeCommandImports => "NULL",
-        ImportSchema::CommandImports | ImportSchema::SourceDocuments => "accepted_metadata_json",
+        ImportSchema::CommandImports
+        | ImportSchema::SourceDocuments
+        | ImportSchema::GatewayRoutes => "accepted_metadata_json",
     };
     type ServiceRow = (
         String,
@@ -1078,12 +1107,20 @@ fn service_record_at(
             ))
         })
         .collect::<Result<BTreeMap<_, _>, ManagedStoreError>>()?;
-    let document = if schema == ImportSchema::SourceDocuments {
+    let document = if matches!(
+        schema,
+        ImportSchema::SourceDocuments | ImportSchema::GatewayRoutes
+    ) {
         super::imported_documents::metadata(conn, service)?
     } else {
         None
     };
     Ok(Some(ImportedServiceRecord {
+        gateway_routes: if schema == ImportSchema::GatewayRoutes {
+            super::imported_gateway_routes::read(conn, service)?
+        } else {
+            None
+        },
         document,
         definition,
         status,
@@ -1508,7 +1545,9 @@ pub(super) fn validate_structure_through(
     check_policy_revision_ready(conn)?;
     catalog_at(
         conn,
-        if version >= MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION {
+        if version >= MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION {
+            ImportSchema::GatewayRoutes
+        } else if version >= MANAGED_STORE_IMPORTED_SOURCE_DOCUMENTS_VERSION {
             ImportSchema::SourceDocuments
         } else {
             ImportSchema::CommandImports
@@ -1639,6 +1678,7 @@ mod tests {
     include!("managed_store/command_imports_store_tests.rs");
     include!("managed_store/imported_basic_tests.rs");
     include!("managed_store/imported_document_tests.rs");
+    include!("managed_store/imported_gateway_route_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,
@@ -1773,6 +1813,7 @@ mod tests {
     }
     fn pending(catalog: &ImportedCatalog) -> ImportedPreviewWriteRequest {
         ImportedPreviewWriteRequest {
+            gateway_routes: None,
             service: "observability".into(),
             expected_version: catalog.services[0].version,
             expected_catalog_revision: catalog.revision,

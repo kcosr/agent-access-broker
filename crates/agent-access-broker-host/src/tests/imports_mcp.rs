@@ -150,6 +150,7 @@ async fn fixture(limit: Option<u32>) -> Fixture {
         }],
     });
     config.imports = ImportsConfig {
+        gateway_bindings: Default::default(),
         enabled: true,
         allowed_kinds: vec!["mcp_http".into()],
         allowed_endpoints: vec![format!("{base}/one"), format!("{base}/two")],

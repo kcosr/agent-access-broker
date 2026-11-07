@@ -309,6 +309,18 @@ impl BrokerRuntime {
                 )));
             }
         };
+        if discovery.gateway_routes.is_some() != adapter.gateway_kind().is_some()
+            || discovery
+                .gateway_routes
+                .as_ref()
+                .is_some_and(|routes| !routes.is_supported() || routes.encoded().is_err())
+        {
+            return Err(ImportPreparationError::new(
+                ReasonCode::UpstreamProtocolFailed,
+                "import adapter returned an invalid gateway routing contract",
+            )
+            .into());
+        }
         assign_imported_action_names(&record, &mut discovery).map_err(|_| {
             ImportPreparationError::new(
                 ReasonCode::UpstreamProtocolFailed,

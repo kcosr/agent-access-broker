@@ -28,7 +28,16 @@ impl BrokerRuntime {
         let imported = catalog
             .services
             .iter()
-            .filter(|service| service.status != ImportedServiceStatus::Retired)
+            .filter(|service| {
+                service.status != ImportedServiceStatus::Retired
+                    && service.gateway_routes.is_none()
+                    && !self
+                        .config
+                        .providers
+                        .registry()
+                        .imported_adapter(&service.definition.adapter_kind)
+                        .is_some_and(|adapter| adapter.gateway_kind().is_some())
+            })
             .flat_map(|service| {
                 service
                     .actions
