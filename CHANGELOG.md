@@ -163,7 +163,8 @@ All notable changes to this project are documented in this file.
   accepted operations. Import lists include safe `gatewayBindings` choices;
   gateway services report `scopedMcp: null` and expose no invoke or MCP tools.
   The portal shows raw-body limits and verification eligibility while preserving
-  eligible Git and mixed-connection probes. See
+  eligible Git and mixed-connection probes. HTTP traces record extension methods
+  as `OTHER` to keep caller-supplied method text out of diagnostics. See
   [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports)
   and the [HTTP gateway setup guide](docs/http-gateway-setup.md).
 

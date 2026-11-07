@@ -714,6 +714,9 @@ only to retired values become stale and unusable.
 `agent-access-broker config validate` keeps its human stdout/stderr behavior and
 does not install the service subscriber.
 
+Request traces record standard HTTP methods by name and extension methods as
+`OTHER`, so caller-supplied method tokens do not enter diagnostics.
+
 The default service filter is:
 
 ```text

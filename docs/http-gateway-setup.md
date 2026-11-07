@@ -243,6 +243,8 @@ The HTTP profile supports common content, conditional and single-range headers,
 plus permitted declared request and response headers. The example declares
 `X-Api-Version`; document custom response headers that clients require. Cookies,
 upstream authentication challenges and routing override headers are not forwarded.
+An upstream 401 returns HTTP 424 `upstream_unauthorized`, without a challenge or
+retry; it does not ask the client to replace its Broker token.
 The host emits bounded whole-second `Retry-After` only on 429. Invalid single
 optional metadata values are omitted while preserving the response body;
 repeated selected fields are rejected as ambiguous.
@@ -267,6 +269,11 @@ review, with affected-grant confirmation when restoring changed authority.
 Route guards, accepted plans and action status are published together. Failed
 discovery leaves the previous complete generation active. Startup uses the
 retained plans and guards without fetching a document.
+
+A prepared request is refused if its admitted action, gateway binding, selected
+credential material or caller identity becomes unavailable before sending.
+Broker does not switch that request to a replacement credential or destination.
+A transfer already forwarding retains its original snapshot to completion.
 
 Check the import's availability, gateway binding, selected credential, grants and
 audit events when a client cannot connect. Unmatched and inactive operations

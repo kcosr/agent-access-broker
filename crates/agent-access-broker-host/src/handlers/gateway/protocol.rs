@@ -33,6 +33,26 @@ pub(super) fn protocol_headers(headers: &HeaderMap) -> HeaderMap {
         .collect()
 }
 
+/// Imported execution headers are host-owned credential carriers even before
+/// policy selects a mode. Neither caller values nor module replacements cross
+/// the credential boundary.
+pub(super) fn imported_credential_header(
+    runtime: &BrokerRuntime,
+    service: &str,
+    name: &str,
+) -> bool {
+    runtime
+        .imported_catalog()
+        .service(service)
+        .is_some_and(|record| {
+            record.definition.execution_bindings.iter().any(|binding| matches!(
+            &binding.delivery,
+            agent_access_core::imports::ImportedCredentialDelivery::RawHeader { name: reserved }
+                if reserved.eq_ignore_ascii_case(name)
+        ))
+        })
+}
+
 fn identity_header(name: &str) -> bool {
     name.starts_with("x-aw-")
         || name.starts_with("x-agent-access-")
@@ -96,7 +116,15 @@ pub(super) fn classify_gateway_request(
     let protocol = runtime
         .gateway_protocol(&matched.service)
         .ok_or_else(unavailable)?;
-    let headers = protocol_headers(headers);
+    let mut headers = protocol_headers(headers);
+    let reserved: Vec<_> = headers
+        .keys()
+        .filter(|name| imported_credential_header(runtime, &matched.service, name.as_str()))
+        .cloned()
+        .collect();
+    for name in reserved {
+        headers.remove(name);
+    }
     let classified = protocol
         .classify(agent_access_provider::host::gateway_request_head(
             method,

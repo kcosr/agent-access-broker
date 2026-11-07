@@ -131,6 +131,37 @@ impl BrokerRuntime {
             .await
     }
 
+    pub(super) async fn resolve_gateway_connection_token(
+        &self,
+        service: &str,
+        identity: &IdentityContext,
+    ) -> Result<
+        (
+            ExecutionCredential,
+            crate::managed_store::CredentialMaterialFence,
+        ),
+        ProviderError,
+    > {
+        let (connection, selection) = self
+            .personal_selection(service, identity)
+            .ok_or_else(personal_credential_unconfigured)?;
+        let Selection::Token(profiles) = selection else {
+            return Err(personal_method_unavailable());
+        };
+        self.resolve_stored_connection_token_with_fence(connection.id, profiles, identity)
+            .await
+            .map_err(|error| {
+                if error.reason_code() == ReasonCode::CredentialNotFound {
+                    ProviderError::deny(
+                        ReasonCode::CredentialNotProvisioned,
+                        "selected personal credential is not provisioned",
+                    )
+                } else {
+                    error
+                }
+            })
+    }
+
     /// Reads and records the use of `identity`'s token row for
     /// `connection`, whose stored profile must be one of `profiles`.
     async fn resolve_stored_connection_token(
@@ -139,6 +170,23 @@ impl BrokerRuntime {
         profiles: &[String],
         identity: &IdentityContext,
     ) -> Result<ExecutionCredential, ProviderError> {
+        self.resolve_stored_connection_token_with_fence(connection, profiles, identity)
+            .await
+            .map(|(credential, _)| credential)
+    }
+
+    async fn resolve_stored_connection_token_with_fence(
+        &self,
+        connection: &str,
+        profiles: &[String],
+        identity: &IdentityContext,
+    ) -> Result<
+        (
+            ExecutionCredential,
+            crate::managed_store::CredentialMaterialFence,
+        ),
+        ProviderError,
+    > {
         let identity = identity.authenticated.then_some(identity).ok_or_else(|| {
             ProviderError::deny(
                 ReasonCode::CredentialNotProvisioned,
@@ -166,7 +214,7 @@ impl BrokerRuntime {
             profiles.to_vec(),
         );
         managed_store_blocking(move || {
-            store.resolve_user_credential_with_imported_contract(
+            store.resolve_user_credential_with_material_fence(
                 &key_ring,
                 &principal,
                 &connection,

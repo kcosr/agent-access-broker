@@ -12,6 +12,7 @@ mod fixture;
 mod guide;
 mod lifecycle;
 mod privacy;
+mod races;
 mod transfers;
 mod trusted_identity;
 

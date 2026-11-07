@@ -75,6 +75,9 @@ pub(crate) struct ReloadableState {
     #[cfg(test)]
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
     #[cfg(test)]
+    pub(crate) gateway_dispatch_barrier:
+        Mutex<Option<(GatewayDispatchPhase, Arc<McpAdmissionBarrier>)>>,
+    #[cfg(test)]
     pub(crate) mcp_discovery_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
     #[cfg(test)]
     pub(crate) service_detail_limit_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
@@ -105,6 +108,13 @@ pub(crate) struct ReloadableState {
     /// pruning.
     #[cfg(test)]
     pub(crate) mcp_cleanup_paused: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatewayDispatchPhase {
+    AfterPrepare,
+    BeforeSend,
 }
 
 #[cfg(test)]
@@ -753,6 +763,8 @@ impl ReloadableState {
             #[cfg(test)]
             mcp_admission_barrier: Mutex::new(None),
             #[cfg(test)]
+            gateway_dispatch_barrier: Mutex::new(None),
+            #[cfg(test)]
             mcp_discovery_barrier: Mutex::new(None),
             #[cfg(test)]
             service_detail_limit_barrier: Mutex::new(None),
@@ -796,6 +808,25 @@ impl ReloadableState {
 
     pub(crate) fn current(&self) -> Arc<RuntimeSnapshot> {
         self.active.load_full()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_gateway_dispatch_barrier(&self, phase: GatewayDispatchPhase) {
+        let barrier = {
+            let mut slot = self.gateway_dispatch_barrier.lock().unwrap();
+            if slot
+                .as_ref()
+                .is_some_and(|(selected, _)| *selected == phase)
+            {
+                slot.take().map(|(_, barrier)| barrier)
+            } else {
+                None
+            }
+        };
+        if let Some(barrier) = barrier {
+            barrier.reached.notify_one();
+            barrier.release.acquire().await.unwrap().forget();
+        }
     }
 
     #[cfg(test)]

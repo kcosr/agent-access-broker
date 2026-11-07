@@ -1153,8 +1153,13 @@ use explicit anonymous or static upstream authentication; no personal-to-shared
 fallback, active verification probe or delegated OpenAPI OAuth. Preserve Git's
 independent verification and OAuth capabilities. Forward bounded raw bodies with
 no claim of field-schema enforcement. Host transport owns authorization, framing,
-bounded Retry-After, completion and permits. Concrete parameter values, queries,
-bodies and arbitrary headers never enter generated-gateway audit facts.
+bounded Retry-After, completion and permits. Recheck the original caller proof,
+publication and selected personal material version after awaited preparation and
+audit work, immediately before sending; never resolve replacement credentials for
+a prepared request. Rewrap preserves material identity. Strip selected credential
+headers before protocol hooks and reject module replacements. Concrete parameter
+values, queries, bodies and arbitrary headers never enter generated-gateway audit
+facts; classifier denials record only a bounded method and safe gateway kind.
 
 Imported integrations use DB-managed stable service/action identities and compiled
 adapter factories. Core must not depend on a protocol adapter. Preserve offline

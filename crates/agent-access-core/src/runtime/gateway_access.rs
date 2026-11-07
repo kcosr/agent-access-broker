@@ -1,4 +1,11 @@
-//! The upstream credential a Git gateway request presents.
+//! The host-owned credential a gateway request presents.
+//!
+//! Imported gateways select an explicit anonymous or static execution binding.
+//! Static delivery uses that binding's Basic, Bearer or header placement, without
+//! Git token-profile rules. Each request retains its admitted publication fence;
+//! a personal token also retains its exact credential ID and material version.
+//! The host rechecks those proofs before dispatch and never resolves replacement
+//! material for an already prepared request.
 //!
 //! A static credential (a service credential, or the caller's stored token)
 //! is presented as `upstream_token_auth` configures. When the caller's
@@ -39,6 +46,14 @@ const PORTAL_RECONNECT: &str = "under My access > Credentials in the Agent Acces
 pub(super) enum GatewayAccess {
     None,
     Static(ExecutionCredential),
+    ImportedStatic {
+        credential: ExecutionCredential,
+        placement: agent_access_provider::CredentialPlacement,
+        personal_fence: Option<(
+            crate::ManagedStore,
+            crate::managed_store::CredentialMaterialFence,
+        )>,
+    },
     Delegated(GatewayDelegatedAccess),
 }
 
@@ -71,7 +86,8 @@ impl GatewayUpstreamPresentation {
     /// the host answers through
     /// [`PreparedGatewayOperation::recover_upstream_presentation`] or
     /// [`PreparedGatewayOperation::reject_upstream_presentation`]. A static
-    /// credential's 401 passes through to the client unchanged.
+    /// Git credential's 401 passes through unchanged; other protocols may
+    /// request the host's upstream-authentication failure translation.
     pub fn is_delegated(&self) -> bool {
         self.delegated_version.is_some()
     }
@@ -99,6 +115,56 @@ impl BrokerRuntime {
         identity: &IdentityContext,
         correlation: &CorrelationContext,
     ) -> Result<GatewayAccess, ProviderError> {
+        if self.imported_catalog.service(service).is_some() {
+            use crate::imports::ImportedCredentialDelivery;
+            use agent_access_provider::CredentialPlacement;
+            let binding = self.imported_gateway_execution_binding(service, credential_mode)?;
+            let delivery = match binding {
+                super::GatewayExecutionBinding::Anonymous => return Ok(GatewayAccess::None),
+                super::GatewayExecutionBinding::Static(delivery) => delivery,
+            };
+            let placement = match delivery {
+                ImportedCredentialDelivery::Basic => CredentialPlacement::basic(),
+                ImportedCredentialDelivery::Bearer => CredentialPlacement::bearer(),
+                ImportedCredentialDelivery::RawHeader { name } => {
+                    CredentialPlacement::header(name.parse().map_err(|_| {
+                        ProviderError::deny(
+                            ReasonCode::CredentialInvalid,
+                            "credential placement is invalid",
+                        )
+                    })?)
+                }
+                _ => {
+                    return Err(ProviderError::deny(
+                        ReasonCode::CredentialInvalid,
+                        "credential placement is unsupported",
+                    ));
+                }
+            };
+            let (credential, personal_fence) = if credential_mode == "per_user" {
+                let (credential, fence) = self
+                    .resolve_gateway_connection_token(service, identity)
+                    .await?;
+                let store = self.managed_store.clone().ok_or_else(|| {
+                    ProviderError::error(
+                        ReasonCode::ManagedStoreUnavailable,
+                        "credential store is unavailable",
+                    )
+                })?;
+                (credential, Some((store, fence)))
+            } else {
+                (
+                    self.resolve_imported_execution_credential(service, credential_mode, identity)
+                        .await?,
+                    None,
+                )
+            };
+            return Ok(GatewayAccess::ImportedStatic {
+                credential,
+                placement,
+                personal_fence,
+            });
+        }
         let descriptor = self
             .services
             .get(service)
@@ -202,6 +268,24 @@ impl BrokerRuntime {
 }
 
 impl PreparedGatewayOperation {
+    /// Host-only final check against the captured publication and personal
+    /// material. Synchronous metadata checks leave no await before dispatch.
+    pub fn validate_imported_dispatch(&self) -> Result<(), ProviderError> {
+        if let Some(fence) = &self.imported_fence {
+            fence.validate()?;
+        }
+        if let GatewayAccess::ImportedStatic {
+            personal_fence: Some((store, fence)),
+            ..
+        } = &self.access
+        {
+            store
+                .validate_credential_material_fence(fence)
+                .map_err(super::provider_error_from_managed_store)?;
+        }
+        Ok(())
+    }
+
     /// Host-only: the authorization the request's next upstream attempt
     /// presents for `gateway`, the configuration the request is forwarded
     /// with. OAuth access is revalidated, renewing it when stale, and pinned
@@ -210,6 +294,7 @@ impl PreparedGatewayOperation {
         &self,
         gateway: &GatewayConfig,
     ) -> Result<GatewayUpstreamPresentation, ProviderError> {
+        self.validate_imported_dispatch()?;
         match &self.access {
             GatewayAccess::None => Ok(GatewayUpstreamPresentation {
                 authorization: None,
@@ -222,6 +307,22 @@ impl PreparedGatewayOperation {
                 )?),
                 delegated_version: None,
             }),
+            GatewayAccess::ImportedStatic {
+                credential,
+                placement,
+                ..
+            } => {
+                self.validate_imported_dispatch()?;
+                Ok(GatewayUpstreamPresentation {
+                    authorization: Some(credential.authorization_as(placement).map_err(|_| {
+                        ProviderError::deny(
+                            ReasonCode::CredentialInvalid,
+                            "credential cannot be presented for the selected binding",
+                        )
+                    })?),
+                    delegated_version: None,
+                })
+            }
             GatewayAccess::Delegated(delegated) => delegated.present(gateway).await,
         }
     }
@@ -292,7 +393,7 @@ impl PreparedGatewayOperation {
         {
             let method = match self.access {
                 GatewayAccess::None => "none",
-                GatewayAccess::Static(_) => "token",
+                GatewayAccess::Static(_) | GatewayAccess::ImportedStatic { .. } => "token",
                 GatewayAccess::Delegated(_) => "oauth",
             };
             gateway.insert("credentialMethod".to_string(), json!(method));

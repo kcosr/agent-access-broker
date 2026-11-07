@@ -344,6 +344,13 @@ publishes guards, preview and quarantine atomically. Admitted requests retain
 their original generation and must pass its dispatch fence before forwarding;
 refresh never rebinds an old request to a replacement action or destination.
 
+The host revalidates the original caller identity after awaited preparation and
+audit work. Personal selection atomically captures credential material with its
+row ID and material version, then checks metadata again before sending. Removal,
+disable, replacement or rotation refuses that prepared request without reading a
+successor credential; encryption-key rewrap preserves its material identity.
+Already-forwarding transfers retain their original snapshot to completion.
+
 These imports authorize whole operations without inferred resource scopes.
 The selected upstream mode is explicitly anonymous or static Basic, Bearer or
 header-key presentation. Personal credentials never fall back to shared

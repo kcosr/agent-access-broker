@@ -4555,6 +4555,28 @@ impl ManagedStore {
         accepted_profiles: &[String],
         requirement: Option<&crate::imports::ImportedCredentialRequirement>,
     ) -> Result<ExecutionCredential, ManagedStoreError> {
+        self.resolve_user_credential_with_material_fence(
+            key_ring,
+            owner_principal_id,
+            service,
+            name,
+            accepted_profiles,
+            requirement,
+        )
+        .map(|(credential, _)| credential)
+    }
+
+    /// Capture the selected plaintext and its immutable material identity under
+    /// one store lock. Rewrap changes encryption, never this identity.
+    pub(crate) fn resolve_user_credential_with_material_fence(
+        &self,
+        key_ring: &CredentialKeyRing,
+        owner_principal_id: &str,
+        service: &str,
+        name: &str,
+        accepted_profiles: &[String],
+        requirement: Option<&crate::imports::ImportedCredentialRequirement>,
+    ) -> Result<(ExecutionCredential, CredentialMaterialFence), ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
         validate_profiles(accepted_profiles)?;
@@ -4576,7 +4598,58 @@ impl ManagedStore {
             params![row.credential_id, now_string()],
         )
         .map_err(sql_unavailable)?;
-        Ok(credential)
+        Ok((
+            credential,
+            CredentialMaterialFence {
+                credential_id: row.credential_id,
+                material_version: row.material_version,
+                owner_principal_id: owner_principal_id.to_owned(),
+                service: service.to_owned(),
+                name: name.to_owned(),
+            },
+        ))
+    }
+
+    /// Recheck metadata only; never resolve replacement secret material for an
+    /// already admitted request. Missing, disabled, replaced and rotated rows
+    /// have the same value-free refusal.
+    pub(crate) fn validate_credential_material_fence(
+        &self,
+        fence: &CredentialMaterialFence,
+    ) -> Result<(), ManagedStoreError> {
+        let conn = self.connection.lock().unwrap();
+        let current: Option<Value> = conn
+            .query_row(
+                "SELECT c.metadata_json FROM credentials c
+             INNER JOIN credential_secret_material m ON m.secret_ref = c.secret_ref
+             WHERE c.owner_kind = 'user' AND c.owner_principal_id = ?1
+               AND c.service = ?2 AND c.name = ?3 AND c.credential_id = ?4
+               AND c.material_version = ?5 AND c.status = 'active'",
+                params![
+                    fence.owner_principal_id,
+                    fence.service,
+                    fence.name,
+                    fence.credential_id,
+                    fence.material_version
+                ],
+                |row| {
+                    let raw: String = row.get(0)?;
+                    serde_json::from_str(&raw).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+                    })
+                },
+            )
+            .optional()
+            .map_err(sql_unavailable)?;
+        let metadata = current.ok_or_else(|| {
+            ManagedStoreError::CredentialInvalid(
+                "selected credential material is no longer available".into(),
+            )
+        })?;
+        if credential_metadata_expires_at(&metadata).is_some_and(|expires| expires <= Utc::now()) {
+            return Err(ManagedStoreError::CredentialExpired);
+        }
+        Ok(())
     }
 
     /// Check the same stored material as execution, without recording use or
@@ -6533,6 +6606,15 @@ pub struct RewrapSummary {
     pub to_key: String,
     pub rewrapped: u64,
     pub conflicts: u64,
+}
+
+/// Private execution fence; contains identifiers only and exposes no material.
+pub(crate) struct CredentialMaterialFence {
+    credential_id: String,
+    material_version: String,
+    owner_principal_id: String,
+    service: String,
+    name: String,
 }
 
 #[derive(Clone)]

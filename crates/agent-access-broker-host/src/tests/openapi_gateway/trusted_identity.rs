@@ -93,6 +93,50 @@ async fn openapi_gateway_trusted_fingerprint_reaches_upstream_and_preserves_cont
         1,
         "valid fingerprint must not recover an invalid explicit Bearer token"
     );
+    let waiting = super::races::PausedRequest::start_with_request(
+        &fixture,
+        crate::state::GatewayDispatchPhase::BeforeSend,
+        request("default", "trusted-proof-rotated-before-send"),
+    )
+    .await;
+    let replacement = uuid::Uuid::new_v4().to_string();
+    runtime
+        .managed_store()
+        .unwrap()
+        .set_identity_token(
+            "alice",
+            &replacement,
+            runtime.credential_key_ring().unwrap(),
+        )
+        .unwrap();
+    let response = waiting.release().await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_auth_invalid"
+    );
+    response.bytes().await.unwrap();
+    assert_eq!(
+        upstream.api_requests().len(),
+        1,
+        "old trusted proof must not be resolved as a replacement identity"
+    );
+    assert_eq!(
+        fixture.terminal("trusted-proof-rotated-before-send").await["reasonCode"],
+        "gateway_auth_invalid"
+    );
+    let replacement_fingerprint = format!("sha256:{:x}", Sha256::digest(replacement.as_bytes()));
+    let response = fixture
+        .gateway_request(Method::GET, "/items/alpha", "trusted-fresh-proof")
+        .header("x-agent-access-caller-authorization", &caller)
+        .header("x-aw-identity-token-sha256", replacement_fingerprint)
+        .header(EXECUTION_CONTEXT_HEADER, "default")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(upstream.api_requests().len(), 2);
     drop(runtime);
     fixture.stop().await;
 }

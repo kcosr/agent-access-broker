@@ -1307,6 +1307,11 @@ and action grants. Static service and personal credentials retain their separate
 selection; a missing personal credential never falls back. Gateway imports offer
 no active credential-verification probe or delegated OpenAPI OAuth.
 
+Before sending, the host rechecks the admitted generation, original caller proof
+and exact personal credential material version. A revoked or replaced selection
+fails without switching credentials or destinations. Encryption-key rewrap keeps
+the material version, and a transfer already forwarding retains its snapshot.
+
 Full source paths and retained historical paths form a bounded denial-guard
 universe. An unaccepted literal such as `/items/admin` takes precedence over an
 accepted `/items/{id}` template, including after that literal disappears from a
@@ -1316,10 +1321,11 @@ accept them. Guard conflicts and capacity limits reject a candidate refresh
 without evicting earlier guards. Offline startup uses retained plans and manifests.
 
 Only the finite request/response header profile and validated declarations pass
-through. The host consumes Broker identity carriers, injects selected upstream
-authorization, refuses redirects and retains private/no-store responses. Upstream
-401 becomes a safe credential error without its challenge; other permitted HTTP
-errors retain their status and bounded body. Concrete parameter values, query
+through. The host consumes Broker identity carriers and selected credential
+headers before the protocol hook, injects selected upstream authorization,
+refuses redirects and retains private/no-store responses. Upstream 401 becomes
+HTTP 424 `upstream_unauthorized` without its challenge or a retry; other permitted
+HTTP errors retain their status and bounded body. Concrete parameter values, query
 values, arbitrary headers and bodies are excluded from gateway audit facts.
 
 Transfer failure after forwarding starts may leave upstream work applied. The

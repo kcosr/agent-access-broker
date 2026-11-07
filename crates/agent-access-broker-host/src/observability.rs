@@ -1,7 +1,7 @@
 use agent_access_core::ExecutionContext;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, MatchedPath};
-use axum::http::{Request, Response};
+use axum::http::{Method, Request, Response};
 use futures_util::future::BoxFuture;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -53,6 +53,22 @@ impl<S> Layer<S> for RequestTracingLayer {
     }
 }
 
+/// Keep extension-method input out of structured diagnostics.
+pub(crate) fn bounded_http_method(method: &Method) -> &'static str {
+    match method.as_str() {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "CONNECT" => "CONNECT",
+        "OPTIONS" => "OPTIONS",
+        "TRACE" => "TRACE",
+        "PATCH" => "PATCH",
+        _ => "OTHER",
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RequestTracingService<S> {
     inner: S,
@@ -76,7 +92,7 @@ where
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let started = Instant::now();
-        let method = request.method().clone();
+        let method = bounded_http_method(request.method());
         let route = request
             .extensions()
             .get::<MatchedPath>()

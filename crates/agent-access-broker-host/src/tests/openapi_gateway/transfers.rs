@@ -41,6 +41,7 @@ async fn openapi_gateway_static_credentials_replace_broker_auth_and_drop_private
             .gateway(Method::GET, "/items/alpha", "static-auth")
             .header("Cookie", "private-client-cookie")
             .header("X-Undeclared-Client", "must-not-pass")
+            .header("X-Inventory-Key", "caller-controlled-spoof")
             .header("Accept-Encoding", "gzip")
             .send()
             .await

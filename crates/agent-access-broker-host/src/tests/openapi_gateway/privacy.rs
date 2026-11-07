@@ -5,14 +5,26 @@ async fn openapi_gateway_classifier_audit_records_only_bounded_method_and_safe_i
     let upstream = Upstream::start().await;
     let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["read_item"]).await;
     let mut public_denial = None;
-    for (method, path, id) in [
+    for (method, expected_method, path, id) in [
         (
             Method::GET,
+            "GET",
             "/missing-private-path?secret=private-query",
             "classify-missing",
         ),
-        (Method::GET, "/items/private", "classify-unaccepted"),
-        (Method::POST, "/items/private", "classify-missing-method"),
+        (Method::GET, "GET", "/items/private", "classify-unaccepted"),
+        (
+            Method::POST,
+            "POST",
+            "/items/private",
+            "classify-missing-method",
+        ),
+        (
+            Method::from_bytes(b"METHOD-PRIVATE-SENTINEL").unwrap(),
+            "OTHER",
+            "/items/alpha",
+            "classify-extension-method",
+        ),
     ] {
         let response = fixture
             .gateway(method.clone(), path, id)
@@ -33,7 +45,7 @@ async fn openapi_gateway_classifier_audit_records_only_bounded_method_and_safe_i
         }
         let audit = fixture.terminal(id).await;
         assert_eq!(audit["action"], "gateway.classify");
-        assert_eq!(audit["providerAudit"]["gateway"]["method"], method.as_str());
+        assert_eq!(audit["providerAudit"]["gateway"]["method"], expected_method);
         let encoded = audit.to_string();
         for forbidden in [
             path,
@@ -41,6 +53,7 @@ async fn openapi_gateway_classifier_audit_records_only_bounded_method_and_safe_i
             "private-query",
             "private_item",
             "/items/private",
+            "METHOD-PRIVATE-SENTINEL",
         ] {
             assert!(
                 !encoded.contains(forbidden),
@@ -59,6 +72,7 @@ async fn openapi_gateway_request_value_sentinels_never_reach_persisted_audit_or_
     const HEADER_VALUE: &str = "header-secret-sentinel";
     const BODY_VALUE: &str = "body-secret-sentinel";
     const DESCRIPTION: &str = "source-description-secret-sentinel";
+    const METHOD_VALUE: &str = "METHOD-PRIVATE-SENTINEL";
     let upstream = Upstream::start().await;
     let fixture = Fixture::start(&upstream, |_| {}).await;
     let mut source = document(
@@ -147,12 +161,47 @@ async fn openapi_gateway_request_value_sentinels_never_reach_persisted_audit_or_
         .await;
     assert_eq!(trace_response, StatusCode::OK);
     fixture.terminal("sentinel-trace").await;
+    let extension_response = captured
+        .run(async {
+            let response = fixture
+                .broker
+                .gateway_app()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::from_bytes(METHOD_VALUE.as_bytes()).unwrap())
+                        .uri(&target)
+                        .extension(ConnectInfo(
+                            "127.0.0.1:43124".parse::<SocketAddr>().unwrap(),
+                        ))
+                        .header(HOST, GATEWAY_HOST)
+                        .header(AUTHORIZATION, format!("Bearer {}", fixture.agent))
+                        .header(REQUEST_ID_HEADER, "sentinel-trace-method")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            status
+        })
+        .await;
+    assert_eq!(extension_response, StatusCode::NOT_FOUND);
+    fixture.terminal("sentinel-trace-method").await;
     let events = captured.take_events();
     assert!(
         events
             .iter()
             .any(|event| event["agentRequestId"] == "sentinel-trace"),
         "{events:?}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["agentRequestId"] == "sentinel-trace-method" && event["http.method"] == "OTHER"
+        }),
+        "extension-method request must retain a bounded method in trace: {events:?}"
     );
     let trace = serde_json::to_string(&events).unwrap();
     let persisted =
@@ -163,6 +212,7 @@ async fn openapi_gateway_request_value_sentinels_never_reach_persisted_audit_or_
         HEADER_VALUE,
         BODY_VALUE,
         DESCRIPTION,
+        METHOD_VALUE,
     ] {
         assert!(!persisted.contains(secret), "audit exposed {secret}");
         assert!(!error.contains(secret), "local error exposed {secret}");

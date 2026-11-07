@@ -1920,6 +1920,7 @@ pub struct PreparedGatewayOperation {
     /// What the request presents upstream, through
     /// [`Self::upstream_presentation`].
     access: gateway_access::GatewayAccess,
+    imported_fence: Option<ImportedGatewayDispatchFence>,
     pub matched_grant: MatchedGrantAudit,
     terminal_audit: Option<GatewayTerminalAuditGuard>,
     finalize_context: FinalizeContext,
@@ -3997,6 +3998,16 @@ impl BrokerRuntime {
             finalize_context,
         } = plan;
 
+        let imported_fence = if self.imported_catalog.service(&service).is_some() {
+            match self.imported_gateway_dispatch_fence(&service, &action) {
+                Ok(fence) => Some(fence),
+                Err(error) => {
+                    return Err(Box::new(self.finalize(finalize_context, Err(error)).await));
+                }
+            }
+        } else {
+            None
+        };
         let access = match self
             .resolve_gateway_access(&service, &action, &credential_mode, &identity, &correlation)
             .await
@@ -4015,6 +4026,7 @@ impl BrokerRuntime {
             resource_scopes,
             credential_mode,
             access,
+            imported_fence,
             matched_grant,
             terminal_audit: None,
             finalize_context,
