@@ -73,6 +73,27 @@ struct GatewayAdmission {
 type GatewayIdentityRecheck =
     Pin<Box<dyn Future<Output = Result<IdentityContext, ProviderError>> + Send>>;
 
+type GatewayDispatchRecheck =
+    Pin<Box<dyn Future<Output = Result<GatewayDispatchIdentity, ProviderError>> + Send>>;
+
+/// The current authority actually checked by the blocking identity read. Keep
+/// its snapshot through the await and reject intervening publication before send.
+struct GatewayDispatchIdentity {
+    identity: IdentityContext,
+    snapshot: Arc<RuntimeSnapshot>,
+    reloadable: Arc<crate::state::ReloadableState>,
+}
+
+impl GatewayDispatchIdentity {
+    fn validate(&self, expected: &IdentityContext) -> Result<(), ProviderError> {
+        if &self.identity == expected && Arc::ptr_eq(&self.snapshot, &self.reloadable.current()) {
+            Ok(())
+        } else {
+            Err(gateway_identity_invalid(IdentityFailure::Invalid))
+        }
+    }
+}
+
 struct GatewayContext {
     snapshot: Arc<RuntimeSnapshot>,
     agent_request_id: String,
@@ -82,7 +103,7 @@ struct GatewayContext {
     execution_context: ExecutionContext,
     permits: RequestPermits,
     rate_admission: Option<agent_access_core::InvocationAdmissionAudit>,
-    dispatch_identity: GatewayIdentityRecheck,
+    dispatch_identity: GatewayDispatchRecheck,
 }
 
 struct GatewayIngressContext {
@@ -152,7 +173,7 @@ enum GatewayPreparedRequestBody {
 struct GatewayForwardOwnership {
     permits: Option<RequestPermits>,
     disposal: Option<GatewayDisposalAudit>,
-    dispatch_identity: Option<GatewayIdentityRecheck>,
+    dispatch_identity: Option<GatewayDispatchRecheck>,
     #[cfg(test)]
     reloadable: Option<Arc<crate::state::ReloadableState>>,
 }
@@ -924,7 +945,7 @@ async fn gateway_identity(
     (
         PendingIdentity<IdentityContext, ProviderError>,
         GatewayIdentityRecheck,
-        GatewayIdentityRecheck,
+        GatewayDispatchRecheck,
     ),
     ProviderError,
 > {
@@ -947,6 +968,9 @@ async fn gateway_identity(
             admission: admission.clone(),
             proof: resolved.proof,
         };
+        let dispatch_pin = pin.clone();
+        let dispatch_state = state.reloadable.clone();
+        let dispatch_headers = headers.clone();
         let resolve = move || {
             let pin = pin.clone();
             let reloadable = state.reloadable.clone();
@@ -956,7 +980,18 @@ async fn gateway_identity(
         };
         let renewal_recheck = resolve();
         let rate_recheck = resolve();
-        let dispatch_recheck = resolve();
+        let dispatch_recheck = async move {
+            let current = dispatch_state.current();
+            let identity = dispatch_pin
+                .revalidate(dispatch_state.clone(), current.clone(), dispatch_headers)
+                .await
+                .map_err(gateway_identity_invalid)?;
+            Ok(GatewayDispatchIdentity {
+                identity,
+                snapshot: current,
+                reloadable: dispatch_state,
+            })
+        };
         return Ok((
             PendingIdentity::new(
                 resolved.identity,
@@ -965,7 +1000,7 @@ async fn gateway_identity(
             )
             .map_err(gateway_identity_invalid),
             Box::pin(async move { rate_recheck.await.map_err(gateway_identity_invalid) }),
-            Box::pin(async move { dispatch_recheck.await.map_err(gateway_identity_invalid) }),
+            Box::pin(dispatch_recheck),
         ));
     }
     let token = basic_broker_token(headers, matched_gateway)?;
@@ -992,13 +1027,42 @@ async fn gateway_identity(
     let resolved = resolve(token.clone()).await?;
     let recheck = resolve(token.clone());
     let rate_recheck = resolve(token.clone());
-    let dispatch_recheck = resolve(token);
+    let dispatch_state = state.reloadable.clone();
+    let dispatch_caller = admission.caller_id().map(str::to_owned);
+    let dispatch_epoch = dispatch_caller
+        .as_ref()
+        .map(|_| snapshot.caller_security_epoch);
+    let dispatch_recheck = async move {
+        let worker_state = dispatch_state.clone();
+        let (current, identity) = tokio::task::spawn_blocking(move || {
+            let check = || {
+                let current = worker_state.current();
+                let mut resolved = current.runtime.resolve_gateway_basic_broker_token(&token)?;
+                resolved.identity.caller_id = dispatch_caller;
+                Ok((current, resolved.identity))
+            };
+            match dispatch_epoch {
+                Some(epoch) => {
+                    worker_state.with_caller_security(epoch, IdentityFailure::Invalid, |_| check())
+                }
+                None => check(),
+            }
+        })
+        .await
+        .unwrap_or(Err(IdentityFailure::Unavailable))
+        .map_err(gateway_identity_invalid)?;
+        Ok(GatewayDispatchIdentity {
+            identity,
+            snapshot: current,
+            reloadable: dispatch_state,
+        })
+    };
     Ok((
         PendingIdentity::new(resolved.identity, resolved.membership_renewal, async move {
             recheck.await.map(|resolved| resolved.identity)
         }),
         Box::pin(async move { rate_recheck.await.map(|resolved| resolved.identity) }),
-        Box::pin(async move { dispatch_recheck.await.map(|resolved| resolved.identity) }),
+        Box::pin(dispatch_recheck),
     ))
 }
 
@@ -1168,31 +1232,54 @@ async fn forward_prepared_gateway(
     }
     // Generated gateways must keep the original identity and generation through
     // every await above. Never select replacement credentials or remap a proof.
-    if runtime
+    let dispatch_proof = if runtime
         .imported_catalog()
         .service(&prepared.service)
         .is_some()
-        && let Some(recheck) = dispatch_identity
     {
-        let result = recheck.await.and_then(|identity| {
-            if identity == prepared.identity {
-                Ok(())
-            } else {
-                Err(gateway_identity_invalid(IdentityFailure::Invalid))
+        match dispatch_identity {
+            Some(recheck) => match recheck.await {
+                Ok(proof) => Some(proof),
+                Err(error) => {
+                    return gateway_runtime_response(
+                        runtime
+                            .fail_prepared_gateway_operation(
+                                prepared,
+                                error.with_audit(attempt_audit.value()),
+                            )
+                            .await,
+                    );
+                }
+            },
+            None => {
+                return gateway_runtime_response(
+                    runtime
+                        .fail_prepared_gateway_operation(
+                            prepared,
+                            contract_failure().with_audit(attempt_audit.value()),
+                        )
+                        .await,
+                );
             }
-        });
-        if let Err(error) = result {
-            return gateway_runtime_response(
-                runtime
-                    .fail_prepared_gateway_operation(
-                        prepared,
-                        error.with_audit(attempt_audit.value()),
-                    )
-                    .await,
-            );
         }
+    } else {
+        None
+    };
+    #[cfg(test)]
+    if let Some(proof) = &dispatch_proof {
+        proof
+            .reloadable
+            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterIdentityRecheck)
+            .await;
     }
-    if let Err(error) = prepared.validate_imported_dispatch() {
+    let validated = prepared.validate_imported_dispatch().and_then(|()| {
+        if let Some(proof) = &dispatch_proof {
+            proof.validate(&prepared.identity)
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(error) = validated {
         return gateway_runtime_response(
             runtime
                 .fail_prepared_gateway_operation(prepared, error.with_audit(attempt_audit.value()))

@@ -105,6 +105,233 @@ async fn openapi_gateway_revoked_broker_identity_is_rechecked_after_started_audi
     fixture.stop().await;
 }
 
+#[tokio::test]
+async fn openapi_gateway_database_switch_rejects_original_token_and_personal_material() {
+    for revoke_token in [true, false] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::start(&upstream, |_| {}).await;
+        let source = document(
+            Dialect::OpenApi31,
+            UpstreamAuth::Bearer,
+            &upstream.endpoint(),
+        );
+        let preview = fixture
+            .create_and_discover_with_bindings(
+                DefinitionSource::Upload,
+                UpstreamAuth::Bearer,
+                &source,
+                &[
+                    ImportedCredentialMode::Service,
+                    ImportedCredentialMode::PerUser,
+                ],
+            )
+            .await;
+        fixture.accept(&preview, &["read_item"]).await;
+        fixture.enable().await;
+        fixture
+            .grant_for("alice", &["read_item"], "service", Some(-1))
+            .await;
+        fixture
+            .grant_for("alice", &["read_item"], "per_user", Some(1))
+            .await;
+        fixture
+            .put_personal("alice", UpstreamAuth::Bearer, "synthetic-original-personal")
+            .await;
+        let before_catalog = fixture.detail().await["catalogRevision"].clone();
+        let waiting = PausedRequest::start(
+            &fixture,
+            GatewayDispatchPhase::BeforeSend,
+            "database-switch-before-send",
+        )
+        .await;
+        assert!(upstream.api_requests().is_empty());
+
+        // Copy the live database through SQLite, including its committed WAL
+        // state. Only the replacement loses authority; the retained old store
+        // and its identical catalog remain usable to expose stale-store checks.
+        let original_runtime = fixture.broker.runtime();
+        let original_store = original_runtime.managed_store().unwrap();
+        let replacement_path = original_store.path().with_file_name("replacement.sqlite");
+        rusqlite::Connection::open(original_store.path())
+            .unwrap()
+            .execute("VACUUM INTO ?1", [replacement_path.to_str().unwrap()])
+            .unwrap();
+        let mut config = fixture.seed.config.clone();
+        config.managed_store.as_mut().unwrap().path = replacement_path.display().to_string();
+        let replacement_runtime = BrokerRuntime::new(config.clone()).unwrap();
+        let replacement_store = replacement_runtime.managed_store().unwrap();
+        if revoke_token {
+            let token = original_store
+                .list_broker_tokens_for_principal("alice")
+                .unwrap()
+                .into_iter()
+                .find(|token| token.name == "gateway acceptance")
+                .unwrap();
+            assert!(token.revoked_at.is_none());
+            replacement_store
+                .revoke_broker_token(&token.token_id, "admin")
+                .unwrap();
+            assert!(
+                original_store
+                    .list_broker_tokens_for_principal("alice")
+                    .unwrap()
+                    .iter()
+                    .find(|current| current.token_id == token.token_id)
+                    .unwrap()
+                    .revoked_at
+                    .is_none()
+            );
+        } else {
+            replacement_store
+                .delete_user_credential(
+                    "alice",
+                    SERVICE,
+                    agent_access_core::CONNECTION_CREDENTIAL_NAME,
+                    agent_access_core::CredentialManagementPurpose::Administrative,
+                )
+                .unwrap();
+            assert!(
+                original_store
+                    .list_credentials(Some("alice"))
+                    .unwrap()
+                    .iter()
+                    .any(|credential| credential.service == SERVICE)
+            );
+            assert!(
+                replacement_store
+                    .list_credentials(Some("alice"))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        fixture.broker.reload_config(&config).await;
+        assert_eq!(fixture.detail().await["catalogRevision"], before_catalog);
+        assert_eq!(
+            fixture.broker.runtime().managed_store().unwrap().path(),
+            replacement_path
+        );
+        let response = waiting.release().await;
+        let expected_reason = if revoke_token {
+            "gateway_auth_invalid"
+        } else {
+            "service_action_denied"
+        };
+        assert_eq!(
+            response.status(),
+            if revoke_token {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::FORBIDDEN
+            }
+        );
+        assert_eq!(response.headers()[REASON_CODE_HEADER], expected_reason);
+        response.bytes().await.unwrap();
+        assert!(
+            upstream.api_requests().is_empty(),
+            "prepared request used the retained old database"
+        );
+        let terminal = fixture.terminal("database-switch-before-send").await;
+        assert_eq!(terminal["reasonCode"], expected_reason);
+        assert_eq!(terminal["credentialMode"], "per_user");
+
+        let response = fixture
+            .gateway(Method::GET, "/items/alpha", "database-switch-fresh")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if revoke_token {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::FORBIDDEN
+            }
+        );
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            if revoke_token {
+                "gateway_auth_invalid"
+            } else {
+                "credential_not_provisioned"
+            }
+        );
+        response.bytes().await.unwrap();
+        assert!(
+            upstream.api_requests().is_empty(),
+            "missing personal material must not fall back to the copied shared slot"
+        );
+        drop(replacement_runtime);
+        drop(original_runtime);
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn openapi_gateway_same_store_reload_is_allowed_before_identity_recheck_but_fenced_afterward()
+{
+    for phase in [
+        GatewayDispatchPhase::BeforeSend,
+        GatewayDispatchPhase::AfterIdentityRecheck,
+    ] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["read_item"]).await;
+        let original = fixture.broker.state().current();
+        let original_catalog = fixture.detail().await["catalogRevision"].clone();
+        let waiting = PausedRequest::start(&fixture, phase, "same-store-reload").await;
+        let mut config = fixture.seed.config.clone();
+        assert!(config.mcp.session_idle_timeout_ms > 1);
+        config.mcp.session_idle_timeout_ms -= 1;
+        fixture.broker.reload_config(&config).await;
+        let current = fixture.broker.state().current();
+        assert!(!Arc::ptr_eq(&original, &current));
+        assert_eq!(
+            original.runtime.managed_store().unwrap().path(),
+            current.runtime.managed_store().unwrap().path()
+        );
+        assert_eq!(
+            current.runtime.config().mcp.session_idle_timeout_ms,
+            config.mcp.session_idle_timeout_ms
+        );
+        assert_eq!(fixture.detail().await["catalogRevision"], original_catalog);
+        let response = waiting.release().await;
+        if matches!(phase, GatewayDispatchPhase::BeforeSend) {
+            assert_eq!(response.status(), StatusCode::OK);
+            response.bytes().await.unwrap();
+            assert_eq!(upstream.api_requests().len(), 1);
+            assert_eq!(
+                fixture.terminal("same-store-reload").await["decision"],
+                "allow"
+            );
+        } else {
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                response.headers()[REASON_CODE_HEADER],
+                "gateway_auth_invalid"
+            );
+            response.bytes().await.unwrap();
+            assert!(
+                upstream.api_requests().is_empty(),
+                "identity proof was published from a replaced snapshot"
+            );
+            assert_eq!(
+                fixture.terminal("same-store-reload").await["reasonCode"],
+                "gateway_auth_invalid"
+            );
+            let response = fixture
+                .gateway(Method::GET, "/items/alpha", "same-store-fresh")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.bytes().await.unwrap();
+            assert_eq!(upstream.api_requests().len(), 1);
+        }
+        drop(current);
+        drop(original);
+        fixture.stop().await;
+    }
+}
+
 impl Drop for PausedRequest {
     fn drop(&mut self) {
         // Also release a request when a mutation assertion panics.

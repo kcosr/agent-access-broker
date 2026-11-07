@@ -1308,7 +1308,9 @@ selection; a missing personal credential never falls back. Gateway imports offer
 no active credential-verification probe or delegated OpenAPI OAuth.
 
 Before sending, the host rechecks the admitted generation, original caller proof
-and exact personal credential material version. A revoked or replaced selection
+against current authority, and exact personal credential material version. A
+managed-database switch retires the old generation, and a publication guard closes
+the asynchronous identity-read boundary. A revoked or replaced selection
 fails without switching credentials or destinations. Encryption-key rewrap keeps
 the material version, and a transfer already forwarding retains its snapshot.
 

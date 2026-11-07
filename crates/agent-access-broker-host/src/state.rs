@@ -115,6 +115,7 @@ pub(crate) struct ReloadableState {
 pub(crate) enum GatewayDispatchPhase {
     AfterPrepare,
     BeforeSend,
+    AfterIdentityRecheck,
 }
 
 #[cfg(test)]

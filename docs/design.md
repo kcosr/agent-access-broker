@@ -344,8 +344,10 @@ publishes guards, preview and quarantine atomically. Admitted requests retain
 their original generation and must pass its dispatch fence before forwarding;
 refresh never rebinds an old request to a replacement action or destination.
 
-The host revalidates the original caller identity after awaited preparation and
-audit work. Personal selection atomically captures credential material with its
+The host revalidates the original caller identity against current authority after
+awaited preparation and audit work. Changing the managed database retires the
+original import generation; publication during the asynchronous identity read
+also refuses the request before sending. Personal selection atomically captures credential material with its
 row ID and material version, then checks metadata again before sending. Removal,
 disable, replacement or rotation refuses that prepared request without reading a
 successor credential; encryption-key rewrap preserves its material identity.

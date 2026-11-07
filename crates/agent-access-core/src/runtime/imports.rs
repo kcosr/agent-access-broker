@@ -873,6 +873,8 @@ impl BrokerRuntime {
                     let prior = previous
                         .filter(|old| {
                             old.imported_catalog.service(name) == Some(record)
+                                && old.managed_store.as_ref().map(ManagedStore::path)
+                                    == self.managed_store.as_ref().map(ManagedStore::path)
                                 && ProviderLimits::from(&old.config.limits)
                                     == ProviderLimits::from(&self.config.limits)
                                 && old.config.network.outbound_tls.trust

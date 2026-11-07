@@ -140,3 +140,87 @@ async fn openapi_gateway_trusted_fingerprint_reaches_upstream_and_preserves_cont
     drop(runtime);
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn openapi_gateway_explicit_token_keeps_authenticated_caller_epoch_until_dispatch() {
+    const REPLACEMENT_CALLER: &str = "synthetic-replacement-caller-secret-0123456789";
+    let upstream = Upstream::start().await;
+    let fixture = Fixture::ready_with(
+        &upstream,
+        UpstreamAuth::Anonymous,
+        &["read_item"],
+        |config| {
+            let path = PathBuf::from(&config.managed_store.as_ref().unwrap().path)
+                .with_file_name("explicit-token-caller.token");
+            std::fs::write(&path, CALLER_SECRET).unwrap();
+            config.identity.trusted_callers.insert(
+                "synthetic_ingress".into(),
+                TrustedCallerConfig {
+                    credential_transport: Default::default(),
+                    username_namespace: None,
+                    credential_ref: format!("file:{}", path.display()),
+                    context_mode: TrustedCallerContextMode::Asserted,
+                    execution_context: None,
+                    allowed_execution_contexts: Some(vec!["default".into()]),
+                    allow_forwarded_identity: true,
+                },
+            );
+        },
+    )
+    .await;
+    let request = |secret: &str, id: &str| {
+        fixture
+            .gateway(Method::GET, "/items/alpha", id)
+            .header(
+                "x-agent-access-caller-authorization",
+                format!("Bearer {secret}"),
+            )
+            .header(EXECUTION_CONTEXT_HEADER, "default")
+    };
+    let waiting = super::races::PausedRequest::start_with_request(
+        &fixture,
+        crate::state::GatewayDispatchPhase::BeforeSend,
+        request(CALLER_SECRET, "explicit-token-caller-rotated"),
+    )
+    .await;
+    let path = PathBuf::from(&fixture.seed.config.managed_store.as_ref().unwrap().path)
+        .with_file_name("explicit-token-caller.token");
+    let previous_mtime = FileTime::from_last_modification_time(&std::fs::metadata(&path).unwrap());
+    std::fs::write(&path, REPLACEMENT_CALLER).unwrap();
+    filetime::set_file_mtime(
+        &path,
+        FileTime::from_unix_time(
+            previous_mtime.unix_seconds() + 1,
+            previous_mtime.nanoseconds(),
+        ),
+    )
+    .unwrap();
+    fixture.broker.reload_config(&fixture.seed.config).await;
+    let response = waiting.release().await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_auth_invalid"
+    );
+    response.bytes().await.unwrap();
+    assert!(
+        upstream.api_requests().is_empty(),
+        "the valid explicit token must not discard its original caller proof"
+    );
+    let terminal = fixture.terminal("explicit-token-caller-rotated").await;
+    assert_eq!(terminal["reasonCode"], "gateway_auth_invalid");
+    assert_eq!(terminal["principal"], "alice");
+
+    let response = request(REPLACEMENT_CALLER, "explicit-token-current-caller")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(upstream.api_requests().len(), 1);
+    let headers = &upstream.api_requests()[0].headers;
+    assert!(!headers.contains_key(AUTHORIZATION));
+    assert!(!headers.contains_key("x-agent-access-caller-authorization"));
+    assert!(!headers.contains_key(EXECUTION_CONTEXT_HEADER));
+    fixture.stop().await;
+}
