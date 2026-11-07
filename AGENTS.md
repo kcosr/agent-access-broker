@@ -1114,6 +1114,28 @@ explicitly authorized dedicated Workflow.
 
 ## Imported services
 
+Managed HTTP gateways use `openapi_gateway` and a separate protocol runtime map.
+Keep the import adapter, common compiler and gateway module independently selected
+and within their crate roles. Never add an invoke provider for a gateway. Operator
+bindings reserve exact service/host/upstream identities even when unavailable;
+validate them jointly with static gateways and retain the independent destination
+allowlist. Exposure and accepted connection settings are immutable.
+
+Retain the complete bounded current and historical path-guard universe; choose
+the path before its method and dispatchability, without broader-route fallback.
+Compile matching at publication. Refresh publishes source, guards and quarantine
+atomically; stale admitted requests fail their original dispatch fences before
+upstream work. Never regenerate V1 plan/manifest or earlier import golden bytes.
+Keep schema-ledger rollback tied to restoring the matching database and binary.
+
+Generated gateways authorize whole operations without resource inference. They
+use explicit anonymous or static upstream authentication; no personal-to-shared
+fallback, active verification probe or delegated OpenAPI OAuth. Preserve Git's
+independent verification and OAuth capabilities. Forward bounded raw bodies with
+no claim of field-schema enforcement. Host transport owns authorization, framing,
+bounded Retry-After, completion and permits. Concrete parameter values, queries,
+bodies and arbitrary headers never enter generated-gateway audit facts.
+
 Imported integrations use DB-managed stable service/action identities and compiled
 adapter factories. Core must not depend on a protocol adapter. Preserve offline
 startup, retained grant references, current operator gates, and cancellation-safe

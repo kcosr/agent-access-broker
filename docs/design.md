@@ -304,6 +304,40 @@ execution of the upstream request given a resolved scope set and an execution
 credential. The provider receives an already-resolved, already-authorized scope
 set; it does not consult policy.
 
+### Managed HTTP gateway imports
+
+An OpenAPI import has one immutable exposure mode. `openapi_http` publishes
+Actions/tools; `openapi_gateway` publishes a host-matched HTTP protocol. The
+operator reserves the exact service identity, gateway hosts and upstream base in
+`imports.gateway_bindings`. The import also passes the independent destination
+allowlist. Reserved hosts remain owned while a service is absent, disabled or
+unavailable, and static and managed bindings share one generation's host index.
+
+`agent-access-openapi-gateway-import` owns source acquisition and the internal
+adapter contract. `agent-access-openapi-common` supplies the bounded document
+compiler, versioned plans and route guards. The separately selected
+`agent-access-openapi-gateway` module builds a protocol from the complete
+retained manifest and accepted action states. It compiles route matching once
+at publication. Core publishes that protocol in its gateway map, without an
+invoke provider or a dependency on the implementation crates.
+
+The durable route universe includes unaccepted, unsupported and historical
+paths. Matching selects the most specific path before checking its method and
+action state; denial cannot fall through to a broader template. Source refresh
+publishes guards, preview and quarantine atomically. Admitted requests retain
+their original generation and must pass its dispatch fence before forwarding;
+refresh never rebinds an old request to a replacement action or destination.
+
+These imports authorize whole operations without inferred resource scopes.
+The selected upstream mode is explicitly anonymous or static Basic, Bearer or
+header-key presentation. Personal credentials never fall back to shared
+credentials. The protocol sees sanitized inputs and returns a relative plan;
+the host injects opaque authorization and streams raw bytes under shared
+admission, transfer and audit ownership. Request-body and response schemas are
+documentation, not field-level enforcement. See the
+[setup guide](http-gateway-setup.md) and
+[managed import contract](imported-services.md#openapi-http-gateway-imports).
+
 ## Naming contracts
 
 - **Service names** match `^[a-z][a-z0-9_-]{0,62}$`. The built-in providers are
