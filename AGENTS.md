@@ -377,7 +377,8 @@ Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
 undeclared role and dependency edges that cross the roles, such as any
 production path from core or the host to a backend, import adapter or gateway, and any
 use of the host-only items (the SDK's `host::authorize_host_request` and
-`host::token_as_basic`, and core's `gateway_upstream_authorization`) in native,
+`host::token_as_basic`, `host::gateway_body`, `host::gateway_body_stream`,
+`host::gateway_request_head`, and core's `gateway_upstream_authorization`) in native,
 adapter, reference, helper or gateway sources. Gateway dependencies of every
 kind may reach only SDK and helper crates; adapters cannot link gateways. See `docs/testing.md` for the rules.
 

@@ -175,6 +175,9 @@ impl GatewayRequest for GitRequest {
             } else {
                 GatewayReplayProfile::BodylessCredentialRecovery
             });
+        if self.kind.is_pack_post() {
+            plan = plan.discard_request_trailers();
+        }
         if let Some(audit) = audit {
             plan = plan.with_audit(audit);
         }

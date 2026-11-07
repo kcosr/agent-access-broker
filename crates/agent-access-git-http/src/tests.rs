@@ -31,7 +31,7 @@ fn classify_push(protocol: &dyn GatewayProtocol) -> GatewayClassification {
         HeaderValue::from_static("application/x-git-receive-pack-request"),
     )]);
     protocol
-        .classify(test_support::gateway_request_head(
+        .classify(test_support::synthetic_gateway_request_head(
             &Method::POST,
             "/team/project.git/git-receive-pack",
             &headers,
@@ -68,7 +68,7 @@ async fn inspected_and_overread_bytes_are_forwarded_once_in_original_order() {
     );
     let plan = classified
         .into_request()
-        .preflight(test_support::gateway_body(frames, 4096))
+        .preflight(test_support::synthetic_gateway_body(frames, 4096))
         .await
         .unwrap();
     assert_eq!(plan.relative_target, "/team/project.git/git-receive-pack");
@@ -77,7 +77,7 @@ async fn inspected_and_overread_bytes_are_forwarded_once_in_original_order() {
         plan.audit.as_ref().unwrap()["updates"][0]["ref"],
         "refs/heads/topic"
     );
-    let mut replay = test_support::gateway_body_stream(plan.body);
+    let mut replay = test_support::replay_gateway_body(plan.body);
     let mut actual = Vec::new();
     while let Some(frame) = replay.next().await {
         if let GatewayBodyFrame::Data(bytes) = frame.unwrap() {
@@ -105,7 +105,7 @@ async fn large_pack_frame_after_a_small_prefix_budget_is_replayed_without_trunca
     expected.extend(vec![b'x'; 2048]);
     let plan = classify_push(protocol.as_ref())
         .into_request()
-        .preflight(test_support::gateway_body(
+        .preflight(test_support::synthetic_gateway_body(
             vec![Ok(GatewayBodyFrame::Data(Bytes::copy_from_slice(
                 &expected,
             )))],
@@ -113,7 +113,7 @@ async fn large_pack_frame_after_a_small_prefix_budget_is_replayed_without_trunca
         ))
         .await
         .unwrap();
-    let mut body = test_support::gateway_body_stream(plan.body);
+    let mut body = test_support::replay_gateway_body(plan.body);
     let mut actual = Vec::new();
     while let Some(frame) = body.next().await {
         if let GatewayBodyFrame::Data(bytes) = frame.unwrap() {
@@ -129,7 +129,7 @@ async fn exact_flush_probe_is_counted_and_trailers_do_not_make_it_valid() {
     let frames = vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"0000")))];
     let plan = classify_push(protocol.as_ref())
         .into_request()
-        .preflight(test_support::gateway_body(frames.clone(), 4096))
+        .preflight(test_support::synthetic_gateway_body(frames.clone(), 4096))
         .await
         .unwrap();
     assert_eq!(plan.audit.unwrap()["probe"], true);
@@ -138,7 +138,7 @@ async fn exact_flush_probe_is_counted_and_trailers_do_not_make_it_valid() {
     frames.push(Ok(GatewayBodyFrame::Trailers));
     let error = classify_push(protocol.as_ref())
         .into_request()
-        .preflight(test_support::gateway_body(frames, 4096))
+        .preflight(test_support::synthetic_gateway_body(frames, 4096))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
@@ -181,7 +181,7 @@ async fn body_error_kind_and_parsed_audit_survive_the_sdk_port() {
         ];
         let error = classify_push(protocol.as_ref())
             .into_request()
-            .preflight(test_support::gateway_body(frames, 4096))
+            .preflight(test_support::synthetic_gateway_body(frames, 4096))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), reason);
@@ -208,7 +208,7 @@ async fn prefix_limit_and_content_type_denials_pass_the_host_failure_contract() 
         .unwrap();
     let error = classify_push(protocol.as_ref())
         .into_request()
-        .preflight(test_support::gateway_body(
+        .preflight(test_support::synthetic_gateway_body(
             vec![Ok(GatewayBodyFrame::Data(Bytes::from(push_prefix())))],
             4096,
         ))
@@ -220,7 +220,7 @@ async fn prefix_limit_and_content_type_denials_pass_the_host_failure_contract() 
         .expect("Git prefix caps retain their HTTP 413 reason through host validation");
 
     let error = protocol
-        .classify(test_support::gateway_request_head(
+        .classify(test_support::synthetic_gateway_request_head(
             &Method::POST,
             "/team/project.git/git-receive-pack",
             &HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("application/json"))]),
@@ -246,7 +246,7 @@ async fn sdk_inspection_cap_refuses_overread_before_forwarding_and_keeps_prior_r
     ];
     let error = classify_push(protocol.as_ref())
         .into_request()
-        .preflight(test_support::gateway_body(frames, cap))
+        .preflight(test_support::synthetic_gateway_body(frames, cap))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::GatewayRequestCapExceeded);
@@ -262,7 +262,7 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
     for service in ["git-upload-pack", "git-receive-pack"] {
         let path = format!("/team/project/info/refs?service={service}");
         let classified = protocol
-            .classify(test_support::gateway_request_head(
+            .classify(test_support::synthetic_gateway_request_head(
                 &Method::GET,
                 &path,
                 &HeaderMap::new(),
@@ -274,7 +274,7 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
         );
         let plan = classified
             .into_request()
-            .preflight(test_support::gateway_body(Vec::new(), 4096))
+            .preflight(test_support::synthetic_gateway_body(Vec::new(), 4096))
             .await
             .unwrap();
         assert_eq!(
@@ -282,7 +282,7 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
             GatewayReplayProfile::BodylessCredentialRecovery
         );
         let classified = protocol
-            .classify(test_support::gateway_request_head(
+            .classify(test_support::synthetic_gateway_request_head(
                 &Method::GET,
                 &path,
                 &HeaderMap::new(),
@@ -290,7 +290,7 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
             .unwrap();
         let error = classified
             .into_request()
-            .preflight(test_support::gateway_body(
+            .preflight(test_support::synthetic_gateway_body(
                 vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"x")))],
                 4096,
             ))
@@ -315,7 +315,7 @@ async fn discovery_rejects_unannounced_trailers_as_a_client_body_denial() {
             // No Trailer header: the protocol must inspect actual frames before
             // it can declare the request eligible for bodyless recovery.
             let classified = protocol
-                .classify(test_support::gateway_request_head(
+                .classify(test_support::synthetic_gateway_request_head(
                     &Method::GET,
                     &path,
                     &HeaderMap::new(),
@@ -323,7 +323,7 @@ async fn discovery_rejects_unannounced_trailers_as_a_client_body_denial() {
                 .unwrap();
             let error = classified
                 .into_request()
-                .preflight(test_support::gateway_body(frames, 4096))
+                .preflight(test_support::synthetic_gateway_body(frames, 4096))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
@@ -341,7 +341,7 @@ async fn response_metadata_preserves_only_the_first_upstream_content_type() {
     let protocol = protocol();
     let plan = classify_push(protocol.as_ref())
         .into_request()
-        .preflight(test_support::gateway_body(
+        .preflight(test_support::synthetic_gateway_body(
             vec![Ok(GatewayBodyFrame::Data(Bytes::from(push_prefix())))],
             4096,
         ))

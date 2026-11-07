@@ -26,9 +26,19 @@ pub(super) fn checked_failure(
 
 /// Identity carriers never cross the protocol-module request-head boundary.
 pub(super) fn protocol_headers(headers: &HeaderMap) -> HeaderMap {
+    let nominated: BTreeSet<String> = headers
+        .get_all(axum::http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| axum::http::HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .map(|name| name.as_str().to_owned())
+        .collect();
     headers
         .iter()
-        .filter(|(name, _)| !reserved_request_header(name.as_str()))
+        .filter(|(name, _)| {
+            !reserved_request_header(name.as_str()) && !nominated.contains(name.as_str())
+        })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
@@ -354,6 +364,7 @@ pub(super) fn selected_response_headers(
 
 pub(super) fn prepare_protocol_request_body(
     body: GatewayBody,
+    discard_trailers: bool,
     limits: &GatewayForwardLimits,
     permits: Option<RequestPermits>,
 ) -> GatewayPreparedRequestBody {
@@ -362,7 +373,16 @@ pub(super) fn prepare_protocol_request_body(
     }
     let failure = Arc::new(AtomicU8::new(REPLAY_FAILURE_NONE));
     let progress = Arc::new(GatewayRequestUploadProgress::new());
-    let stream = agent_access_provider::host::gateway_body_stream(body);
+    let stream = agent_access_provider::host::gateway_body_stream(body).filter_map(
+        move |frame| async move {
+            if discard_trailers && matches!(frame, Ok(GatewayBodyFrame::Trailers)) {
+                None
+            } else {
+                Some(frame)
+            }
+        },
+    );
+    let stream = Box::pin(stream);
     let state = (
         stream,
         failure.clone(),
@@ -392,10 +412,11 @@ pub(super) fn prepare_protocol_request_body(
                     return None;
                 }
                 Some(Ok(GatewayBodyFrame::Data(bytes))) => {
-                    sent = sent.saturating_add(bytes.len());
-                    if sent > cap {
+                    let next_sent = sent.saturating_add(bytes.len());
+                    if next_sent > cap {
                         Err(GatewayBodyError::TooLarge)
                     } else {
+                        sent = next_sent;
                         Ok(bytes)
                     }
                 }

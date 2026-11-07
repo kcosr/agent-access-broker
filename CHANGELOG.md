@@ -420,6 +420,10 @@ All notable changes to this project are documented in this file.
   remains one failed transfer with the observed upstream status. Responses with
   both `Transfer-Encoding` and `Content-Length` now fail with
   `upstream_protocol_failed` before credential recovery or body delivery.
+  Response lengths, including HEAD and 304, are validated and canonicalized;
+  declared request lengths above the cap are refused before upstream dispatch.
+  Upload failures after dispatch return HTTP 502 with an error audit and an
+  explicit partial or uncertain upstream outcome, rather than an input denial.
   Validator-free response profiles also reject repeated selected headers with
   that reason before body delivery; Git's validator preserves its first
   `Content-Type` value.

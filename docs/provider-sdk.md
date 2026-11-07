@@ -2658,11 +2658,14 @@ The host retains common destination, host, authentication and limit fields.
 
 `GatewayProtocol::classify` receives the method, target and sanitized protocol
 headers. Broker authorization, cookies and trusted identity assertions are absent.
+Headers nominated by `Connection` are removed with the fixed hop-by-hop fields.
 It returns a declared action, final `ResourceScopes`, a registered request-kind name
 and an owned `GatewayRequest`. An unscoped action requires empty scopes; a scoped
 action requires every declared scope dimension. Body-derived resources and
 preauthorization upstream lookup are unsupported. The host performs identity and
 admission checks, then calls `GatewayRequest::preflight` with `GatewayBody`.
+An explicit request length over the configured cap is refused before preflight
+or upstream work, with policy-denial precedence preserved.
 Preflight cannot change the classified action or scopes. Policy denial takes
 precedence over a preflight failure.
 
@@ -2676,11 +2679,23 @@ a response profile. The host rejects absolute or escaping destinations, reserved
 headers, invalid outcomes and inconsistent plans before acquiring credentials or
 contacting upstream.
 
+Only the host uses `host::gateway_body`, `host::gateway_body_stream` and
+`host::gateway_request_head`; the crate-boundary check fences them from gateway
+modules. Tests use `test_support::synthetic_gateway_body`,
+`synthetic_gateway_request_head` and `replay_gateway_body`. Forward plans reject
+HTTP trailers by default. A protocol that ignores trailing metadata may select
+`discard_request_trailers()`, as Git pack POSTs do; the host discards only trailer
+frames, preserves data order and limits, and never forwards trailer fields.
+
 `GatewayResponseProfile` selects shared headers plus the first matching exact
 status rule, status class, or default rule. A custom header validator may only
 remove upstream values; it cannot rewrite or invent them. Content-Length is
 host-owned and can be preserved explicitly for raw bytes. Decompression and
-redirect following are disabled. Useful upstream HTTP statuses and bodies remain
+redirect following are disabled. The host validates every Content-Length value,
+including on HEAD and 304 responses, before completion. Repeated values and
+comma lists must contain the same decimal length, which is emitted canonically.
+Invalid or conflicting lengths fail with `upstream_protocol_failed`.
+Useful upstream HTTP statuses and bodies remain
 separate from local `ProviderError` outcomes. Local errors must satisfy the gateway
 phase contract and declared domain-reason ownership. Host authentication, policy
 and accounting reasons cannot be fabricated by a module.
@@ -2712,6 +2727,9 @@ The terminal audit also waits for upload, response and bounded unread-body dispo
 An early successful upstream response cannot establish successful completion of
 an unfinished upload; a later upload failure produces one failed terminal record
 with the observed upstream status and partial or uncertain execution outcome.
+Request-stream failures after dispatch are errors with HTTP 502 when response
+headers have not been sent; the terminal audit retains transferred byte counts
+and states that upstream execution may be partial or uncertain.
 
 The independent fixture at
 [`tests/downstream-consumer/provider-repo/crates/example-gateway`](../tests/downstream-consumer/provider-repo/crates/example-gateway/src/lib.rs)

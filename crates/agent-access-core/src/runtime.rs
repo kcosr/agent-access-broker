@@ -9897,13 +9897,29 @@ impl GatewayTerminalAuditState {
         {
             gateway.insert("requestBytes".to_owned(), json!(bytes));
         }
-        if let Some(reason) = inner.request_failure
-            && record.decision == Decision::Allow
-        {
+        if let Some(reason) = inner.request_failure {
+            let prior_phase = record
+                .provider_audit
+                .as_ref()
+                .and_then(|audit| {
+                    audit
+                        .get("gateway")
+                        .and_then(|gateway| gateway.get("phase"))
+                        .or_else(|| audit.get("gatewayPhase"))
+                })
+                .and_then(Value::as_str)
+                .unwrap_or("failed");
+            let phase = if matches!(prior_phase, "canceled" | "forced_shutdown") {
+                prior_phase.to_owned()
+            } else {
+                "failed".to_owned()
+            };
+            if record.decision != Decision::Error {
+                record.reason_code = Some(reason.into());
+            }
             record.decision = Decision::Error;
-            record.reason_code = Some(reason.into());
             record.provider_audit = gateway_terminal_audit_value(
-                record.provider_audit.take(), "failed",
+                record.provider_audit.take(), &phase,
                 Some("gateway request upload did not complete; upstream execution may be partial or uncertain".to_owned()),
             );
         }
