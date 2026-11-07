@@ -1026,6 +1026,7 @@ async fn a_push_answered_early_upstream_is_read_to_its_end_once_the_upstream_let
     );
     wait_until(|| guards.global_in_flight_requests() == 0).await;
     assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+    assert_abandoned_upload_audit(&fixture, 413, ReasonCode::UpstreamProtocolFailed).await;
 }
 
 /// The pace of a client resuming its upload: one chunk every tenth of a
@@ -1208,11 +1209,15 @@ async fn completed_successful_push_responses_retain_capacity_until_abandoned_upl
             (1, 1),
             "completed response with_report={with_report} must retain upload capacity"
         );
-        assert_abandoned_early_success_audit(&fixture).await;
+        assert_abandoned_upload_audit(&fixture, 200, ReasonCode::GatewayRequestBodyDenied).await;
     }
 }
 
-async fn assert_abandoned_early_success_audit(fixture: &GatewayRouterFixture) {
+async fn assert_abandoned_upload_audit(
+    fixture: &GatewayRouterFixture,
+    status: u16,
+    reason: ReasonCode,
+) {
     fixture
         ._broker
         .runtime()
@@ -1226,7 +1231,9 @@ async fn assert_abandoned_early_success_audit(fixture: &GatewayRouterFixture) {
     assert_eq!(records.len(), 2, "{records:?}");
     assert_eq!(records[0]["providerAudit"]["gateway"]["phase"], "started");
     assert_eq!(records[1]["providerAudit"]["gateway"]["phase"], "failed");
-    assert_eq!(records[1]["upstreamStatus"], 200);
+    assert_eq!(records[1]["upstreamStatus"], status);
+    assert_eq!(records[1]["reasonCode"], reason.as_str());
+    assert_eq!(records[1]["decision"], "error");
 }
 
 /// If an upstream drops an unfinished upload after completing a successful
@@ -1295,7 +1302,7 @@ async fn completed_successful_push_keeps_capacity_through_abandoned_upload_dispo
         (1, 1),
         "the unfinished body retains capacity through disposal"
     );
-    assert_abandoned_early_success_audit(&fixture).await;
+    assert_abandoned_upload_audit(&fixture, 200, ReasonCode::UpstreamProtocolFailed).await;
 }
 
 /// Starts a push to an origin that refuses it early and keeps reading, and

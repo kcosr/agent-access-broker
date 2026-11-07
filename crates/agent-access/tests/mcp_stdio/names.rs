@@ -20,9 +20,9 @@ async fn aggregate_names_omit_conflicts_preserve_helpers_and_refresh_without_rec
     let overlong = "a".repeat(124);
     let mut catalog = serde_json::to_value(agent_access_core::empty_catalog(json!({}))).unwrap();
     catalog["services"] = json!([
-        {"service":"fake","displayName":"Naming fixture","surface":"invoke","scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],
+        {"service":"fake","displayName":"Naming fixture","surface":"invoke","credentialVerificationSupported":true,"scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],
          "actions":[action("echo"),action("item.read"),action("item_read"),action(&overlong)]},
-        {"service":"services","displayName":"Helper conflict fixture","surface":"invoke","scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],
+        {"service":"services","displayName":"Helper conflict fixture","surface":"invoke","credentialVerificationSupported":true,"scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],
          "actions":[action("list")]}
     ]);
     let current = Arc::new(Mutex::new(catalog));

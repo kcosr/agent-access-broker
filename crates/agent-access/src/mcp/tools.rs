@@ -823,6 +823,7 @@ mod tests {
         let server = MockServer::start().await;
         let detail = json!({
             "service":"jira-team", "displayName":"Example service", "surface":"invoke",
+            "credentialVerificationSupported":true,
             "scopeTypes":[], "actions":[action()], "scopedMcpReady":true,
             "availability":{"state":"available","requirements":[],"message":"Locally available"},
             "limits":{
@@ -871,6 +872,7 @@ mod tests {
         let server = MockServer::start().await;
         let detail = json!({
             "service":"jira-team", "displayName":"Example service", "surface":"invoke",
+            "credentialVerificationSupported":true,
             "scopeTypes":[], "actions":[action()], "scopedMcpReady":true, "limits":{},
             "availability":{"state":"available","requirements":[],"message":"Locally available"}
         });

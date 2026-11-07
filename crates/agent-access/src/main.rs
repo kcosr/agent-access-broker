@@ -18673,6 +18673,7 @@ mod tests {
         serde_json::json!([
             {
                 "service": "zeta",
+                "credentialVerificationSupported": true,
                 "availability": {"state":"available","requirements":[],"message":"Locally available"},
                 "displayName": "Zeta gateway",
                 "surface": "gateway",
@@ -18690,6 +18691,7 @@ mod tests {
             },
             {
                 "service": "gitlab",
+                "credentialVerificationSupported": true,
                 "availability": {"state":"available","requirements":[],"message":"Locally available"},
                 "displayName": "GitLab REST",
                 "surface": "invoke",

@@ -307,7 +307,7 @@ mod tests {
         }
     }
     fn service(surface: &str) -> Value {
-        json!({"service":"gitlab","displayName":"GitLab","surface":surface,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[{
+        json!({"service":"gitlab","displayName":"GitLab","surface":surface,"credentialVerificationSupported":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[{
             "action":"repo.fetch","readOnly":true,"description":"Fetch repository","requiredScopeTypes":["repository"],"credentialModes":["service"],"lookupRequired":false,
             "documentation":{"examples":["extended usage detail"]},
             "inputSchema":{"type":"object","properties":{"project":{"type":"string"}},"additionalProperties":false},"futureField":"preserved"

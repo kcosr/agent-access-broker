@@ -2698,9 +2698,9 @@ restricted to completely inspected empty bodies without trailers. Permission for
 confirmed-unprocessed recovery does not itself cause retries: the host also needs
 request-specific non-processing evidence and complete retained bytes. Timeouts,
 connection resets, replayable bodies and methods alone never establish that
-proof. The current transport disables reqwest protocol retries; production does
-not enable HTTP/2 or HTTP/3. Safe pooled-connection replacement before writing
-remains within the original deadline. Git alone opts into its existing single
+proof. The current transport disables reqwest policy retries and explicitly pins
+HTTP/1, including in downstream assemblies that enable HTTP/2 elsewhere. Safe
+pooled-connection replacement before writing remains within the original deadline. Git alone opts into its existing single
 bodyless OAuth recovery; pack uploads are never replayed.
 
 Keep audit facts bounded and free of bodies, credentials and arbitrary parameter

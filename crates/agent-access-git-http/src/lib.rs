@@ -10,13 +10,16 @@ mod tests;
 use agent_access_provider::{
     GatewayBody, GatewayBodyError, GatewayBodyFrame, GatewayClassification, GatewayForwardPlan,
     GatewayProtocol, GatewayRegistration, GatewayReplayProfile, GatewayRequest, GatewayRequestHead,
-    GatewayRequestKind, GatewayResponseProfile, GatewayVerificationProbe, ProviderError,
-    ReasonCode,
+    GatewayRequestKind, GatewayResponseProfile, GatewayResponseValidator, GatewayVerificationProbe,
+    ProviderError, ReasonCode,
 };
 use async_trait::async_trait;
 use classify::GitRequestKind;
 use config::{GitConfig, GitModuleConfig};
-use http::{HeaderMap, Uri, header::CONTENT_LENGTH};
+use http::{
+    HeaderMap, Uri,
+    header::{CONTENT_LENGTH, CONTENT_TYPE},
+};
 use std::sync::Arc;
 
 /// Selects Git smart HTTP gateway support. Service identities and hosts remain
@@ -145,7 +148,13 @@ impl GatewayRequest for GitRequest {
                             "gateway GET requests must not include a body",
                         ));
                     }
-                    GatewayBodyFrame::Data(_) | GatewayBodyFrame::Trailers => {}
+                    GatewayBodyFrame::Data(_) => {}
+                    GatewayBodyFrame::Trailers => {
+                        return Err(ProviderError::deny(
+                            ReasonCode::GatewayRequestBodyDenied,
+                            "gateway GET requests must not include trailers",
+                        ));
+                    }
                     _ => return Err(body_error(GatewayBodyError::Read, false)),
                 }
             }
@@ -157,7 +166,9 @@ impl GatewayRequest for GitRequest {
         let mut plan = GatewayForwardPlan::new(self.kind.method(), self.target, body)
             .with_headers(headers)
             .with_response(
-                GatewayResponseProfile::new(vec!["content-type".into()]).bounded_retry_after(),
+                GatewayResponseProfile::new(vec!["content-type".into()])
+                    .bounded_retry_after()
+                    .with_validator(Arc::new(GitResponseHeaders)),
             )
             .with_replay(if self.kind.is_pack_post() {
                 GatewayReplayProfile::Never
@@ -168,6 +179,21 @@ impl GatewayRequest for GitRequest {
             plan = plan.with_audit(audit);
         }
         Ok(plan)
+    }
+}
+
+#[derive(Debug)]
+struct GitResponseHeaders;
+
+impl GatewayResponseValidator for GitResponseHeaders {
+    fn validate(&self, _status: u16, headers: &HeaderMap) -> Result<HeaderMap, ProviderError> {
+        let mut selected = HeaderMap::new();
+        // Git forwarding preserves its established first-value Content-Type
+        // selection. Retry-After bounds and response framing remain host-owned.
+        if let Some(content_type) = headers.get(CONTENT_TYPE) {
+            selected.insert(CONTENT_TYPE, content_type.clone());
+        }
+        Ok(selected)
     }
 }
 

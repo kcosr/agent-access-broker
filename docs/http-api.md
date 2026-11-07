@@ -769,9 +769,10 @@ managed through the [OAuth routes](#upstream-oauth-browser-connections)), or
 method returns HTTP 400 `input_invalid`.
 
 A connection lists its *consumers*: the consuming services the caller holds an
-active `per_user` grant on, each with `service`, `displayName`, and
-`credentialVerificationInputs` (inputs verifying through that service needs
-besides the credential, such as `["repository"]` for a Git gateway; `[]` when it
+active `per_user` grant on, each with `service`, `displayName`,
+`credentialVerificationSupported` (whether the consumer supports verification;
+false for a push-only Git gateway), and `credentialVerificationInputs` (inputs
+verifying through that service needs besides the credential, such as `["repository"]` for a Git gateway; `[]` when it
 needs none). `otherConsumers` counts the consuming services the caller is not
 entitled to, which the connection serves too.
 
@@ -785,8 +786,8 @@ entitled to, which the connection serves too.
       "displayName": "GitLab",
       "method": "token",
       "consumers": [
-        {"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []},
-        {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationInputs": ["repository"]}
+        {"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationSupported": true, "credentialVerificationInputs": []},
+        {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationSupported": true, "credentialVerificationInputs": ["repository"]}
       ],
       "otherConsumers": 0,
       "tokenProfiles": [
@@ -817,7 +818,7 @@ entitled to, which the connection serves too.
       "connection": "gmail",
       "displayName": "Gmail",
       "method": "oauth",
-      "consumers": [{"service": "gmail", "displayName": "Gmail", "credentialVerificationInputs": []}],
+      "consumers": [{"service": "gmail", "displayName": "Gmail", "credentialVerificationSupported": true, "credentialVerificationInputs": []}],
       "otherConsumers": 0,
       "tokenProfiles": [],
       "registration": "google",
@@ -883,7 +884,7 @@ store now, with the schema-driven input form:
   {
     "connection": "gitlab",
     "displayName": "GitLab",
-    "consumers": [{"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []}],
+    "consumers": [{"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationSupported": true, "credentialVerificationInputs": []}],
     "otherConsumers": 1,
     "tokenProfiles": [
       {
@@ -3968,8 +3969,8 @@ connections select:
     "displayName": "GitLab",
     "connectionDescription": "Read and change GitLab projects as you",
     "consumers": [
-      {"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationInputs": []},
-      {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationInputs": ["repository"]}
+      {"service": "gitlab", "displayName": "GitLab REST", "credentialVerificationSupported": true, "credentialVerificationInputs": []},
+      {"service": "gitlab_git", "displayName": "GitLab Git", "credentialVerificationSupported": true, "credentialVerificationInputs": ["repository"]}
     ],
     "otherConsumers": 0,
     "permissionProfile": "default",

@@ -26,19 +26,21 @@ root.
   inherits, copied verbatim from the candidate root manifest. The provider
   repository versions its crate independently (`0.7.0`). Its members are
   `crates/*`, so the provider SDK guide's example crates staged beside the
-  conformance crate join the workspace.
+  conformance crate join the workspace. The committed `crates/example-gateway`
+  depends only on the SDK; the provider test gate compiles and tests it to prove
+  linked gateway contracts require no core or host dependency.
 - `assembly-repo/` is a downstream distribution, `downstream-broker` `0.3.0`,
   following the [downstream assembly guide](../../docs/downstream-assembly.md).
   It links `agent-access-broker-host`, production `agent-access-cloudbees-ci`,
   and the explicitly selected `agent-access-git-http` gateway
   from upstream and `agent-access-conformance` from the provider repository.
-  Its library exports `composition()`, which selects CloudBees CI and the
+  Its library exports `composition()`, which selects CloudBees CI, the Git HTTP gateway and the
   development-only conformance provider, and `build_identity()`; `main.rs`
   runs the host's `BrokerApplication` with both.
   - `build.rs` reads the assembly's own `Cargo.lock` and emits the locked
     version and full commit of the upstream and provider repositories. The
     identity reports them as evidence-backed revisions: the upstream commit for
-    the host, the SDK and CloudBees CI, and the provider commit for the
+    the host, the SDK, CloudBees CI and the Git HTTP gateway, and the provider commit for the
     conformance module, in a module provenance map keyed by crate name and
     version.
   - The assembly's own revision and qualification label come from

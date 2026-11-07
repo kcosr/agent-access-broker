@@ -1998,7 +1998,8 @@ credential_mode = "service"
 
 Gateway keys (`[gateways.<name>]`):
 
-- `kind` must be `git_http`; other values are rejected.
+- `kind` selects a linked gateway registration. The shipped assembly links
+  `git_http`; unlinked kinds are rejected during validation.
 - `display_name`, `broker_hosts`, `upstream_base_url`,
   `allowed_upstream_hosts`, `auth_modes`, and `credential_modes` are required.
 - `broker_hosts` lists exact lower-case DNS hosts handled by this gateway. No
@@ -2010,12 +2011,13 @@ Gateway keys (`[gateways.<name>]`):
   client repository URLs with or without `.git` and always uses `.git` for
   upstream discovery, fetch, and push. Repository authorization is unchanged.
 - `allowed_upstream_hosts` follows the same allowlist rules as providers.
-- `auth_modes` currently accepts only `basic_broker_token`. Git clients send a
-  broker token using HTTP Basic auth; the username must equal
-  `basic_broker_token_username`.
+- `auth_modes` accepts `basic_broker_token` and `bearer_broker_token`. With Basic,
+  the username must equal `basic_broker_token_username`; both modes carry a
+  Broker token, never an upstream credential.
 - `credential_modes` is required (non-empty); each value must be `service` or
-  `per_user` and must have a matching configured credential for the gateway
-  service.
+  `per_user` and must have a matching configured credential for a gateway that
+  requires one. A linked module may explicitly declare credential-free execution;
+  such a gateway supports service-mode policy without a dummy credential.
 - `upstream_token_auth` selects how the gateway presents token material, a
   `bearer_token` upstream credential (service or per-user) or a person's OAuth
   access token, as one table tagged by `scheme`:

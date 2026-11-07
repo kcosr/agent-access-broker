@@ -202,7 +202,7 @@ struct GatewayUploadOwner {
 impl Drop for GatewayUploadOwner {
     fn drop(&mut self) {
         self.progress
-            .finish_audit(Some(ReasonCode::GatewayRequestBodyDenied));
+            .finish_audit(Some(ReasonCode::UpstreamProtocolFailed));
     }
 }
 

@@ -333,16 +333,33 @@ pub(super) fn selected_response_headers(
         Some(validator) => validator
             .validate(status, headers)
             .map_err(|error| checked_failure(registration, GatewayHookPhase::Response, error))?,
-        None => headers
-            .iter()
-            .filter(|(name, _)| allowed.contains(name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
+        None => {
+            if allowed
+                .iter()
+                .any(|name| headers.get_all(name).iter().count() > 1)
+            {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "upstream returned ambiguous gateway response headers",
+                ));
+            }
+            headers
+                .iter()
+                .filter(|(name, _)| allowed.contains(name.as_str()))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect()
+        }
     };
     if result.keys().any(|name| {
-        !allowed.contains(name.as_str())
-            || reserved_response_header(name.as_str())
-            || !result.get_all(name).iter().eq(headers.get_all(name).iter())
+        !allowed.contains(name.as_str()) || reserved_response_header(name.as_str()) || {
+            // Validators may omit upstream values, but cannot invent,
+            // duplicate or reorder them (Git selects the first Content-Type).
+            let mut upstream = headers.get_all(name).iter();
+            !result
+                .get_all(name)
+                .iter()
+                .all(|selected| upstream.any(|value| value == selected))
+        }
     }) {
         return Err(contract_failure());
     }

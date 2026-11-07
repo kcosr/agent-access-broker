@@ -300,6 +300,76 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
     }
 }
 
+#[tokio::test]
+async fn discovery_rejects_unannounced_trailers_as_a_client_body_denial() {
+    let protocol = protocol();
+    for service in ["git-upload-pack", "git-receive-pack"] {
+        let path = format!("/team/project/info/refs?service={service}");
+        for frames in [
+            vec![Ok(GatewayBodyFrame::Trailers)],
+            vec![
+                Ok(GatewayBodyFrame::Data(Bytes::new())),
+                Ok(GatewayBodyFrame::Trailers),
+            ],
+        ] {
+            // No Trailer header: the protocol must inspect actual frames before
+            // it can declare the request eligible for bodyless recovery.
+            let classified = protocol
+                .classify(test_support::gateway_request_head(
+                    &Method::GET,
+                    &path,
+                    &HeaderMap::new(),
+                ))
+                .unwrap();
+            let error = classified
+                .into_request()
+                .preflight(test_support::gateway_body(frames, 4096))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
+            assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+            assert_eq!(error.reason_code().http_status(), 400);
+            GIT_HTTP_GATEWAY
+                .check_failure(GatewayHookPhase::Preflight, &error)
+                .expect("unexpected discovery trailers remain a protocol denial");
+        }
+    }
+}
+
+#[tokio::test]
+async fn response_metadata_preserves_only_the_first_upstream_content_type() {
+    let protocol = protocol();
+    let plan = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::from(push_prefix())))],
+            4096,
+        ))
+        .await
+        .unwrap();
+    assert!(plan.response.bounded_retry_after);
+    let validator = plan.response.validator.as_ref().unwrap();
+    let first = HeaderValue::from_static("application/x-git-receive-pack-result");
+    let mut upstream = HeaderMap::new();
+    upstream.append(CONTENT_TYPE, first.clone());
+    upstream.append(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+    upstream.insert(
+        http::header::SET_COOKIE,
+        HeaderValue::from_static("session=fixture"),
+    );
+    upstream.insert(http::header::RETRY_AFTER, HeaderValue::from_static("30"));
+    for status in [200, 429] {
+        let selected = validator.validate(status, &upstream).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected.get_all(CONTENT_TYPE).iter().count(), 1);
+        assert_eq!(selected[CONTENT_TYPE], first);
+        assert!(!selected.contains_key(http::header::SET_COOKIE));
+        assert!(!selected.contains_key(http::header::RETRY_AFTER));
+    }
+    upstream.remove(CONTENT_TYPE);
+    assert!(validator.validate(200, &upstream).unwrap().is_empty());
+}
+
 #[test]
 fn verification_eligibility_matches_the_available_read_probe() {
     let context = GatewayServiceContext::new("git", "Git", "https://git.example")

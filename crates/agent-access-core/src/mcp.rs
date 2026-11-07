@@ -1060,7 +1060,7 @@ mod tests {
 
     #[test]
     fn discovery_projection_preserves_raw_metadata_but_keeps_compact_results_small() {
-        let service = json!({"service":"gitlab","displayName":"GitLab","surface":"invoke","scopeTypes":["project"],"availability":{"state":"available","requirements":[],"message":"Locally available"},"futureServiceField":42,"actions":[{
+        let service = json!({"service":"gitlab","displayName":"GitLab","surface":"invoke","credentialVerificationSupported":true,"scopeTypes":["project"],"availability":{"state":"available","requirements":[],"message":"Locally available"},"futureServiceField":42,"actions":[{
             "action":"file.write","readOnly":false,"description":"Write content","requiredScopeTypes":[],"credentialModes":[],"lookupRequired":false,"inputSchema":{"type":"object"},"futureField":"preserved"
         }]});
         assert_eq!(
@@ -1080,7 +1080,7 @@ mod tests {
 
     #[test]
     fn discovery_projections_never_restore_gateway_metadata() {
-        let gateway = json!({"service":"git","displayName":"Git","surface":"gateway","gatewayKind":"git_http","brokerHosts":["git.example.test"],"scopeTypes":[],"availability":{"state":"available","requirements":[],"message":"Locally available"},"actions":[]});
+        let gateway = json!({"service":"git","displayName":"Git","surface":"gateway","credentialVerificationSupported":true,"gatewayKind":"git_http","brokerHosts":["git.example.test"],"scopeTypes":[],"availability":{"state":"available","requirements":[],"message":"Locally available"},"actions":[]});
         for prefix in [None, Some("git")] {
             assert_eq!(
                 project_service_list(json!([gateway.clone()]), prefix, false).unwrap(),

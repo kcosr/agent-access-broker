@@ -82,3 +82,22 @@ impl GatewayRequest for Example {
         Ok(GatewayForwardPlan::new(Method::GET, "/items", body))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linked_gateway_parses_strict_configuration_and_declares_authority() {
+        let empty = toml::Value::Table(Default::default());
+        let gateway = parse(empty).unwrap();
+        let context = GatewayServiceContext::new("items", "Items", "https://api.example.test");
+        let descriptor = gateway.descriptor(&context);
+        assert_eq!(descriptor.service, "items");
+        assert!(!descriptor.credentials.verification_supported);
+        assert!(descriptor.action("items.read").unwrap().read_only);
+        let mut unexpected = toml::map::Map::new();
+        unexpected.insert("secret".into(), toml::Value::String("not accepted".into()));
+        assert!(parse(toml::Value::Table(unexpected)).is_err());
+    }
+}

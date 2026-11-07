@@ -1979,7 +1979,7 @@ impl GatewayRequestBodyAudit {
 impl Drop for GatewayRequestBodyAudit {
     fn drop(&mut self) {
         if let Some(state) = self.state.take() {
-            state.finish_request_body(None, Some(ReasonCode::GatewayRequestBodyDenied));
+            state.finish_request_body(None, Some(ReasonCode::UpstreamProtocolFailed));
         }
     }
 }

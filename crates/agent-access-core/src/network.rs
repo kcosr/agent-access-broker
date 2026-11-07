@@ -188,6 +188,7 @@ impl HostNetwork {
         let client = self
             .client(&selection, ClientProfile::Upload)?
             .retry(reqwest::retry::never())
+            .http1_only()
             .no_gzip()
             .no_brotli()
             .no_deflate()
