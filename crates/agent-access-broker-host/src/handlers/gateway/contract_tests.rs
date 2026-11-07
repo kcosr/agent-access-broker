@@ -859,6 +859,101 @@ async fn framing_completion_needs_no_extra_body_poll_and_releases_capacity() {
 }
 
 #[tokio::test]
+async fn ambiguous_zero_length_chunked_response_is_rejected() {
+    assert_raw_response_framing(Some(0)).await;
+}
+
+#[tokio::test]
+async fn ambiguous_short_length_chunked_response_is_rejected() {
+    assert_raw_response_framing(Some(4)).await;
+}
+
+#[tokio::test]
+async fn unambiguous_chunked_response_completes_with_all_bytes() {
+    assert_raw_response_framing(None).await;
+}
+
+async fn assert_raw_response_framing(content_length: Option<usize>) {
+    let temp = crate::tests::test_temp_dir();
+    let length = content_length
+        .map(|length| format!("Content-Length: {length}\r\n"))
+        .unwrap_or_default();
+    let response = format!(
+        "HTTP/1.1 200 OK\r\n{length}Transfer-Encoding: chunked\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n4\r\nmore\r\n5\r\n-data\r\n0\r\n\r\n"
+    );
+    let (url, ready, upstream) = tls_origin(Some(response.into_bytes()));
+    let (runtime, state, authorization) = runtime_fixture(&url, &temp);
+    ready.send(()).unwrap();
+    let response = crate::router::build_gateway_router(state.clone())
+        .oneshot(request(
+            Method::GET,
+            "/items",
+            &authorization,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    if content_length.is_some() {
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            "upstream_protocol_failed"
+        );
+    } else {
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!response.headers().contains_key(CONTENT_LENGTH));
+    }
+    assert!(!response.headers().contains_key("transfer-encoding"));
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    if content_length.is_some() {
+        assert!(!String::from_utf8_lossy(&body).contains("more-data"));
+    } else {
+        assert_eq!(&body[..], b"more-data");
+    }
+    let (request_body, replayed) = upstream.await.unwrap();
+    assert!(request_body.is_empty());
+    assert!(
+        !replayed,
+        "response framing failure must never replay a request"
+    );
+    drop(state.shared_ingress.try_global_concurrency(1).unwrap());
+    drop(
+        state
+            .shared_ingress
+            .try_principal_concurrency("gateway-user", 1)
+            .unwrap(),
+    );
+    runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let records = agent_access_core::test_support::read_audit_records(
+        agent_access_core::AuditStoreType::Jsonl,
+        &temp.join("audit.jsonl"),
+    );
+    let lifecycle: Vec<_> = records
+        .iter()
+        .filter(|record| record["providerAudit"]["gateway"]["phase"].is_string())
+        .collect();
+    assert_eq!(lifecycle.len(), 2, "{records:?}");
+    assert_eq!(lifecycle[0]["providerAudit"]["gateway"]["phase"], "started");
+    let terminal = lifecycle[1];
+    assert_eq!(terminal["upstreamStatus"], 200);
+    if content_length.is_some() {
+        assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "failed");
+        assert_eq!(terminal["reasonCode"], "upstream_protocol_failed");
+        assert_eq!(terminal["decision"], "error");
+        assert_eq!(terminal["providerAudit"]["gateway"]["responseBytes"], 0);
+    } else {
+        assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "completed");
+        assert_eq!(terminal["decision"], "allow");
+        assert_eq!(terminal["providerAudit"]["gateway"]["responseBytes"], 9);
+    }
+}
+
+#[tokio::test]
 async fn a_committed_request_with_lost_response_is_never_replayed() {
     let temp = crate::tests::test_temp_dir();
     let (url, ready, upstream) = tls_origin(None);
