@@ -88,7 +88,7 @@ impl GatewayProtocol for HttpFixture {
         } else {
             ResourceScopes::new()
         };
-        Ok(GatewayClassification::new(
+        let classification = GatewayClassification::new(
             if path == "/unknown-action" {
                 "unknown"
             } else if path.starts_with("/scoped") {
@@ -102,7 +102,18 @@ impl GatewayProtocol for HttpFixture {
                 method: head.method().clone(),
                 path: path.into(),
             }),
-        ))
+        );
+        let facts = match path {
+            "/known-overcap" => Some(json!({"operation": "fixture_read"})),
+            "/bad-audit-shape" => Some(json!(["invalid"])),
+            "/bad-audit-size" => Some(json!({"operation": "x".repeat(16 * 1024)})),
+            "/bad-audit-spoof" => Some(json!({"phase": "completed"})),
+            _ => None,
+        };
+        Ok(match facts {
+            Some(facts) => classification.with_head_audit(facts),
+            None => classification,
+        })
     }
 }
 struct HttpRequest {
@@ -629,7 +640,8 @@ async fn known_length_over_cap_is_denied_before_protocol_inspection_or_upstream_
         &temp.join("audit.jsonl"),
     );
     assert!(records.iter().any(|record| record["decision"] == "deny"
-        && record["reasonCode"] == "gateway_request_cap_exceeded"));
+        && record["reasonCode"] == "gateway_request_cap_exceeded"
+        && record["providerAudit"]["gateway"]["operation"] == "fixture_read"));
     assert!(
         !records
             .iter()
@@ -997,7 +1009,7 @@ async fn upstream_content_length_is_validated_and_canonicalized_before_completio
     ] {
         let temp = crate::tests::test_temp_dir();
         let response = format!(
-            "HTTP/1.1 {status} Fixture\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{payload}"
+            "HTTP/1.1 {status} Fixture\r\nContent-Length: {length}\r\nConnection: close, Content-Length\r\n\r\n{payload}"
         );
         let (url, ready, upstream) = tls_origin(Some(response.into_bytes()));
         let (runtime, state, authorization) = runtime_fixture(&url, &temp);
@@ -1293,4 +1305,174 @@ fn protocol_audit_facts_cannot_assert_host_lifecycle_or_credential_fields() {
     ] {
         assert!(audit["gateway"].get(key).is_none(), "{key}");
     }
+}
+
+#[derive(Debug)]
+struct SelectedHeaders(HeaderMap);
+impl agent_access_provider::GatewayResponseValidator for SelectedHeaders {
+    fn validate(&self, _: u16, _: &HeaderMap) -> Result<HeaderMap, ProviderError> {
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn connection_nominated_response_headers_are_removed_for_default_and_validator_profiles() {
+    let mut headers = HeaderMap::new();
+    headers.append("connection", HeaderValue::from_static("keep-alive, ETag"));
+    headers.append(
+        "connection",
+        HeaderValue::from_static(" X-Transient , Retry-After"),
+    );
+    headers.append("etag", HeaderValue::from_static("one"));
+    headers.append("etag", HeaderValue::from_static("two"));
+    headers.insert("x-transient", HeaderValue::from_static("private-value"));
+    headers.insert("retry-after", HeaderValue::from_static("999999999"));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    let profile = GatewayResponseProfile::new(vec![
+        "etag".into(),
+        "x-transient".into(),
+        "retry-after".into(),
+        "content-type".into(),
+    ])
+    .bounded_retry_after();
+    let chosen: HeaderMap = headers
+        .iter()
+        .filter(|(name, _)| name.as_str() != "connection")
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let validated = profile
+        .clone()
+        .with_validator(Arc::new(SelectedHeaders(chosen)));
+    for profile in [profile, validated] {
+        assert_eq!(
+            selected_response_headers(&HTTP_FIXTURE, &profile, 429, &headers).unwrap(),
+            HeaderMap::from_iter([(
+                CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream")
+            )])
+        );
+    }
+    // Nominations cannot hide invalid module output before contract checking.
+    for (name, value) in [("etag", "invented"), ("authorization", "private-value")] {
+        headers.append("connection", HeaderValue::from_str(name).unwrap());
+        let chosen = HeaderMap::from_iter([(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            HeaderValue::from_static(value),
+        )]);
+        let profile = GatewayResponseProfile::new(vec![name.into()])
+            .with_validator(Arc::new(SelectedHeaders(chosen)));
+        assert_eq!(
+            selected_response_headers(&HTTP_FIXTURE, &profile, 200, &headers)
+                .unwrap_err()
+                .reason_code(),
+            ReasonCode::BrokerProviderContractFailed
+        );
+    }
+}
+
+#[tokio::test]
+async fn classified_head_audit_rejects_invalid_shapes_size_and_host_lifecycle_spoofing() {
+    let temp = crate::tests::test_temp_dir();
+    let (runtime, _, _) = runtime_fixture("https://unused.example.test", &temp);
+    let matched = MatchedGateway {
+        service: "api_one".into(),
+        config: runtime.gateway_config("api_one").unwrap().clone(),
+    };
+    for path in ["/bad-audit-shape", "/bad-audit-size", "/bad-audit-spoof"] {
+        let error = classify_gateway_request(
+            &runtime,
+            &matched,
+            &Method::GET,
+            &path.parse().unwrap(),
+            &HeaderMap::new(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::BrokerProviderContractFailed,
+            "{path}"
+        );
+    }
+    runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn generic_refused_connection_records_zero_handoff_without_execution_uncertainty() {
+    let temp = crate::tests::test_temp_dir();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("https://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let (runtime, state, authorization) = runtime_fixture(&url, &temp);
+    // Preflight inspects these bytes, but no byte can reach a refused listener.
+    let response = crate::router::build_gateway_router(state)
+        .oneshot(request(
+            Method::POST,
+            "/items",
+            &authorization,
+            Body::from("data"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "upstream_connection_failed"
+    );
+    let _ = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let records = agent_access_core::test_support::read_audit_records(
+        agent_access_core::AuditStoreType::Jsonl,
+        &temp.join("audit.jsonl"),
+    );
+    let terminal: Vec<_> = records
+        .iter()
+        .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
+        .collect();
+    assert_eq!(terminal.len(), 1, "{records:?}");
+    let record = terminal[0];
+    assert_eq!(record["decision"], "error");
+    assert_eq!(record["reasonCode"], "upstream_connection_failed");
+    assert_eq!(record["providerAudit"]["gateway"]["requestBytes"], 0);
+    assert!(
+        !record["providerAudit"]["gateway"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("uncertain")
+    );
+}
+
+#[test]
+fn valid_connection_nominations_are_removed_despite_invalid_sibling_tokens() {
+    let headers = HeaderMap::from_iter([
+        (
+            axum::http::header::CONNECTION,
+            HeaderValue::from_bytes(b" ETag , \xff , invalid;token").unwrap(),
+        ),
+        (
+            axum::http::header::ETAG,
+            HeaderValue::from_static("private-hop-value"),
+        ),
+        (CONTENT_TYPE, HeaderValue::from_static("text/plain")),
+    ]);
+    let expected = HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("text/plain"))]);
+    // Incoming identity admission separately rejects non-ASCII Connection fields;
+    // the common filter must still handle untrusted upstream response values.
+    assert_eq!(protocol_headers(&headers), expected);
+    let profile = GatewayResponseProfile::new(vec!["etag".into(), "content-type".into()]);
+    assert_eq!(
+        selected_response_headers(&HTTP_FIXTURE, &profile, 200, &headers).unwrap(),
+        expected
+    );
 }

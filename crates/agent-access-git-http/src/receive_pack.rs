@@ -437,6 +437,10 @@ fn receive_pack_error(
     }))
 }
 
+pub(crate) fn empty_receive_pack_audit() -> serde_json::Value {
+    receive_pack_audit_value(&[])
+}
+
 fn receive_pack_audit_value(updates: &[GitRefUpdate]) -> serde_json::Value {
     json!({
         "operation": "receive-pack",

@@ -430,6 +430,7 @@ pub struct GatewayClassification {
     scopes: ResourceScopes,
     request_kind: &'static str,
     request: Box<dyn GatewayRequest>,
+    head_audit: Option<Value>,
 }
 impl GatewayClassification {
     pub fn new(
@@ -443,6 +444,7 @@ impl GatewayClassification {
             scopes,
             request_kind,
             request,
+            head_audit: None,
         }
     }
     pub fn action(&self) -> &str {
@@ -453,6 +455,17 @@ impl GatewayClassification {
     }
     pub fn request_kind(&self) -> &'static str {
         self.request_kind
+    }
+    /// Bounded protocol facts known from the head, for host refusals before
+    /// preflight. The host requires an object of at most 16 KiB, wraps it under
+    /// the registration's audit key, and rejects host-owned lifecycle fields.
+    /// Do not include bodies, credentials or arbitrary parameter values.
+    pub fn with_head_audit(mut self, audit: Value) -> Self {
+        self.head_audit = Some(audit);
+        self
+    }
+    pub fn head_audit(&self) -> Option<&Value> {
+        self.head_audit.as_ref()
     }
     pub fn into_request(self) -> Box<dyn GatewayRequest> {
         self.request
@@ -1122,6 +1135,20 @@ mod tests {
             assert!(!value.contains("secret-"), "{value}");
         }
     }
+    #[test]
+    fn classification_debug_omits_head_audit_values() {
+        let facts = serde_json::json!({"operation": "SDK_PRIVATE_AUDIT_SENTINEL"});
+        let classification = GatewayClassification::new(
+            "items.read",
+            ResourceScopes::new(),
+            "request",
+            Box::new(Fixture),
+        )
+        .with_head_audit(facts.clone());
+        assert_eq!(classification.head_audit(), Some(&facts));
+        assert!(!format!("{classification:?}").contains("SDK_PRIVATE_AUDIT_SENTINEL"));
+    }
+
     #[test]
     fn request_debug_bounds_extension_methods_without_changing_the_request() {
         let extension = Method::from_bytes(b"SDK_PRIVATE_METHOD_SENTINEL").unwrap();

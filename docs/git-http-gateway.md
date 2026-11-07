@@ -407,9 +407,12 @@ by `streaming_idle_timeout_ms` for stalled request uploads, upstream response
 header waits, and response body streaming, plus byte caps, rate limits, and
 concurrency limits. Downloads have no total transfer deadline.
 Declared request lengths above the cap are refused before upstream dispatch.
-If an upload fails after dispatch, its terminal audit reports an error and a
-partial or uncertain upstream outcome. When response headers are still pending,
-the broker returns HTTP 502; it never retries a pack POST.
+An unfinished upload after dispatch records a partial or uncertain upstream
+outcome. An existing upstream denial or error retains its decision and reason;
+an otherwise successful transfer becomes an error. When response headers are
+still pending, streamed body read and byte-cap failures return HTTP 502;
+transport timeouts retain HTTP 504. Confirmed connection failures before any
+byte handoff do not imply uncertain execution. The broker never retries a pack POST.
 
 `git-upload-pack` and `git-receive-pack` POSTs are service invocations: each
 POST is counted once against the caller's per-principal limit for the gateway's
