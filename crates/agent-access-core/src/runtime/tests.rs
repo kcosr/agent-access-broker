@@ -8031,6 +8031,8 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         0,
     )));
     let invalid_runtime = BrokerRuntime {
+        gateways: runtime.gateways.clone(),
+        gateway_configs: runtime.gateway_configs.clone(),
         effective_credentials: Arc::new(invalid_config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
         imported_credential_contracts: runtime.imported_credential_contracts.clone(),

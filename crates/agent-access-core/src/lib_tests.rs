@@ -5238,13 +5238,7 @@ upload_spool_dir = "upload-spool"
 "#;
     let config: BrokerConfig = parse_test_config(raw).unwrap();
     validate_broker_config(&config).unwrap();
-    assert!(
-        config.gateways["gitlab_git"]
-            .git
-            .as_ref()
-            .unwrap()
-            .deny_delete_refs
-    );
+    assert_eq!(config.gateways["gitlab_git"].protocol_fields["git"]["allow_push"].as_bool(), Some(true));
     assert_eq!(
         config.policy.grants[0].resources.resource_group_ids,
         vec!["repositories"]
@@ -5294,7 +5288,7 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
     let errors = validation_errors(validate_broker_config(&with_gateway(gateway)));
     assert_contains(&errors, "must be an exact DNS host");
     let mut gateway = git_http_gateway_config();
-    gateway.git = None;
+    gateway.protocol_fields.remove("git");
     let errors = validation_errors(validate_broker_config(&with_gateway(gateway)));
     assert_contains(&errors, "gateways.gitlab_git.git is required");
 
