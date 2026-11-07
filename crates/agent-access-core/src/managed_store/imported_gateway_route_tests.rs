@@ -156,6 +156,15 @@ fn gateway_routes_hash_corruption_is_rejected_and_unknown_envelope_is_retained_u
         reopened.imported_catalog(),
         Err(ManagedStoreError::SchemaInvalid(_))
     ));
+    drop(reopened);
+    assert!(matches!(
+        ManagedStore::open(
+            &config,
+            &test_execution_contexts(),
+            ManagedStoreOpenMode::Startup,
+        ),
+        Err(ManagedStoreError::SchemaInvalid(_))
+    ));
 }
 
 #[test]
@@ -183,23 +192,51 @@ fn gateway_route_first_release_envelope_and_hash_are_frozen() {
 
 #[test]
 fn gateway_routes_migration_is_additive_requires_admission_and_supports_backup_restore() {
-    let (_temp, config, store, _) = fixture();
-    let original = store
-        .create_imported_service(definition(), "admin", accept)
-        .unwrap()
-        .catalog;
-    {
+    let temp = tempfile::TempDir::new().unwrap();
+    let config = ManagedStoreConfig {
+        kind: "sqlite".into(),
+        path: temp.path().join("store.sqlite").display().to_string(),
+        auto_migrate: true,
+        require_registered_principal_for_invocation: false,
+    };
+    let through_contexts = MANAGED_STORE_MIGRATIONS
+        .iter()
+        .position(|migration| {
+            migration.version == MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION
+        })
+        .unwrap();
+    let store = ManagedStore::open_with_catalog(
+        &config,
+        &test_execution_contexts(),
+        ManagedStoreOpenMode::Startup,
+        ManagedStoreMigrationCatalog {
+            migrations: &MANAGED_STORE_MIGRATIONS[..=through_contexts],
+        },
+    )
+    .unwrap();
+    let original = {
         let conn = store.connection.lock().unwrap();
-        conn.execute("DROP TABLE imported_gateway_routes", [])
-            .unwrap();
+        // A deterministic row in the actual pre-gateway schema. Current mutation
+        // methods intentionally require the current schema and are not used here.
         conn.execute(
-            "DELETE FROM schema_migrations WHERE version='035_imported_gateway_routes'",
+            "INSERT INTO imported_services(service,definition_json,status,version,created_at,created_by,updated_at,updated_by) VALUES(?1,?2,'draft',1,'2026-01-01T00:00:00Z','admin','2026-01-01T00:00:00Z','admin')",
+            params!["observability", serde_json::to_string(&definition()).unwrap()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE imported_catalog_revision SET revision=1 WHERE singleton=1",
             [],
         )
         .unwrap();
+        assert!(
+            !sqlite_support::sqlite_object_exists(&conn, "table", "imported_gateway_routes")
+                .unwrap()
+        );
+        let original = catalog_at(&conn, ImportSchema::SourceDocuments).unwrap();
         conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
             .unwrap();
-    }
+        original
+    };
     drop(store);
     let backup = fs::read(&config.path).unwrap();
     let mut read_only = config.clone();

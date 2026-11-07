@@ -2824,6 +2824,12 @@ upstream endpoint. The API endpoint must also match `imports.allowed_endpoints`.
 A URL source needs its document destination independently allowed; uploads need
 no document URL.
 
+Configuring any binding requires managed identity and policy authority, a managed
+store, credential encryption, and `management.enabled = true`, even when
+`imports.enabled = false`. The endpoint must use HTTPS in production. Its path
+must not contain repeated slashes or `.`/`..` components; at most one trailing
+slash is allowed.
+
 ```toml
 [imports]
 enabled = true
@@ -2849,10 +2855,13 @@ correlation_headers = true
 
 The binding also accepts an optional `egress_proxy` using the common proxy
 configuration. Authentication modes govern Broker ingress, independently of the
-upstream authentication selected during import. Trusted ingress requires
-`allow_forwarded_identity = true` and the existing trusted-caller admission
-contract. Anonymous upstream access never permits anonymous Broker ingress.
-Generated gateways reject redirects. Byte limits must be positive and cannot
+upstream authentication selected during import. `basic_broker_token_username`
+defaults to `"agent-access"` and must be nonempty printable ASCII without a colon
+or whitespace. `allow_forwarded_identity` defaults to `false`; trusted ingress
+requires `true` and the existing trusted-caller admission contract. Anonymous
+upstream access never permits anonymous Broker ingress. `redirect_policy`
+defaults to `"none"`, its only accepted value. `correlation_headers` defaults to
+`true`. Byte limits must be positive and cannot
 exceed `limits.max_http_body_bytes` or `limits.max_upstream_response_bytes`;
 `streaming_idle_timeout_ms`, when set, must be positive.
 

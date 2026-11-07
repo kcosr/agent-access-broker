@@ -353,11 +353,11 @@ impl GatewayRouteMatcher {
 fn select_components<'a, 'p>(
     method: &str,
     components: &[String],
-    candidates: impl Iterator<Item = (&'a str, &'a GatewayPathV1, &'p [Segment])>,
+    mut candidates: impl Iterator<Item = (&'a str, &'a GatewayPathV1, &'p [Segment])> + Clone,
 ) -> Result<Option<GatewayPathMatch<'a>>, String> {
     let mut selected = None;
     let mut specificity = 0;
-    for (template, guard, pattern) in candidates {
+    for (template, guard, pattern) in candidates.clone() {
         if components.len() != pattern.len() {
             continue;
         }
@@ -383,6 +383,29 @@ fn select_components<'a, 'p>(
     let Some((template, guard, pattern)) = selected else {
         return Ok(None);
     };
+    // Upstream routers may compare literals without ASCII case sensitivity. A
+    // capture must not become another guarded path's literal under that rule,
+    // even when the alternate guard is historical or has no selected method.
+    // Check the whole path so unrelated literals cannot constrain a capture;
+    // never change normal selection or rewrite the caller's case.
+    if candidates.any(|(_, _, alternate)| {
+        alternate.len() == components.len()
+            && alternate.iter().zip(pattern).any(|(other, selected)| {
+                matches!(
+                    (other, selected),
+                    (Segment::Literal(_), Segment::Parameter(_))
+                )
+            })
+            && alternate
+                .iter()
+                .zip(components)
+                .all(|(part, value)| match part {
+                    Segment::Literal(literal) => literal.eq_ignore_ascii_case(value),
+                    Segment::Parameter(_) => !value.is_empty(),
+                })
+    }) {
+        return Ok(None);
+    }
     let mut parameters = BTreeMap::new();
     let mut encoded = Vec::with_capacity(pattern.len());
     for (part, value) in pattern.iter().zip(components) {

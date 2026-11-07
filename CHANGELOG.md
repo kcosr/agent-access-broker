@@ -159,8 +159,10 @@ All notable changes to this project are documented in this file.
   or HTTP gateway exposure, review and accept operations, and authorize native
   HTTP clients with whole-operation grants. Operator
   `[imports.gateway_bindings.<service>]` entries pin each service's Broker hosts
-  and upstream endpoint. Execution requires explicit anonymous access or static
-  Basic, bearer or header API-key bindings; unlinked adapters stay unavailable.
+  and upstream endpoint. Gateway execution supports explicitly selected anonymous
+  access with no execution bindings, or static Basic, bearer or header API-key
+  bindings. Existing MCP and OpenAPI actions/tools imports still require execution
+  credential bindings.
   Refresh retains literal route guards and quarantines changed or missing
   accepted operations. Import lists include safe `gatewayBindings` choices;
   gateway services report `scopedMcp: null` and expose no invoke or MCP tools.
@@ -334,6 +336,13 @@ All notable changes to this project are documented in this file.
   ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
+
+- **Unlinked import adapters preserve configuration validity.** Syntactically
+  valid `imports.allowed_kinds` entries may name adapters absent from the selected
+  assembly. Startup and reload warn about each missing adapter; its imports
+  remain unavailable while the adapter is absent. See
+  [import operator controls](docs/configuration.md#imported-services-operator-controls).
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104))
 
 - **Raw downloads use explicit download response headers.** Successful native
   and command downloads carry `Content-Disposition: attachment` and

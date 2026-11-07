@@ -9,12 +9,13 @@ export const GATEWAY_BINDING: ImportGatewayBinding = {
 };
 
 export function gatewayOperation(action = "get_item", method = "GET", path = "/items/{id}"): ImportActionDefinition {
+  const source = { operationId: action };
   return {
-    action, source: { operationId: action }, label: "Inventory item", description: "Access an inventory item", readOnly: false,
-    inputSchema: { type: "object", properties: { id: { type: "string" } } },
+    action, source, label: "Inventory item", description: "Access an inventory item", readOnly: false,
+    inputSchema: { type: "object", additionalProperties: false },
     annotations: {
       openapiGateway: {
-        version: 1, method, path, security: { kind: "anonymous" },
+        version: 1, source, method, path, security: { kind: "anonymous" },
         parameters: [{ name: "id", location: "path", required: true, style: "simple", explode: false, schema: { type: "string" } }],
         responses: { "200": { headers: [{ name: "X-Api-Version", schema: { type: "string", maxLength: 32 } }], contentTypes: ["application/json"] } }
       }
@@ -39,7 +40,7 @@ export function gatewayPreview(): ImportPreviewResult {
       service: "inventory", serviceVersion: 1, catalogRevision: 4, configRevision: "config", credentialVersions: {}, manifestHash: "manifest",
       createdAt: "2026-11-07T00:00:00Z", expiresAt: "2099-11-07T00:00:00Z", createdBy: "admin",
       manifest: {
-        protocolVersion: "3.1.1", metadata: { bodyValidation: "none", securitySchemes: [{ name: "key", kind: "raw_header", header: "X-Api-Key" }, { name: "basic", kind: "basic" }, { name: "bearer", kind: "bearer" }] },
+        protocolVersion: "3.1.1", metadata: { securitySchemes: [{ name: "key", kind: "raw_header", header: "X-Api-Key" }, { name: "basic", kind: "basic" }, { name: "bearer", kind: "bearer" }] },
         tools: [{ definition: gatewayOperation(), unsupportedReason: null, readOnlyHint: null }]
       }
     }

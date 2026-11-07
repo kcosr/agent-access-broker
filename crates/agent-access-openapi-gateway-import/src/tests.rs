@@ -166,11 +166,9 @@ async fn complete_discovery_preserves_removed_literal_guards_and_has_no_automati
     assert!(selected.route.is_none());
     let removed = routes.select("DELETE", "/items/admin").unwrap().unwrap();
     assert!(!removed.route.unwrap().current);
-    assert!(
-        next.metadata
-            .to_string()
-            .contains(GATEWAY_TEMPLATE_COVERAGE_NOTICE)
-    );
+    assert_eq!(next.metadata["openapiVersion"], "3.1.0");
+    assert_eq!(next.metadata["apiBaseUrl"], definition.endpoint);
+    assert_eq!(next.metadata["securitySchemes"], json!([]));
 }
 
 #[tokio::test]

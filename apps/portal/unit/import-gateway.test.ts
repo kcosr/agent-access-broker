@@ -105,17 +105,17 @@ describe("gateway operation review", () => {
     expect(html).not.toContain("Body optional");
   });
 
-  test("raw body schemas never claim field-level validation", () => {
+  test("raw body review describes presence and media types without field-level validation", () => {
     const definition = gatewayOperation("submit", "POST", "/items");
-    definition.annotations = { openapiGateway: { version: 1, method: "POST", path: "/items", security: { kind: "anonymous" }, requestBody: { required: true, mediaTypes: ["application/json", "application/x-www-form-urlencoded"] }, parameters: [], responses: {} } };
-    definition.inputSchema = { type: "object", required: ["body"], properties: { body: { type: "object", required: ["secretField"], properties: { secretField: { type: "string" } } } } };
+    definition.annotations = { openapiGateway: { version: 1, source: definition.source, method: "POST", path: "/items", security: { kind: "anonymous" }, requestBody: { required: true, mediaTypes: ["application/json", "application/x-www-form-urlencoded"] }, parameters: [], responses: {} } };
     const operation = openApiOperation(definition);
     expect(operation).toMatchObject({ gateway: true, requestBodyRequired: true, requestMediaTypes: ["application/json", "application/x-www-form-urlencoded"] });
     expect(operation).not.toHaveProperty("requiredBodyFields");
     const html = renderToStaticMarkup(createElement(OperationDetails, { definition }));
     expect(html).toContain("Body required");
     expect(html).toContain("Body schema not validated by gateway");
-    expect(html).not.toContain("secretField");
+    expect(html).not.toContain("Required body fields");
+    expect(html).not.toContain("Required fields when body is supplied");
   });
 
   test("unsupported and future plans do not invent a body contract", () => {

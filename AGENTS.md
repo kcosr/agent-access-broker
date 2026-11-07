@@ -1147,6 +1147,8 @@ Compile matching at publication. Refresh publishes source, guards and quarantine
 atomically; stale admitted requests fail their original dispatch fences before
 upstream work. Never regenerate V1 plan/manifest or earlier import golden bytes.
 Keep schema-ledger rollback tied to restoring the matching database and binary.
+Preserve path case while denying capture aliases that ASCII-casefold onto a
+guarded literal in any alternate full-path match, including mixed templates.
 
 Generated gateways authorize whole operations without resource inference. They
 use explicit anonymous or static upstream authentication; no personal-to-shared
@@ -1157,7 +1159,11 @@ bounded Retry-After, completion and permits. Recheck the original caller proof,
 publication and selected personal material version after awaited preparation and
 audit work, immediately before sending; never resolve replacement credentials for
 a prepared request. Rewrap preserves material identity. Strip selected credential
-headers before protocol hooks and reject module replacements. Concrete parameter
+and configured identity-source headers before protocol hooks and reject module
+replacements. The adapter declares request headers through its core interface;
+core rejects configured identity collisions without parsing protocol plan JSON.
+Keep SQLite work off asynchronous executor workers and perform only cheap
+in-memory proof checks after the final awaited material recheck. Concrete parameter
 values, queries, bodies and arbitrary headers never enter generated-gateway audit
 facts; classifier denials record only a bounded method and safe gateway kind.
 

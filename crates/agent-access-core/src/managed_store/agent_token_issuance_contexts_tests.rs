@@ -483,7 +483,13 @@ fn issuance_context_migration_failure_rolls_back_tables_seed_and_ledger() {
         drop(contexts_previous_schema(&path));
         let before = migration_rows(&path);
         let mut migrations = MANAGED_STORE_MIGRATIONS.to_vec();
-        migrations.last_mut().unwrap().seed = Some(seed);
+        migrations
+            .iter_mut()
+            .find(|migration| {
+                migration.version == MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION
+            })
+            .expect("issuance-context migration is present")
+            .seed = Some(seed);
         let error = ManagedStore::open_with_catalog(
             &store_config(&path),
             &test_execution_contexts(),
@@ -496,6 +502,10 @@ fn issuance_context_migration_failure_rolls_back_tables_seed_and_ledger() {
         if stage == "ledger" {
             assert!(
                 matches!(error, ManagedStoreError::Unavailable(message) if message.contains("failed to record managed store migration 034_agent_token_issuance_contexts"))
+            );
+        } else {
+            assert!(
+                matches!(error, ManagedStoreError::SchemaInvalid(message) if message == "injected after context seed")
             );
         }
         assert_eq!(migration_rows(&path), before, "{stage}");
@@ -703,6 +713,10 @@ fn issuance_context_current_schema_validation_uses_one_snapshot_during_policy_wr
     .unwrap();
     let (blocked, ready) = channel();
     let (resume, released) = channel();
+    let validate_current_schema = production_migration_catalog()
+        .latest()
+        .unwrap()
+        .structural_validation;
     let task = thread::spawn(move || {
         VALIDATION_WAIT.with(|slot| *slot.borrow_mut() = Some((blocked, released)));
         let conn = reader.connection.lock().unwrap();
@@ -725,7 +739,7 @@ fn issuance_context_current_schema_validation_uses_one_snapshot_during_policy_wr
                 }
             }),
         );
-        agent_token_issuance::validate_context_structure(&conn)
+        validate_current_schema(&conn)
     });
     ready
         .recv_timeout(std::time::Duration::from_secs(10))

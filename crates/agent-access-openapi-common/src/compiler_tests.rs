@@ -28,10 +28,10 @@ fn compile(
 fn openapi_anonymous_compilation_keeps_source_identity_and_complete_guard_universe() {
     let result = compile(&source(), GatewayAuthenticationSelection::Anonymous).unwrap();
     assert_eq!(result.version, "3.1.1");
-    assert_eq!(result.metadata["bodyValidation"], "none");
     assert_eq!(
-        result.metadata["templateCoverageNotice"],
-        GATEWAY_TEMPLATE_COVERAGE_NOTICE
+        result.metadata,
+        json!({"openapiVersion":"3.1.1","title":null,"version":null,
+            "apiBaseUrl":"https://api.example.test/api","securitySchemes":[]})
     );
     assert_eq!(result.operations.len(), 2);
     for operation in result.operations {
@@ -454,6 +454,28 @@ fn first_release_v1_wire_and_canonical_hashes_remain_frozen() {
     assert_eq!(
         format!("{:x}", Sha256::digest(&canonical)),
         hashes["v1-retained-routes.json"]["canonicalSha256"]
+    );
+    // Derive the retained manifest from the real source compiler and refresh
+    // merge. The historical bytes above are read-only expectations, never a
+    // source for constructing the candidate under test.
+    let mut prior_source: Value = serde_json::from_slice(source).unwrap();
+    prior_source["paths"]["/items/admin"] = json!({"get":{
+        "operationId":"inventory_admin","responses":{"200":{"description":"Admin"}}
+    }});
+    let prior = compile_gateway_document(
+        &serde_json::to_vec(&prior_source).unwrap(),
+        &options(GatewayAuthenticationSelection::Anonymous),
+    )
+    .unwrap();
+    let mut current =
+        compile_gateway_document(source, &options(GatewayAuthenticationSelection::Anonymous))
+            .unwrap();
+    current.routes.merge_retained(&prior.routes).unwrap();
+    assert_eq!(current.routes, historical);
+    assert_eq!(serde_json::to_vec(&current.routes).unwrap(), bytes);
+    assert_eq!(
+        serde_json::to_vec(&serde_json::to_value(&current.routes).unwrap()).unwrap(),
+        canonical,
     );
     let selected = historical.select("GET", "/items/admin").unwrap().unwrap();
     assert_eq!(selected.template, "/items/admin");

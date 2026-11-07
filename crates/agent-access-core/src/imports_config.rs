@@ -227,15 +227,13 @@ fn validate_gateway_bindings(config: &BrokerConfig, errors: &mut Vec<String>) {
                 Err(_) => errors.push(format!("{label}.broker_hosts contains an invalid host")),
             }
         }
-        let endpoint = crate::imports::parse_import_endpoint(&binding.endpoint);
-        if !matches!(&endpoint, Ok(crate::imports::ImportEndpoint::Http(_)))
-            || binding.endpoint.contains(['*', '\\'])
-        {
+        let endpoint = managed_gateway_endpoint(&binding.endpoint);
+        if endpoint.is_err() {
             errors.push(format!(
                 "{label}.endpoint must be a fixed HTTP(S) API base URL"
             ));
         }
-        if let Ok(crate::imports::ImportEndpoint::Http(url)) = endpoint {
+        if let Ok(url) = endpoint {
             if config.deployment.environment == "production" && url.scheme() != "https" {
                 errors.push(format!("{label}.endpoint must use HTTPS in production"));
             }
@@ -299,6 +297,68 @@ fn validate_gateway_bindings(config: &BrokerConfig, errors: &mut Vec<String>) {
             errors,
         );
     }
+}
+
+/// Validate managed binding paths before URL parsing can erase dot components.
+/// This is a host endpoint constraint; no protocol implementation is linked here.
+pub(crate) fn managed_gateway_endpoint(raw: &str) -> Result<url::Url, ()> {
+    fn valid_path(path: &str) -> bool {
+        if !path.starts_with('/')
+            || path.starts_with("//")
+            || path.len() > 4096
+            || path.contains(['?', '#', '\\'])
+            || path.chars().any(char::is_control)
+        {
+            return false;
+        }
+        let components = path[1..].split('/').collect::<Vec<_>>();
+        if components.len() > 128
+            || components[..components.len().saturating_sub(1)]
+                .iter()
+                .any(|part| part.is_empty())
+        {
+            return false;
+        }
+        components.iter().all(|part| {
+            let bytes = part.as_bytes();
+            let mut offset = 0;
+            while offset < bytes.len() {
+                if bytes[offset] == b'%' {
+                    if offset + 2 >= bytes.len()
+                        || !bytes[offset + 1].is_ascii_hexdigit()
+                        || !bytes[offset + 2].is_ascii_hexdigit()
+                    {
+                        return false;
+                    }
+                    offset += 3;
+                } else {
+                    offset += 1;
+                }
+            }
+            percent_encoding::percent_decode_str(part)
+                .decode_utf8()
+                .is_ok_and(|decoded| {
+                    !matches!(decoded.as_ref(), "." | "..")
+                        && !decoded.contains(['/', '\\', '%', ';'])
+                        && !decoded.chars().any(char::is_control)
+                })
+        })
+    }
+    if raw.chars().any(char::is_control) || raw.contains(['*', '\\']) {
+        return Err(());
+    }
+    let (_, authority) = raw.split_once("://").ok_or(())?;
+    if let Some((_, path)) = authority.split_once('/')
+        && !valid_path(&format!("/{path}"))
+    {
+        return Err(());
+    }
+    let crate::imports::ImportEndpoint::Http(url) =
+        crate::imports::parse_import_endpoint(raw).map_err(|_| ())?
+    else {
+        return Err(());
+    };
+    valid_path(url.path()).then_some(url).ok_or(())
 }
 
 pub(crate) fn validate_imported_gateway_bindings(
@@ -601,6 +661,58 @@ mod tests {
     }
     fn binding(endpoint: &str, host: &str) -> ImportedGatewayBinding {
         toml::from_str(&format!("endpoint = {endpoint:?}\nbroker_hosts = [{host:?}]\nauth_modes = [\"bearer_broker_token\"]\n")).unwrap()
+    }
+
+    #[test]
+    fn gateway_binding_validates_raw_components_before_url_normalization() {
+        let mut config = import_config("development", false);
+        config.imports.allowed_endpoints = vec!["https://api.example/**".into()];
+        for endpoint in [
+            "https://api.example",
+            "https://api.example/",
+            "https://api.example/api",
+            "https://api.example/api/",
+            "https://api.example/v1/items:lookup@owner+value=present",
+            "https://api.example/caf%C3%A9/%7Euser",
+        ] {
+            config.imports.gateway_bindings.insert(
+                "inventory".into(),
+                binding(endpoint, "inventory.gateway.example"),
+            );
+            let mut errors = Vec::new();
+            validate_gateway_bindings(&config, &mut errors);
+            assert!(errors.is_empty(), "{endpoint}: {errors:?}");
+        }
+        for endpoint in [
+            "https://api.example/api//".to_owned(),
+            "https://api.example//api".to_owned(),
+            "https://api.example/api//items".to_owned(),
+            "https://api.example/api/./items".to_owned(),
+            "https://api.example/api/../items".to_owned(),
+            "https://api.example/api/%2e/items".to_owned(),
+            "https://api.example/api/.%2E/items".to_owned(),
+            "https://api.example/api/%2fitems".to_owned(),
+            "https://api.example/api/%5citems".to_owned(),
+            "https://api.example/api/%252e".to_owned(),
+            "https://api.example/api/items;ignored".to_owned(),
+            "https://api.example/api/items%3Bignored".to_owned(),
+            "https://api.example/api/%0a".to_owned(),
+            "https://api.example/api/%ff".to_owned(),
+            "https://api.example/api/%2".to_owned(),
+            "https://api.example/api/%zz".to_owned(),
+            format!("https://api.example/{}", vec!["a"; 129].join("/")),
+        ] {
+            config.imports.gateway_bindings.insert(
+                "inventory".into(),
+                binding(&endpoint, "inventory.gateway.example"),
+            );
+            let mut errors = Vec::new();
+            validate_gateway_bindings(&config, &mut errors);
+            assert!(errors.iter().any(|error| {
+                error == "imports.gateway_bindings.inventory.endpoint must be a fixed HTTP(S) API base URL"
+            }), "{endpoint}: {errors:?}");
+            assert!(!errors.iter().any(|error| error.contains(&endpoint)));
+        }
     }
 
     #[test]

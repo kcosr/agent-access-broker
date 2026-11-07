@@ -177,7 +177,6 @@ pub fn compile_gateway_document(
         "openapiVersion":version,"title":text(document.pointer("/info/title"),256),
         "version":text(document.pointer("/info/version"),256),"apiBaseUrl":options.endpoint,
         "securitySchemes":schemes.iter().map(|s| { let mut value=json!({"name":s.scheme,"kind":s.kind});if let Some(header)=&s.header{value["header"]=json!(header);}value }).collect::<Vec<_>>(),
-        "bodyValidation":"none", "templateCoverageNotice":GATEWAY_TEMPLATE_COVERAGE_NOTICE,
     });
     Ok(GatewayCompilation {
         version,

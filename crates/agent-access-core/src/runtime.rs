@@ -1783,6 +1783,7 @@ pub struct BrokerRuntime {
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
     imported_catalog: Arc<crate::ImportedCatalog>,
     imported_credential_contracts: Arc<imports::ImportedCredentialContracts>,
+    imported_gateway_diagnostics: Arc<BTreeMap<String, imports::ImportedGatewayDiagnostic>>,
     effective_credentials: Arc<crate::CredentialsConfig>,
     import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
     /// Command-import budgets and live process supervisors, carried from
@@ -2359,7 +2360,10 @@ impl BrokerRuntime {
                 .check_active_credential_keys(ring)
                 .map_err(runtime_managed_store_error)?;
         }
-        let imported_providers = imports::build_providers(
+        let imports::BuiltImportedProviders {
+            providers: imported_providers,
+            gateway_diagnostics: imported_gateway_diagnostics,
+        } = imports::build_providers(
             &config,
             &imported_catalog,
             &imported_credential_contracts,
@@ -2480,6 +2484,7 @@ impl BrokerRuntime {
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
             imported_credential_contracts: Arc::new(imported_credential_contracts),
+            imported_gateway_diagnostics: Arc::new(imported_gateway_diagnostics),
             import_dispatch: Arc::new(BTreeMap::new()),
             command_registry: previous
                 .map(|previous| previous.command_registry.clone())

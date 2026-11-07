@@ -59,6 +59,22 @@ pub(super) enum GatewayAccess {
     Delegated(GatewayDelegatedAccess),
 }
 
+impl GatewayAccess {
+    async fn recheck_imported_material(&self) -> Result<(), ProviderError> {
+        if let Self::ImportedStatic {
+            personal_fence: Some(material),
+            ..
+        } = self
+        {
+            let (store, fence) = material.as_ref().clone();
+            super::managed_store_blocking(move || store.validate_credential_material_fence(&fence))
+                .await
+                .map_err(super::provider_error_from_managed_store)?;
+        }
+        Ok(())
+    }
+}
+
 /// The caller's OAuth lease for one gateway request.
 pub(super) struct GatewayDelegatedAccess {
     credential: DelegatedCredential,
@@ -271,7 +287,7 @@ impl BrokerRuntime {
 
 impl PreparedGatewayOperation {
     /// Host-only final check against the captured publication and personal
-    /// material. Synchronous metadata checks leave no await before dispatch.
+    /// material proofs. This performs no locking or database work.
     pub fn validate_imported_dispatch(&self) -> Result<(), ProviderError> {
         if let Some(fence) = &self.imported_fence {
             fence.validate()?;
@@ -281,12 +297,20 @@ impl PreparedGatewayOperation {
             ..
         } = &self.access
         {
-            let (store, fence) = material.as_ref();
-            store
-                .validate_credential_material_fence(fence)
+            let (_, fence) = material.as_ref();
+            fence
+                .validate_current()
                 .map_err(super::provider_error_from_managed_store)?;
         }
         Ok(())
+    }
+
+    /// Host-only final metadata check for selected personal material, off the
+    /// async executor. After this await, recheck the cheap dispatch and identity
+    /// proofs immediately before sending. Local material mutations retire the
+    /// captured proof across this await; no replacement credential is resolved.
+    pub async fn recheck_imported_material(&self) -> Result<(), ProviderError> {
+        self.access.recheck_imported_material().await
     }
 
     /// Host-only: the authorization the request's next upstream attempt
@@ -314,18 +338,15 @@ impl PreparedGatewayOperation {
                 credential,
                 placement,
                 ..
-            } => {
-                self.validate_imported_dispatch()?;
-                Ok(GatewayUpstreamPresentation {
-                    authorization: Some(credential.authorization_as(placement).map_err(|_| {
-                        ProviderError::deny(
-                            ReasonCode::CredentialInvalid,
-                            "credential cannot be presented for the selected binding",
-                        )
-                    })?),
-                    delegated_version: None,
-                })
-            }
+            } => Ok(GatewayUpstreamPresentation {
+                authorization: Some(credential.authorization_as(placement).map_err(|_| {
+                    ProviderError::deny(
+                        ReasonCode::CredentialInvalid,
+                        "credential cannot be presented for the selected binding",
+                    )
+                })?),
+                delegated_version: None,
+            }),
             GatewayAccess::Delegated(delegated) => delegated.present(gateway).await,
         }
     }
@@ -486,6 +507,116 @@ fn gateway_lease_failure(connection: &str, error: ProviderError) -> ProviderErro
 mod tests {
     use super::*;
     use agent_access_provider::Decision;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn imported_material_recheck_keeps_tokio_timers_live_while_store_is_locked() {
+        use base64::Engine;
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let temp = tempfile::TempDir::new().unwrap();
+        let registry = crate::ConfiguredExecutionContexts::from_config(None).unwrap();
+        let store = crate::ManagedStore::open(
+            &crate::ManagedStoreConfig {
+                kind: "sqlite".into(),
+                path: temp.path().join("store.sqlite").display().to_string(),
+                auto_migrate: true,
+                require_registered_principal_for_invocation: false,
+            },
+            &registry,
+            crate::ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        store
+            .create_principal(
+                crate::PrincipalWriteRequest {
+                    principal_id: "alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                },
+                &registry,
+            )
+            .unwrap();
+        let key_path = temp.path().join("key");
+        std::fs::write(
+            &key_path,
+            base64::engine::general_purpose::STANDARD.encode([7u8; 32]),
+        )
+        .unwrap();
+        let ring = crate::CredentialKeyRing::load(&crate::CredentialEncryptionConfig {
+            active_key: "key".into(),
+            keys: vec![crate::CredentialEncryptionKeyConfig {
+                id: "key".into(),
+                provider: "file".into(),
+                env: None,
+                path: Some(key_path.display().to_string()),
+            }],
+        })
+        .unwrap();
+        store
+            .upsert_user_credential(
+                &ring,
+                crate::CredentialWriteRequest {
+                    owner_principal_id: "alice".into(),
+                    service: "inventory".into(),
+                    name: "default".into(),
+                    profile: "token".into(),
+                    credential_kind: "bearer_token".into(),
+                    secret: json!({"token":"fixture"}),
+                    metadata: json!({}),
+                    actor: "admin".into(),
+                },
+                crate::CredentialManagementPurpose::Administrative,
+            )
+            .unwrap();
+        let (credential, fence) = store
+            .resolve_user_credential_with_material_fence(
+                &ring,
+                "alice",
+                "inventory",
+                "default",
+                &["token".into()],
+                None,
+            )
+            .unwrap();
+        let access = GatewayAccess::ImportedStatic {
+            credential,
+            placement: agent_access_provider::CredentialPlacement::bearer(),
+            personal_fence: Some(Box::new((store.clone(), fence.clone()))),
+        };
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let mut released_normally = false;
+            store.with_credential_test_connection_lock(|| {
+                locked.send(()).unwrap();
+                // Watchdog bounds a regression that mistakenly blocks the sole
+                // Tokio worker; it does not establish the expected test ordering.
+                released_normally = released.recv_timeout(Duration::from_secs(5)).is_ok();
+            });
+            released_normally
+        });
+        ready.await.unwrap();
+        fence.validate_current().unwrap();
+        let recheck = access.recheck_imported_material();
+        tokio::pin!(recheck);
+        tokio::select! {
+            biased;
+            result = &mut recheck => panic!("locked store check completed before its release: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        release.send(()).unwrap();
+        recheck.await.unwrap();
+        assert!(
+            holder.join().unwrap(),
+            "store watchdog fired before Tokio's timer"
+        );
+    }
 
     #[test]
     fn only_reconnect_states_name_the_portal_reconnect() {

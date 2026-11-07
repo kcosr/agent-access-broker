@@ -113,9 +113,11 @@ pub(crate) struct ReloadableState {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GatewayDispatchPhase {
+    BeforePrepare,
     AfterPrepare,
     BeforeSend,
     AfterIdentityRecheck,
+    AfterMaterialRecheck,
 }
 
 #[cfg(test)]

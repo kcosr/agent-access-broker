@@ -168,6 +168,19 @@ impl ImportedAdapter for OpenApiGatewayAdapter {
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String> {
         plan(action).map(|_| ())
     }
+    fn request_header_names(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<Vec<String>, String> {
+        let plan = plan(action)?;
+        Ok(plan
+            .parameters
+            .into_iter()
+            .filter(|parameter| parameter.location == "header")
+            .map(|parameter| parameter.name)
+            .chain(plan.security.header)
+            .collect())
+    }
     fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
         Err("gateway actions have no executable MCP name".into())
     }

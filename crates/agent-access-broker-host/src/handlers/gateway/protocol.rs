@@ -6,6 +6,17 @@ use agent_access_provider::{
 use futures_util::StreamExt;
 use std::collections::BTreeSet;
 
+const ROUTE_NOT_FOUND_MESSAGE: &str = "gateway route was not found";
+
+pub(super) fn configured_identity_header(runtime: &BrokerRuntime, name: &str) -> bool {
+    runtime
+        .config()
+        .identity
+        .sources
+        .iter()
+        .any(|source| source.header.eq_ignore_ascii_case(name))
+}
+
 pub(super) fn contract_failure() -> ProviderError {
     ProviderError::error(
         ReasonCode::BrokerProviderContractFailed,
@@ -104,10 +115,19 @@ pub(super) fn classify_gateway_request(
     uri: &Uri,
     headers: &HeaderMap,
 ) -> Result<ClassifiedGatewayRequest, ProviderError> {
+    let managed = runtime
+        .config()
+        .imports
+        .gateway_bindings
+        .contains_key(&matched.service);
     let unavailable = || {
         ProviderError::deny(
             ReasonCode::GatewayRuleNotFound,
-            "gateway route is unavailable",
+            if managed {
+                ROUTE_NOT_FOUND_MESSAGE
+            } else {
+                "gateway route is unavailable"
+            },
         )
     };
     let registration = runtime
@@ -119,7 +139,10 @@ pub(super) fn classify_gateway_request(
     let mut headers = protocol_headers(headers);
     let reserved: Vec<_> = headers
         .keys()
-        .filter(|name| imported_credential_header(runtime, &matched.service, name.as_str()))
+        .filter(|name| {
+            configured_identity_header(runtime, name.as_str())
+                || imported_credential_header(runtime, &matched.service, name.as_str())
+        })
         .cloned()
         .collect();
     for name in reserved {
@@ -131,7 +154,14 @@ pub(super) fn classify_gateway_request(
             uri.path_and_query().map_or("/", |target| target.as_str()),
             &headers,
         ))
-        .map_err(|error| checked_failure(registration, GatewayHookPhase::Classification, error))?;
+        .map_err(|error| {
+            let error = checked_failure(registration, GatewayHookPhase::Classification, error);
+            if managed && error.reason_code() == ReasonCode::GatewayRuleNotFound {
+                ProviderError::deny(ReasonCode::GatewayRuleNotFound, ROUTE_NOT_FOUND_MESSAGE)
+            } else {
+                error
+            }
+        })?;
     let descriptor = runtime
         .service_descriptor(&matched.service)
         .ok_or_else(contract_failure)?;

@@ -29,9 +29,6 @@ pub const GATEWAY_MAX_PATHS: usize = 4096;
 pub const GATEWAY_MAX_OPERATIONS: usize = 512;
 /// Maximum nesting in source JSON and local references.
 pub const GATEWAY_MAX_DEPTH: usize = 64;
-/// Review notice required for template routes and subset acceptance.
-pub const GATEWAY_TEMPLATE_COVERAGE_NOTICE: &str = "Route guards cover only paths declared in this document or retained from earlier versions. Include literal routes that shadow templates, even when those operations will not be accepted.";
-
 pub(crate) fn bounded(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }

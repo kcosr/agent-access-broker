@@ -70,6 +70,9 @@ impl ImportedAdapter for PlannedCommand {
     fn kind(&self) -> &'static str {
         "command"
     }
+    fn supports_credential_free_execution(&self) -> bool {
+        true
+    }
     fn development_only(&self) -> bool {
         false
     }

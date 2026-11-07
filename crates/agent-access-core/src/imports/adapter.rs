@@ -256,6 +256,16 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         &["/result"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String>;
+    /// Request header names declared by a gateway action, including its selected
+    /// credential header. Core rejects collisions with configured identity
+    /// carriers during discovery and executable preparation. Invoke adapters
+    /// declare none; the host independently filters every forwarded request.
+    fn request_header_names(
+        &self,
+        _action: &ImportedActionDefinition,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
     /// The resources an accepted action names and the credential modes it
     /// supports, read offline from its definition; core maps them onto the
     /// action's descriptor. The default declares neither: the action is

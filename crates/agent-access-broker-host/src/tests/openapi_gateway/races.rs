@@ -445,6 +445,61 @@ impl PublicationChange {
 }
 
 #[tokio::test]
+async fn openapi_gateway_publication_during_upload_preflight_is_a_generation_denial() {
+    for change in [
+        PublicationChange::RotateShared,
+        PublicationChange::DisableService,
+        PublicationChange::RetireAction,
+        PublicationChange::ChangeHost,
+    ] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::ready(&upstream, UpstreamAuth::Bearer, &["upload_bytes"]).await;
+        let waiting = PausedRequest::start_with_request(
+            &fixture,
+            GatewayDispatchPhase::BeforePrepare,
+            fixture
+                .gateway(Method::POST, "/upload", "preflight-generation-fenced")
+                .header(CONTENT_TYPE, "application/octet-stream")
+                .body(BLOB.to_vec()),
+        )
+        .await;
+        assert!(upstream.api_requests().is_empty());
+        assert_eq!(upstream.writes(), 0);
+        if matches!(change, PublicationChange::RetireAction) {
+            action_status(&fixture, "upload_bytes", "retired").await;
+        } else {
+            change.apply(&fixture, &upstream).await;
+        }
+        let response = waiting.release().await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{change:?}");
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            "service_action_denied",
+            "{change:?}"
+        );
+        response.bytes().await.unwrap();
+        assert!(upstream.api_requests().is_empty(), "{change:?}");
+        assert_eq!(upstream.writes(), 0, "{change:?}");
+        let terminal = fixture.terminal("preflight-generation-fenced").await;
+        assert_eq!(
+            terminal["reasonCode"], "service_action_denied",
+            "{change:?}"
+        );
+        assert_ne!(terminal["providerAudit"]["gateway"]["phase"], "started");
+        let records =
+            read_audit_records(Path::new(&fixture.seed.config.audit.as_ref().unwrap().path));
+        assert_eq!(
+            records
+                .iter()
+                .filter(|row| row["agentRequestId"] == "preflight-generation-fenced")
+                .count(),
+            1
+        );
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn openapi_gateway_publication_changes_reject_original_prepared_and_pre_send_authority() {
     for phase in [
         GatewayDispatchPhase::AfterPrepare,
@@ -495,6 +550,7 @@ async fn openapi_gateway_selected_personal_material_is_fenced_after_rotation_rem
     for phase in [
         GatewayDispatchPhase::AfterPrepare,
         GatewayDispatchPhase::BeforeSend,
+        GatewayDispatchPhase::AfterMaterialRecheck,
     ] {
         for mutation in ["rotate", "remove", "replace"] {
             let upstream = Upstream::start().await;

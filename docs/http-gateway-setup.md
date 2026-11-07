@@ -139,6 +139,12 @@ through to the accepted `/items/{id}` action. The Broker derives guards from the
 document. It cannot discover a backend `/items/admin` route omitted by the
 author. Do not create a reduced document by deleting shadowing routes.
 
+Routing preserves path case. A template capture is denied when ASCII case
+folding could make the full path match another declared or historical guard
+with a literal in that captured position. Thus `/items/ADMIN` cannot bypass
+`/items/admin` through `/items/{id}`. This also protects mixed literal and
+parameter paths; unrelated values such as `/items/ALPHA` retain their case.
+
 Templates bind complete individual segments. Concrete paths take precedence;
 equivalent templates with renamed variables and ambiguous overlapping templates
 are rejected. Methods are exact: declare HEAD and OPTIONS explicitly. Missing,
@@ -148,6 +154,11 @@ substituted parameter values are encoded separately. Matrix/path parameters are
 unsupported: semicolons, including encoded forms, are rejected in source paths
 and captured values. An unsafe source path fails discovery rather than being
 dropped from the guard universe.
+
+Configured identity-source header names are reserved as well as the standard
+Broker identity carriers. An operation declaring one is unsupported in preview;
+adding a conflicting identity source makes retained affected imports unavailable.
+Caller values for these headers never reach the protocol module or upstream.
 Removed paths remain historical denial guards. A refresh never removes a guard
 to make room; exceeding the guard limits rejects the refresh and retains the
 previous complete generation.

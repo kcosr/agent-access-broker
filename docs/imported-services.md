@@ -40,6 +40,15 @@ known service. They are absent from ordinary agent service/action discovery,
 executable MCP tools and `/v1/invoke`. Native clients use the configured gateway
 host and their Broker ingress credentials.
 
+The administrative import list always includes a `gatewayBindings` array of
+reserved identities, even when empty. Each entry reports its service, endpoint,
+Broker hosts, ingress modes, trusted-identity setting and creation availability.
+An already retained identity is unavailable for creating another import, even
+when its current service is enabled; disabled bindings and missing permitted
+gateway modules also make it unavailable. An unavailable entry includes a reason.
+These choices contain no proxy credentials or secret references. See the
+[HTTP API fields](http-api.md#imported-mcp-actions).
+
 The definition requires `connectionSettings.executionAuthentication`:
 
 - `anonymous` requires `executionBindings: []` and no `securityScheme`. Only
@@ -147,6 +156,10 @@ from the complete catalog. Disabled and retired records still count as retained
 names, so disabling or retiring an import does not invalidate its TOML entry.
 
 ## Administrative workflow
+
+MCP actions/tools imports require one or two execution credential bindings,
+selecting service credentials, personal credentials, or both. These MCP imports
+do not support anonymous upstream execution.
 
 1. Open **Admin > Catalog** as a base administrator, choose **Import service**,
    and create a draft; the draft opens on the service's **Import** tab. Supply a service ID,
@@ -797,8 +810,10 @@ for naming limits, shared HTTP quotas and stdio whole-catalog limits.
 
 ## Service-specific MCP readiness
 
-Import detail and mutation responses include a derived `scopedMcp` object with
-`ready`, bounded `issues` (codes and canonical action IDs), and `truncated`.
+Import detail and mutation responses require `scopedMcp`. HTTP gateway imports
+return `null` and have no service-specific MCP connection. Actions/tools imports
+return a derived object with `ready`, bounded `issues` (codes and canonical action
+IDs), and `truncated`.
 It describes the current published definitions, including actions the current
 agent cannot see. Disabled, retired, and quarantined actions are excluded.
 The ordinary caller catalog exposes only `scopedMcpReady` on services and
@@ -806,7 +821,8 @@ The ordinary caller catalog exposes only `scopedMcpReady` on services and
 administrative data.
 
 Preview responses separately include `scopedMcpWarnings`, with `toolIndex`,
-`proposedAction`, and `codes`. These provisional warnings do not block accepting
+`proposedAction`, and `codes`; HTTP gateways return an empty array. These
+provisional warnings do not block accepting
 an otherwise supported aggregate action, and are outside the stored manifest
 and its hash. Editing canonical names can affect warnings for unnamed OpenAPI
 operations. Acceptance recomputes readiness from the final selection.

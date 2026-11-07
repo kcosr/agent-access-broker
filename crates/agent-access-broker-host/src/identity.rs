@@ -389,6 +389,8 @@ mod tests {
                 "agent-access-gmail",
                 "agent-access-jira",
                 "agent-access-mcp-upstream",
+                "agent-access-openapi-gateway",
+                "agent-access-openapi-gateway-import",
                 "agent-access-openapi-upstream",
                 "agent-access-teams",
             ]
@@ -396,6 +398,14 @@ mod tests {
         assert_eq!(
             module(&status, "agent-access-git-http")["roles"],
             json!([{"role": "gateway", "id": "git_http"}])
+        );
+        assert_eq!(
+            module(&status, "agent-access-openapi-gateway")["roles"],
+            json!([{"role": "gateway", "id": "openapi_gateway"}])
+        );
+        assert_eq!(
+            module(&status, "agent-access-openapi-gateway-import")["roles"],
+            json!([{"role": "import", "id": "openapi_gateway"}])
         );
         assert_eq!(
             module(&status, "agent-access-fake")["roles"],

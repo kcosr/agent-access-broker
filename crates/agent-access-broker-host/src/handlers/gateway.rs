@@ -593,31 +593,39 @@ async fn gateway_dispatch_admitted(
             );
         }
     };
-    let upstream_url =
-        match validate_forward_plan(&matched_gateway.config, &classified.method, &plan).and_then(
-            |url| {
-                if plan.headers.keys().any(|name| {
-                    imported_credential_header(&runtime, &matched_gateway.service, name.as_str())
-                }) {
-                    Err(contract_failure())
-                } else {
-                    Ok(url)
-                }
-            },
-        ) {
-            Ok(url) => url,
-            Err(error) => {
-                return gateway_runtime_response(
-                    runtime
-                        .reject_gateway_operation_without_credential(
-                            operation_context,
-                            classified.resource_scopes,
-                            error,
-                        )
-                        .await,
-                );
-            }
-        };
+    let upstream_url = match validate_forward_plan(
+        &matched_gateway.config,
+        &classified.method,
+        &plan,
+    )
+    .and_then(|url| {
+        if plan.headers.keys().any(|name| {
+            configured_identity_header(&runtime, name.as_str())
+                || imported_credential_header(&runtime, &matched_gateway.service, name.as_str())
+        }) {
+            Err(contract_failure())
+        } else {
+            Ok(url)
+        }
+    }) {
+        Ok(url) => url,
+        Err(error) => {
+            return gateway_runtime_response(
+                runtime
+                    .reject_gateway_operation_without_credential(
+                        operation_context,
+                        classified.resource_scopes,
+                        error,
+                    )
+                    .await,
+            );
+        }
+    };
+    #[cfg(test)]
+    state
+        .reloadable
+        .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::BeforePrepare)
+        .await;
     let prepared = match runtime
         .prepare_gateway_operation(operation_context, classified.resource_scopes)
         .await
@@ -1272,13 +1280,23 @@ async fn forward_prepared_gateway(
             .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterIdentityRecheck)
             .await;
     }
-    let validated = prepared.validate_imported_dispatch().and_then(|()| {
-        if let Some(proof) = &dispatch_proof {
-            proof.validate(&prepared.identity)
-        } else {
-            Ok(())
-        }
-    });
+    let material = prepared.recheck_imported_material().await;
+    #[cfg(test)]
+    if let Some(proof) = &dispatch_proof {
+        proof
+            .reloadable
+            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterMaterialRecheck)
+            .await;
+    }
+    let validated = material
+        .and_then(|()| prepared.validate_imported_dispatch())
+        .and_then(|()| {
+            if let Some(proof) = &dispatch_proof {
+                proof.validate(&prepared.identity)
+            } else {
+                Ok(())
+            }
+        });
     if let Err(error) = validated {
         return gateway_runtime_response(
             runtime

@@ -83,6 +83,105 @@ fn literal_guard_wins_before_method_or_action_state() {
 }
 
 #[test]
+fn captured_ascii_case_variants_cannot_bypass_any_literal_guard() {
+    for (current, supported) in [(true, true), (true, false), (false, true)] {
+        let mut routes = manifest(&["/{collection}/{id}", "/items/{id}", "/items/admin"]);
+        let guarded = routes
+            .paths
+            .get_mut("/items/admin")
+            .unwrap()
+            .methods
+            .get_mut("GET")
+            .unwrap();
+        guarded.current = current;
+        guarded.supported = supported;
+        let matcher = routes.matcher().unwrap();
+        for method in ["GET", "POST", "HEAD"] {
+            for path in [
+                "/items/ADMIN",
+                "/items/aDmIn",
+                "/items/%41DMIN",
+                "/ITEMS/admin",
+                "/ItEmS/aDmIn",
+                "/ITEMS/ordinary",
+            ] {
+                assert!(matcher.select(method, path).unwrap().is_none(), "{path}");
+                assert!(routes.select(method, path).unwrap().is_none(), "{path}");
+            }
+            // Exact selection remains authoritative, including a denied method
+            // or historical operation. Its case is never normalized.
+            let selected = matcher.select(method, "/items/admin").unwrap().unwrap();
+            assert_eq!(selected.template, "/items/admin");
+            assert_eq!(selected.canonical_path, "/items/admin");
+            if method == "GET" {
+                assert_eq!(selected.route.unwrap().current, current);
+                assert_eq!(selected.route.unwrap().supported, supported);
+            } else {
+                assert!(selected.route.is_none());
+            }
+            for (path, template) in [
+                ("/items/ALPHA", "/items/{id}"),
+                ("/OTHER/ordinary", "/{collection}/{id}"),
+            ] {
+                let selected = matcher.select(method, path).unwrap().unwrap();
+                assert_eq!(selected.template, template);
+                assert_eq!(selected.canonical_path, path);
+            }
+        }
+    }
+}
+
+#[test]
+fn case_variant_guards_cover_mixed_templates_and_incomparable_paths() {
+    let routes = manifest(&[
+        "/teams/{team}/items/{id}",
+        "/teams/admin/items/{id}",
+        "/Items/{id}/edit",
+        "/items/admin/{verb}",
+    ]);
+    let matcher = routes.matcher().unwrap();
+    for path in [
+        "/teams/ADMIN/items/ALPHA",
+        "/teams/aDmIn/items/item",
+        "/Items/ADMIN/edit",
+        "/items/admin/EDIT",
+    ] {
+        assert!(matcher.select("GET", path).unwrap().is_none(), "{path}");
+        assert!(routes.select("GET", path).unwrap().is_none(), "{path}");
+    }
+    for (path, template) in [
+        ("/teams/ALPHA/items/ADMIN", "/teams/{team}/items/{id}"),
+        ("/teams/admin/items/ALPHA", "/teams/admin/items/{id}"),
+        ("/Items/ALPHA/edit", "/Items/{id}/edit"),
+        ("/items/admin/ALPHA", "/items/admin/{verb}"),
+    ] {
+        let selected = matcher.select("GET", path).unwrap().unwrap();
+        assert_eq!(selected.template, template);
+        assert_eq!(selected.canonical_path, path);
+    }
+}
+
+#[test]
+fn exact_literal_routes_and_nonascii_case_remain_distinct() {
+    let routes = manifest(&[
+        "/items/{id}",
+        "/items/admin",
+        "/items/ADMIN",
+        "/items/ädmin",
+    ]);
+    let matcher = routes.matcher().unwrap();
+    for path in ["/items/admin", "/items/ADMIN"] {
+        let selected = matcher.select("GET", path).unwrap().unwrap();
+        assert_eq!(selected.template, path);
+        assert_eq!(selected.canonical_path, path);
+    }
+    let selected = matcher.select("GET", "/items/ÄDMIN").unwrap().unwrap();
+    assert_eq!(selected.template, "/items/{id}");
+    assert_eq!(selected.parameters["id"], "ÄDMIN");
+    assert_eq!(selected.canonical_path, "/items/%C3%84DMIN");
+}
+
+#[test]
 fn removed_path_remains_a_guard_after_refresh() {
     let old = manifest(&["/items/{id}", "/items/admin"]);
     let mut current = manifest(&["/items/{id}"]);
