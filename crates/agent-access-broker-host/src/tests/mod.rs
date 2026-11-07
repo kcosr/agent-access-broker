@@ -102,6 +102,7 @@ mod mcp_spans;
 mod membership_renewal;
 mod microsoft_oidc;
 mod oauth;
+mod openapi_gateway;
 mod principal_access;
 mod rate_wait;
 mod resource_management;

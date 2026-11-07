@@ -7,7 +7,7 @@ const RELEASE_SOURCE: SourceRevision = SourceRevision::evidence(RELEASE_COMMIT);
 
 /// The module packages this assembly registers, all members of this
 /// workspace and so built from its one commit.
-const fn workspace_modules(source: SourceRevision) -> [ModuleProvenance; 11] {
+const fn workspace_modules(source: SourceRevision) -> [ModuleProvenance; 13] {
     [
         ModuleProvenance::new("agent-access-atlassian", VERSION, source),
         ModuleProvenance::new("agent-access-cloudbees-ci", VERSION, source),
@@ -18,12 +18,14 @@ const fn workspace_modules(source: SourceRevision) -> [ModuleProvenance; 11] {
         ModuleProvenance::new("agent-access-gmail", VERSION, source),
         ModuleProvenance::new("agent-access-jira", VERSION, source),
         ModuleProvenance::new("agent-access-mcp-upstream", VERSION, source),
+        ModuleProvenance::new("agent-access-openapi-gateway", VERSION, source),
+        ModuleProvenance::new("agent-access-openapi-gateway-import", VERSION, source),
         ModuleProvenance::new("agent-access-openapi-upstream", VERSION, source),
         ModuleProvenance::new("agent-access-teams", VERSION, source),
     ]
 }
 
-static RELEASE_MODULES: [ModuleProvenance; 11] = workspace_modules(RELEASE_SOURCE);
+static RELEASE_MODULES: [ModuleProvenance; 13] = workspace_modules(RELEASE_SOURCE);
 
 /// This executable's identity, stamped by `build.rs`. A release build was
 /// made from a verified clean checkout of one commit, which is the source of
@@ -57,7 +59,7 @@ mod tests {
     fn a_release_stamp_covers_every_registered_package_with_one_commit() {
         const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
         const SOURCE: SourceRevision = SourceRevision::evidence(COMMIT);
-        static MODULES: [ModuleProvenance; 11] = workspace_modules(SOURCE);
+        static MODULES: [ModuleProvenance; 13] = workspace_modules(SOURCE);
         let identity = AssemblyIdentity::new("agent-access-broker", VERSION)
             .with_source(SOURCE)
             .with_host_source(SOURCE)

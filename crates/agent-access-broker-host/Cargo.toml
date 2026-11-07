@@ -63,6 +63,8 @@ agent-access-gmail = { path = "../agent-access-gmail", features = ["test-support
 agent-access-jira = { path = "../agent-access-jira", features = ["test-support"] }
 agent-access-mcp-upstream = { path = "../agent-access-mcp-upstream" }
 agent-access-openapi-upstream = { path = "../agent-access-openapi-upstream" }
+agent-access-openapi-gateway = { path = "../agent-access-openapi-gateway" }
+agent-access-openapi-gateway-import = { path = "../agent-access-openapi-gateway-import" }
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 agent-access-teams = { path = "../agent-access-teams" }
 async-trait.workspace = true
