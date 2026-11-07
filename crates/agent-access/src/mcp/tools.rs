@@ -927,7 +927,12 @@ mod tests {
             )
             .await
             .unwrap_err();
-            assert_eq!(error.to_string(), "service view is unavailable", "{change}");
+            let expected = if change == "gateway" {
+                "service is not visible or does not exist"
+            } else {
+                "service view is unavailable"
+            };
+            assert_eq!(error.to_string(), expected, "{change}");
             assert_eq!(std::fs::read_to_string(&output).unwrap(), "preserve");
         }
         let error = call_tool(

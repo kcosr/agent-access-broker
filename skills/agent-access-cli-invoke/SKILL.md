@@ -36,6 +36,10 @@ agent-access actions describe --service SERVICE ACTION
 agent-access spec catalog
 ```
 
+Service/action discovery omits gateways, including Git. Native clients use their
+preconfigured gateway address; `resource-access describe --service SERVICE`
+can inspect authorized access to an already known gateway service ID.
+
 Action detail and the caller-filtered `agent-access.catalog.v2` catalog contain
 the inner `inputSchema`, extended `documentation`, I/O and response capabilities.
 Read documentation for query syntax, field relationships, content formats,

@@ -37,6 +37,10 @@ agent-access actions describe --service SERVICE ACTION
 agent-access spec catalog
 ```
 
+Service/action discovery omits gateways, including Git. Native clients use their
+preconfigured gateway address; explicit resource-access inspection remains
+available for an already known gateway service ID.
+
 `SERVICE` and `ACTION` stand for canonical IDs, not display or MCP tool names.
 Action detail's `documentation.typedCommand` gives the typed command template.
 Read that command's `--help` for exact flags and alternatives. Use canonical

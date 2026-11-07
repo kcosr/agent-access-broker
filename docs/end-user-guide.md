@@ -492,7 +492,10 @@ report.
 | Access through a Microsoft group stopped working | Check **Microsoft groups** on **Account** (or `microsoftMembership` in `agent-access auth status`). If it asks for a sign-in, sign in to the portal with Microsoft again; if renewal is blocked, ask your administrator |
 
 `agent-access services describe SERVICE` and MCP `services_describe` show your
-effective rate, configured wait and current process-local queue/capacity estimates.
+invoke services' effective rate, configured wait and current process-local
+queue/capacity estimates. Gateways are excluded from describe: Git pack-POST
+live queues and admission estimates are unavailable to callers. Their configured
+allowances remain in `agent-access auth status` and `/v1/me.serviceLimits`.
 A waiting call stays open and uses a request slot; do not submit it again. CLI
 and local stdio MCP use `[service].request_timeout_ms` (default `30000`); allow
 waiting plus execution within any proxy timeout. A timeout may leave the Broker

@@ -695,21 +695,41 @@ async fn git_revocation_during_rate_wait(exhaust_auth_budget: bool) {
     drop(seed);
     let (body, polls) = counted_body("git-revocation-waiting");
     let waiting = tokio::spawn(pack("git-revocation-waiting", body));
-    let public = fixture._broker.app();
+    // Gateway service detail is intentionally hidden from agent discovery.
+    // Observe the scheduler directly to retain the queue-before-revocation fence.
+    let state = fixture._broker.state();
+    let snapshot = state.current();
+    let limiter = &state.shared_invocations;
+    let epoch = limiter
+        .runtime_epoch(|| Arc::ptr_eq(&state.current(), &snapshot))
+        .unwrap();
+    let max_wait = snapshot
+        .runtime
+        .configured_invocation_limits()
+        .max_wait("gitlab_git");
+    let resolve_limit: crate::ingress::invocation_limits::InvocationLimitResolver =
+        Arc::new(move || {
+            let runtime = snapshot.runtime.clone();
+            Box::pin(async move {
+                runtime
+                    .effective_invocation_limit("gateway-user", "gitlab_git")
+                    .await
+                    .map(|effective| effective.limit())
+            })
+        });
     tokio::time::timeout(WAIT_BOUND, async {
         loop {
-            let response = authed_json_request(
-                public.clone(),
-                Method::GET,
-                "/v1/services/gitlab_git",
-                "git-revocation-observe",
-                "Authorization",
-                format!("Bearer {}", fixture.agent_token),
-                None,
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            if response_json(response).await["limits"]["invocations"]["queuedRequests"] == 1 {
+            let observed = limiter
+                .observe(
+                    epoch,
+                    "gateway-user",
+                    "gitlab_git",
+                    max_wait,
+                    resolve_limit.clone(),
+                )
+                .await
+                .unwrap();
+            if observed.invocations.queued_requests == 1 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;

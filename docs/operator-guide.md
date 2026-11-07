@@ -1319,12 +1319,16 @@ a pending request infeasible, returning 429 before its original deadline without
 charging either allowance. The waiting deadline is never extended.
 
 Use `agent-access services describe SERVICE`, HTTP service detail or MCP
-`services_describe` for [live limits](http-api.md#live-service-limits): effective
+`services_describe` for invoke services' [live limits](http-api.md#live-service-limits): effective
 personal and shared policy, personal counted/queued requests, the next joint
 admission estimate and approximate principal occupancy. `blockingScope` identifies
 personal or shared blockage. Describe has independent bounded capacity; lists and the
 Account page remain static. Observations are local to one Broker process and
 reserve no capacity.
+
+Gateway services are excluded from describe, so callers cannot observe Git
+pack-POST live queues or admission estimates. Configured allowances remain in
+`/v1/me.serviceLimits` and administrator service-limits routes.
 
 Allow waiting plus useful execution in client/proxy timeouts. CLI and local stdio
 MCP use `[service].request_timeout_ms` (default `30000`); download body idle timeout

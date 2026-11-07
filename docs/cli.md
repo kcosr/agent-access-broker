@@ -268,7 +268,11 @@ metadata; it does not replace health or readiness checks.
 {"services":[{"service":"jira","displayName":"Jira","surface":"invoke","actions":["issue.view","search"],"availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."}}]}
 ```
 
-Surfaces use the broker's canonical `invoke` or `gateway` spelling. Action names replace counts. `--verbose` returns an unwrapped array of
+Ordinary discovery includes only `surface: "invoke"` services. Gateway services,
+including Git, are omitted from service/action lists and describes; direct
+lookups receive the same unavailable response as a missing service. Obtain the
+gateway address and authentication setup from the administrator. Action names
+replace counts. `--verbose` returns an unwrapped array of
 complete service objects, including action schemas. `services describe SERVICE`
 returns one complete service object, including authenticated callers' effective
 `limits`, personal FIFO queue/rate observations and shared request occupancy in
@@ -297,6 +301,10 @@ several types; without it, all types and unscoped actions are described.
 `executionContext` identifies the admitted context; `availability` uses the same
 credential readiness and remediation shape as `services list`, including when
 missing credentials leave `access` empty.
+
+A known gateway service is also supported here, including its repository
+scopes, even though ordinary service/action discovery omits gateways. This
+explicit query applies the same caller authority and local credential checks.
 
 ```json
 {"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
@@ -366,24 +374,23 @@ Execution still authorizes every resolved target together.
 same filters. It fetches selected names first, then service details, and only
 keeps their intersection. A second-fetch failure fails the command.
 
-`actions describe --service SERVICE ACTION` returns one full action definition
-with `service` added. For invoke actions, a fresh caller-visible runtime catalog
+`actions describe --service SERVICE ACTION` returns one full invoke-action definition
+with `service` added. A fresh caller-visible runtime catalog
 supplies IO, presentation, and sensitive-field metadata. Actions with an available
 aggregate MCP name also include `mcpTool` containing the exact name and argument
 schema. The top-level `inputSchema` describes
 raw broker inputs; `mcpTool.inputSchema` describes the local MCP wrapper.
-Non-invoke actions return raw service action metadata without `mcpTool`.
 Invoke actions with an unavailable aggregate name omit `mcpTool` and include
 `mcpToolUnavailable`: `name_conflict`, `name_too_long`, or `reserved_name`.
 This concerns MCP naming, not CLI invocation eligibility. See
 [MCP discovery](mcp.md#discovery-and-permissions).
 
-Service discovery supports all its existing token classes and surfaces; native
+Service discovery supports its existing token classes for invoke services; native
 MCP tools and augmented invoke-action details require caller catalog visibility.
 Invoke-action detail also requires an authenticated identity: the runtime catalog
 rejects anonymous callers with HTTP 401 (CLI exit 6), even when service discovery
 allows anonymous access. Anonymous callers should use `services describe` for
-the raw definition; non-invoke action details retain service visibility.
+the raw definition.
 When an action appears in the service document but lacks catalog detail, the
 command reports unavailable caller-visible catalog detail and recommends
 `services describe` or retry. It does not silently return a partial definition.
