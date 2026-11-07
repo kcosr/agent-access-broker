@@ -473,15 +473,66 @@ fn canonical_paths_preserve_raw_pchar_and_literal_custom_verbs() {
     let routes = manifest(&[path]);
     routes.validate().unwrap();
     let selected = routes
-        .select("GET", "/jobs/id@kind/action:run")
+        .select("GET", "/jobs/id@kind+tag/action:run")
         .unwrap()
         .unwrap();
     let request = plan(path)
         .validate_request_parameters(&selected, None, &HeaderMap::new())
         .unwrap();
-    assert_eq!(request.relative_target, "/jobs/id@kind/action:run");
+    assert_eq!(request.relative_target, "/jobs/id%40kind%2Btag/action:run");
     assert_eq!(canonical_path("/a%3Ab/").unwrap(), "/a:b/");
     assert!(canonical_path("/a%252fb").is_err());
+}
+
+#[test]
+fn path_parameter_semicolons_cannot_bypass_literal_guards_or_form_traversal_segments() {
+    let routes = manifest(&["/items/{id}", "/items/admin", "/items/{id}/{child}"]);
+    let matcher = routes.matcher().unwrap();
+    for path in [
+        "/items/admin;x",
+        "/items/admin%3Bx",
+        "/items/admin%3bx",
+        "/items/..;",
+        "/items/..%3B",
+        "/items/..;/comments",
+        "/items/%2e%2e%3B/comments",
+        "/items/ordinary/..;",
+        "/items/admin;SENTINEL",
+    ] {
+        let error = matcher.select("GET", path).err().unwrap();
+        assert_eq!(error, "gateway path parameter contains an unsafe component");
+        assert_eq!(routes.select("GET", path).err().unwrap(), error);
+        assert!(!error.contains("SENTINEL"));
+    }
+    let guard = matcher.select("POST", "/items/admin").unwrap().unwrap();
+    assert_eq!(guard.template, "/items/admin");
+    assert!(guard.route.is_none());
+}
+
+#[test]
+fn declared_literal_pchar_is_distinct_from_encoded_parameter_values() {
+    let routes = manifest(&["/items/{id}", "/items/admin;x", "/jobs/{id}/action:run"]);
+    let matcher = routes.matcher().unwrap();
+    let literal = matcher.select("GET", "/items/admin;x").unwrap().unwrap();
+    assert_eq!(literal.template, "/items/admin;x");
+    assert_eq!(literal.canonical_path, "/items/admin;x");
+    assert_eq!(
+        matcher
+            .select("GET", "/items/admin%3Bx")
+            .unwrap()
+            .unwrap()
+            .template,
+        "/items/admin;x"
+    );
+    for path in ["/jobs/a@b+c=d/action:run", "/jobs/a%40b%2Bc%3Dd/action:run"] {
+        let selected = matcher.select("GET", path).unwrap().unwrap();
+        assert_eq!(selected.parameters["id"], "a@b+c=d");
+        assert_eq!(selected.canonical_path, "/jobs/a%40b%2Bc%3Dd/action:run");
+        let request = plan("/jobs/{id}/action:run")
+            .validate_request_parameters(&selected, None, &HeaderMap::new())
+            .unwrap();
+        assert_eq!(request.relative_target, selected.canonical_path);
+    }
 }
 
 #[test]

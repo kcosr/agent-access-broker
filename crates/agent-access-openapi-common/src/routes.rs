@@ -17,6 +17,8 @@ enum Segment {
 #[derive(Debug)]
 pub struct GatewayPathMatch<'a> {
     pub template: &'a str,
+    /// Forwarding path reconstructed from the selected template: literal pchar
+    /// stays literal; captured parameter values use unreserved-only encoding.
     pub canonical_path: String,
     pub parameters: BTreeMap<String, String>,
     pub route: Option<&'a GatewayRouteV1>,
@@ -66,12 +68,15 @@ fn decode_segment(raw: &str) -> Result<String, String> {
     Ok(decoded)
 }
 
-fn encode_segment(value: &str) -> String {
+fn encode_segment(value: &str, literal: bool) -> String {
     let mut result = String::new();
     for byte in value.bytes() {
         // RFC 3986 pchar includes sub-delimiters, colon and at-sign. Escaping
         // these changes raw-path routing semantics for literal custom verbs.
-        if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@".contains(&byte) {
+        if byte.is_ascii_alphanumeric()
+            || b"-._~".contains(&byte)
+            || literal && b"!$&'()*+,;=:@".contains(&byte)
+        {
             result.push(char::from(byte));
         } else {
             use std::fmt::Write;
@@ -104,7 +109,9 @@ fn decoded_path(path: &str) -> Result<Vec<String>, String> {
     Ok(parts)
 }
 
-/// Decode exactly once and reconstruct from those components, retaining a meaningful trailing slash.
+/// Normalize an unbound/source path once, retaining literal pchar and a meaningful trailing slash.
+/// Forward requests using the selected matcher result's `canonical_path`, which also constrains
+/// captured parameter values according to their template role.
 pub fn canonical_path(path: &str) -> Result<String, String> {
     Ok(encode_components(&decoded_path(path)?))
 }
@@ -114,7 +121,7 @@ fn encode_components(components: &[String]) -> String {
         "/{}",
         components
             .iter()
-            .map(|part| encode_segment(part))
+            .map(|part| encode_segment(part, true))
             .collect::<Vec<_>>()
             .join("/")
     )
@@ -311,13 +318,13 @@ impl GatewayRouteManifestV1 {
         for (template, guard) in &self.paths {
             paths.push((template.as_str(), guard, segments(template)?));
         }
-        Ok(select_components(
+        select_components(
             method,
             &components,
             paths
                 .iter()
                 .map(|(template, guard, segments)| (*template, *guard, segments.as_slice())),
-        ))
+        )
     }
 }
 
@@ -325,7 +332,7 @@ impl GatewayRouteMatcher {
     /// Select the complete source path before its exact method, using the immutable publication index.
     pub fn select(&self, method: &str, path: &str) -> Result<Option<GatewayPathMatch<'_>>, String> {
         let components = decoded_path(path)?;
-        Ok(select_components(
+        select_components(
             method,
             &components,
             self.paths
@@ -339,7 +346,7 @@ impl GatewayRouteMatcher {
                         path.segments.as_slice(),
                     )
                 }),
-        ))
+        )
     }
 }
 
@@ -347,7 +354,7 @@ fn select_components<'a, 'p>(
     method: &str,
     components: &[String],
     candidates: impl Iterator<Item = (&'a str, &'a GatewayPathV1, &'p [Segment])>,
-) -> Option<GatewayPathMatch<'a>> {
+) -> Result<Option<GatewayPathMatch<'a>>, String> {
     let mut selected = None;
     let mut specificity = 0;
     for (template, guard, pattern) in candidates {
@@ -373,21 +380,32 @@ fn select_components<'a, 'p>(
             selected = Some((template, guard, pattern));
         }
     }
-    let (template, guard, pattern) = selected?;
-    let parameters = pattern
-        .iter()
-        .zip(components)
-        .filter_map(|(part, value)| match part {
-            Segment::Parameter(name) => Some((name.clone(), value.clone())),
-            Segment::Literal(_) => None,
-        })
-        .collect();
-    Some(GatewayPathMatch {
+    let Some((template, guard, pattern)) = selected else {
+        return Ok(None);
+    };
+    let mut parameters = BTreeMap::new();
+    let mut encoded = Vec::with_capacity(pattern.len());
+    for (part, value) in pattern.iter().zip(components) {
+        match part {
+            Segment::Parameter(name) => {
+                // Some backends strip semicolon suffixes before routing. Do not
+                // let template captures collapse onto an independently guarded
+                // literal or a dot segment, regardless of decode ordering.
+                if value.contains(';') {
+                    return Err("gateway path parameter contains an unsafe component".into());
+                }
+                parameters.insert(name.clone(), value.clone());
+                encoded.push(encode_segment(value, false));
+            }
+            Segment::Literal(literal) => encoded.push(encode_segment(literal, true)),
+        }
+    }
+    Ok(Some(GatewayPathMatch {
         template,
-        canonical_path: encode_components(components),
+        canonical_path: format!("/{}", encoded.join("/")),
         parameters,
         route: guard.methods.get(method),
-    })
+    }))
 }
 
 impl Default for GatewayRouteManifestV1 {
