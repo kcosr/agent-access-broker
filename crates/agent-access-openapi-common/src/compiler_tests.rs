@@ -542,3 +542,59 @@ fn neutral_json_decoder_retains_explicit_limits_duplicate_checks_and_safe_diagno
         "definition must be bounded JSON"
     );
 }
+
+#[test]
+fn missing_path_required_flag_has_a_specific_value_free_diagnostic_in_both_dialects() {
+    let mut openapi = source();
+    openapi["paths"]["/items/{id}"]["parameters"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("required");
+    let swagger = json!({"swagger":"2.0","host":"api.example.test","basePath":"/api","schemes":["https"],
+        "paths":{"/items/{id}":{"get":{"parameters":[{"name":"id","in":"path","type":"string"}],"responses":{"200":{"description":"ok"}}}}}});
+    for document in [openapi, swagger] {
+        let compiled = compile(&document, GatewayAuthenticationSelection::Anonymous).unwrap();
+        let unsupported = compiled
+            .operations
+            .iter()
+            .find(|op| op.plan.is_none())
+            .unwrap();
+        assert_eq!(
+            unsupported.unsupported_reason.as_deref(),
+            Some("path parameters must declare required: true")
+        );
+    }
+}
+
+#[test]
+fn declared_client_identity_and_routing_headers_are_unsupported_at_discovery() {
+    for name in [
+        "X-Real-IP",
+        "True-Client-IP",
+        "CF-Connecting-IP",
+        "Refresh",
+        "Alt-Svc",
+        "Strict-Transport-Security",
+    ] {
+        for response in [false, true] {
+            let mut doc = source();
+            if response {
+                doc["paths"]["/items/admin"]["get"]["responses"]["200"]["headers"] =
+                    json!({name:{"schema":{"type":"string"}}});
+            } else {
+                doc["paths"]["/items/admin"]["get"]["parameters"] =
+                    json!([{"name":name,"in":"header","schema":{"type":"string"}}]);
+            }
+            let compiled = compile(&doc, GatewayAuthenticationSelection::Anonymous).unwrap();
+            assert!(
+                compiled
+                    .operations
+                    .iter()
+                    .find(|op| op.action == "item_admin")
+                    .unwrap()
+                    .plan
+                    .is_none()
+            );
+        }
+    }
+}

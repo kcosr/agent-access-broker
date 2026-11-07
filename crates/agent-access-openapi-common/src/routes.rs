@@ -1,5 +1,6 @@
 use crate::{
-    GATEWAY_MAX_MANIFEST_BYTES, GATEWAY_MAX_PATHS, GatewayRouteManifestV1, GatewayRouteV1, bounded,
+    GATEWAY_MAX_MANIFEST_BYTES, GATEWAY_MAX_PATHS, GatewayPathV1, GatewayRouteManifestV1,
+    GatewayRouteV1, bounded,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +20,20 @@ pub struct GatewayPathMatch<'a> {
     pub canonical_path: String,
     pub parameters: BTreeMap<String, String>,
     pub route: Option<&'a GatewayRouteV1>,
+}
+
+/// An immutable publication snapshot with precompiled segments, grouped by path length.
+/// This runtime index is deliberately separate from the durable V1 wire representation.
+#[derive(Clone, Debug)]
+pub struct GatewayRouteMatcher {
+    paths: BTreeMap<usize, Vec<CompiledPath>>,
+}
+
+#[derive(Clone, Debug)]
+struct CompiledPath {
+    template: String,
+    guard: GatewayPathV1,
+    segments: Vec<Segment>,
 }
 
 fn decode_segment(raw: &str) -> Result<String, String> {
@@ -54,7 +69,9 @@ fn decode_segment(raw: &str) -> Result<String, String> {
 fn encode_segment(value: &str) -> String {
     let mut result = String::new();
     for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+        // RFC 3986 pchar includes sub-delimiters, colon and at-sign. Escaping
+        // these changes raw-path routing semantics for literal custom verbs.
+        if byte.is_ascii_alphanumeric() || b"-._~!$&'()*+,;=:@".contains(&byte) {
             result.push(char::from(byte));
         } else {
             use std::fmt::Write;
@@ -89,14 +106,18 @@ fn decoded_path(path: &str) -> Result<Vec<String>, String> {
 
 /// Decode exactly once and reconstruct from those components, retaining a meaningful trailing slash.
 pub fn canonical_path(path: &str) -> Result<String, String> {
-    Ok(format!(
+    Ok(encode_components(&decoded_path(path)?))
+}
+
+fn encode_components(components: &[String]) -> String {
+    format!(
         "/{}",
-        decoded_path(path)?
+        components
             .iter()
             .map(|part| encode_segment(part))
             .collect::<Vec<_>>()
             .join("/")
-    ))
+    )
 }
 
 fn segments(path: &str) -> Result<Vec<Segment>, String> {
@@ -263,6 +284,21 @@ impl GatewayRouteManifestV1 {
         Ok(())
     }
 
+    /// Build once during publication; requests reuse its validated segment index.
+    pub fn matcher(&self) -> Result<GatewayRouteMatcher, String> {
+        self.validate()?;
+        let mut paths: BTreeMap<usize, Vec<CompiledPath>> = BTreeMap::new();
+        for (template, guard) in &self.paths {
+            let segments = segments(template)?;
+            paths.entry(segments.len()).or_default().push(CompiledPath {
+                template: template.clone(),
+                guard: guard.clone(),
+                segments,
+            });
+        }
+        Ok(GatewayRouteMatcher { paths })
+    }
+
     /// Select the most specific source path before selecting its exact method.
     /// `None` and an absent/inactive route are indistinguishable denial targets to HTTP callers.
     pub fn select<'a>(
@@ -271,42 +307,87 @@ impl GatewayRouteManifestV1 {
         path: &str,
     ) -> Result<Option<GatewayPathMatch<'a>>, String> {
         let components = decoded_path(path)?;
-        let canonical_path = canonical_path(path)?;
-        let mut selected = None;
-        let mut specificity = 0;
+        let mut paths = Vec::with_capacity(self.paths.len());
         for (template, guard) in &self.paths {
-            let pattern = segments(template)?;
-            if components.len() != pattern.len() {
-                continue;
-            }
-            let mut parameters = BTreeMap::new();
-            let mut score = 0;
-            let matches = pattern
-                .iter()
-                .zip(&components)
-                .all(|(part, value)| match part {
-                    Segment::Literal(literal) => {
-                        score += 1;
-                        literal == value
-                    }
-                    Segment::Parameter(name) if !value.is_empty() => {
-                        parameters.insert(name.clone(), value.clone());
-                        true
-                    }
-                    Segment::Parameter(_) => false,
-                });
-            if matches && (selected.is_none() || score > specificity) {
-                specificity = score;
-                selected = Some(GatewayPathMatch {
-                    template,
-                    canonical_path: canonical_path.clone(),
-                    parameters,
-                    route: guard.methods.get(method),
-                });
-            }
+            paths.push((template.as_str(), guard, segments(template)?));
         }
-        Ok(selected)
+        Ok(select_components(
+            method,
+            &components,
+            paths
+                .iter()
+                .map(|(template, guard, segments)| (*template, *guard, segments.as_slice())),
+        ))
     }
+}
+
+impl GatewayRouteMatcher {
+    /// Select the complete source path before its exact method, using the immutable publication index.
+    pub fn select(&self, method: &str, path: &str) -> Result<Option<GatewayPathMatch<'_>>, String> {
+        let components = decoded_path(path)?;
+        Ok(select_components(
+            method,
+            &components,
+            self.paths
+                .get(&components.len())
+                .into_iter()
+                .flatten()
+                .map(|path| {
+                    (
+                        path.template.as_str(),
+                        &path.guard,
+                        path.segments.as_slice(),
+                    )
+                }),
+        ))
+    }
+}
+
+fn select_components<'a, 'p>(
+    method: &str,
+    components: &[String],
+    candidates: impl Iterator<Item = (&'a str, &'a GatewayPathV1, &'p [Segment])>,
+) -> Option<GatewayPathMatch<'a>> {
+    let mut selected = None;
+    let mut specificity = 0;
+    for (template, guard, pattern) in candidates {
+        if components.len() != pattern.len() {
+            continue;
+        }
+        let matches = pattern
+            .iter()
+            .zip(components)
+            .all(|(part, value)| match part {
+                Segment::Literal(literal) => literal == value,
+                Segment::Parameter(_) => !value.is_empty(),
+            });
+        if !matches {
+            continue;
+        }
+        let score = pattern
+            .iter()
+            .filter(|part| matches!(part, Segment::Literal(_)))
+            .count();
+        if selected.is_none() || score > specificity {
+            specificity = score;
+            selected = Some((template, guard, pattern));
+        }
+    }
+    let (template, guard, pattern) = selected?;
+    let parameters = pattern
+        .iter()
+        .zip(components)
+        .filter_map(|(part, value)| match part {
+            Segment::Parameter(name) => Some((name.clone(), value.clone())),
+            Segment::Literal(_) => None,
+        })
+        .collect();
+    Some(GatewayPathMatch {
+        template,
+        canonical_path: encode_components(components),
+        parameters,
+        route: guard.methods.get(method),
+    })
 }
 
 impl Default for GatewayRouteManifestV1 {

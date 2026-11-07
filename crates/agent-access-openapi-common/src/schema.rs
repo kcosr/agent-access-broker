@@ -165,7 +165,37 @@ fn integer(value: &Value) -> Option<i128> {
 fn numeric_order(left: &Value, right: &Value) -> Option<Ordering> {
     match (integer(left), integer(right)) {
         (Some(left), Some(right)) => Some(left.cmp(&right)),
+        (Some(left), None) => integer_float_order(left, right.as_f64()?),
+        (None, Some(right)) => integer_float_order(right, left.as_f64()?).map(Ordering::reverse),
         _ => left.as_f64()?.partial_cmp(&right.as_f64()?),
+    }
+}
+
+fn integer_float_order(integer: i128, float: f64) -> Option<Ordering> {
+    if !float.is_finite() {
+        return None;
+    }
+    // JSON integer values fit in i64/u64, so float values outside i128 are
+    // decisively ordered. Inside that range, compare the exact integral part
+    // before the fractional remainder; casting the integer to f64 loses bits.
+    if float >= i128::MAX as f64 {
+        return Some(Ordering::Less);
+    }
+    if float < i128::MIN as f64 {
+        return Some(Ordering::Greater);
+    }
+    let integral = float.trunc();
+    match integer.cmp(&(integral as i128)) {
+        Ordering::Equal => integral.partial_cmp(&float),
+        order => Some(order),
+    }
+}
+
+fn equivalent(left: &Value, right: &Value) -> bool {
+    if left.is_number() && right.is_number() {
+        numeric_order(left, right) == Some(Ordering::Equal)
+    } else {
+        left == right
     }
 }
 
@@ -204,7 +234,7 @@ pub(crate) fn scalar(raw: &str, schema: &Value) -> Result<Value, String> {
         _ => return Err("gateway parameter schema is invalid".into()),
     };
     if let Some(values) = schema.get("enum").and_then(Value::as_array)
-        && !values.contains(&value)
+        && !values.iter().any(|candidate| equivalent(candidate, &value))
     {
         return Err("gateway parameter is outside its declared enum".into());
     }
@@ -313,7 +343,11 @@ pub(crate) fn array(values: &[String], schema: &Value) -> Result<(), String> {
     let mut validated = Vec::new();
     for value in values {
         let value = scalar(value, &schema["items"])?;
-        if schema.get("uniqueItems") == Some(&json!(true)) && validated.contains(&value) {
+        if schema.get("uniqueItems") == Some(&json!(true))
+            && validated
+                .iter()
+                .any(|candidate| equivalent(candidate, &value))
+        {
             return Err("gateway query array contains repeated values".into());
         }
         validated.push(value);

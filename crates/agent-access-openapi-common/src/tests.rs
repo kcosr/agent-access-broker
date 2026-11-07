@@ -354,7 +354,7 @@ fn invalid_optional_response_values_are_omitted_without_failing_error_responses(
 }
 
 #[test]
-fn ambiguous_or_nontext_selected_response_headers_still_fail() {
+fn repeated_selected_response_headers_still_fail() {
     let mut plan = plan("/file");
     plan.responses.insert(
         "default".into(),
@@ -372,9 +372,34 @@ fn ambiguous_or_nontext_selected_response_headers_still_fail() {
         headers.append(name, HeaderValue::from_static("1"));
         headers.append(name, HeaderValue::from_static("2"));
         assert!(plan.response_headers(429, &headers).is_err());
-        headers.clear();
-        headers.insert(name, HeaderValue::from_bytes(&[0xff]).unwrap());
-        assert!(plan.response_headers(429, &headers).is_err());
+    }
+}
+
+#[test]
+fn nonascii_optional_response_values_are_omitted_without_discarding_body_metadata() {
+    let mut plan = plan("/file");
+    plan.responses.insert(
+        "default".into(),
+        GatewayResponseV1 {
+            headers: vec![GatewayResponseHeaderV1 {
+                name: "X-Api-Version".into(),
+                schema: json!({"type":"string"}),
+            }],
+            content_types: Vec::new(),
+        },
+    );
+    plan.validate().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/pdf"));
+    headers.insert(
+        "content-disposition",
+        HeaderValue::from_bytes(b"attachment; filename=\"r\xc3\xa9sum\xc3\xa9.pdf\"").unwrap(),
+    );
+    headers.insert("x-api-version", HeaderValue::from_bytes(&[0xff]).unwrap());
+    for status in [200, 404, 429, 500] {
+        let filtered = plan.response_headers(status, &headers).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered["content-type"], "application/pdf");
     }
 }
 
@@ -415,8 +440,138 @@ fn restored_plan_rejects_unknown_fields_versions_and_credential_header_collision
         "Connection",
         "X-Forwarded-For",
         "X-Original-Url",
+        "X-Real-IP",
+        "True-Client-IP",
+        "CF-Connecting-IP",
+        "X-Client-IP",
+        "X-Cluster-Client-IP",
+        "Fastly-Client-IP",
+        "Refresh",
+        "Alt-Svc",
+        "Strict-Transport-Security",
+        "Via",
+        "Expect",
+        "Max-Forwards",
     ] {
         assert!(validate_declared_header(name).is_err());
+    }
+}
+
+#[test]
+fn canonical_paths_preserve_raw_pchar_and_literal_custom_verbs() {
+    for path in [
+        "/v1/name:cancel",
+        "/a@b",
+        "/x=y;z",
+        "/a+b",
+        "/tags/a,b",
+        "/!$&'()*+,;=:@",
+    ] {
+        assert_eq!(canonical_path(path).unwrap(), path);
+    }
+    let path = "/jobs/{id}/action:run";
+    let routes = manifest(&[path]);
+    routes.validate().unwrap();
+    let selected = routes
+        .select("GET", "/jobs/id@kind/action:run")
+        .unwrap()
+        .unwrap();
+    let request = plan(path)
+        .validate_request_parameters(&selected, None, &HeaderMap::new())
+        .unwrap();
+    assert_eq!(request.relative_target, "/jobs/id@kind/action:run");
+    assert_eq!(canonical_path("/a%3Ab/").unwrap(), "/a:b/");
+    assert!(canonical_path("/a%252fb").is_err());
+}
+
+#[test]
+fn compiled_matcher_preserves_guard_precedence_methods_and_immutable_snapshot() {
+    let mut routes = manifest(&[
+        "/{kind}/{id}",
+        "/items/{id}",
+        "/items/admin",
+        "/items/admin/",
+        "/jobs/{id}/action:run",
+    ]);
+    routes
+        .paths
+        .get_mut("/items/admin")
+        .unwrap()
+        .methods
+        .get_mut("GET")
+        .unwrap()
+        .current = false;
+    let matcher = routes.matcher().unwrap();
+    for path in [
+        "/items/admin",
+        "/items/admin/",
+        "/items/ordinary",
+        "/kinds/a%20b",
+        "/jobs/id@kind/action:run",
+        "/no/such/path",
+        "/",
+        "/items/%2f",
+    ] {
+        for method in ["GET", "POST", "HEAD"] {
+            match (routes.select(method, path), matcher.select(method, path)) {
+                (Ok(Some(left)), Ok(Some(right))) => {
+                    assert_eq!(left.template, right.template);
+                    assert_eq!(left.canonical_path, right.canonical_path);
+                    assert_eq!(left.parameters, right.parameters);
+                    assert_eq!(left.route, right.route);
+                }
+                (Ok(None), Ok(None)) => {}
+                (Err(left), Err(right)) => assert_eq!(left, right),
+                _ => panic!("compiled route selection differs"),
+            }
+        }
+    }
+    routes.paths.remove("/items/admin");
+    let selected = matcher.select("GET", "/items/admin").unwrap().unwrap();
+    assert_eq!(selected.template, "/items/admin");
+    assert!(!selected.route.unwrap().current);
+    assert!(
+        manifest(&["/items/{id}", "/items/{name}"])
+            .matcher()
+            .is_err()
+    );
+}
+
+#[test]
+fn numeric_enum_and_unique_items_compare_values_across_json_number_representations() {
+    let schema = json!({"type":"number","enum":[1.0,2.5]});
+    crate::schema::validate_schema(&schema, false).unwrap();
+    for value in ["1", "1.0", "1e0", "2.50"] {
+        crate::schema::scalar(value, &schema).unwrap();
+    }
+    assert!(crate::schema::scalar("2", &schema).is_err());
+    let schema = json!({"type":"array","uniqueItems":true,"items":{"type":"number"}});
+    crate::schema::validate_schema(&schema, true).unwrap();
+    for values in [["1", "1.0"], ["0", "-0.0"], ["2.50", "2.5"]] {
+        assert!(crate::schema::array(&values.map(str::to_owned), &schema).is_err());
+    }
+    crate::schema::array(
+        &["9007199254740993".into(), "9007199254740992.0".into()],
+        &schema,
+    )
+    .unwrap();
+    let strings = json!({"type":"array","uniqueItems":true,"items":{"type":"string"}});
+    crate::schema::array(&["1".into(), "1.0".into()], &strings).unwrap();
+}
+
+#[test]
+fn mixed_number_comparisons_do_not_round_large_integer_values() {
+    let schema = json!({"type":"number","enum":[9007199254740992.0]});
+    crate::schema::scalar("9007199254740992", &schema).unwrap();
+    assert!(crate::schema::scalar("9007199254740993", &schema).is_err());
+    let schema = json!({"type":"number","maximum":9007199254740992.0});
+    assert!(crate::schema::scalar("9007199254740993", &schema).is_err());
+    let schema = json!({"type":"number","minimum":-1.5,"maximum":1.5});
+    for value in ["-1", "0", "1"] {
+        crate::schema::scalar(value, &schema).unwrap();
+    }
+    for value in ["-2", "2"] {
+        assert!(crate::schema::scalar(value, &schema).is_err());
     }
 }
 

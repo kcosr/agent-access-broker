@@ -17,7 +17,7 @@ pub use profile::{
     GATEWAY_COMMON_REQUEST_HEADERS, GATEWAY_COMMON_RESPONSE_HEADERS, GatewayValidatedParameters,
     validate_declared_header,
 };
-pub use routes::{GatewayPathMatch, canonical_path, validate_path_template};
+pub use routes::{GatewayPathMatch, GatewayRouteMatcher, canonical_path, validate_path_template};
 
 /// Maximum bytes in a source document or durable route manifest.
 pub const GATEWAY_MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;

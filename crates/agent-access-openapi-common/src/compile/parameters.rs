@@ -57,6 +57,9 @@ pub(super) fn parameters(
     for ((location, _), value) in effective {
         let name = value["name"].as_str().expect("validated name");
         let required = boolean(value, "required", false)?;
+        if location == "path" && !required {
+            return Err("path parameters must declare required: true".into());
+        }
         if dialect == Dialect::Swagger2 {
             if location == "body" {
                 if body.body.is_some() {

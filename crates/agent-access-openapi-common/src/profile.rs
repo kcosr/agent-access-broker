@@ -56,6 +56,18 @@ pub fn validate_declared_header(name: &str) -> Result<(), String> {
                 | "trailer"
                 | "upgrade"
                 | "forwarded"
+                | "x-real-ip"
+                | "true-client-ip"
+                | "cf-connecting-ip"
+                | "x-client-ip"
+                | "x-cluster-client-ip"
+                | "fastly-client-ip"
+                | "refresh"
+                | "alt-svc"
+                | "strict-transport-security"
+                | "via"
+                | "expect"
+                | "max-forwards"
                 | "location"
                 | "content-location"
                 | "x-http-method-override"
@@ -419,7 +431,7 @@ impl GatewayPlanV1 {
     }
 
     /// Filter optional response metadata without discarding useful upstream response bodies.
-    /// Invalid scalar/bounded values are omitted; repeated or non-text selected fields fail.
+    /// Invalid scalar/bounded or non-text values are omitted; repeated selected fields fail.
     /// Framing, including Content-Length integrity, remains strictly host-owned.
     pub fn response_headers(&self, status: u16, headers: &HeaderMap) -> Result<HeaderMap, String> {
         let mut result = HeaderMap::new();
@@ -491,13 +503,14 @@ fn response_header<'a>(
 ) -> Result<Option<&'a HeaderValue>, String> {
     let mut values = headers.get_all(name).iter();
     let first = values.next();
-    if values.next().is_some() || first.is_some_and(|value| value.to_str().is_err()) {
-        return Err("gateway response header is repeated or is not text".into());
+    if values.next().is_some() {
+        return Err("gateway response header is repeated".into());
     }
     Ok(first.filter(|value| {
         value.as_bytes().len() <= schema::MAX_VALUE_BYTES
-            && (!name.eq_ignore_ascii_case("retry-after")
-                || valid_retry_after(value.to_str().expect("validated text")))
+            && value.to_str().is_ok_and(|text| {
+                !name.eq_ignore_ascii_case("retry-after") || valid_retry_after(text)
+            })
     }))
 }
 
