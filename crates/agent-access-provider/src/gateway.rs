@@ -489,10 +489,13 @@ pub type GatewayBodyStream =
     Pin<Box<dyn Stream<Item = Result<GatewayBodyFrame, GatewayBodyError>> + Send>>;
 
 /// Host-owned body with bounded inspection and automatic byte-exact replay.
-/// Every inspected frame remains owned by this value until the host forwards it.
+/// Every inspected nonempty data frame and trailer frame remains owned until
+/// the host forwards it. Empty data frames are omitted without changing bytes.
 /// `max_bytes` is the whole-request wire-byte cap, also the maximum retained
 /// inspection memory. Whole frames, including over-read bytes, count against it;
 /// protocol-specific prefix limits must be enforced separately by the module.
+/// More than 32 consecutive empty data or trailer frames fail inspection with
+/// `GatewayBodyError::Read`; nonempty data resets that counter.
 /// A failed inspection is terminal: the host must refuse the plan before dispatch.
 #[non_exhaustive]
 pub struct GatewayBody {
@@ -535,11 +538,13 @@ impl GatewayBody {
     pub fn inspected_bytes(&self) -> usize {
         self.inspected_bytes
     }
-    /// EOF was observed and every original frame is retained without failure.
+    /// EOF was observed without failure and all nonempty data and trailer frames
+    /// are retained. This query never polls the unread source.
     pub fn is_complete(&self) -> bool {
         self.ended && self.failed.is_none()
     }
-    /// Reads the next frame for inspection, retaining it for ordered forwarding.
+    /// Reads the next frame, retaining nonempty data and trailers for forwarding.
+    /// More than 32 consecutive empty data or trailer frames fail with `Read`.
     pub async fn next_frame(&mut self) -> Result<Option<GatewayBodyFrame>, GatewayBodyError> {
         if let Some(error) = self.failed {
             return Err(error);

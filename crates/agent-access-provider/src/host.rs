@@ -589,7 +589,8 @@ pub fn gateway_body_stream(body: crate::GatewayBody) -> crate::GatewayBodyStream
     body.into_stream()
 }
 
-/// Whether bounded preflight reached EOF without seeing any body bytes.
+/// Whether bounded preflight reached EOF without failure and retains no data
+/// or trailer frames. Empty data frames do not count as retained frames.
 /// Only this state is eligible for a bodyless credential-recovery attempt.
 pub fn gateway_body_is_empty_complete(body: &crate::GatewayBody) -> bool {
     body.is_empty_complete()
