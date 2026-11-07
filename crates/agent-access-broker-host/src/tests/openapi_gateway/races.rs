@@ -459,8 +459,7 @@ async fn openapi_gateway_stream_already_forwarding_finishes_its_original_snapsho
     assert_eq!(upstream.api_requests().len(), 1);
 
     let response = fixture
-        .gateway(Method::GET, "/stream", "retired-after-stream")
-        .header(HOST, NEXT_HOST)
+        .gateway_on_host(NEXT_HOST, Method::GET, "/stream", "retired-after-stream")
         .send()
         .await
         .unwrap();
@@ -470,8 +469,7 @@ async fn openapi_gateway_stream_already_forwarding_finishes_its_original_snapsho
         "gateway_rule_not_found"
     );
     let response = fixture
-        .gateway(Method::GET, "/blob", "new-snapshot")
-        .header(HOST, NEXT_HOST)
+        .gateway_on_host(NEXT_HOST, Method::GET, "/blob", "new-snapshot")
         .send()
         .await
         .unwrap();

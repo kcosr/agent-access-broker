@@ -58,9 +58,46 @@ async fn openapi_gateway_late_upload_failure_records_started_upstream_work_witho
         assert!(!response.status().is_success());
     }
     let terminal = fixture.terminal("late-upload-failure").await;
-    assert_eq!(terminal["decision"], "error");
+    // A body read error retains the host's input-denial outcome even when
+    // earlier bytes have reached the backend. Progress must record that fact.
+    assert_eq!(terminal["decision"], "deny");
+    assert_eq!(terminal["reasonCode"], "gateway_request_body_denied");
     assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "failed");
+    assert_eq!(terminal["providerAudit"]["gateway"]["requestBytes"], 5);
+    let records = read_audit_records(Path::new(&fixture.seed.config.audit.as_ref().unwrap().path));
+    let records = records
+        .iter()
+        .filter(|record| record["agentRequestId"] == "late-upload-failure")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["providerAudit"]["gateway"]["phase"] == "started")
+            .count(),
+        1
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
+            .count(),
+        1
+    );
     assert_eq!(upstream.writes(), 1);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while upstream.api_requests().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("upstream observes the interrupted upload");
+    assert_eq!(
+        upstream.api_requests().len(),
+        1,
+        "failed upload must not replay"
+    );
+    assert_eq!(upstream.api_requests()[0].body, b"first");
     fixture.stop().await;
 }
 
@@ -267,7 +304,8 @@ async fn openapi_gateway_client_disconnect_finalizes_audit_and_releases_transfer
     assert_eq!(upstream.api_requests().len(), 1);
     drop(response);
     let terminal = fixture.terminal("cancelled-stream").await;
-    assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "failed");
+    assert_eq!(terminal["decision"], "error");
+    assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "canceled");
     assert_eq!(terminal["providerAudit"]["gateway"]["responseBytes"], 11);
     let response = fixture
         .gateway(Method::GET, "/blob", "capacity-released")

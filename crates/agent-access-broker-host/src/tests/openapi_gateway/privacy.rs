@@ -130,11 +130,18 @@ async fn openapi_gateway_request_value_sentinels_never_reach_persisted_audit_or_
     // socket requests above cover real ingress; an in-process router call
     // carries the capture span into the host's operation owner.
     let captured = install_trace_capture().start();
+    let traced_gateway =
+        fixture
+            .broker
+            .gateway_app()
+            .layer(crate::observability::RequestTracingLayer::new(
+                crate::observability::ListenerKind::Gateway,
+                "gateway-acceptance",
+            ));
     let trace_response = captured
         .run(async {
-            let response = fixture
-                .broker
-                .gateway_app()
+            let response = traced_gateway
+                .clone()
                 .oneshot(
                     Request::builder()
                         .method(Method::POST)
@@ -163,9 +170,8 @@ async fn openapi_gateway_request_value_sentinels_never_reach_persisted_audit_or_
     fixture.terminal("sentinel-trace").await;
     let extension_response = captured
         .run(async {
-            let response = fixture
-                .broker
-                .gateway_app()
+            let response = traced_gateway
+                .clone()
                 .oneshot(
                     Request::builder()
                         .method(Method::from_bytes(METHOD_VALUE.as_bytes()).unwrap())

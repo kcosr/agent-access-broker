@@ -263,8 +263,12 @@ async fn openapi_gateway_binding_host_changes_and_removal_preserve_accepted_auth
     );
     assert!(upstream.api_requests().is_empty());
     let response = fixture
-        .gateway(Method::GET, "/items/alpha", "new-host-existing-authority")
-        .header(HOST, NEXT_HOST)
+        .gateway_on_host(
+            NEXT_HOST,
+            Method::GET,
+            "/items/alpha",
+            "new-host-existing-authority",
+        )
         .send()
         .await
         .unwrap();
@@ -279,8 +283,7 @@ async fn openapi_gateway_binding_host_changes_and_removal_preserve_accepted_auth
     assert_eq!(after["service"]["actions"], before["service"]["actions"]);
     assert_eq!(after["service"]["status"], "enabled");
     let response = fixture
-        .gateway(Method::GET, "/items/alpha", "binding-removed")
-        .header(HOST, NEXT_HOST)
+        .gateway_on_host(NEXT_HOST, Method::GET, "/items/alpha", "binding-removed")
         .send()
         .await
         .unwrap();

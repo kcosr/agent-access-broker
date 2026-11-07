@@ -171,17 +171,9 @@ async fn raw_connection(
         socket.shutdown().await.unwrap();
         return;
     }
-    let length = headers
-        .get(CONTENT_LENGTH)
-        .map(|value| value.to_str().unwrap().parse::<usize>().unwrap())
-        .unwrap_or(0);
-    assert!(length <= 64 * 1024);
-    while received.len() - split < length {
-        let mut bytes = [0; 2048];
-        let count = socket.read(&mut bytes).await.unwrap();
-        assert_ne!(count, 0);
-        received.extend_from_slice(&bytes[..count]);
-    }
+    let body = raw_request_body(&mut socket, &headers, &mut received, split).await;
+    // The ambiguous-write fixture observes a completed application input
+    // before dropping the response, rather than counting an unread request.
     if method == Method::POST {
         state.writes.fetch_add(1, Ordering::SeqCst);
     }
@@ -190,7 +182,7 @@ async fn raw_connection(
         path: uri.path().into(),
         query: uri.query().unwrap_or_default().into(),
         headers,
-        body: received[split..split + length].to_vec(),
+        body,
     });
     match reply {
         RawReply::CloseBeforeHeaders => {}
@@ -200,6 +192,89 @@ async fn raw_connection(
         RawReply::EarlyRejection => unreachable!(),
     }
     socket.shutdown().await.unwrap();
+}
+
+async fn raw_read_more(socket: &mut tokio::net::TcpStream, received: &mut Vec<u8>) {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = [0; 2048];
+    let count = socket.read(&mut bytes).await.unwrap();
+    assert_ne!(
+        count, 0,
+        "fixture request ended before its framing completed"
+    );
+    received.extend_from_slice(&bytes[..count]);
+    assert!(received.len() <= 128 * 1024, "fixture wire-byte cap");
+}
+
+async fn raw_request_line(
+    socket: &mut tokio::net::TcpStream,
+    received: &mut Vec<u8>,
+    cursor: &mut usize,
+) -> Vec<u8> {
+    loop {
+        if let Some(end) = received[*cursor..]
+            .windows(2)
+            .position(|bytes| bytes == b"\r\n")
+        {
+            assert!(end <= 4096, "fixture framing-line cap");
+            let line = received[*cursor..*cursor + end].to_vec();
+            *cursor += end + 2;
+            return line;
+        }
+        assert!(received.len() - *cursor <= 4096, "fixture framing-line cap");
+        raw_read_more(socket, received).await;
+    }
+}
+
+async fn raw_request_body(
+    socket: &mut tokio::net::TcpStream,
+    headers: &HeaderMap,
+    received: &mut Vec<u8>,
+    split: usize,
+) -> Vec<u8> {
+    if let Some(encoding) = headers.get("transfer-encoding") {
+        assert_eq!(encoding, "chunked");
+        assert!(!headers.contains_key(CONTENT_LENGTH));
+        let mut cursor = split;
+        let mut body = Vec::new();
+        loop {
+            let line = raw_request_line(socket, received, &mut cursor).await;
+            let size = std::str::from_utf8(&line)
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap();
+            assert!(!size.is_empty() && size.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            let size = usize::from_str_radix(size, 16).unwrap();
+            assert!(size <= 64 * 1024 - body.len(), "fixture decoded-body cap");
+            if size == 0 {
+                // Consume the complete trailer section before recognizing EOF.
+                loop {
+                    let line = raw_request_line(socket, received, &mut cursor).await;
+                    if line.is_empty() {
+                        return body;
+                    }
+                    assert!(line.contains(&b':'), "fixture malformed request trailer");
+                }
+            }
+            while received.len() - cursor < size + 2 {
+                raw_read_more(socket, received).await;
+            }
+            body.extend_from_slice(&received[cursor..cursor + size]);
+            cursor += size;
+            assert_eq!(&received[cursor..cursor + 2], b"\r\n");
+            cursor += 2;
+        }
+    }
+    let length = headers
+        .get(CONTENT_LENGTH)
+        .map(|value| value.to_str().unwrap().parse::<usize>().unwrap())
+        .unwrap_or(0);
+    assert!(length <= 64 * 1024);
+    while received.len() - split < length {
+        raw_read_more(socket, received).await;
+    }
+    received[split..split + length].to_vec()
 }
 impl Drop for Upstream {
     fn drop(&mut self) {
@@ -577,6 +652,18 @@ impl Fixture {
     }
     pub fn gateway(&self, method: Method, path: &str, id: &str) -> reqwest::RequestBuilder {
         self.gateway_as(&self.agent, method, path, id)
+    }
+    pub fn gateway_on_host(
+        &self,
+        host: &str,
+        method: Method,
+        path: &str,
+        id: &str,
+    ) -> reqwest::RequestBuilder {
+        let mut headers = HeaderMap::new();
+        headers.insert(HOST, HeaderValue::from_str(host).unwrap());
+        // RequestBuilder::header appends; headers replaces the default Host.
+        self.gateway(method, path, id).headers(headers)
     }
     pub fn gateway_as(
         &self,
