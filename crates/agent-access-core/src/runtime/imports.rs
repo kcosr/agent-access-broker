@@ -168,13 +168,13 @@ pub(super) fn validate_gateway_request_headers(
     config: &BrokerConfig,
     adapter: &dyn crate::imports::ImportedAdapter,
     action: &ImportedActionDefinition,
-) -> Result<(), &'static str> {
+) -> Result<(), ImportedGatewayDiagnostic> {
     if adapter.gateway_kind().is_none() {
         return Ok(());
     }
     let names = adapter
         .request_header_names(action)
-        .map_err(|_| "gateway action request headers are invalid")?;
+        .map_err(|_| ImportedGatewayDiagnostic::ActionPlanInvalid)?;
     if names.iter().any(|name| {
         config
             .identity
@@ -182,7 +182,7 @@ pub(super) fn validate_gateway_request_headers(
             .iter()
             .any(|source| source.header.eq_ignore_ascii_case(name))
     }) {
-        return Err("gateway action declares a reserved identity header");
+        return Err(ImportedGatewayDiagnostic::IdentityHeaderCollision);
     }
     Ok(())
 }
@@ -1383,9 +1383,21 @@ pub(super) fn build_providers(
             ProviderAttributionConfig::default(),
             None,
         );
+        // Retained non-dispatchable plans still reserve their routes. Only
+        // enabled actions may send a declared header under this configuration.
+        if let Err(diagnostic) = record
+            .actions
+            .iter()
+            .filter(|action| action.status == ImportedActionStatus::Enabled)
+            .try_for_each(|action| {
+                validate_gateway_request_headers(config, adapter, &action.definition)
+            })
+        {
+            unavailable(diagnostic);
+            continue;
+        }
         if actions.iter().any(|action| {
             adapter.validate_action(action).is_err()
-                || validate_gateway_request_headers(config, adapter, action).is_err()
                 || (adapter.gateway_kind().is_none() && adapter.scoped_mcp_name(action).is_err())
         }) {
             unavailable(ImportedGatewayDiagnostic::ActionPlanInvalid);
@@ -1689,9 +1701,19 @@ impl BrokerRuntime {
             })
             .map(|action| action.definition.clone())
             .collect::<Vec<_>>();
+        for action in record
+            .actions
+            .iter()
+            .filter(|action| action.status == ImportedActionStatus::Enabled)
+        {
+            validate_gateway_request_headers(&self.config, adapter, &action.definition).map_err(
+                |diagnostic| {
+                    diagnostic.warn(&definition.service);
+                    ManagedStoreError::InputInvalid(diagnostic.message().into())
+                },
+            )?;
+        }
         for action in &actions {
-            validate_gateway_request_headers(&self.config, adapter, action)
-                .map_err(|message| ManagedStoreError::InputInvalid(message.into()))?;
             adapter.validate_action(action).map_err(|error| {
                 if adapter.gateway_kind().is_some() {
                     let diagnostic = ImportedGatewayDiagnostic::ActionPlanInvalid;

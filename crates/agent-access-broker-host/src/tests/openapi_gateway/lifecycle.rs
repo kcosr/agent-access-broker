@@ -867,3 +867,161 @@ async fn openapi_gateway_binding_reload_cancels_queued_work_before_dispatch() {
         fixture.stop().await;
     }
 }
+
+#[tokio::test]
+async fn openapi_gateway_nondispatchable_identity_header_actions_allow_recovery_and_keep_guards() {
+    const COLLISION: &str = "A gateway action declares a header reserved for configured identity.";
+    for action_status in ["disabled", "retired"] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::start(&upstream, |_| {}).await;
+        let mut source = document(
+            Dialect::OpenApi31,
+            UpstreamAuth::Anonymous,
+            &upstream.endpoint(),
+        );
+        source["paths"]["/items/private"]["get"]["parameters"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "name":"x-bRoKeR-tOkEn","in":"header","schema":{"type":"string","maxLength":256}
+            }));
+        let preview = fixture
+            .create_and_discover(DefinitionSource::Upload, UpstreamAuth::Anonymous, &source)
+            .await;
+        fixture
+            .accept(&preview, &["read_item", "private_item"])
+            .await;
+        fixture.enable().await;
+        fixture.grant(&["read_item", "private_item"]).await;
+        let guards = fixture
+            .broker
+            .runtime()
+            .imported_catalog()
+            .service(SERVICE)
+            .unwrap()
+            .gateway_routes
+            .clone();
+
+        let mut config = fixture.seed.config.clone();
+        config.identity.sources.push(IdentitySourceConfig {
+            name: "synthetic_header".into(),
+            kind: "broker_tokens".into(),
+            header: "X-Broker-Token".into(),
+            scheme: "Bearer".into(),
+            principals: vec![],
+        });
+        fixture.broker.reload_config(&config).await;
+        let unavailable = fixture.detail().await;
+        assert_eq!(unavailable["available"], false);
+        assert_eq!(unavailable["unavailableReason"], COLLISION);
+        let response = fixture
+            .gateway(Method::GET, "/items/private", "enabled-identity-collision")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(upstream.api_requests().is_empty());
+
+        // A non-dispatchable retained action must permit recovery through the
+        // ordinary publication path, without deleting its historical guard.
+        let mut change = versions(&unavailable);
+        change["status"] = json!(action_status);
+        change["confirm"] = json!(true);
+        fixture
+            .admin_ok(
+                Method::POST,
+                "/v1/admin/imports/inventory/actions/private_item/status",
+                Some(change),
+            )
+            .await;
+        assert_eq!(fixture.detail().await["available"], true);
+
+        // Both re-enabling the service and rebuilding on config reload must
+        // preserve the usable template beside the retained denied literal.
+        let mut disable = versions(&fixture.detail().await);
+        disable["status"] = json!("disabled");
+        disable["confirm"] = json!(true);
+        fixture
+            .admin_ok(
+                Method::POST,
+                "/v1/admin/imports/inventory/status",
+                Some(disable),
+            )
+            .await;
+        let mut enable_service = versions(&fixture.detail().await);
+        enable_service["status"] = json!("enabled");
+        enable_service["confirm"] = json!(true);
+        fixture
+            .admin_ok(
+                Method::POST,
+                "/v1/admin/imports/inventory/status",
+                Some(enable_service),
+            )
+            .await;
+        assert_eq!(fixture.detail().await["available"], true);
+        fixture.broker.reload_config(&config).await;
+        let recovered = fixture.detail().await;
+        assert_eq!(recovered["available"], true);
+        assert_eq!(
+            fixture
+                .broker
+                .runtime()
+                .imported_catalog()
+                .service(SERVICE)
+                .unwrap()
+                .gateway_routes,
+            guards
+        );
+        assert!(
+            recovered["service"]["actions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|action| action["definition"]["action"] == "private_item"
+                    && action["status"] == action_status)
+        );
+
+        if action_status == "disabled" {
+            let mut enable = versions(&recovered);
+            enable["status"] = json!("enabled");
+            enable["confirm"] = json!(true);
+            let (status, body) = fixture
+                .admin_request(
+                    Method::POST,
+                    "/v1/admin/imports/inventory/actions/private_item/status",
+                    Some(enable),
+                )
+                .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(body.to_string().contains(COLLISION), "{body}");
+            let unchanged = fixture.detail().await;
+            assert_eq!(unchanged["catalogRevision"], recovered["catalogRevision"]);
+            assert_eq!(unchanged["service"], recovered["service"]);
+            assert_eq!(unchanged["available"], true);
+        }
+
+        for path in ["/items/private", "/items/PRIVATE"] {
+            let response = fixture
+                .gateway(Method::GET, path, "retained-identity-header-guard")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(
+                response.headers()[REASON_CODE_HEADER],
+                "gateway_rule_not_found"
+            );
+            assert!(upstream.api_requests().is_empty());
+        }
+        let response = fixture
+            .gateway(Method::GET, "/items/ordinary", "recovered-template")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.bytes().await.unwrap();
+        assert_eq!(upstream.api_requests().len(), 1);
+        assert_eq!(upstream.api_requests()[0].path, "/api/items/ordinary");
+        fixture.stop().await;
+    }
+}

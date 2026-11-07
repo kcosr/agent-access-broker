@@ -11,6 +11,7 @@ pub(in crate::runtime) enum ImportedGatewayDiagnostic {
     DefinitionInvalid,
     CredentialContractUnavailable,
     ActionPlanInvalid,
+    IdentityHeaderCollision,
     AdapterBuildRejected,
     ExecutableContractInvalid,
     RouteManifestMissing,
@@ -28,6 +29,7 @@ impl ImportedGatewayDiagnostic {
             Self::DefinitionInvalid => "retained_definition_invalid",
             Self::CredentialContractUnavailable => "credential_contract_unavailable",
             Self::ActionPlanInvalid => "retained_action_plan_invalid",
+            Self::IdentityHeaderCollision => "identity_header_collision",
             Self::AdapterBuildRejected => "adapter_build_rejected",
             Self::ExecutableContractInvalid => "executable_contract_invalid",
             Self::RouteManifestMissing => "route_manifest_missing",
@@ -47,6 +49,9 @@ impl ImportedGatewayDiagnostic {
                 "The retained gateway credential contract is unavailable."
             }
             Self::ActionPlanInvalid => "A retained gateway action plan is unsupported or invalid.",
+            Self::IdentityHeaderCollision => {
+                "A gateway action declares a header reserved for configured identity."
+            }
             Self::AdapterBuildRejected => {
                 "The gateway adapter rejected the retained definition or action plans."
             }
@@ -562,6 +567,16 @@ mod tests {
                 Ok(())
             }
         }
+        fn request_header_names(
+            &self,
+            action: &ImportedActionDefinition,
+        ) -> Result<Vec<String>, String> {
+            Ok(if action.annotations.get("identity_header").is_some() {
+                vec!["x-fixture-identity".into()]
+            } else {
+                Vec::new()
+            })
+        }
         fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
             Err("gateway actions have no scoped MCP name".into())
         }
@@ -612,6 +627,10 @@ mod tests {
                 ImportedGatewayDiagnostic::RouteManifestVersionUnsupported,
             ),
             ("action", ImportedGatewayDiagnostic::ActionPlanInvalid),
+            (
+                "identity_header",
+                ImportedGatewayDiagnostic::IdentityHeaderCollision,
+            ),
             ("adapter", ImportedGatewayDiagnostic::AdapterBuildRejected),
             ("builder", ImportedGatewayDiagnostic::BuilderRejected),
         ] {
@@ -645,6 +664,16 @@ mod tests {
                 }
                 "action" => {
                     record.actions[0].definition.annotations = json!({"reject_action":true})
+                }
+                "identity_header" => {
+                    record.actions[0].definition.annotations = json!({"identity_header":true});
+                    config.identity.sources.push(crate::IdentitySourceConfig {
+                        name: "fixture_identity".into(),
+                        kind: "broker_tokens".into(),
+                        header: "X-Fixture-Identity".into(),
+                        scheme: "Bearer".into(),
+                        principals: Vec::new(),
+                    });
                 }
                 "adapter" => {
                     record
@@ -691,6 +720,7 @@ mod tests {
             assert!(!rendered.contains("private-sentinel"));
             assert!(!rendered.contains("private.invalid"));
             assert!(!rendered.contains("api.example"));
+            assert!(!rendered.contains("fixture-identity"));
             runtime.config = Arc::new(config);
             runtime.imported_catalog = Arc::new(catalog);
             runtime.imported_gateway_diagnostics = Arc::new(built.gateway_diagnostics);
