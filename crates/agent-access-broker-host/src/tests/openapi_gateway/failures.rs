@@ -40,75 +40,178 @@ async fn openapi_gateway_early_upstream_reply_does_not_wait_for_an_unfinished_up
 
 #[tokio::test]
 async fn openapi_gateway_late_upload_failure_records_started_upstream_work_without_retry() {
-    let upstream = Upstream::start().await;
-    let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["upload_bytes"]).await;
-    let started = upstream.upload_started();
-    let chunks = futures_util::stream::unfold((0, started), |(step, started)| async move {
-        match step {
-            0 => Some((Ok(Bytes::from_static(b"first")), (1, started))),
-            1 => {
-                started.notified().await;
-                Some((
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "synthetic upload interruption",
-                    )),
-                    (2, started),
-                ))
-            }
-            _ => None,
+    for cap_exceeded in [false, true] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::ready_with(
+            &upstream,
+            UpstreamAuth::Anonymous,
+            &["upload_bytes"],
+            |config| {
+                if cap_exceeded {
+                    config
+                        .imports
+                        .gateway_bindings
+                        .get_mut(SERVICE)
+                        .unwrap()
+                        .request_body_max_bytes = Some(8);
+                }
+            },
+        )
+        .await;
+        let started = upstream.upload_started();
+        let chunks =
+            futures_util::stream::unfold((0, started), move |(step, started)| async move {
+                match step {
+                    0 => Some((Ok(Bytes::from_static(b"first")), (1, started))),
+                    1 => {
+                        started.notified().await;
+                        let frame = if cap_exceeded {
+                            Ok(Bytes::from_static(b"later"))
+                        } else {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                "synthetic upload interruption",
+                            ))
+                        };
+                        Some((frame, (2, started)))
+                    }
+                    _ => None,
+                }
+            });
+        let id = if cap_exceeded {
+            "late-upload-cap"
+        } else {
+            "late-upload-failure"
+        };
+        let reason = if cap_exceeded {
+            "gateway_request_cap_exceeded"
+        } else {
+            "gateway_request_body_denied"
+        };
+        let response = fixture
+            .gateway(Method::POST, "/upload", id)
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(reqwest::Body::wrap_stream(chunks))
+            .send()
+            .await;
+        if cap_exceeded {
+            assert!(
+                response.is_ok(),
+                "valid client body receives the postdispatch cap failure"
+            );
         }
-    });
-    if let Ok(response) = fixture
-        .gateway(Method::POST, "/upload", "late-upload-failure")
+        // The read-error client can terminate its own transport before it reads
+        // a response. Any delivered response must preserve execution uncertainty.
+        if let Ok(response) = response {
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            assert_eq!(response.headers()[REASON_CODE_HEADER], reason);
+            assert!(
+                response
+                    .text()
+                    .await
+                    .unwrap()
+                    .contains("upstream execution may be partial or uncertain")
+            );
+        }
+        let terminal = fixture.terminal(id).await;
+        assert_eq!(terminal["decision"], "error");
+        assert_eq!(terminal["reasonCode"], reason);
+        assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "failed");
+        assert_eq!(terminal["providerAudit"]["gateway"]["requestBytes"], 5);
+        assert!(
+            terminal["providerAudit"]["gateway"]["message"]
+                .as_str()
+                .is_some_and(
+                    |message| message.contains("upstream execution may be partial or uncertain")
+                )
+        );
+        let records =
+            read_audit_records(Path::new(&fixture.seed.config.audit.as_ref().unwrap().path));
+        let records = records
+            .iter()
+            .filter(|record| record["agentRequestId"] == id)
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["providerAudit"]["gateway"]["phase"] == "started")
+                .count(),
+            1
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
+                .count(),
+            1
+        );
+        assert_eq!(upstream.writes(), 1);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while upstream.api_requests().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("upstream observes the interrupted upload");
+        assert_eq!(
+            upstream.api_requests().len(),
+            1,
+            "failed upload must not replay"
+        );
+        assert_eq!(upstream.api_requests()[0].body, b"first");
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn openapi_gateway_fragmented_known_length_upload_is_denied_before_upstream_dispatch() {
+    let upstream = Upstream::start().await;
+    let fixture = Fixture::ready_with(
+        &upstream,
+        UpstreamAuth::Anonymous,
+        &["upload_bytes"],
+        |config| {
+            config
+                .imports
+                .gateway_bindings
+                .get_mut(SERVICE)
+                .unwrap()
+                .request_body_max_bytes = Some(8);
+        },
+    )
+    .await;
+    let chunks = futures_util::stream::iter(
+        [b"aaaa", b"bbbb", b"cccc"].map(|chunk| Ok::<_, std::io::Error>(Bytes::from_static(chunk))),
+    );
+    let response = fixture
+        .gateway(Method::POST, "/upload", "known-fragmented-cap")
         .header(CONTENT_TYPE, "application/octet-stream")
+        .header(CONTENT_LENGTH, 12)
         .body(reqwest::Body::wrap_stream(chunks))
         .send()
         .await
-    {
-        assert!(!response.status().is_success());
-    }
-    let terminal = fixture.terminal("late-upload-failure").await;
-    // A body read error retains the host's input-denial outcome even when
-    // earlier bytes have reached the backend. Progress must record that fact.
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_request_cap_exceeded"
+    );
+    response.bytes().await.unwrap();
+    assert!(upstream.api_requests().is_empty());
+    assert_eq!(upstream.writes(), 0);
+    let terminal = fixture.terminal("known-fragmented-cap").await;
     assert_eq!(terminal["decision"], "deny");
-    assert_eq!(terminal["reasonCode"], "gateway_request_body_denied");
-    assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "failed");
-    assert_eq!(terminal["providerAudit"]["gateway"]["requestBytes"], 5);
+    assert_eq!(terminal["reasonCode"], "gateway_request_cap_exceeded");
+    assert_ne!(terminal["providerAudit"]["gateway"]["phase"], "started");
     let records = read_audit_records(Path::new(&fixture.seed.config.audit.as_ref().unwrap().path));
-    let records = records
-        .iter()
-        .filter(|record| record["agentRequestId"] == "late-upload-failure")
-        .collect::<Vec<_>>();
-    assert_eq!(records.len(), 2);
     assert_eq!(
         records
             .iter()
-            .filter(|record| record["providerAudit"]["gateway"]["phase"] == "started")
+            .filter(|record| record["agentRequestId"] == "known-fragmented-cap")
             .count(),
         1
     );
-    assert_eq!(
-        records
-            .iter()
-            .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
-            .count(),
-        1
-    );
-    assert_eq!(upstream.writes(), 1);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while upstream.api_requests().is_empty() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await
-    .expect("upstream observes the interrupted upload");
-    assert_eq!(
-        upstream.api_requests().len(),
-        1,
-        "failed upload must not replay"
-    );
-    assert_eq!(upstream.api_requests()[0].body, b"first");
     fixture.stop().await;
 }
 

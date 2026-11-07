@@ -55,7 +55,9 @@ fn classify(
     target: &str,
     headers: &HeaderMap,
 ) -> Result<GatewayClassification, agent_access_provider::ProviderError> {
-    protocol.classify(test_support::gateway_request_head(method, target, headers))
+    protocol.classify(test_support::synthetic_gateway_request_head(
+        method, target, headers,
+    ))
 }
 
 fn body(data: &'static [u8]) -> agent_access_provider::GatewayBody {
@@ -64,7 +66,7 @@ fn body(data: &'static [u8]) -> agent_access_provider::GatewayBody {
     } else {
         vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(data)))]
     };
-    test_support::gateway_body(frames, 1024)
+    test_support::synthetic_gateway_body(frames, 1024)
 }
 
 #[test]
@@ -241,7 +243,7 @@ async fn opaque_upload_replays_inspected_prefix_and_drops_identity_headers() {
     ];
     let forwarded = classified
         .into_request()
-        .preflight(test_support::gateway_body(frames, 1024))
+        .preflight(test_support::synthetic_gateway_body(frames, 1024))
         .await
         .unwrap();
     assert_eq!(forwarded.relative_target, "/items/SECRET");
@@ -260,7 +262,7 @@ async fn opaque_upload_replays_inspected_prefix_and_drops_identity_headers() {
             .contains("SECRET")
     );
     assert_eq!(forwarded.audit_target.as_deref(), Some("/items/{id}"));
-    let frames: Vec<_> = test_support::gateway_body_stream(forwarded.body)
+    let frames: Vec<_> = test_support::replay_gateway_body(forwarded.body)
         .collect()
         .await;
     let mut bytes = Vec::new();
@@ -308,7 +310,7 @@ async fn body_presence_media_and_trailers_are_checked_before_forwarding() {
         assert_eq!(
             classified
                 .into_request()
-                .preflight(test_support::gateway_body(frames, 1024))
+                .preflight(test_support::synthetic_gateway_body(frames, 1024))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -543,7 +545,7 @@ async fn raw_json_is_forwarded_without_claiming_body_schema_validation() {
         .preflight(body(b"opaque non-JSON bytes"))
         .await
         .unwrap();
-    let frames: Vec<_> = test_support::gateway_body_stream(forwarded.body)
+    let frames: Vec<_> = test_support::replay_gateway_body(forwarded.body)
         .collect()
         .await;
     assert!(
@@ -561,7 +563,7 @@ async fn body_presence_inspection_has_an_empty_frame_budget() {
         .collect();
     let error = classified
         .into_request()
-        .preflight(test_support::gateway_body(frames, 1))
+        .preflight(test_support::synthetic_gateway_body(frames, 1))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
