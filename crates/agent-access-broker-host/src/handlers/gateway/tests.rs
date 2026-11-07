@@ -1562,7 +1562,7 @@ async fn unsubmitted_upload_drop_preserves_final_fence_denial() {
         .await
         .unwrap();
     let progress = Arc::new(GatewayRequestUploadProgress::new());
-    *progress.audit.lock().unwrap() = prepared.retain_gateway_request_body();
+    progress.audit.lock().unwrap().lease = prepared.retain_gateway_request_body();
     drop(GatewayUploadOwner {
         progress,
         _permits: None,
@@ -3791,5 +3791,245 @@ fn gateway_request_stream_body(
             progress,
         } => (body, failure, progress),
         GatewayPreparedRequestBody::Bytes(_) => panic!("unread fixture body must remain streamed"),
+    }
+}
+
+#[tokio::test]
+async fn known_length_receive_pack_refusal_retains_head_audit_and_policy_precedence() {
+    for (action, expected) in [
+        ("repo.push", "gateway_request_cap_exceeded"),
+        ("repo.fetch", "service_action_denied"),
+    ] {
+        let temp = test_temp_dir();
+        let audit_path = temp.join("head-cap.jsonl");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream = format!("https://{}", listener.local_addr().unwrap());
+        let (state, authorization) = managed_gateway_body_fixture(action, None, |config| {
+            config.audit = Some(AuditConfig::new(
+                agent_access_core::AuditStoreType::Jsonl,
+                audit_path.display().to_string(),
+            ));
+            let gateway = config.gateways.get_mut("gitlab_git").unwrap();
+            gateway.upstream_base_url = upstream.clone();
+            gateway.allowed_upstream_hosts = vec![format!("{upstream}/**")];
+            gateway.request_body_max_bytes = Some(8);
+        });
+        let runtime = state.current().runtime.clone();
+        let response = build_gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/sip/service.git/git-receive-pack")
+                    .extension(ConnectInfo(
+                        "127.0.0.1:41080".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .header(HOST, "git.example.test")
+                    .header(AUTHORIZATION, authorization)
+                    .header(REQUEST_ID_HEADER, "receive-pack-head-cap")
+                    .header(CONTENT_TYPE, "application/x-git-receive-pack-request")
+                    .header(CONTENT_LENGTH, "12")
+                    // Invalid Git packets would fail preflight with a different reason.
+                    .body(Body::from("not-git-data"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.headers()[REASON_CODE_HEADER], expected);
+        assert!(
+            timeout(Duration::from_millis(30), listener.accept())
+                .await
+                .is_err()
+        );
+        let _ = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        drain_gateway_test_audit(&runtime).await;
+        let records = audit_records(&audit_path);
+        let record = records
+            .iter()
+            .find(|record| record["reasonCode"] == expected)
+            .unwrap();
+        assert_eq!(record["decision"], "deny");
+        if action == "repo.push" {
+            assert_eq!(
+                record["providerAudit"]["git"],
+                json!({"operation":"receive-pack", "updates":[]})
+            );
+        }
+        assert!(
+            !records
+                .iter()
+                .any(|record| record["providerAudit"]["gateway"]["phase"] == "started")
+        );
+    }
+}
+
+#[tokio::test]
+async fn refused_connection_does_not_claim_uncertain_upload_processing() {
+    let temp = test_temp_dir();
+    let token = temp.join("upstream-token");
+    let identity_token = temp.join("identity-token");
+    let audit_path = temp.join("connect-failure.jsonl");
+    std::fs::write(&token, "upstream-token").unwrap();
+    std::fs::write(&identity_token, "identity-token").unwrap();
+    let runtime =
+        BrokerRuntime::new(test_forwarding_config(&token, &identity_token, &audit_path)).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut gateway = test_gateway_config();
+    gateway.upstream_base_url = format!("http://{address}");
+    gateway.allowed_upstream_hosts = vec![format!("http://{address}/**")];
+    let identity = runtime.identity_from_principal_groups(
+        "gateway-user".into(),
+        None,
+        Some("gateway-user".into()),
+        vec!["gateway-users".into()],
+        None,
+        None,
+    );
+    let prepared = runtime
+        .prepare_gateway_operation(
+            test_governed_operation(OperationContext {
+                agent_request_id: "refused-connect".into(),
+                broker_request_id: "refused-connect".into(),
+                identity,
+                service: "gitlab_git".into(),
+                action: "repo.fetch".into(),
+                source: agent_access_core::SourceContext::unknown(),
+            }),
+            ResourceScopes::from([("repository".into(), vec!["sip/service".into()])]),
+        )
+        .await
+        .unwrap();
+    let polled = Arc::new(AtomicBool::new(false));
+    let record_poll = polled.clone();
+    let body = Body::from_stream(stream::poll_fn(move |_| {
+        record_poll.store(true, Ordering::Relaxed);
+        Poll::Pending::<Option<Result<Bytes, io::Error>>>
+    }));
+    let response = forward_prepared_git_http(
+        runtime.clone(),
+        gateway,
+        GatewayForwardRequest {
+            git_request_kind: GitRequestKind::UploadPackPost,
+            headers: HeaderMap::from_iter([(
+                CONTENT_TYPE,
+                HeaderValue::from_static("application/x-git-upload-pack-request"),
+            )]),
+            body,
+            content_encoding: None,
+            receive_pack: None,
+        },
+        prepared,
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "upstream_connection_failed"
+    );
+    let _ = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    assert!(!polled.load(Ordering::Relaxed));
+    drain_gateway_test_audit(&runtime).await;
+    let records = audit_records(&audit_path);
+    let terminal: Vec<_> = records
+        .iter()
+        .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
+        .collect();
+    assert_eq!(terminal.len(), 1, "{records:?}");
+    let record = terminal[0];
+    assert_eq!(record["decision"], "error");
+    assert_eq!(record["reasonCode"], "upstream_connection_failed");
+    // Git retains its existing audit shape; the body was never polled above.
+    assert!(
+        record["providerAudit"]["gateway"]
+            .get("requestBytes")
+            .is_none()
+    );
+    assert!(
+        !record["providerAudit"]["gateway"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("uncertain")
+    );
+}
+
+#[tokio::test]
+async fn abandoned_pending_or_accepted_uploads_remain_uncertain_without_body_polling() {
+    for accepted in [false, true] {
+        let temp = test_temp_dir();
+        let token = temp.join("upstream-token");
+        let identity_token = temp.join("identity-token");
+        let audit_path = temp.join("abandoned.jsonl");
+        std::fs::write(&token, "upstream-token").unwrap();
+        std::fs::write(&identity_token, "identity-token").unwrap();
+        let runtime =
+            BrokerRuntime::new(test_forwarding_config(&token, &identity_token, &audit_path))
+                .unwrap();
+        let identity = runtime.identity_from_principal_groups(
+            "gateway-user".into(),
+            None,
+            Some("gateway-user".into()),
+            vec!["gateway-users".into()],
+            None,
+            None,
+        );
+        let mut prepared = runtime
+            .prepare_gateway_operation(
+                test_governed_operation(OperationContext {
+                    agent_request_id: "abandoned-upload".into(),
+                    broker_request_id: "abandoned-upload".into(),
+                    identity,
+                    service: "gitlab_git".into(),
+                    action: "repo.fetch".into(),
+                    source: agent_access_core::SourceContext::unknown(),
+                }),
+                ResourceScopes::from([("repository".into(), vec!["sip/service".into()])]),
+            )
+            .await
+            .unwrap();
+        runtime
+            .start_prepared_gateway_operation(&mut prepared, json!({"gateway":{"requestBytes":0}}))
+            .await
+            .unwrap();
+        let progress = Arc::new(GatewayRequestUploadProgress::new());
+        {
+            let mut audit = progress.audit.lock().unwrap();
+            audit.lease = prepared.retain_gateway_request_body();
+            audit.send = GatewayUploadSendState::Pending;
+        }
+        drop(GatewayUploadOwner {
+            progress: progress.clone(),
+            _permits: None,
+        });
+        if accepted {
+            progress.finish_send(false);
+        }
+        drop(progress);
+        let _ = runtime
+            .fail_prepared_gateway_operation(
+                prepared,
+                ProviderError::error(ReasonCode::UpstreamProtocolFailed, "gateway send ended")
+                    .with_audit(json!({"gateway":{"requestBytes":0}})),
+            )
+            .await;
+        drain_gateway_test_audit(&runtime).await;
+        let records = audit_records(&audit_path);
+        let terminal: Vec<_> = records
+            .iter()
+            .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
+            .collect();
+        assert_eq!(terminal.len(), 1, "accepted={accepted}: {records:?}");
+        assert_eq!(terminal[0]["providerAudit"]["gateway"]["requestBytes"], 0);
+        assert!(
+            terminal[0]["providerAudit"]["gateway"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("uncertain")
+        );
     }
 }

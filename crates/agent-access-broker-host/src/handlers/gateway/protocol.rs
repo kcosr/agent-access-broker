@@ -24,16 +24,19 @@ pub(super) fn checked_failure(
     }
 }
 
-/// Identity carriers never cross the protocol-module request-head boundary.
-pub(super) fn protocol_headers(headers: &HeaderMap) -> HeaderMap {
-    let nominated: BTreeSet<String> = headers
+fn connection_nominated_headers(headers: &HeaderMap) -> BTreeSet<String> {
+    headers
         .get_all(axum::http::header::CONNECTION)
         .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .filter_map(|name| axum::http::HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|name| axum::http::HeaderName::from_bytes(name.trim_ascii()).ok())
         .map(|name| name.as_str().to_owned())
-        .collect();
+        .collect()
+}
+
+/// Identity carriers never cross the protocol-module request-head boundary.
+pub(super) fn protocol_headers(headers: &HeaderMap) -> HeaderMap {
+    let nominated = connection_nominated_headers(headers);
     headers
         .iter()
         .filter(|(name, _)| {
@@ -41,6 +44,38 @@ pub(super) fn protocol_headers(headers: &HeaderMap) -> HeaderMap {
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
+}
+
+fn classified_head_audit(
+    registration: &agent_access_provider::GatewayRegistration,
+    audit: Option<&serde_json::Value>,
+) -> Result<Option<serde_json::Value>, ProviderError> {
+    let Some(audit) = audit else { return Ok(None) };
+    let facts = audit.as_object().ok_or_else(contract_failure)?;
+    if serde_json::to_vec(audit).map_or(true, |bytes| bytes.len() > 16 * 1024)
+        || (registration.audit_key() == "gateway"
+            && facts.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "phase"
+                        | "message"
+                        | "credentialMethod"
+                        | "durationMs"
+                        | "upstreamStatus"
+                        | "transferOutcome"
+                        | "kind"
+                        | "method"
+                        | "upstreamOrigin"
+                        | "upstreamPath"
+                        | "egressProxy"
+                        | "requestBytes"
+                        | "responseBytes"
+                )
+            }))
+    {
+        return Err(contract_failure());
+    }
+    Ok(Some(json!({registration.audit_key(): audit})))
 }
 
 fn identity_header(name: &str) -> bool {
@@ -144,6 +179,7 @@ pub(super) fn classify_gateway_request(
     let counted = registration
         .counted(classified.request_kind())
         .ok_or_else(contract_failure)?;
+    let head_audit = classified_head_audit(registration, classified.head_audit())?;
     Ok(ClassifiedGatewayRequest {
         service: matched.service.clone(),
         action: classified.action().to_owned(),
@@ -152,6 +188,7 @@ pub(super) fn classify_gateway_request(
         resource_scopes: classified.scopes().clone(),
         request: classified.into_request(),
         registration,
+        head_audit,
     })
 }
 
@@ -288,6 +325,7 @@ pub(super) fn selected_response_headers(
     status: u16,
     headers: &HeaderMap,
 ) -> Result<HeaderMap, ProviderError> {
+    let nominated = connection_nominated_headers(headers);
     let exact = profile
         .status_headers
         .iter()
@@ -316,10 +354,9 @@ pub(super) fn selected_response_headers(
             .validate(status, headers)
             .map_err(|error| checked_failure(registration, GatewayHookPhase::Response, error))?,
         None => {
-            if allowed
-                .iter()
-                .any(|name| headers.get_all(name).iter().count() > 1)
-            {
+            if allowed.iter().any(|name| {
+                !nominated.contains(name.as_str()) && headers.get_all(name).iter().count() > 1
+            }) {
                 return Err(ProviderError::error(
                     ReasonCode::UpstreamProtocolFailed,
                     "upstream returned ambiguous gateway response headers",
@@ -355,6 +392,11 @@ pub(super) fn selected_response_headers(
                 HeaderValue::from(wait.seconds()),
             );
         }
+    }
+    // Validate module-selected values before removing hop-by-hop nominations,
+    // so nominations cannot conceal a reserved or invented module output.
+    for name in nominated {
+        result.remove(name.as_str());
     }
     // Framing comes from the transport's upstream headers and policy, never
     // from a module's selection or validator result.

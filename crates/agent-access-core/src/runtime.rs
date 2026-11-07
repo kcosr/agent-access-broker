@@ -9914,10 +9914,10 @@ impl GatewayTerminalAuditState {
             } else {
                 "failed".to_owned()
             };
-            if record.decision != Decision::Error {
+            if record.decision == Decision::Allow {
                 record.reason_code = Some(reason.into());
+                record.decision = Decision::Error;
             }
-            record.decision = Decision::Error;
             record.provider_audit = gateway_terminal_audit_value(
                 record.provider_audit.take(), &phase,
                 Some("gateway request upload did not complete; upstream execution may be partial or uncertain".to_owned()),

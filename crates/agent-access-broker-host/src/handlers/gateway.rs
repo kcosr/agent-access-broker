@@ -62,6 +62,7 @@ struct ClassifiedGatewayRequest {
     resource_scopes: ResourceScopes,
     request: Box<dyn agent_access_provider::GatewayRequest>,
     registration: &'static agent_access_provider::GatewayRegistration,
+    head_audit: Option<serde_json::Value>,
 }
 
 struct GatewayAdmission {
@@ -173,22 +174,32 @@ struct GatewayUploadOwner {
 
 impl Drop for GatewayUploadOwner {
     fn drop(&mut self) {
-        self.progress.finish_audit(
-            self.progress
-                .dispatched
-                .load(Ordering::Relaxed)
-                .then_some(ReasonCode::UpstreamProtocolFailed),
-        );
+        self.progress.abandon_upload();
     }
+}
+
+#[derive(Default, PartialEq, Eq)]
+enum GatewayUploadSendState {
+    #[default]
+    NotSubmitted,
+    Pending,
+    Completed,
+    KnownNotProcessed,
+}
+
+#[derive(Default)]
+struct GatewayUploadAuditState {
+    lease: Option<GatewayRequestBodyAudit>,
+    send: GatewayUploadSendState,
+    abandoned: bool,
 }
 
 struct GatewayRequestUploadProgress {
     updates: AtomicU64,
-    dispatched: AtomicBool,
     started: AtomicBool,
     complete: AtomicBool,
     bytes: Arc<AtomicU64>,
-    audit: Mutex<Option<GatewayRequestBodyAudit>>,
+    audit: Mutex<GatewayUploadAuditState>,
 }
 
 enum GatewaySendError<E> {
@@ -201,11 +212,10 @@ impl GatewayRequestUploadProgress {
     fn new() -> Self {
         Self {
             updates: AtomicU64::new(0),
-            dispatched: AtomicBool::new(false),
             started: AtomicBool::new(false),
             complete: AtomicBool::new(false),
             bytes: Arc::new(AtomicU64::new(0)),
-            audit: Mutex::new(None),
+            audit: Mutex::new(GatewayUploadAuditState::default()),
         }
     }
 
@@ -221,13 +231,61 @@ impl GatewayRequestUploadProgress {
     }
 
     fn finish_audit(&self, failure: Option<ReasonCode>) {
-        if let Some(audit) = self.audit.lock().unwrap().take() {
+        let audit = self.audit.lock().unwrap().lease.take();
+        self.finish_audit_lease(audit, failure);
+    }
+
+    fn finish_audit_lease(
+        &self,
+        audit: Option<GatewayRequestBodyAudit>,
+        failure: Option<ReasonCode>,
+    ) {
+        if let Some(audit) = audit {
             let bytes = Some(self.bytes.load(Ordering::Relaxed));
             match failure {
                 Some(reason) => audit.fail(reason, bytes),
                 None => audit.complete(bytes),
             }
         }
+    }
+
+    fn abandon_upload(&self) {
+        let (lease, failure) = {
+            let mut audit = self.audit.lock().unwrap();
+            audit.abandoned = true;
+            match audit.send {
+                // The transport can drop its body before returning a connect/TLS
+                // failure. Defer that lease until the send result proves whether
+                // processing was impossible; body polling alone is not proof.
+                GatewayUploadSendState::Pending => return,
+                GatewayUploadSendState::NotSubmitted
+                | GatewayUploadSendState::KnownNotProcessed => (audit.lease.take(), None),
+                GatewayUploadSendState::Completed => {
+                    (audit.lease.take(), Some(ReasonCode::UpstreamProtocolFailed))
+                }
+            }
+        };
+        self.finish_audit_lease(lease, failure);
+    }
+
+    fn finish_send(&self, known_not_processed: bool) {
+        let lease = {
+            let mut audit = self.audit.lock().unwrap();
+            audit.send = if known_not_processed {
+                GatewayUploadSendState::KnownNotProcessed
+            } else {
+                GatewayUploadSendState::Completed
+            };
+            if known_not_processed || audit.abandoned {
+                audit.lease.take()
+            } else {
+                None
+            }
+        };
+        self.finish_audit_lease(
+            lease,
+            (!known_not_processed).then_some(ReasonCode::UpstreamProtocolFailed),
+        );
     }
 
     async fn wait_for_send_idle_timeout(
@@ -250,6 +308,25 @@ impl GatewayRequestUploadProgress {
                 };
             }
             last_seen = current;
+        }
+    }
+}
+
+impl Drop for GatewayRequestUploadProgress {
+    fn drop(&mut self) {
+        let audit = self.audit.get_mut().unwrap();
+        if let Some(lease) = audit.lease.take() {
+            let bytes = Some(self.bytes.load(Ordering::Relaxed));
+            if matches!(
+                audit.send,
+                GatewayUploadSendState::NotSubmitted | GatewayUploadSendState::KnownNotProcessed
+            ) {
+                lease.complete(bytes);
+            } else {
+                // Cancellation while awaiting a send result supplies no proof
+                // of non-processing, even if the body had not yet been polled.
+                lease.fail(ReasonCode::UpstreamProtocolFailed, bytes);
+            }
         }
     }
 }
@@ -551,7 +628,10 @@ async fn gateway_dispatch_admitted(
         )),
         _ => None,
     };
-    if let Some(error) = head_error {
+    if let Some(mut error) = head_error {
+        if let Some(audit) = classified.head_audit {
+            error = error.with_audit(audit);
+        }
         return gateway_runtime_response(
             runtime
                 .reject_gateway_operation_without_credential(
@@ -1157,7 +1237,7 @@ async fn forward_prepared_gateway(
         return gateway_runtime_response(*response);
     }
     if let Some(progress) = &upload_progress {
-        *progress.audit.lock().unwrap() = prepared.retain_gateway_request_body();
+        progress.audit.lock().unwrap().lease = prepared.retain_gateway_request_body();
         if let Some(disposal) = &disposal {
             *disposal.0.0.lock().unwrap() = prepared.retain_gateway_request_body();
         }
@@ -1364,9 +1444,17 @@ async fn send_gateway_upstream(
             .with_audit(audit.value())
     };
     if let Some(progress) = &upload_progress {
-        progress.dispatched.store(true, Ordering::Relaxed);
+        progress.audit.lock().unwrap().send = GatewayUploadSendState::Pending;
     }
-    match gateway_send_with_upload_watchdog(builder.send(), upload_progress, idle_timeout).await {
+    let result =
+        gateway_send_with_upload_watchdog(builder.send(), upload_progress.clone(), idle_timeout)
+            .await;
+    if let Some(progress) = &upload_progress {
+        let known_not_processed = matches!(&result, Err(GatewaySendError::Inner(error)) if error.is_connect())
+            && progress.bytes.load(Ordering::Relaxed) == 0;
+        progress.finish_send(known_not_processed);
+    }
+    match result {
         Ok(mut response) => {
             // Hyper gives Transfer-Encoding precedence while retaining a supplied
             // Content-Length. Refuse the conflict before raw Content-Length can

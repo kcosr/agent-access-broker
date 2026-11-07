@@ -2665,7 +2665,11 @@ action requires every declared scope dimension. Body-derived resources and
 preauthorization upstream lookup are unsupported. The host performs identity and
 admission checks, then calls `GatewayRequest::preflight` with `GatewayBody`.
 An explicit request length over the configured cap is refused before preflight
-or upstream work, with policy-denial precedence preserved.
+or upstream work, with policy-denial precedence preserved. Classification may
+supply `with_head_audit` facts for these head-only refusals: an object of at most
+16 KiB, placed under the registration's audit key. These facts must contain only
+bounded protocol metadata and cannot set host lifecycle fields. They require no
+body inspection and are omitted from the classification's Debug output.
 Preflight cannot change the classified action or scopes. Policy denial takes
 precedence over a preflight failure.
 
@@ -2689,7 +2693,9 @@ frames, preserves data order and limits, and never forwards trailer fields.
 
 `GatewayResponseProfile` selects shared headers plus the first matching exact
 status rule, status class, or default rule. A custom header validator may only
-remove upstream values; it cannot rewrite or invent them. Content-Length is
+remove upstream values; it cannot rewrite or invent them. The host removes
+response fields nominated by `Connection`, including fields selected by a
+validator, after checking the validator's output. Content-Length is
 host-owned and can be preserved explicitly for raw bytes. Decompression and
 redirect following are disabled. The host validates every Content-Length value,
 including on HEAD and 304 responses, before completion. Repeated values and
@@ -2727,9 +2733,15 @@ The terminal audit also waits for upload, response and bounded unread-body dispo
 An early successful upstream response cannot establish successful completion of
 an unfinished upload; a later upload failure produces one failed terminal record
 with the observed upstream status and partial or uncertain execution outcome.
-Request-stream failures after dispatch are errors with HTTP 502 when response
-headers have not been sent; the terminal audit retains transferred byte counts
-and states that upstream execution may be partial or uncertain.
+After dispatch, streamed body read and byte-cap failures are errors with HTTP
+502 when response headers have not been sent. Transport timeouts retain HTTP
+504. The terminal audit retains transferred byte counts and states that
+upstream execution may be partial or uncertain. An existing denial or error
+keeps its decision and reason while receiving this additional upload evidence.
+A confirmed connection failure before any byte handoff records no uncertainty;
+an early upstream response or cancellation without a send result does not supply
+that proof, even if the body has not yet been polled. Git retains its established
+audit shape; generated gateway records include request byte counts.
 
 The independent fixture at
 [`tests/downstream-consumer/provider-repo/crates/example-gateway`](../tests/downstream-consumer/provider-repo/crates/example-gateway/src/lib.rs)

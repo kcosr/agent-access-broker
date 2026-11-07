@@ -2686,10 +2686,12 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayBod
 #[non_exhaustive] pub struct agent_access_provider::GatewayClassification
 impl agent_access_provider::GatewayClassification
 pub fn agent_access_provider::GatewayClassification::action(&self) -> &str
+pub fn agent_access_provider::GatewayClassification::head_audit(&self) -> core::option::Option<&serde_json::value::Value>
 pub fn agent_access_provider::GatewayClassification::into_request(self) -> alloc::boxed::Box<dyn agent_access_provider::GatewayRequest>
 pub fn agent_access_provider::GatewayClassification::new(impl core::convert::Into<alloc::string::String>, agent_access_provider::ResourceScopes, &'static str, alloc::boxed::Box<dyn agent_access_provider::GatewayRequest>) -> Self
 pub fn agent_access_provider::GatewayClassification::request_kind(&self) -> &'static str
 pub fn agent_access_provider::GatewayClassification::scopes(&self) -> &agent_access_provider::ResourceScopes
+pub fn agent_access_provider::GatewayClassification::with_head_audit(self, serde_json::value::Value) -> Self
 impl core::fmt::Debug for agent_access_provider::GatewayClassification
 pub fn agent_access_provider::GatewayClassification::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Freeze for agent_access_provider::GatewayClassification

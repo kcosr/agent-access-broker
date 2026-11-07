@@ -6711,7 +6711,7 @@ async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
         let mut completed = started;
         completed.decision = decision.clone();
         if decision != Decision::Allow {
-            completed.reason_code = Some(ReasonCode::GatewayRequestBodyDenied.into());
+            completed.reason_code = Some(ReasonCode::CredentialInvalid.into());
         }
         completed.upstream_status = Some(200);
         completed.provider_audit.as_mut().unwrap()["gateway"] = json!({
@@ -6761,9 +6761,25 @@ async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
                 record["providerAudit"]["gateway"]["phase"],
                 if failure { "failed" } else { "completed" }
             );
-            assert_eq!(record["decision"], if failure { "error" } else { "allow" });
+            assert_eq!(
+                record["decision"],
+                if decision == Decision::Deny {
+                    "deny"
+                } else if failure {
+                    "error"
+                } else {
+                    "allow"
+                }
+            );
             if failure {
-                assert_eq!(record["reasonCode"], "gateway_request_body_denied");
+                assert_eq!(
+                    record["reasonCode"],
+                    if decision == Decision::Allow {
+                        "gateway_request_body_denied"
+                    } else {
+                        "credential_invalid"
+                    }
+                );
                 assert!(
                     record["providerAudit"]["gateway"]["message"]
                         .as_str()

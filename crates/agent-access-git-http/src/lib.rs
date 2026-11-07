@@ -62,7 +62,7 @@ impl GatewayProtocol for GitProtocol {
         let classified = classify::classify(&self.git, head.method(), &uri, head.headers())?;
         let kind = classified.git_request_kind;
         let target = kind.relative_target(&classified.resource_scopes)?;
-        Ok(GatewayClassification::new(
+        let classification = GatewayClassification::new(
             kind.action(),
             classified.resource_scopes,
             kind.name(),
@@ -72,7 +72,12 @@ impl GatewayProtocol for GitProtocol {
                 target,
                 headers: head.headers().clone(),
             }),
-        ))
+        );
+        Ok(if kind.is_receive_pack_post() {
+            classification.with_head_audit(receive_pack::empty_receive_pack_audit())
+        } else {
+            classification
+        })
     }
 
     fn verification(
