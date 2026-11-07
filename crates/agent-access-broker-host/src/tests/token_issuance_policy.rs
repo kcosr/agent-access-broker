@@ -130,7 +130,7 @@ impl Fixture {
         config.mcp.enabled = true;
         config.mcp.public_url = Some("https://broker.example.test/mcp".into());
         let mut gateway = test_git_gateway_config();
-        gateway.git.as_mut().unwrap().allow_push = true;
+        gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] = toml::Value::Boolean(true);
         config.gateways.insert("gitlab_git".into(), gateway);
         let upstream_key = directory.path().join("git-key");
         std::fs::write(&upstream_key, "synthetic-gateway-credential").unwrap();

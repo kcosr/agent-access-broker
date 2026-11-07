@@ -1,5 +1,7 @@
 use super::*;
-use agent_access_provider::{GatewayProbeStatus, GatewayServiceContext, test_support};
+use agent_access_provider::{
+    GatewayHookPhase, GatewayProbeStatus, GatewayServiceContext, test_support,
+};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http::{HeaderValue, Method, header::CONTENT_TYPE};
@@ -40,7 +42,12 @@ fn classify_push(protocol: &dyn GatewayProtocol) -> GatewayClassification {
 #[tokio::test]
 async fn inspected_and_overread_bytes_are_forwarded_once_in_original_order() {
     let protocol = protocol();
-    let prefix = push_prefix();
+    // Retain the baseline Git 2.43 packet and a second declaration without a
+    // newline, followed by a command crossing the SDK inspection boundary.
+    let mut prefix = b"0035shallow e56b9448bcf5add52ac4f1944cb0c20d1bf75056\n".to_vec();
+    let shallow = "shallow 2222222222222222222222222222222222222222";
+    prefix.extend(format!("{:04x}{shallow}", shallow.len() + 4).bytes());
+    prefix.extend(push_prefix());
     let mut overread = prefix[13..].to_vec();
     overread.extend(b"PACK-OVERREAD");
     let frames = vec![
@@ -79,6 +86,40 @@ async fn inspected_and_overread_bytes_are_forwarded_once_in_original_order() {
     }
     let mut expected = prefix;
     expected.extend(b"PACK-OVERREADPACK-REMAINING");
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn large_pack_frame_after_a_small_prefix_budget_is_replayed_without_truncation() {
+    let context = GatewayServiceContext::new("git", "Git", "https://git.example");
+    let protocol = GIT_HTTP_GATEWAY
+        .parse_config(
+            toml::from_str("[git]\nallow_push = true\nreceive_pack_prefix_max_bytes = 128")
+                .unwrap(),
+        )
+        .unwrap()
+        .build(&context)
+        .unwrap();
+    let mut expected = push_prefix();
+    expected.extend(b"PACK");
+    expected.extend(vec![b'x'; 2048]);
+    let plan = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::copy_from_slice(
+                &expected,
+            )))],
+            4096,
+        ))
+        .await
+        .unwrap();
+    let mut body = test_support::gateway_body_stream(plan.body);
+    let mut actual = Vec::new();
+    while let Some(frame) = body.next().await {
+        if let GatewayBodyFrame::Data(bytes) = frame.unwrap() {
+            actual.extend(bytes);
+        }
+    }
     assert_eq!(actual, expected);
 }
 
@@ -145,11 +186,50 @@ async fn body_error_kind_and_parsed_audit_survive_the_sdk_port() {
             .unwrap_err();
         assert_eq!(error.reason_code(), reason);
         assert_eq!(error.message, message);
+        GIT_HTTP_GATEWAY
+            .check_failure(GatewayHookPhase::Preflight, &error)
+            .expect("the host accepts the preserved Git preflight failure");
         assert_eq!(
             error.audit.unwrap()["git"]["updates"][0]["ref"],
             "refs/heads/topic"
         );
     }
+}
+
+#[tokio::test]
+async fn prefix_limit_and_content_type_denials_pass_the_host_failure_contract() {
+    let context = GatewayServiceContext::new("git", "Git", "https://git.example");
+    let protocol = GIT_HTTP_GATEWAY
+        .parse_config(
+            toml::from_str("[git]\nallow_push = true\nreceive_pack_prefix_max_bytes = 4").unwrap(),
+        )
+        .unwrap()
+        .build(&context)
+        .unwrap();
+    let error = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::from(push_prefix())))],
+            4096,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GitPrefixCapExceeded);
+    GIT_HTTP_GATEWAY
+        .check_failure(GatewayHookPhase::Preflight, &error)
+        .expect("Git prefix caps retain their HTTP 413 reason through host validation");
+
+    let error = protocol
+        .classify(test_support::gateway_request_head(
+            &Method::POST,
+            "/team/project.git/git-receive-pack",
+            &HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("application/json"))]),
+        ))
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GatewayContentTypeDenied);
+    GIT_HTTP_GATEWAY
+        .check_failure(GatewayHookPhase::Classification, &error)
+        .expect("unsupported Git media types remain a protocol classification denial");
 }
 
 #[tokio::test]
@@ -221,6 +301,33 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
 }
 
 #[test]
+fn verification_eligibility_matches_the_available_read_probe() {
+    let context = GatewayServiceContext::new("git", "Git", "https://git.example")
+        .with_credential_modes(vec!["per_user".into()]);
+    for (fetch, push) in [(true, false), (true, true), (false, true)] {
+        let config = GIT_HTTP_GATEWAY
+            .parse_config(
+                toml::from_str(&format!(
+                    "[git]\nallow_fetch = {fetch}\nallow_push = {push}"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let descriptor = config.descriptor(&context);
+        assert_eq!(descriptor.credentials.verification_inputs, ["repository"]);
+        assert_eq!(descriptor.credentials.verification_supported, fetch);
+        let protocol = config.build(&context).unwrap();
+        assert_eq!(
+            protocol
+                .verification(Some("team/project"))
+                .unwrap()
+                .is_some(),
+            descriptor.credentials.verification_supported
+        );
+    }
+}
+
+#[test]
 fn credential_probe_declares_fetch_authority_and_validates_the_git_advertisement() {
     let protocol = protocol();
     let probe = protocol
@@ -236,6 +343,12 @@ fn credential_probe_declares_fetch_authority_and_validates_the_git_advertisement
         "/team/project.git/info/refs?service=git-upload-pack"
     );
     assert_eq!(request.max_response_bytes, 1024);
+    assert_eq!(
+        request.audit,
+        Some(
+            serde_json::json!({"operation": "upload-pack-discovery", "repository": "team/project"})
+        )
+    );
     let headers = HeaderMap::from_iter([(
         CONTENT_TYPE,
         HeaderValue::from_static("application/x-git-upload-pack-advertisement"),

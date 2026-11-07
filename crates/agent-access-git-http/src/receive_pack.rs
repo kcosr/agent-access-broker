@@ -536,14 +536,22 @@ mod tests {
             json!({"operation": "receive-pack", "probe": true, "updates": []})
         );
         for trailing in [b"PACK".as_slice(), b"0000", b"x"] {
-            let mut parser = ReceivePackParser::new(&git, 4096);
-            parser.push(b"0000").unwrap();
-            let error = parser.push(trailing).unwrap_err();
-            assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
-            assert_eq!(
-                error.message,
-                "gateway git receive-pack command list is empty"
-            );
+            for same_frame in [false, true] {
+                let mut parser = ReceivePackParser::new(&git, 4096);
+                let mut bytes = Vec::new();
+                if same_frame {
+                    bytes.extend(b"0000");
+                } else {
+                    parser.push(b"0000").unwrap();
+                }
+                bytes.extend(trailing);
+                let error = parser.push(&bytes).unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
+                assert_eq!(
+                    error.message,
+                    "gateway git receive-pack command list is empty"
+                );
+            }
         }
         let mut parser = ReceivePackParser::new(&git, 4096);
         parser.push(b"0000").unwrap();
@@ -597,12 +605,21 @@ mod tests {
                 ReasonCode::GitCapabilityDenied,
             ),
         ] {
-            let mut parser = ReceivePackParser::new(&git, 4096);
-            let error = parser
-                .push(&command(new, reference, capabilities))
-                .unwrap_err();
-            assert_eq!(error.reason_code(), reason);
-            assert_eq!(error.audit.unwrap()["git"]["updates"][0]["ref"], reference);
+            for shallow in [false, true] {
+                let mut parser = ReceivePackParser::new(&git, 4096);
+                if shallow {
+                    parser
+                        .push(&packet(format!("shallow {OLD}\n").as_bytes()))
+                        .unwrap();
+                }
+                let error = parser
+                    .push(&command(new, reference, capabilities))
+                    .unwrap_err();
+                assert_eq!(error.reason_code(), reason);
+                let audit = error.audit.unwrap();
+                assert_eq!(audit["git"]["operation"], "receive-pack");
+                assert_eq!(audit["git"]["updates"][0]["ref"], reference);
+            }
         }
         for bytes in [
             packet(b"shallow bad\n"),

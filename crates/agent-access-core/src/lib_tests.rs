@@ -5418,7 +5418,8 @@ fn git_http_gateway_rejects_invalid_gateway_options() {
     );
 
     let mut gateway = git_http_gateway_config();
-    gateway.git.as_mut().unwrap().receive_pack_prefix_max_bytes = Some(0);
+    gateway.protocol_fields.get_mut("git").unwrap()["receive_pack_prefix_max_bytes"] =
+        toml::Value::Integer(0);
     let errors = validation_errors(validate_broker_config(&config_with_gateway(gateway)));
     assert_contains(&errors, "receive_pack_prefix_max_bytes must be non-zero");
 }
@@ -6727,13 +6728,16 @@ fn git_http_gateway_config() -> GatewayConfig {
         response_body_max_bytes: None,
         streaming_idle_timeout_ms: None,
         correlation_headers: true,
-        git: Some(GatewayGitConfig {
-            allow_fetch: true,
-            allow_push: true,
-            deny_ref_patterns: vec!["refs/heads/main".to_string()],
-            deny_delete_refs: true,
-            receive_pack_prefix_max_bytes: Some(64 * 1024),
-        }),
+        protocol_fields: toml::from_str(
+            r#"[git]
+allow_fetch = true
+allow_push = true
+deny_ref_patterns = ["refs/heads/main"]
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+        )
+        .unwrap(),
     }
 }
 

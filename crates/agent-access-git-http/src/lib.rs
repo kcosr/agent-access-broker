@@ -156,7 +156,9 @@ impl GatewayRequest for GitRequest {
         let headers = classify::request_headers(&self.headers, self.kind, encoding)?;
         let mut plan = GatewayForwardPlan::new(self.kind.method(), self.target, body)
             .with_headers(headers)
-            .with_response(GatewayResponseProfile::new(vec!["content-type".into()]))
+            .with_response(
+                GatewayResponseProfile::new(vec!["content-type".into()]).bounded_retry_after(),
+            )
             .with_replay(if self.kind.is_pack_post() {
                 GatewayReplayProfile::Never
             } else {

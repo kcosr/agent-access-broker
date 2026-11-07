@@ -1520,7 +1520,8 @@ async fn managed_git_push_fixture() -> (Fixture, PathBuf) {
             external_default(config);
             let mut gateway = test_git_gateway_config();
             gateway.allow_forwarded_identity = true;
-            gateway.git.as_mut().unwrap().allow_push = true;
+            gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] =
+                toml::Value::Boolean(true);
             config.gateways.insert("gitlab_git".into(), gateway);
             let dir = PathBuf::from(&config.managed_store.as_ref().unwrap().path)
                 .parent()

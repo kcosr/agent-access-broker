@@ -72,7 +72,7 @@ async fn metadata_fixture_with(configure: impl FnOnce(&mut BrokerConfig)) -> Met
     let mut gateway = test_git_gateway_config();
     gateway.credential_modes = vec!["per_user".to_string()];
     gateway.allowed_upstream_hosts = vec!["https://gitlab.example.com/**".to_string()];
-    gateway.git.as_mut().unwrap().allow_push = true;
+    gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] = toml::Value::Boolean(true);
     config.gateways.insert("gitlab_git".to_string(), gateway);
     for (service, profile) in [
         ("gitlab_git", "git-bearer-token"),

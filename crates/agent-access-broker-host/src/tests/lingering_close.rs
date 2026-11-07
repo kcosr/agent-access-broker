@@ -533,7 +533,8 @@ async fn push_gateway(configure: impl FnOnce(&mut BrokerConfig)) -> GatewayRoute
     test_gateway_router_with_config(true, &["repo.fetch", "repo.push"], |config| {
         let gateway = config.gateways.get_mut("gitlab_git").unwrap();
         gateway.request_body_max_bytes = Some(64 * 1024 * 1024);
-        gateway.git.as_mut().unwrap().deny_ref_patterns = vec!["refs/heads/protected".into()];
+        gateway.protocol_fields.get_mut("git").unwrap()["deny_ref_patterns"] =
+            toml::Value::Array(vec![toml::Value::String("refs/heads/protected".into())]);
         configure(config);
     })
     .await

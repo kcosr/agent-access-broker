@@ -39,11 +39,15 @@ impl GitProbe {
             request: GatewayProbeRequest::new(
                 "repo.fetch",
                 ResourceScopes::from([("repository".into(), vec![repository.clone()])]),
-                repository,
+                repository.clone(),
                 url[url::Position::BeforePath..].to_owned(),
                 GIT_UPLOAD_PACK_ADVERTISEMENT_PREFIX_MAX_BYTES,
             )
-            .with_headers(headers),
+            .with_headers(headers)
+            .with_audit(serde_json::json!({
+                "operation": "upload-pack-discovery",
+                "repository": repository,
+            })),
         })
     }
 }

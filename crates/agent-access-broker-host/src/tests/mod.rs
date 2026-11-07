@@ -17925,7 +17925,8 @@ where
         },
     );
     let mut gateway = test_git_gateway_config();
-    gateway.git.as_mut().unwrap().allow_push = allow_push;
+    gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] =
+        toml::Value::Boolean(allow_push);
     config.gateways.insert("gitlab_git".to_string(), gateway);
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["user:gateway-user".to_string()],
@@ -18015,13 +18016,16 @@ fn test_git_gateway_config() -> agent_access_core::GatewayConfig {
         response_body_max_bytes: Some(1024 * 1024),
         streaming_idle_timeout_ms: Some(30_000),
         correlation_headers: true,
-        git: Some(agent_access_core::GatewayGitConfig {
-            allow_fetch: true,
-            allow_push: false,
-            deny_ref_patterns: vec![],
-            deny_delete_refs: true,
-            receive_pack_prefix_max_bytes: Some(65_536),
-        }),
+        protocol_fields: toml::from_str(
+            r#"[git]
+allow_fetch = true
+allow_push = false
+deny_ref_patterns = []
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+        )
+        .unwrap(),
     }
 }
 

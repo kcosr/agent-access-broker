@@ -43,20 +43,32 @@ normal Git commands against a remote URL whose host matches one of the gateway's
 `broker_hosts`, and the broker classifies the Git smart HTTP request into the
 same service/action/scope policy model used by providers.
 
+The shipped Broker assembly selects the linked `agent-access-git-http` module.
+A custom assembly selects it with
+`BrokerCompositionBuilder::gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)`;
+see [downstream assembly](downstream-assembly.md). Configuring `kind = "git_http"`
+without that registration fails configuration validation. Each service uses the
+strict `[gateways.<name>]` common settings and nested `[gateways.<name>.git]`
+protocol settings. The module classifies Git requests and validates their
+protocol data; the host owns caller identity, policy, credentials, transport,
+limits and audit completion. The shared `git_repository` resource type also
+serves GitLab REST and remains available independently of the Git module.
+
 ## Access surfaces and examples
 
 Git HTTP gateways are used through ordinary Git smart HTTP clients, not
-`agent-access invoke`, JSON `send`, or direct `/v1/invoke` HTTP calls. The broker
-still advertises gateway actions in discovery so agents and operators can see
-policy-grantable `repo.fetch` and `repo.push` actions.
+`agent-access invoke`, JSON `send`, or direct `/v1/invoke` HTTP calls. Gateway
+services and their actions are excluded from ordinary agent service/action
+lists and descriptions, MCP tools, and invoke/send runtime specs. Administrators
+still configure grants for `repo.fetch` and `repo.push`, and service, credential
+and explicit access-inspection views retain those policy identities.
 
-Gateway discovery and credential verification use the CLI. Gateway services
-appear in `services` and `actions` output, but they are intentionally omitted
-from invoke/send runtime specs because they are not `/v1/invoke` actions.
+Use the CLI to inspect repository access and verify a personal token. Git smart
+HTTP reference discovery (`GET .../info/refs`) is a separate protocol operation
+and remains available to authorized Git clients.
 
 ```bash
-agent-access services list
-agent-access actions list --service gitlab_git
+agent-access resource-access describe --service gitlab_git --action repo.fetch
 # Verify your token for the gitlab credential connection through the gateway
 agent-access --url http://127.0.0.1:8787 credentials verify gitlab --service gitlab_git --repository team/project
 ```
@@ -141,7 +153,7 @@ a grant or selects credentials.
 
 ## Actions and authentication
 
-The gateway advertises these actions when enabled in `[gateways.<name>.git]`:
+The gateway defines these policy actions when enabled in `[gateways.<name>.git]`:
 
 | Action | Required scope type | Enabled by |
 | --- | --- | --- |
@@ -151,10 +163,9 @@ The gateway advertises these actions when enabled in `[gateways.<name>.git]`:
 Git clients authenticate with HTTP Basic auth. The username must equal
 `basic_broker_token_username` (default `agent-access`), and the password must be
 a broker `agent_invoke` token. That broker token identifies the caller and is
-checked before any upstream credential is selected. Discovery through the
-public listener is context-specific too, so use the public trusted entrypoint
-for the same execution context when checking whether `repo.fetch` or
-`repo.push` is visible.
+checked before any upstream credential is selected. Explicit access inspection
+through the public listener is context-specific too, so use the public trusted
+entrypoint for the same execution context when checking repository access.
 
 Every gateway response, including denials and upstream failures, carries
 `Cache-Control: private, no-store` and `Pragma: no-cache`. The broker discards
@@ -301,7 +312,9 @@ any Atlassian profile (`atlassian-api-token`, `atlassian-scoped-api-token`,
 and verification refuse such a token before anything is sent. The self-service credential verifier checks
 stored tokens; it requires a repository that the principal can fetch and uses
 `streaming_idle_timeout_ms` for stalled upstream discovery headers or body
-reads.
+reads. A gateway with `allow_fetch = false` has no eligible credential-verification
+probe. Token storage and OAuth connection setup remain available according to
+the connection configuration.
 
 The gateway presents a `basic_api_token` credential (a service credential, or a
 basic-kind profile such as `git-basic-api-token`) as HTTP Basic with its own

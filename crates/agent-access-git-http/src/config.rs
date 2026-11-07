@@ -147,6 +147,11 @@ impl GatewayConfig for GitModuleConfig {
         } else {
             CredentialDescriptor::default().verification_input("repository")
         };
+        let credentials = if self.git.as_ref().is_some_and(|git| git.allow_fetch) {
+            credentials
+        } else {
+            credentials.without_verification()
+        };
         let descriptor = ServiceDescriptor::new(&context.service, context.display_name.clone())
             .with_surface(ServiceSurface::Gateway {
                 kind: "git_http".to_string(),

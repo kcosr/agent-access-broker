@@ -400,6 +400,8 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         runtime.config_generation.unwrap_or(0),
     )));
     BrokerRuntime {
+        gateways: Arc::clone(&runtime.gateways),
+        gateway_configs: Arc::new(config.gateways.clone()),
         effective_credentials: Arc::new(config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
         imported_credential_contracts: runtime.imported_credential_contracts.clone(),
@@ -8214,13 +8216,16 @@ fn runtime_preflights_gateway_proxy_secrets() {
             response_body_max_bytes: None,
             streaming_idle_timeout_ms: None,
             correlation_headers: true,
-            git: Some(crate::GatewayGitConfig {
-                allow_fetch: true,
-                allow_push: false,
-                deny_ref_patterns: vec![],
-                deny_delete_refs: true,
-                receive_pack_prefix_max_bytes: Some(64 * 1024),
-            }),
+            protocol_fields: toml::from_str(
+                r#"[git]
+allow_fetch = true
+allow_push = false
+deny_ref_patterns = []
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+            )
+            .unwrap(),
         },
     );
 
@@ -8388,13 +8393,16 @@ fn runtime_rejects_provider_service_that_shadows_a_gateway() {
             response_body_max_bytes: None,
             streaming_idle_timeout_ms: None,
             correlation_headers: true,
-            git: Some(crate::GatewayGitConfig {
-                allow_fetch: true,
-                allow_push: false,
-                deny_ref_patterns: vec![],
-                deny_delete_refs: true,
-                receive_pack_prefix_max_bytes: Some(64 * 1024),
-            }),
+            protocol_fields: toml::from_str(
+                r#"[git]
+allow_fetch = true
+allow_push = false
+deny_ref_patterns = []
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+            )
+            .unwrap(),
         },
     );
 
@@ -8730,13 +8738,16 @@ fn git_gateway_config() -> crate::GatewayConfig {
         response_body_max_bytes: Some(1024 * 1024),
         streaming_idle_timeout_ms: Some(30_000),
         correlation_headers: true,
-        git: Some(crate::GatewayGitConfig {
-            allow_fetch: true,
-            allow_push: true,
-            deny_ref_patterns: vec!["refs/heads/main".to_string()],
-            deny_delete_refs: true,
-            receive_pack_prefix_max_bytes: Some(65_536),
-        }),
+        protocol_fields: toml::from_str(
+            r#"[git]
+allow_fetch = true
+allow_push = true
+deny_ref_patterns = ["refs/heads/main"]
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+        )
+        .unwrap(),
     }
 }
 

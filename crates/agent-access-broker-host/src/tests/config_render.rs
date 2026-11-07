@@ -11,7 +11,7 @@ use agent_access_core::{
     BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig,
     ConnectionConfig, ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
     CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
-    GatewayConfig, GatewayGitConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
+    GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
     IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
     InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
     ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
@@ -811,9 +811,9 @@ fn gateway_value(gateway: &GatewayConfig) -> Value {
         response_body_max_bytes,
         streaming_idle_timeout_ms,
         correlation_headers,
-        git,
+        protocol_fields,
     } = gateway;
-    Fields::default()
+    let mut fields = Fields::default()
         .put("allow_forwarded_identity", *allow_forwarded_identity)
         .put("kind", kind.as_str())
         .put("display_name", display_name.as_str())
@@ -845,29 +845,14 @@ fn gateway_value(gateway: &GatewayConfig) -> Value {
         .opt_int("response_body_max_bytes", *response_body_max_bytes)
         .opt_int("streaming_idle_timeout_ms", *streaming_idle_timeout_ms)
         .put("correlation_headers", *correlation_headers)
-        .opt(
-            "git",
-            git.as_ref().map(|git| {
-                let GatewayGitConfig {
-                    allow_fetch,
-                    allow_push,
-                    deny_ref_patterns,
-                    deny_delete_refs,
-                    receive_pack_prefix_max_bytes,
-                } = git;
-                Fields::default()
-                    .put("allow_fetch", *allow_fetch)
-                    .put("allow_push", *allow_push)
-                    .put("deny_ref_patterns", strings(deny_ref_patterns))
-                    .put("deny_delete_refs", *deny_delete_refs)
-                    .opt_int(
-                        "receive_pack_prefix_max_bytes",
-                        *receive_pack_prefix_max_bytes,
-                    )
-                    .value()
-            }),
-        )
-        .value()
+        .table();
+    for (key, value) in protocol_fields {
+        assert!(
+            fields.insert(key.clone(), value.clone()).is_none(),
+            "gateway protocol field {key} conflicts with a common setting"
+        );
+    }
+    Value::Table(fields)
 }
 
 fn limits_value(limits: &LimitsConfig) -> Value {
