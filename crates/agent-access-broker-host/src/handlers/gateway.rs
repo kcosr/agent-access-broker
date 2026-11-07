@@ -22,7 +22,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{ConnectInfo, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, EXPIRES, HOST, PRAGMA, TRAILER,
-    WWW_AUTHENTICATE,
+    TRANSFER_ENCODING, WWW_AUTHENTICATE,
 };
 use axum::http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri};
 use base64::Engine;
@@ -1292,8 +1292,8 @@ impl GatewayAttemptAudit<'_> {
     }
 }
 
-/// Sends one upstream attempt, failing as the operation's error when no
-/// response headers arrive.
+/// Sends one upstream attempt, rejecting ambiguous response framing before
+/// status-driven credential recovery, body completion, or header selection.
 async fn send_gateway_upstream(
     builder: reqwest::RequestBuilder,
     upload_progress: Option<Arc<GatewayRequestUploadProgress>>,
@@ -1308,7 +1308,25 @@ async fn send_gateway_upstream(
             .with_audit(audit.value())
     };
     match gateway_send_with_upload_watchdog(builder.send(), upload_progress, idle_timeout).await {
-        Ok(response) => Ok(response),
+        Ok(response) => {
+            // Hyper gives Transfer-Encoding precedence while retaining a supplied
+            // Content-Length. Refuse the conflict before raw Content-Length can
+            // cause premature completion, truncated delivery, or a credential retry.
+            if response.headers().contains_key(TRANSFER_ENCODING)
+                && response.headers().contains_key(CONTENT_LENGTH)
+            {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "gateway upstream response framing is ambiguous",
+                )
+                .with_upstream(
+                    Some(response.status().as_u16()),
+                    Some(elapsed_millis(started)),
+                )
+                .with_audit(audit.value()));
+            }
+            Ok(response)
+        }
         Err(GatewaySendError::Inner(error)) => {
             let duration_ms = elapsed_millis(started);
             let replay_failure = replay_failure
