@@ -731,4 +731,118 @@ mod tests {
             && name == "AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_USER")
         );
     }
+
+    fn retained_import(
+        adapter_kind: &str,
+        status: crate::ImportedServiceStatus,
+        gateway: bool,
+    ) -> crate::ImportedServiceRecord {
+        crate::ImportedServiceRecord {
+            definition: ImportedServiceDefinition {
+                service: "inventory".into(),
+                display_name: "Inventory".into(),
+                adapter_kind: adapter_kind.into(),
+                endpoint: "https://api.example/api".into(),
+                connection_settings: BTreeMap::new(),
+                execution_bindings: vec![crate::imports::ImportedCredentialBinding::token(
+                    crate::imports::ImportedCredentialMode::Service,
+                    crate::imports::ImportedCredentialDelivery::Bearer,
+                )],
+                discovery: crate::imports::ImportedDiscoveryCredential::Anonymous,
+                transport_auth: false,
+                invocation_limit: None,
+            },
+            status,
+            version: 3,
+            actions: Vec::new(),
+            slot_versions: BTreeMap::new(),
+            accepted_metadata: None,
+            document: None,
+            gateway_routes: gateway.then(|| {
+                crate::imports::ImportedGatewayRouteRecord::next(
+                    None,
+                    crate::imports::ImportedGatewayRouteCandidate::new(
+                        json!({"version":1,"paths":{}}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            }),
+            created_at: "2026-11-07T00:00:00Z".into(),
+            created_by: "admin".into(),
+            updated_at: "2026-11-07T00:00:00Z".into(),
+            updated_by: "admin".into(),
+        }
+    }
+
+    #[test]
+    fn gateway_binding_rejects_retained_non_gateway_imports_in_every_status() {
+        let mut config = import_config("development", false);
+        config.imports.gateway_bindings.insert(
+            "inventory".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        for status in [
+            crate::ImportedServiceStatus::Draft,
+            crate::ImportedServiceStatus::Disabled,
+            crate::ImportedServiceStatus::Enabled,
+            crate::ImportedServiceStatus::Retired,
+        ] {
+            for kind in ["remote_import", "unlinked_import"] {
+                let catalog = crate::ImportedCatalog {
+                    revision: 4,
+                    services: vec![retained_import(kind, status, false)],
+                };
+                assert_eq!(
+                    validate_imported_gateway_bindings(&config, &catalog).unwrap_err(),
+                    "imports.gateway_bindings.inventory collides with a retained non-gateway import"
+                );
+            }
+        }
+        // A known invoke adapter cannot become a gateway through an opaque
+        // route row: the linked adapter's capability remains authoritative.
+        let catalog = crate::ImportedCatalog {
+            revision: 4,
+            services: vec![retained_import(
+                "remote_import",
+                crate::ImportedServiceStatus::Retired,
+                true,
+            )],
+        };
+        assert!(validate_imported_gateway_bindings(&config, &catalog).is_err());
+    }
+
+    #[test]
+    fn retired_gateway_binding_keeps_its_exact_destination_without_a_linked_adapter() {
+        let mut config = import_config("development", false);
+        config.imports.gateway_bindings.insert(
+            "inventory".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        let catalog = crate::ImportedCatalog {
+            revision: 4,
+            services: vec![retained_import(
+                "unlinked_gateway",
+                crate::ImportedServiceStatus::Retired,
+                true,
+            )],
+        };
+        validate_imported_gateway_bindings(&config, &catalog).unwrap();
+        for endpoint in [
+            "https://api.example/another-api",
+            "https://other.example/api",
+            "https://api.example/api/",
+        ] {
+            config
+                .imports
+                .gateway_bindings
+                .get_mut("inventory")
+                .unwrap()
+                .endpoint = endpoint.into();
+            assert_eq!(
+                validate_imported_gateway_bindings(&config, &catalog).unwrap_err(),
+                "imports.gateway_bindings.inventory endpoint differs from its retained import"
+            );
+        }
+    }
 }

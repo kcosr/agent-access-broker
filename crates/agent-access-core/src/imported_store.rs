@@ -1679,6 +1679,7 @@ mod tests {
     include!("managed_store/imported_basic_tests.rs");
     include!("managed_store/imported_document_tests.rs");
     include!("managed_store/imported_gateway_route_tests.rs");
+    include!("managed_store/imported_gateway_credentials_tests.rs");
     fn fixture() -> (
         tempfile::TempDir,
         ManagedStoreConfig,
