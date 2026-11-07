@@ -529,10 +529,10 @@ function OpenApiImportForm({
           }}>
             <option value="">Select an approved binding</option>
             {old && !binding ? <option value={old.service}>{old.service} (binding unavailable)</option> : null}
-            {gatewayBindings.map((candidate) => <option key={candidate.service} value={candidate.service} disabled={!candidate.available && candidate.service !== old?.service} title={!candidate.available && candidate.service !== old?.service ? candidate.unavailableReason ?? "Unavailable" : undefined}>{candidate.service} · {candidate.brokerHosts.join(", ")}{!candidate.available && candidate.service !== old?.service ? " (unavailable)" : ""}</option>)}
+            {gatewayBindings.map((candidate) => <option key={candidate.service} value={candidate.service} disabled={!candidate.available && candidate.service !== old?.service} title={!old && !candidate.available ? candidate.unavailableReason ?? "Unavailable" : undefined}>{candidate.service} · {candidate.brokerHosts.join(", ")}{!candidate.available && candidate.service !== old?.service ? " (unavailable)" : ""}</option>)}
           </Select>
         </Field>
-        {gatewayBindings.filter((candidate) => !candidate.available && candidate.service !== old?.service && candidate.unavailableReason).map((candidate) => <p key={candidate.service} className="pt-prose wb-small"><span className="wb-mono">{candidate.service}</span>: {candidate.unavailableReason}</p>)}
+        {!old ? gatewayBindings.filter((candidate) => !candidate.available && candidate.unavailableReason).map((candidate) => <p key={candidate.service} className="pt-prose wb-small"><span className="wb-mono">{candidate.service}</span>: {candidate.unavailableReason}</p>) : null}
         {!old && !gatewayBindings.some((candidate) => candidate.available) ? <p className="pt-catalog-warn">No unused gateway binding is available. Ask the operator to reserve an identity, gateway hostname and approved API destination.</p> : null}
         {old && !binding ? <p className="pt-catalog-warn">The operator binding is unavailable. The import and its grants are retained, but requests cannot execute.</p> : null}
         {binding ? <p className="pt-prose wb-small">Broker ingress: {gatewayIngressLabel(binding)}. Native clients use {binding.brokerHosts.join(", ")}; the API authentication below is presented only to the upstream.</p> : null}

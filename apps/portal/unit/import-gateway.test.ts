@@ -39,11 +39,17 @@ describe("gateway import configuration", () => {
   });
 
   test("explains unavailable bindings without applying creation-only reasons to the retained import", () => {
-    const bindings = [{ ...GATEWAY_BINDING, available: false, unavailableReason: "Service identity is already retained" }];
+    const bindings = [
+      { ...GATEWAY_BINDING, available: false, unavailableReason: "Service identity is already retained" },
+      { ...GATEWAY_BINDING, service: "packages", available: false, unavailableReason: "Packages binding is already retained" }
+    ];
     const html = renderEditor(undefined, bindings);
     expect(html).toContain('title="Service identity is already retained"');
     expect(html).toContain('inventory</span>: Service identity is already retained');
-    expect(renderEditor(gatewayPreview(), bindings)).not.toContain("Service identity is already retained");
+    expect(html).toContain('packages</span>: Packages binding is already retained');
+    const edit = renderEditor(gatewayPreview(), bindings);
+    expect(edit).not.toContain("Service identity is already retained");
+    expect(edit).not.toContain("Packages binding is already retained");
   });
 
   test("retained imports keep immutable exposure and destination even when the binding is removed", () => {
