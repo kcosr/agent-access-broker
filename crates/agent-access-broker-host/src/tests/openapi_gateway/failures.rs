@@ -8,19 +8,30 @@ async fn openapi_gateway_early_upstream_reply_does_not_wait_for_an_unfinished_up
     let chunks =
         futures_util::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"first")) })
             .chain(futures_util::stream::pending());
-    let response = fixture
-        .gateway(Method::POST, "/upload", "early-upstream-reply")
-        .header(CONTENT_TYPE, "application/octet-stream")
-        .body(reqwest::Body::wrap_stream(chunks))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(
-        response.text().await.unwrap(),
-        "synthetic early rejection\n"
-    );
-    let terminal = fixture.terminal("early-upstream-reply").await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let response = fixture
+            .gateway(Method::POST, "/upload", "early-upstream-reply")
+            .header(CONTENT_TYPE, "application/octet-stream")
+            .body(reqwest::Body::wrap_stream(chunks))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            response.text().await.unwrap(),
+            "synthetic early rejection\n"
+        );
+    })
+    .await
+    .expect("the complete early response arrives before upload disposal finishes");
+    // Joined terminal audit waits for bounded disposal of the unfinished input.
+    // Its deadline must include the production linger period, not race it.
+    let terminal = fixture
+        .terminal_within(
+            "early-upstream-reply",
+            crate::ingress::lingering_close::LINGER_TIMEOUT + Duration::from_secs(2),
+        )
+        .await;
     assert_eq!(terminal["upstreamStatus"], 413);
     assert_eq!(upstream.api_requests().len(), 1);
     assert_eq!(upstream.writes(), 0);

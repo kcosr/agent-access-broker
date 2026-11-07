@@ -911,7 +911,10 @@ impl Fixture {
         .await;
     }
     pub async fn terminal(&self, id: &str) -> Value {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        self.terminal_within(id, Duration::from_secs(5)).await
+    }
+    pub async fn terminal_within(&self, id: &str, timeout: Duration) -> Value {
+        tokio::time::timeout(timeout, async {
             loop {
                 let records =
                     read_audit_records(Path::new(&self.seed.config.audit.as_ref().unwrap().path));

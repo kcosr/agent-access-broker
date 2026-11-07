@@ -1,4 +1,47 @@
 use super::*;
+use std::sync::Mutex;
+use tracing::instrument::WithSubscriber;
+
+// The shared trace capture records events. HTTP method and route metadata are
+// span fields, so inspect those separately under a local test dispatcher.
+#[derive(Clone, Default)]
+struct CapturedSpanFields(Arc<Mutex<BTreeMap<u64, BTreeMap<String, String>>>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CapturedSpanFields {
+    fn on_new_span(
+        &self,
+        attributes: &tracing::span::Attributes<'_>,
+        id: &tracing::Id,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut fields = BTreeMap::from([("name".into(), attributes.metadata().name().into())]);
+        attributes.record(&mut SpanFieldVisitor(&mut fields));
+        self.0.lock().unwrap().insert(id.into_u64(), fields);
+    }
+
+    fn on_record(
+        &self,
+        id: &tracing::Id,
+        values: &tracing::span::Record<'_>,
+        _: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        if let Some(fields) = self.0.lock().unwrap().get_mut(&id.into_u64()) {
+            values.record(&mut SpanFieldVisitor(fields));
+        }
+    }
+}
+
+struct SpanFieldVisitor<'a>(&'a mut BTreeMap<String, String>);
+
+impl tracing::field::Visit for SpanFieldVisitor<'_> {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.insert(field.name().into(), value.into());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.insert(field.name().into(), format!("{value:?}"));
+    }
+}
 
 #[tokio::test]
 async fn openapi_gateway_classifier_audit_records_only_bounded_method_and_safe_identity() {
@@ -204,12 +247,49 @@ async fn openapi_gateway_request_value_sentinels_never_reach_persisted_audit_or_
         "{events:?}"
     );
     assert!(
-        events.iter().any(|event| {
-            event["agentRequestId"] == "sentinel-trace-method" && event["http.method"] == "OTHER"
-        }),
-        "extension-method request must retain a bounded method in trace: {events:?}"
+        events
+            .iter()
+            .any(|event| event["agentRequestId"] == "sentinel-trace-method")
     );
-    let trace = serde_json::to_string(&events).unwrap();
+    let span_fields = CapturedSpanFields::default();
+    let subscriber = tracing_subscriber::registry().with(span_fields.clone());
+    let span_response = async {
+        let response = traced_gateway
+            .oneshot(
+                Request::builder()
+                    .method(Method::from_bytes(METHOD_VALUE.as_bytes()).unwrap())
+                    .uri(&target)
+                    .extension(ConnectInfo(
+                        "127.0.0.1:43125".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .header(HOST, GATEWAY_HOST)
+                    .header(AUTHORIZATION, format!("Bearer {}", fixture.agent))
+                    .header(REQUEST_ID_HEADER, "sentinel-method-span")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        status
+    }
+    .with_subscriber(subscriber)
+    .await;
+    assert_eq!(span_response, StatusCode::NOT_FOUND);
+    fixture.terminal("sentinel-method-span").await;
+    let spans = std::mem::take(&mut *span_fields.0.lock().unwrap());
+    assert!(
+        spans.values().any(|span| {
+            span.get("name").map(String::as_str) == Some("http.request")
+                && span.get("agentRequestId").map(String::as_str) == Some("sentinel-method-span")
+                && span.get("http.method").map(String::as_str) == Some("OTHER")
+        }),
+        "extension-method request must retain a bounded method in its HTTP span: {spans:?}"
+    );
+    let trace = serde_json::to_string(&json!({"events":events,"spans":spans})).unwrap();
     let persisted =
         std::fs::read_to_string(&fixture.seed.config.audit.as_ref().unwrap().path).unwrap();
     for secret in [
