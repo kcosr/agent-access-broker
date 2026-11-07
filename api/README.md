@@ -75,6 +75,13 @@ feature-gated test constructors. Git's supported module selection export is
 `agent_access_git_http::GIT_HTTP_GATEWAY`. Assembly composition and build status
 include the `gateway` role; the API inventory tracks those additions.
 
+Generated OpenAPI gateways have separate protocol and import-adapter
+`registration()` entry points. The host test-support surface also exposes retained
+gateway route metadata through imported-service records. Construct route
+candidates with `ImportedGatewayRouteCandidate::new` and retained generations
+with `ImportedGatewayRouteRecord::next`; both types are non-exhaustive. Their
+stored representation remains a separately versioned data contract.
+
 ## Construction and exhaustiveness policy
 
 Supported SDK types follow one construction policy, so a compatible release

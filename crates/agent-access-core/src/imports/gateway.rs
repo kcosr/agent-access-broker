@@ -10,6 +10,7 @@ pub const IMPORT_GATEWAY_ENVELOPE_VERSION: u32 = 1;
 /// protocol semantics; core validates the envelope and its storage bounds.
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ImportedGatewayRouteCandidate {
     pub version: u32,
     pub data: Value,
@@ -55,6 +56,7 @@ impl ImportedGatewayRouteCandidate {
 
 /// A retained routing generation, independent of expiring import previews.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ImportedGatewayRouteRecord {
     pub manifest: ImportedGatewayRouteCandidate,
     pub content_hash: String,
