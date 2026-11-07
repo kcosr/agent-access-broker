@@ -88,10 +88,15 @@ fn security_matches(
             scheme.is_some()
                 && &security.scheme == scheme
                 && delivery.as_ref().is_some_and(|delivery| {
-                    definition
-                        .execution_bindings
-                        .iter()
-                        .all(|binding| &binding.delivery == delivery)
+                    definition.execution_bindings.iter().all(|binding| {
+                        match (&binding.delivery, delivery) {
+                            (
+                                ImportedCredentialDelivery::RawHeader { name: binding },
+                                ImportedCredentialDelivery::RawHeader { name: plan },
+                            ) => binding.eq_ignore_ascii_case(plan),
+                            _ => &binding.delivery == delivery,
+                        }
+                    })
                 })
         }
     }

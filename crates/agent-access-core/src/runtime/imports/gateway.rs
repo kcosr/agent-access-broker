@@ -159,9 +159,10 @@ pub(in crate::runtime) fn managed_gateway_configs(
             gateway.response_body_max_bytes = binding.response_body_max_bytes;
             gateway.streaming_idle_timeout_ms = binding.streaming_idle_timeout_ms;
             gateway.correlation_headers = binding.correlation_headers;
-            if let Ok(url) = url::Url::parse(&binding.endpoint) {
-                gateway.allowed_upstream_hosts =
-                    url.host_str().map(str::to_owned).into_iter().collect();
+            if let Ok(mut url) = url::Url::parse(&binding.endpoint) {
+                let base = url.path().strip_suffix('/').unwrap_or(url.path());
+                url.set_path(&format!("{base}/**"));
+                gateway.allowed_upstream_hosts = vec![url.into()];
             }
             (service.clone(), gateway)
         })
@@ -247,6 +248,14 @@ pub(in crate::runtime) fn compile_executable(
             )
             .remove(&record.definition.service)
             .ok_or("gateway binding unavailable")?;
+            let endpoint = url::Url::parse(&gateway.upstream_base_url)
+                .map_err(|_| "gateway binding endpoint is invalid")?;
+            if !agent_access_provider::base_covered_by_patterns(
+                &endpoint,
+                &gateway.allowed_upstream_hosts,
+            ) {
+                return Err("gateway binding allowlist does not cover its endpoint".into());
+            }
             let protocol = builder(&gateway.service_context(&record.definition.service), &input)
                 .map_err(|_| "gateway builder rejected the retained routing contract")?;
             Ok(ImportedExecutable::Gateway(protocol))
@@ -258,5 +267,68 @@ pub(in crate::runtime) fn compile_executable(
             Ok(ImportedExecutable::Invoke(value))
         }
         _ => Err("import adapter returned an inconsistent executable".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_access_provider::{base_covered_by_patterns, url_allowed_by_patterns};
+
+    #[test]
+    fn managed_gateway_allowlist_pins_endpoint_origin_and_base() {
+        for (endpoint, allowed, sibling) in [
+            (
+                "https://api.example/api",
+                "https://api.example/api/items/1?detail=true",
+                Some("https://api.example/api-other/items/1"),
+            ),
+            (
+                "https://api.example:8443/api/",
+                "https://api.example:8443/api/items/1",
+                Some("https://api.example:8443/other/items/1"),
+            ),
+            (
+                "https://api.example/api//",
+                "https://api.example/api//items/1",
+                Some("https://api.example/api/items/1"),
+            ),
+            ("https://api.example/", "https://api.example/items/1", None),
+        ] {
+            let mut config = crate::parse_broker_config_raw(
+                "imports.toml",
+                "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n[limits]\nupload_spool_dir = \"upload-spool\"\n",
+                &Arc::new(crate::BackendRegistry::empty()),
+            )
+            .unwrap();
+            config.imports.gateway_bindings.insert(
+                "inventory".into(),
+                toml::from_str(&format!(
+                    "endpoint = {endpoint:?}\nbroker_hosts = [\"inventory.gateway.example\"]\nauth_modes = [\"bearer_broker_token\"]\n"
+                ))
+                .unwrap(),
+            );
+            let configs = managed_gateway_configs(&config, &ImportedCatalog::default());
+            let patterns = &configs["inventory"].allowed_upstream_hosts;
+            let endpoint = url::Url::parse(endpoint).unwrap();
+            assert!(base_covered_by_patterns(&endpoint, patterns));
+            let operation = url::Url::parse(allowed).unwrap();
+            assert!(url_allowed_by_patterns(&operation, patterns));
+            if let Some(sibling) = sibling {
+                assert!(!url_allowed_by_patterns(
+                    &url::Url::parse(sibling).unwrap(),
+                    patterns
+                ));
+            }
+            let mut other = operation.clone();
+            other.set_host(Some("other.example")).unwrap();
+            assert!(!url_allowed_by_patterns(&other, patterns));
+            other = operation.clone();
+            other.set_scheme("http").unwrap();
+            assert!(!url_allowed_by_patterns(&other, patterns));
+            other = operation;
+            other.set_port(Some(9443)).unwrap();
+            assert!(!url_allowed_by_patterns(&other, patterns));
+        }
     }
 }

@@ -399,6 +399,16 @@ fn baseline_imported_rows_remain_readable() {
         );
     }
     let record = catalog.service("golden-openapi").unwrap();
+    for action in &record.actions {
+        let (_, _, definition, hash, _, _) = GOLDEN_ACTION_ROWS
+            .iter()
+            .find(|(id, ..)| *id == action.definition.action)
+            .unwrap();
+        let encoded = serde_json::to_string(&action.definition).unwrap();
+        assert_eq!(&encoded, definition);
+        assert_eq!(sha256_hex(encoded.as_bytes()), *hash);
+        assert_eq!(&action.definition_hash, hash);
+    }
     let actions = record
         .actions
         .iter()

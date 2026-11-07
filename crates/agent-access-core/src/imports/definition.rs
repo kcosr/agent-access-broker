@@ -157,6 +157,13 @@ pub struct ImportedServiceDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_limit: Option<ImportedInvocationLimit>,
 }
+/// An accepted action's persisted JSON is a durable byte contract. Field order,
+/// serialized names and default omission must preserve the bytes of existing
+/// definitions: their SHA-256 hash binds accepted plans and dispatch generations,
+/// and gateway loading verifies that hash after parsing and serializing again.
+/// The imported-store golden fixtures freeze historical bytes and hashes; never
+/// regenerate them for a refactor. A format change requires an explicit store
+/// migration coordinated with the accepted-version and publication fences.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedActionDefinition {

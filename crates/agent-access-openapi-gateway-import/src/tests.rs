@@ -90,6 +90,49 @@ fn explicit_anonymous_contract_is_distinct_from_missing_static_credentials() {
     assert!(adapter.validate_definition(&invalid).is_err());
 }
 
+#[test]
+fn static_definition_rejects_mixed_deliveries_before_discovery_or_acceptance() {
+    for (service, per_user) in [
+        (
+            ImportedCredentialDelivery::Basic,
+            ImportedCredentialDelivery::Bearer,
+        ),
+        (
+            ImportedCredentialDelivery::Bearer,
+            ImportedCredentialDelivery::RawHeader {
+                name: "X-Api-Key".into(),
+            },
+        ),
+        (
+            ImportedCredentialDelivery::RawHeader {
+                name: "X-Api-Key".into(),
+            },
+            ImportedCredentialDelivery::RawHeader {
+                name: "X-Other-Key".into(),
+            },
+        ),
+    ] {
+        let mut definition = definition("static");
+        definition.execution_bindings = vec![
+            ImportedCredentialBinding::token(ImportedCredentialMode::Service, service),
+            ImportedCredentialBinding::token(ImportedCredentialMode::PerUser, per_user),
+        ];
+        let expected = "imported credential modes must share a delivery destination";
+        assert_eq!(
+            OpenApiGatewayAdapter
+                .validate_definition(&definition)
+                .unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            OpenApiGatewayAdapter
+                .credential_contract(&definition, &ImportedAdapterContext::default())
+                .unwrap_err(),
+            expected
+        );
+    }
+}
+
 #[tokio::test]
 async fn complete_discovery_preserves_removed_literal_guards_and_has_no_automatic_read_classification()
  {
@@ -147,7 +190,7 @@ async fn gateway_build_is_offline_and_checks_each_accepted_static_binding() {
             "api_key",
             json!({"type":"apiKey","in":"header","name":"X-Api-Key"}),
             ImportedCredentialDelivery::RawHeader {
-                name: "X-Api-Key".into(),
+                name: "x-api-key".into(),
             },
         ),
     ] {
@@ -159,6 +202,9 @@ async fn gateway_build_is_offline_and_checks_each_accepted_static_binding() {
             ImportedCredentialBinding::token(ImportedCredentialMode::Service, delivery.clone()),
             ImportedCredentialBinding::token(ImportedCredentialMode::PerUser, delivery.clone()),
         ];
+        OpenApiGatewayAdapter
+            .validate_definition(&definition)
+            .unwrap();
         let mut doc = document();
         doc["components"] = json!({"securitySchemes":{scheme:schema}});
         doc["security"] = json!([{scheme:[]}]);
@@ -188,6 +234,25 @@ async fn gateway_build_is_offline_and_checks_each_accepted_static_binding() {
         assert!(built.provider().is_none());
         assert!(host.built_clients().is_empty());
         assert!(matches!(built, ImportedProvider::Gateway { plans, .. } if plans.len() == 2));
+        if matches!(delivery, ImportedCredentialDelivery::RawHeader { .. }) {
+            let mut mismatched = definition.clone();
+            for binding in &mut mismatched.execution_bindings {
+                binding.delivery = ImportedCredentialDelivery::RawHeader {
+                    name: "X-Other-Key".into(),
+                };
+            }
+            assert!(
+                OpenApiGatewayAdapter
+                    .build(
+                        &mismatched,
+                        &actions,
+                        None,
+                        &ImportedAdapterContext::default(),
+                        &host.context(),
+                    )
+                    .is_err()
+            );
+        }
         definition
             .execution_bindings
             .iter_mut()

@@ -18,6 +18,12 @@ All notable changes to this project are documented in this file.
   administrator service-limits routes.
   ([#102](https://github.com/kcosr/agent-access-broker/pull/102))
 
+- **Managed HTTP gateways add a managed-store migration.** Back up before
+  applying `035_imported_gateway_routes` and upgrade the Broker, CLI and portal
+  together. Existing imports retain their definitions and credentials; rollback
+  across this schema change requires the pre-migration backup. See
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+
 - **Agent token issuance requires explicit context permission and a read-only choice.**
   Upgrade Broker, CLI and portal together. `agentTokenIssuance` is now a complete
   `{mode, allowedExecutionContexts}` object; scalar writes are rejected. Effective
@@ -134,6 +140,17 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
+  2.0 and OpenAPI 3.0/3.1 documents by URL or upload, review and accept operations,
+  and authorize native HTTP clients with whole-operation grants. Operator
+  `[imports.gateway_bindings.<service>]` entries pin each service's Broker hosts
+  and upstream endpoint. Execution requires explicit anonymous access or static
+  Basic, bearer or header API-key bindings; unlinked adapters stay unavailable.
+  Refresh retains literal route guards and quarantines changed or missing
+  accepted operations. Import lists include safe `gatewayBindings` choices;
+  gateway services report `scopedMcp: null` and expose no invoke or MCP tools.
+  See [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports).
 
 - **Context-limited account/group issuance and read-only agent tokens.** A mode
   dropdown and dynamic context checklist define each enabled policy. Explicit
