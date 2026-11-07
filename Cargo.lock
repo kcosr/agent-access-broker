@@ -445,6 +445,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-access-openapi-common"
+version = "0.2.0"
+dependencies = [
+ "http",
+ "httpdate",
+ "percent-encoding",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+]
+
+[[package]]
 name = "agent-access-openapi-upstream"
 version = "0.2.0"
 dependencies = [

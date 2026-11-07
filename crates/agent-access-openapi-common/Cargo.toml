@@ -1,0 +1,18 @@
+[package]
+name = "agent-access-openapi-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[package.metadata.agent-access]
+role = "helper"
+
+[dependencies]
+http.workspace = true
+httpdate = "1.0"
+percent-encoding.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+url.workspace = true

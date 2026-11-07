@@ -18,6 +18,7 @@ members = [
   "crates/agent-access-provider",
   "crates/agent-access-mcp-upstream",
   "crates/agent-access-openapi-upstream",
+  "crates/agent-access-openapi-common",
   "crates/agent-access-teams",
 ]
 # Templates staged as independent repositories by
