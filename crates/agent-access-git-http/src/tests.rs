@@ -300,6 +300,42 @@ async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
     }
 }
 
+#[tokio::test]
+async fn discovery_rejects_unannounced_trailers_as_a_client_body_denial() {
+    let protocol = protocol();
+    for service in ["git-upload-pack", "git-receive-pack"] {
+        let path = format!("/team/project/info/refs?service={service}");
+        for frames in [
+            vec![Ok(GatewayBodyFrame::Trailers)],
+            vec![
+                Ok(GatewayBodyFrame::Data(Bytes::new())),
+                Ok(GatewayBodyFrame::Trailers),
+            ],
+        ] {
+            // No Trailer header: the protocol must inspect actual frames before
+            // it can declare the request eligible for bodyless recovery.
+            let classified = protocol
+                .classify(test_support::gateway_request_head(
+                    &Method::GET,
+                    &path,
+                    &HeaderMap::new(),
+                ))
+                .unwrap();
+            let error = classified
+                .into_request()
+                .preflight(test_support::gateway_body(frames, 4096))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
+            assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+            assert_eq!(error.reason_code().http_status(), 400);
+            GIT_HTTP_GATEWAY
+                .check_failure(GatewayHookPhase::Preflight, &error)
+                .expect("unexpected discovery trailers remain a protocol denial");
+        }
+    }
+}
+
 #[test]
 fn verification_eligibility_matches_the_available_read_probe() {
     let context = GatewayServiceContext::new("git", "Git", "https://git.example")

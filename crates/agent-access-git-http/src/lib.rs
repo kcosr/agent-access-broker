@@ -145,7 +145,13 @@ impl GatewayRequest for GitRequest {
                             "gateway GET requests must not include a body",
                         ));
                     }
-                    GatewayBodyFrame::Data(_) | GatewayBodyFrame::Trailers => {}
+                    GatewayBodyFrame::Data(_) => {}
+                    GatewayBodyFrame::Trailers => {
+                        return Err(ProviderError::deny(
+                            ReasonCode::GatewayRequestBodyDenied,
+                            "gateway GET requests must not include trailers",
+                        ));
+                    }
                     _ => return Err(body_error(GatewayBodyError::Read, false)),
                 }
             }
