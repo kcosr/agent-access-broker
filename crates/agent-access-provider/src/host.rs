@@ -588,3 +588,14 @@ pub fn gateway_body(
 pub fn gateway_body_stream(body: crate::GatewayBody) -> crate::GatewayBodyStream {
     body.into_stream()
 }
+
+/// Whether bounded preflight reached EOF without seeing any body bytes.
+/// Only this state is eligible for a bodyless credential-recovery attempt.
+pub fn gateway_body_is_empty_complete(body: &crate::GatewayBody) -> bool {
+    body.is_empty_complete()
+}
+
+/// A terminal inspection failure that must be checked before dispatching a plan.
+pub fn gateway_body_failure(body: &crate::GatewayBody) -> Option<crate::GatewayBodyError> {
+    body.failure()
+}

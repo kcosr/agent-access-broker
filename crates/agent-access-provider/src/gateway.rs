@@ -11,7 +11,12 @@ use reqwest::{Method, header::HeaderMap};
 use serde_json::Value;
 use std::{collections::VecDeque, fmt, pin::Pin, sync::Arc, time::Duration};
 
+/// Parses only the selected module's remaining fields. Parsers must reject all
+/// unknown fields (typically with `serde(deny_unknown_fields)`); the host owns
+/// common fields and validates the returned descriptor against its context.
 pub type GatewayConfigParser = fn(toml::Value) -> Result<Arc<dyn GatewayConfig>, String>;
+/// Builds bounded, version-tagged managed data. Builders must reject a zero
+/// manifest generation, an empty/invalid hash, and unsupported wire versions.
 pub type GatewayManagedPlanBuilder = fn(
     &GatewayServiceContext,
     &GatewayManagedInput,
@@ -19,6 +24,9 @@ pub type GatewayManagedPlanBuilder = fn(
 const DEFAULT_REQUEST_KINDS: &[GatewayRequestKind] = &[GatewayRequestKind::counted("request")];
 
 /// A protocol kind selected by an assembly, independent of its service instances.
+/// Composition rejects duplicate or invalid kinds/request-kind names, foreign
+/// domain-reason prefixes, collisions and reserved audit keys before serving.
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct GatewayRegistration {
     module: ModuleMetadata,
@@ -130,6 +138,7 @@ impl GatewayRegistration {
             GatewayHookPhase::Classification => matches!(
                 code,
                 ReasonCode::GatewayRuleNotFound
+                    | ReasonCode::GatewayContentTypeDenied
                     | ReasonCode::GatewayMethodDenied
                     | ReasonCode::GatewayQueryDenied
                     | ReasonCode::GitServiceDenied
@@ -139,6 +148,9 @@ impl GatewayRegistration {
             GatewayHookPhase::Preflight => matches!(
                 code,
                 ReasonCode::GatewayHeaderDenied
+                    | ReasonCode::GatewayRequestCapExceeded
+                    | ReasonCode::GitPktLineMalformed
+                    | ReasonCode::GitPrefixCapExceeded
                     | ReasonCode::GatewayRequestBodyDenied
                     | ReasonCode::GitRefDenied
                     | ReasonCode::GitCapabilityDenied
@@ -161,9 +173,7 @@ impl GatewayRegistration {
             ),
             GatewayHookPhase::Response => matches!(
                 code,
-                ReasonCode::UpstreamProtocolFailed
-                    | ReasonCode::UpstreamFailed
-                    | ReasonCode::GatewayHeaderDenied
+                ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamFailed
             ),
         };
         if !permitted {
@@ -184,7 +194,13 @@ impl GatewayRegistration {
                         code,
                         ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamFailed
                     )));
-        if error.decision() != Decision::Deny && !error_allowed {
+        let deny_allowed = error.decision() == Decision::Deny
+            && !matches!(
+                code,
+                ReasonCode::UpstreamFailed | ReasonCode::UpstreamTimeout
+            )
+            && phase != GatewayHookPhase::Response;
+        if !deny_allowed && !error_allowed {
             return Err(ContractViolation::ReasonNotPermitted);
         }
         Ok(())
@@ -201,6 +217,7 @@ pub enum GatewayHookPhase {
     Response,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewayRequestKind {
     name: &'static str,
@@ -268,6 +285,8 @@ impl GatewayServiceContext {
 }
 
 /// A strict module-owned configuration. All methods are local and offline.
+/// The host rejects descriptors whose service, Gateway surface, kind or host
+/// reservation differs from the selected registration and service context.
 pub trait GatewayConfig: fmt::Debug + Send + Sync {
     fn validate(&self, context: &GatewayServiceContext, errors: &mut Vec<String>);
     fn descriptor(&self, context: &GatewayServiceContext) -> ServiceDescriptor;
@@ -341,11 +360,19 @@ impl GatewayManagedInput {
 }
 
 /// Sanitized request head. The host removes authentication and identity carriers.
-#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+#[derive(Clone, Copy)]
 pub struct GatewayRequestHead<'a> {
     method: &'a Method,
     path_and_query: &'a str,
     headers: &'a HeaderMap,
+}
+impl fmt::Debug for GatewayRequestHead<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GatewayRequestHead")
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
 }
 impl<'a> GatewayRequestHead<'a> {
     pub(crate) fn new(method: &'a Method, path_and_query: &'a str, headers: &'a HeaderMap) -> Self {
@@ -371,7 +398,9 @@ pub trait GatewayProtocol: fmt::Debug + Send + Sync {
         &self,
         head: GatewayRequestHead<'_>,
     ) -> Result<GatewayClassification, ProviderError>;
-    /// Construct a bounded protocol probe. `None` means verification is unsupported.
+    /// Construct a bounded protocol probe. The service descriptor's verification
+    /// capability is authoritative: the host never calls this for an ineligible
+    /// service, and `None` from an eligible service is a contract failure.
     fn verification(
         &self,
         _input: Option<&str>,
@@ -380,6 +409,7 @@ pub trait GatewayProtocol: fmt::Debug + Send + Sync {
     }
 }
 
+#[non_exhaustive]
 pub struct GatewayClassification {
     action: String,
     scopes: ResourceScopes,
@@ -460,6 +490,11 @@ pub type GatewayBodyStream =
 
 /// Host-owned body with bounded inspection and automatic byte-exact replay.
 /// Every inspected frame remains owned by this value until the host forwards it.
+/// `max_bytes` is the whole-request wire-byte cap, also the maximum retained
+/// inspection memory. Whole frames, including over-read bytes, count against it;
+/// protocol-specific prefix limits must be enforced separately by the module.
+/// A failed inspection is terminal: the host must refuse the plan before dispatch.
+#[non_exhaustive]
 pub struct GatewayBody {
     stream: GatewayBodyStream,
     inspected: VecDeque<GatewayBodyFrame>,
@@ -467,6 +502,7 @@ pub struct GatewayBody {
     max_bytes: usize,
     idle_timeout: Duration,
     ended: bool,
+    failed: Option<GatewayBodyError>,
 }
 impl fmt::Debug for GatewayBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -485,6 +521,7 @@ impl GatewayBody {
             max_bytes,
             idle_timeout,
             ended: false,
+            failed: None,
         }
     }
     pub fn max_bytes(&self) -> usize {
@@ -493,29 +530,45 @@ impl GatewayBody {
     pub fn idle_timeout(&self) -> Duration {
         self.idle_timeout
     }
+    pub fn inspected_bytes(&self) -> usize {
+        self.inspected_bytes
+    }
+    /// EOF was observed and every original frame is retained without failure.
+    pub fn is_complete(&self) -> bool {
+        self.ended && self.failed.is_none()
+    }
     /// Reads the next frame for inspection, retaining it for ordered forwarding.
     pub async fn next_frame(&mut self) -> Result<Option<GatewayBodyFrame>, GatewayBodyError> {
+        if let Some(error) = self.failed {
+            return Err(error);
+        }
         if self.ended {
             return Ok(None);
         }
-        let next = tokio::time::timeout(self.idle_timeout, self.stream.next())
-            .await
-            .map_err(|_| GatewayBodyError::IdleTimeout)?;
+        let next = match tokio::time::timeout(self.idle_timeout, self.stream.next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                self.failed = Some(GatewayBodyError::IdleTimeout);
+                return Err(GatewayBodyError::IdleTimeout);
+            }
+        };
         match next {
             None => {
                 self.ended = true;
                 Ok(None)
             }
-            Some(Err(error)) => Err(error),
+            Some(Err(error)) => {
+                self.failed = Some(error);
+                Err(error)
+            }
             Some(Ok(frame)) => {
                 if let GatewayBodyFrame::Data(bytes) = &frame {
-                    self.inspected_bytes = self
-                        .inspected_bytes
-                        .checked_add(bytes.len())
-                        .ok_or(GatewayBodyError::TooLarge)?;
-                    if self.inspected_bytes > self.max_bytes {
+                    let total = self.inspected_bytes.checked_add(bytes.len());
+                    if total.is_none_or(|total| total > self.max_bytes) {
+                        self.failed = Some(GatewayBodyError::TooLarge);
                         return Err(GatewayBodyError::TooLarge);
                     }
+                    self.inspected_bytes = total.expect("checked above");
                 }
                 self.inspected.push_back(frame.clone());
                 Ok(Some(frame))
@@ -523,7 +576,16 @@ impl GatewayBody {
         }
     }
     pub(crate) fn into_stream(self) -> GatewayBodyStream {
+        if let Some(error) = self.failed {
+            return Box::pin(futures_util::stream::once(async move { Err(error) }));
+        }
         Box::pin(futures_util::stream::iter(self.inspected.into_iter().map(Ok)).chain(self.stream))
+    }
+    pub(crate) fn is_empty_complete(&self) -> bool {
+        self.is_complete() && self.inspected_bytes == 0
+    }
+    pub(crate) fn failure(&self) -> Option<GatewayBodyError> {
+        self.failed
     }
 }
 
@@ -548,6 +610,8 @@ pub struct GatewayResponseProfile {
     pub translate_unauthorized: bool,
     pub reject_redirects: bool,
     pub preserve_content_length: bool,
+    /// On 429 only, let the host emit its bounded whole-second Retry-After.
+    pub bounded_retry_after: bool,
     pub validator: Option<Arc<dyn GatewayResponseValidator>>,
 }
 impl GatewayResponseProfile {
@@ -558,6 +622,7 @@ impl GatewayResponseProfile {
             translate_unauthorized: false,
             reject_redirects: false,
             preserve_content_length: false,
+            bounded_retry_after: false,
             validator: None,
         }
     }
@@ -577,20 +642,29 @@ impl GatewayResponseProfile {
         self.preserve_content_length = true;
         self
     }
+    pub fn bounded_retry_after(mut self) -> Self {
+        self.bounded_retry_after = true;
+        self
+    }
     pub fn with_validator(mut self, validator: Arc<dyn GatewayResponseValidator>) -> Self {
         self.validator = Some(validator);
         self
     }
 }
 /// Bounded response metadata validation, with no body, credential or transport access.
-/// The host checks all returned names against the profile and its reserved fields.
+/// The result is an upstream-value-preserving filter. The host checks all returned
+/// names against the profile and reserved fields and requires every returned
+/// value to equal the upstream field values. Framing remains host-owned.
 pub trait GatewayResponseValidator: fmt::Debug + Send + Sync {
     fn validate(&self, status: u16, headers: &HeaderMap) -> Result<HeaderMap, ProviderError>;
 }
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayStatusMatch {
+    /// An exact status from 100 through 599, checked by the host.
     Exact(u16),
+    /// A status class from 1 through 5; `Class(2)` selects 2xx. Exact selection
+    /// wins over class selection, which wins over `Default`.
     Class(u16),
     Default,
 }
@@ -661,7 +735,7 @@ impl fmt::Debug for GatewayForwardPlan {
 
 /// The host authorizes this action and these scopes before presenting a credential.
 #[non_exhaustive]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GatewayProbeRequest {
     pub action: String,
     pub scopes: ResourceScopes,
@@ -670,6 +744,15 @@ pub struct GatewayProbeRequest {
     pub method: Method,
     pub headers: HeaderMap,
     pub max_response_bytes: usize,
+}
+impl fmt::Debug for GatewayProbeRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GatewayProbeRequest")
+            .field("action", &self.action)
+            .field("method", &self.method)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .finish_non_exhaustive()
+    }
 }
 impl GatewayProbeRequest {
     pub fn new(
@@ -697,6 +780,8 @@ impl GatewayProbeRequest {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayProbeStatus {
+    /// More bytes are needed. The host treats this at EOF or the probe byte cap
+    /// as failed verification, never a successful or inconclusive result.
     NeedMore,
     Valid,
     Invalid,
@@ -808,6 +893,119 @@ mod tests {
             body.next_frame().await.unwrap_err(),
             GatewayBodyError::TooLarge
         );
+        assert_eq!(
+            body.next_frame().await.unwrap_err(),
+            GatewayBodyError::TooLarge
+        );
+        assert_eq!(
+            crate::host::gateway_body_failure(&body),
+            Some(GatewayBodyError::TooLarge)
+        );
+        assert!(!body.is_complete());
+        let frames = crate::host::gateway_body_stream(body)
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(frames.len(), 1);
+        assert!(matches!(frames[0], Err(GatewayBodyError::TooLarge)));
+    }
+    #[tokio::test]
+    async fn failed_inspection_cannot_forward_a_prefix_or_poll_past_failure() {
+        for failure in [
+            GatewayBodyError::Read,
+            GatewayBodyError::Timeout,
+            GatewayBodyError::IdleTimeout,
+        ] {
+            let mut body = crate::test_support::gateway_body(
+                vec![
+                    Ok(GatewayBodyFrame::Data(Bytes::from_static(b"prefix"))),
+                    Err(failure),
+                    Ok(GatewayBodyFrame::Data(Bytes::from_static(
+                        b"must-not-forward",
+                    ))),
+                ],
+                128,
+            );
+            body.next_frame().await.unwrap();
+            assert_eq!(body.inspected_bytes(), 6);
+            assert!(!body.is_complete());
+            assert_eq!(body.next_frame().await.unwrap_err(), failure);
+            assert_eq!(body.next_frame().await.unwrap_err(), failure);
+            let frames = crate::host::gateway_body_stream(body)
+                .collect::<Vec<_>>()
+                .await;
+            assert_eq!(frames.len(), 1);
+            assert!(matches!(frames[0], Err(error) if error == failure));
+        }
+    }
+    #[tokio::test]
+    async fn complete_body_proof_requires_eof_and_retains_every_byte() {
+        let mut empty = crate::test_support::gateway_body(Vec::new(), 16);
+        assert!(!crate::host::gateway_body_is_empty_complete(&empty));
+        assert!(empty.next_frame().await.unwrap().is_none());
+        assert!(crate::host::gateway_body_is_empty_complete(&empty));
+        let mut body = crate::test_support::gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"data")))],
+            16,
+        );
+        body.next_frame().await.unwrap();
+        assert!(!body.is_complete());
+        assert!(body.next_frame().await.unwrap().is_none());
+        assert!(body.is_complete());
+        assert_eq!(body.inspected_bytes(), 4);
+        assert!(!crate::host::gateway_body_is_empty_complete(&body));
+    }
+    #[test]
+    fn upstream_faults_cannot_be_mislabeled_as_policy_denials() {
+        for (phase, code) in [
+            (GatewayHookPhase::Preflight, ReasonCode::UpstreamTimeout),
+            (GatewayHookPhase::Verification, ReasonCode::UpstreamFailed),
+            (GatewayHookPhase::Response, ReasonCode::UpstreamFailed),
+            (
+                GatewayHookPhase::Response,
+                ReasonCode::UpstreamProtocolFailed,
+            ),
+        ] {
+            assert!(
+                REGISTRATION
+                    .check_failure(phase, &ProviderError::deny(code, "invalid decision"))
+                    .is_err()
+            );
+            assert!(
+                REGISTRATION
+                    .check_failure(phase, &ProviderError::error(code, "upstream failure"))
+                    .is_ok()
+            );
+        }
+        assert!(
+            REGISTRATION
+                .check_failure(
+                    GatewayHookPhase::Response,
+                    &ProviderError::deny(
+                        ReasonCode::GatewayHeaderDenied,
+                        "client status is not an upstream outcome"
+                    )
+                )
+                .is_err()
+        );
+    }
+    #[test]
+    fn request_debug_omits_paths_queries_headers_scopes_and_probe_input() {
+        let headers = HeaderMap::from_iter([(
+            reqwest::header::AUTHORIZATION,
+            "secret-header".parse().unwrap(),
+        )]);
+        let head = GatewayRequestHead::new(&Method::GET, "/secret-path?q=secret-query", &headers);
+        let probe = GatewayProbeRequest::new(
+            "items.read",
+            ResourceScopes::from([("item".into(), vec!["secret-resource".into()])]),
+            "secret-input",
+            "/secret-path?q=secret-query",
+            128,
+        )
+        .with_headers(headers.clone());
+        for value in [format!("{head:?}"), format!("{probe:?}")] {
+            assert!(!value.contains("secret-"), "{value}");
+        }
     }
     #[test]
     fn module_failures_do_not_claim_host_auth_policy_or_accounting_outcomes() {
