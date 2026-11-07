@@ -193,6 +193,7 @@ impl CompatFixture {
             )
             .unwrap()
             .provider()
+            .expect("MCP adapter builds a provider")
     }
     async fn invoke(&self) -> Result<ProviderResult, ProviderError> {
         self.provider(&test_host())

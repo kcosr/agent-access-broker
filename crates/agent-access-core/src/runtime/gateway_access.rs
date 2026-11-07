@@ -49,10 +49,12 @@ pub(super) enum GatewayAccess {
     ImportedStatic {
         credential: ExecutionCredential,
         placement: agent_access_provider::CredentialPlacement,
-        personal_fence: Option<(
-            crate::ManagedStore,
-            crate::managed_store::CredentialMaterialFence,
-        )>,
+        personal_fence: Option<
+            Box<(
+                crate::ManagedStore,
+                crate::managed_store::CredentialMaterialFence,
+            )>,
+        >,
     },
     Delegated(GatewayDelegatedAccess),
 }
@@ -151,7 +153,7 @@ impl BrokerRuntime {
                         "credential store is unavailable",
                     )
                 })?;
-                (credential, Some((store, fence)))
+                (credential, Some(Box::new((store, fence))))
             } else {
                 (
                     self.resolve_imported_execution_credential(service, credential_mode, identity)
@@ -275,10 +277,11 @@ impl PreparedGatewayOperation {
             fence.validate()?;
         }
         if let GatewayAccess::ImportedStatic {
-            personal_fence: Some((store, fence)),
+            personal_fence: Some(material),
             ..
         } = &self.access
         {
+            let (store, fence) = material.as_ref();
             store
                 .validate_credential_material_fence(fence)
                 .map_err(super::provider_error_from_managed_store)?;
