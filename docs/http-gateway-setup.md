@@ -143,6 +143,11 @@ Templates bind complete individual segments. Concrete paths take precedence;
 equivalent templates with renamed variables and ambiguous overlapping templates
 are rejected. Methods are exact: declare HEAD and OPTIONS explicitly. Missing,
 unsupported and unaccepted operations do not fall through to another template.
+Literal custom verbs such as `/jobs/{id}/action:run` retain their punctuation;
+substituted parameter values are encoded separately. Matrix/path parameters are
+unsupported: semicolons, including encoded forms, are rejected in source paths
+and captured values. An unsafe source path fails discovery rather than being
+dropped from the guard universe.
 Removed paths remain historical denial guards. A refresh never removes a guard
 to make room; exceeding the guard limits rejects the refresh and retains the
 previous complete generation.
@@ -238,6 +243,9 @@ The HTTP profile supports common content, conditional and single-range headers,
 plus permitted declared request and response headers. The example declares
 `X-Api-Version`; document custom response headers that clients require. Cookies,
 upstream authentication challenges and routing override headers are not forwarded.
+The host emits bounded whole-second `Retry-After` only on 429. Invalid single
+optional metadata values are omitted while preserving the response body;
+repeated selected fields are rejected as ambiguous.
 Redirects are refused, and absolute URLs embedded in response bodies are not
 rewritten. Applications requiring those behaviors need separate qualification
 and may need a custom module. Responses retain the Broker's private/no-store
