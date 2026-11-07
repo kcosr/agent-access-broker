@@ -371,6 +371,7 @@ pub(super) fn document(dialect: Dialect, auth: UpstreamAuth, endpoint: &str) -> 
     for (path, method, id, media) in [
         ("/blob", "get", "download_blob", None),
         ("/blob", "head", "head_blob", None),
+        ("/blob", "options", "options_blob", None),
         ("/empty", "get", "empty_result", None),
         ("/conditional", "get", "conditional", None),
         ("/stream", "get", "stream_blob", None),
@@ -552,6 +553,9 @@ impl Fixture {
         path: &str,
         id: &str,
     ) -> reqwest::RequestBuilder {
+        self.gateway_request(method, path, id).bearer_auth(token)
+    }
+    pub fn gateway_request(&self, method: Method, path: &str, id: &str) -> reqwest::RequestBuilder {
         self.client
             .request(
                 method,
@@ -562,7 +566,6 @@ impl Fixture {
             )
             .header(HOST, GATEWAY_HOST)
             .header(REQUEST_ID_HEADER, id)
-            .bearer_auth(token)
     }
     pub fn issue_agent(&self, read_only: bool) -> String {
         self.issue_agent_for("alice", read_only)
@@ -809,6 +812,44 @@ impl Fixture {
         })
         .await
         .expect("one terminal gateway audit")
+    }
+    pub async fn wait_for_queue(&self, principal: &str, expected: u64) {
+        let state = self.broker.state();
+        let snapshot = state.current();
+        let limiter = &state.shared_invocations;
+        let epoch = limiter
+            .runtime_epoch(|| Arc::ptr_eq(&state.current(), &snapshot))
+            .unwrap();
+        let max_wait = snapshot
+            .runtime
+            .configured_invocation_limits()
+            .max_wait(SERVICE);
+        let owner = principal.to_owned();
+        let resolve: crate::ingress::invocation_limits::InvocationLimitResolver =
+            Arc::new(move || {
+                let runtime = snapshot.runtime.clone();
+                let owner = owner.clone();
+                Box::pin(async move {
+                    runtime
+                        .effective_invocation_limit(&owner, SERVICE)
+                        .await
+                        .map(|value| value.limit())
+                })
+            });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let observed = limiter
+                    .observe(epoch, principal, SERVICE, max_wait, resolve.clone())
+                    .await
+                    .unwrap();
+                if observed.invocations.queued_requests == expected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("gateway queue reaches the expected size");
     }
     pub async fn restart_without_gateway(self) -> Self {
         let Self {

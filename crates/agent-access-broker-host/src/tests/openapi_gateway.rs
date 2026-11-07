@@ -5,11 +5,14 @@ use super::*;
 use axum::http::header::{CONTENT_LENGTH, HOST};
 use axum::http::{HeaderMap, HeaderValue};
 
+mod accounting;
 mod credentials;
 mod failures;
 mod fixture;
 mod lifecycle;
+mod privacy;
 mod transfers;
+mod trusted_identity;
 
 use fixture::*;
 

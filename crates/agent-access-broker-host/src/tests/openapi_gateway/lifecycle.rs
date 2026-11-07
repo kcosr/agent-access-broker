@@ -232,3 +232,131 @@ async fn openapi_gateway_changed_operation_is_quarantined_until_explicit_reaccep
     assert_eq!(upstream.api_requests().len(), 1);
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn openapi_gateway_binding_host_changes_and_removal_preserve_accepted_authority() {
+    const NEXT_HOST: &str = "inventory-next.gateway.example.test";
+    let upstream = Upstream::start().await;
+    let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["read_item"]).await;
+    let before = fixture.detail().await;
+    let mut config = fixture.seed.config.clone();
+    config
+        .imports
+        .gateway_bindings
+        .get_mut(SERVICE)
+        .unwrap()
+        .broker_hosts = vec![NEXT_HOST.into()];
+    fixture.broker.reload_config(&config).await;
+    let after = fixture.detail().await;
+    assert_eq!(after["catalogRevision"], before["catalogRevision"]);
+    assert_eq!(after["service"]["version"], before["service"]["version"]);
+    assert_eq!(after["service"]["actions"], before["service"]["actions"]);
+    let response = fixture
+        .gateway(Method::GET, "/items/alpha", "old-host-unmatched")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_host_unmatched"
+    );
+    assert!(upstream.api_requests().is_empty());
+    let response = fixture
+        .gateway(Method::GET, "/items/alpha", "new-host-existing-authority")
+        .header(HOST, NEXT_HOST)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(upstream.api_requests().len(), 1);
+
+    config.imports.gateway_bindings.remove(SERVICE);
+    fixture.broker.reload_config(&config).await;
+    let after = fixture.detail().await;
+    assert_eq!(after["catalogRevision"], before["catalogRevision"]);
+    assert_eq!(after["service"]["actions"], before["service"]["actions"]);
+    assert_eq!(after["service"]["status"], "enabled");
+    let response = fixture
+        .gateway(Method::GET, "/items/alpha", "binding-removed")
+        .header(HOST, NEXT_HOST)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_host_unmatched"
+    );
+    assert_eq!(upstream.api_requests().len(), 1);
+
+    fixture.broker.reload_config(&fixture.seed.config).await;
+    let response = fixture
+        .gateway(Method::GET, "/items/alpha", "binding-restored")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(upstream.api_requests().len(), 2);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn openapi_gateway_binding_reload_cancels_queued_work_before_dispatch() {
+    for remove in [false, true] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::ready_with(
+            &upstream,
+            UpstreamAuth::Anonymous,
+            &["read_item"],
+            |config| {
+                config.limits.request_body_timeout_ms = 30_000;
+                config.limits.invocations.default =
+                    Some(agent_access_core::InvocationLimitConfig {
+                        requests: 1,
+                        window: "10s".into(),
+                        max_wait: Some("20s".into()),
+                    });
+            },
+        )
+        .await;
+        let response = fixture
+            .gateway(Method::GET, "/items/alpha", "binding-queue-seed")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.bytes().await.unwrap();
+        let request = fixture.gateway(Method::GET, "/items/alpha", "binding-queue-waiter");
+        let pending = tokio::spawn(async move { request.send().await.unwrap() });
+        fixture.wait_for_queue("alice", 1).await;
+        let mut config = fixture.seed.config.clone();
+        if remove {
+            config.imports.gateway_bindings.remove(SERVICE);
+        } else {
+            config
+                .imports
+                .gateway_bindings
+                .get_mut(SERVICE)
+                .unwrap()
+                .broker_hosts = vec!["inventory-next.gateway.example.test".into()];
+        }
+        fixture.broker.reload_config(&config).await;
+        let response = tokio::time::timeout(Duration::from_secs(5), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!response.status().is_success());
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            "operation_cancelled"
+        );
+        response.bytes().await.unwrap();
+        assert_eq!(upstream.api_requests().len(), 1);
+        let terminal = fixture.terminal("binding-queue-waiter").await;
+        assert_eq!(terminal["reasonCode"], "operation_cancelled");
+        fixture.stop().await;
+    }
+}

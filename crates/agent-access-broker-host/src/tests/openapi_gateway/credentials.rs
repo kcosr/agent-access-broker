@@ -147,3 +147,73 @@ async fn openapi_gateway_selected_personal_static_credentials_never_fall_back_to
         fixture.stop().await;
     }
 }
+
+#[tokio::test]
+async fn openapi_gateway_personal_credentials_refuse_explicit_and_automatic_verification_without_a_probe()
+ {
+    let upstream = Upstream::start().await;
+    let fixture = Fixture::start(&upstream, |_| {}).await;
+    let source = document(
+        Dialect::OpenApi31,
+        UpstreamAuth::Bearer,
+        &upstream.endpoint(),
+    );
+    let preview = fixture
+        .create_and_discover_with_bindings(
+            DefinitionSource::Upload,
+            UpstreamAuth::Bearer,
+            &source,
+            &[ImportedCredentialMode::PerUser],
+        )
+        .await;
+    fixture.accept(&preview, &["read_item"]).await;
+    fixture.enable().await;
+    fixture
+        .grant_for("alice", &["read_item"], "per_user", None)
+        .await;
+    fixture
+        .put_personal("alice", UpstreamAuth::Bearer, "synthetic-personal-token")
+        .await;
+    assert!(upstream.api_requests().is_empty());
+    assert!(
+        !fixture
+            .broker
+            .runtime()
+            .service_descriptor(SERVICE)
+            .unwrap()
+            .credentials
+            .verification_supported
+    );
+    for body in [json!({"service":SERVICE}), json!({})] {
+        let (status, response) = fixture
+            .admin_request(
+                Method::POST,
+                "/v1/admin/principals/alice/credentials/connections/inventory/verify",
+                Some(body),
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{response}");
+        assert_eq!(response["reasonCode"], "service_action_denied");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no eligible credential verification consumer")
+        );
+        assert!(upstream.api_requests().is_empty());
+    }
+    // Refusing an unsupported probe does not damage a usable personal credential.
+    let response = fixture
+        .gateway(
+            Method::GET,
+            "/items/alpha",
+            "after-unsupported-verification",
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    assert_eq!(upstream.api_requests().len(), 1);
+    fixture.stop().await;
+}
