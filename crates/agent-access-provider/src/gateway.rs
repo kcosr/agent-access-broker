@@ -367,10 +367,25 @@ pub struct GatewayRequestHead<'a> {
     path_and_query: &'a str,
     headers: &'a HeaderMap,
 }
+fn debug_http_method(method: &Method) -> &'static str {
+    match method.as_str() {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "CONNECT" => "CONNECT",
+        "OPTIONS" => "OPTIONS",
+        "TRACE" => "TRACE",
+        "PATCH" => "PATCH",
+        _ => "OTHER",
+    }
+}
+
 impl fmt::Debug for GatewayRequestHead<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GatewayRequestHead")
-            .field("method", &self.method)
+            .field("method", &debug_http_method(self.method))
             .finish_non_exhaustive()
     }
 }
@@ -758,7 +773,7 @@ impl GatewayForwardPlan {
 impl fmt::Debug for GatewayForwardPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GatewayForwardPlan")
-            .field("method", &self.method)
+            .field("method", &debug_http_method(&self.method))
             .finish_non_exhaustive()
     }
 }
@@ -783,7 +798,7 @@ impl fmt::Debug for GatewayProbeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GatewayProbeRequest")
             .field("action", &self.action)
-            .field("method", &self.method)
+            .field("method", &debug_http_method(&self.method))
             .field("max_response_bytes", &self.max_response_bytes)
             .finish_non_exhaustive()
     }
@@ -1096,6 +1111,50 @@ mod tests {
             assert!(!value.contains("secret-"), "{value}");
         }
     }
+    #[test]
+    fn request_debug_bounds_extension_methods_without_changing_the_request() {
+        let extension = Method::from_bytes(b"SDK_PRIVATE_METHOD_SENTINEL").unwrap();
+        for method in [
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::CONNECT,
+            Method::OPTIONS,
+            Method::TRACE,
+            Method::PATCH,
+            extension.clone(),
+        ] {
+            let headers = HeaderMap::new();
+            let head = GatewayRequestHead::new(&method, "/items", &headers);
+            let plan = GatewayForwardPlan::new(
+                method.clone(),
+                "/items",
+                crate::test_support::gateway_body(Vec::new(), 8),
+            );
+            let mut probe =
+                GatewayProbeRequest::new("items.read", ResourceScopes::new(), "", "/items", 128);
+            probe.method = method.clone();
+            let expected = if method == extension {
+                "OTHER"
+            } else {
+                method.as_str()
+            };
+            for value in [
+                format!("{head:?}"),
+                format!("{plan:?}"),
+                format!("{probe:?}"),
+            ] {
+                assert!(!value.contains("SDK_PRIVATE_METHOD_SENTINEL"), "{value}");
+                assert!(value.contains(expected), "{value}");
+            }
+            assert_eq!(head.method(), &method);
+            assert_eq!(plan.method, method);
+            assert_eq!(probe.method, method);
+        }
+    }
+
     #[test]
     fn module_failures_do_not_claim_host_auth_policy_or_accounting_outcomes() {
         for code in [

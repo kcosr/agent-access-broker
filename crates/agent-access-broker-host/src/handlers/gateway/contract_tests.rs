@@ -697,13 +697,13 @@ fn response_validators_cannot_rewrite_upstream_values_or_select_reserved_headers
     }
 }
 
-fn tls_origin(
-    response: Option<Vec<u8>>,
-) -> (
+type TlsOrigin = (
     String,
     std::sync::mpsc::Sender<()>,
     tokio::task::JoinHandle<(Vec<u8>, bool)>,
-) {
+);
+
+fn tls_origin(response: Option<Vec<u8>>) -> TlsOrigin {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("https://{}", listener.local_addr().unwrap());

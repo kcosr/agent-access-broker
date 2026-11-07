@@ -893,7 +893,6 @@ mod tests {
             "request_body_max_bytes": null,
             "response_body_max_bytes": null,
             "streaming_idle_timeout_ms": null,
-            "git": null,
         }))
         .unwrap();
         let gateways = BTreeMap::from([("git".to_string(), gateway)]);
