@@ -212,6 +212,7 @@
     "configuredCredentialModes": [
       "service"
     ],
+    "credentialVerificationSupported": true,
     "displayName": "Conformance",
     "lookupCredentialConfigured": false,
     "resourceScopes": {

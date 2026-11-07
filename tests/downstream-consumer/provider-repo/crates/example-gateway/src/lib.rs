@@ -96,8 +96,9 @@ mod tests {
         assert_eq!(descriptor.service, "items");
         assert!(!descriptor.credentials.verification_supported);
         assert!(descriptor.action("items.read").unwrap().read_only);
-        let mut unexpected = toml::map::Map::new();
-        unexpected.insert("secret".into(), toml::Value::String("not accepted".into()));
+        let unexpected = [("secret".into(), toml::Value::String("not accepted".into()))]
+            .into_iter()
+            .collect();
         assert!(parse(toml::Value::Table(unexpected)).is_err());
     }
 }

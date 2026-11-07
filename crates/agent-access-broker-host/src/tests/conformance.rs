@@ -36,7 +36,9 @@ fn conformance_registry() -> BackendRegistry {
         .registrations()
         .chain([&CONFORMANCE_BACKEND])
         .collect::<Vec<_>>();
-    BackendRegistry::new(registrations).unwrap()
+    BackendRegistry::new(registrations)
+        .and_then(|registry| registry.with_gateways(linked.gateway_registrations()))
+        .unwrap()
 }
 
 /// A broker serving the conformance backend at `base_url`, with its secrets

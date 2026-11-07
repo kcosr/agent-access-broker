@@ -230,7 +230,7 @@ pub(super) fn validate_forward_plan(
     plan: &GatewayForwardPlan,
 ) -> Result<Url, ProviderError> {
     if agent_access_provider::host::gateway_body_failure(&plan.body).is_some()
-        || &plan.method != original_method
+        || plan.method != *original_method
         || plan.headers.len() > 128
         || plan
             .headers

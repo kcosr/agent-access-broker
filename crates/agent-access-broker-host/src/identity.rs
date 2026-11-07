@@ -384,6 +384,7 @@ mod tests {
                 "agent-access-command-import",
                 "agent-access-confluence",
                 "agent-access-fake",
+                "agent-access-git-http",
                 "agent-access-gitlab",
                 "agent-access-gmail",
                 "agent-access-jira",
@@ -391,6 +392,10 @@ mod tests {
                 "agent-access-openapi-upstream",
                 "agent-access-teams",
             ]
+        );
+        assert_eq!(
+            module(&status, "agent-access-git-http")["roles"],
+            json!([{"role": "gateway", "id": "git_http"}])
         );
         assert_eq!(
             module(&status, "agent-access-fake")["roles"],
