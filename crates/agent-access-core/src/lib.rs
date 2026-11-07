@@ -3325,6 +3325,13 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
         .collect::<BTreeSet<_>>();
     let mut broker_hosts = BTreeMap::<String, String>::new();
     for (service, gateway) in &config.gateways {
+        let module = gateway.module_config(config.providers.registry());
+        let execution_required = module.as_ref().map_or(true, |module| {
+            module
+                .descriptor(&gateway.service_context(service))
+                .credentials
+                .execution_required
+        });
         if service == "broker" || !is_service_name(service) {
             errors.push(format!("gateways.{service} uses an invalid service name"));
         }
@@ -3415,7 +3422,13 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
                 errors.push(format!(
                     "gateways.{service}.credential_modes contains unsupported mode {mode}"
                 ));
-            } else if !credential_mode_configured(&config.credentials, service, mode) {
+            } else if !execution_required && mode != "service" {
+                errors.push(format!(
+                    "gateways.{service} credential-free execution requires service mode"
+                ));
+            } else if execution_required
+                && !credential_mode_configured(&config.credentials, service, mode)
+            {
                 errors.push(format!(
                     "gateways.{service}.credential_modes includes {mode} but credentials.{mode}.{service} is not configured"
                 ));
@@ -3459,12 +3472,12 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
                 "gateways.{service}.response_body_max_bytes must not exceed limits.max_upstream_response_bytes"
             ));
         }
-        match gateway.module_config(config.providers.registry()) {
+        match module {
             Ok(module) => {
                 module.validate(&gateway.service_context(service), errors);
                 let descriptor = module.descriptor(&gateway.service_context(service));
                 if descriptor.service != *service
-                    || !matches!(&descriptor.surface, agent_access_provider::ServiceSurface::Gateway { kind, .. } if kind == &gateway.kind)
+                    || !matches!(&descriptor.surface, agent_access_provider::ServiceSurface::Gateway { kind, broker_hosts } if kind == &gateway.kind && broker_hosts == &gateway.broker_hosts)
                 {
                     errors.push(format!(
                         "gateways.{service} module returned an inconsistent descriptor"

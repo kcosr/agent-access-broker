@@ -6609,6 +6609,110 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
 }
 
 #[tokio::test]
+async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
+    for (name, upload_first, failure, forced) in [
+        ("upload-first", true, false, false),
+        ("response-first", false, false, false),
+        ("late-failure", false, true, false),
+        ("failure-first", true, true, false),
+        ("shutdown", false, false, true),
+    ] {
+        let audit_path = temp_path(&format!("gateway-joined-{name}.jsonl"));
+        let (sink, registry) =
+            test_audit_runtime_parts(Some(jsonl_audit_config(audit_path.display().to_string())));
+        let mut started = test_audit_record();
+        started.provider_audit = Some(json!({
+            "gateway": { "phase": "started", "responseBytes": 0, "requestBytes": 0 },
+            "admission": { "waited": true, "waitedMilliseconds": 17, "outcome": "admitted" },
+        }));
+        sink.append_required(started.clone()).await.unwrap();
+        let terminal = GatewayTerminalAuditGuard::new(
+            started.clone(),
+            sink.reserve_terminal().await.unwrap(),
+            registry.clone(),
+        );
+        let retain = || {
+            assert!(terminal.state.retain_request_body());
+            GatewayRequestBodyAudit {
+                state: Some(terminal.state.clone()),
+            }
+        };
+        let mut upload = Some(retain());
+        let disposal = retain();
+        let finish_upload = |upload: GatewayRequestBodyAudit| {
+            if failure {
+                upload.fail(ReasonCode::GatewayRequestBodyDenied, Some(23));
+            } else {
+                upload.complete(Some(23));
+            }
+        };
+        if upload_first {
+            finish_upload(upload.take().unwrap());
+        }
+        let mut completed = started;
+        completed.upstream_status = Some(200);
+        completed.provider_audit.as_mut().unwrap()["gateway"] = json!({
+            "phase": "completed", "responseBytes": 4, "requestBytes": 7,
+        });
+        terminal.finish_record(completed);
+        drop(terminal);
+        sink.writer.as_ref().unwrap().probe_storage().await.unwrap();
+        assert_eq!(
+            audit_records(&audit_path).len(),
+            1,
+            "{name}: body owners remain"
+        );
+        if forced {
+            assert_eq!(registry.cancel_terminal_audits(), 1);
+            assert_eq!(registry.cancel_terminal_audits(), 0);
+        }
+        if let Some(upload) = upload {
+            finish_upload(upload);
+        }
+        if !forced {
+            sink.writer.as_ref().unwrap().probe_storage().await.unwrap();
+            assert_eq!(
+                audit_records(&audit_path).len(),
+                1,
+                "{name}: disposal remains"
+            );
+        }
+        disposal.complete(None);
+        sink.shutdown_and_drain(Duration::from_secs(1))
+            .await
+            .unwrap();
+        let records = audit_records(&audit_path);
+        assert_eq!(records.len(), 2, "{name}: one started and one terminal");
+        let record = &records[1];
+        assert_eq!(record["upstreamStatus"], 200);
+        assert_eq!(record["providerAudit"]["gateway"]["responseBytes"], 4);
+        assert_eq!(
+            record["providerAudit"]["admission"]["waitedMilliseconds"],
+            17
+        );
+        if forced {
+            assert_eq!(record["providerAudit"]["gateway"]["phase"], "canceled");
+        } else {
+            assert_eq!(record["providerAudit"]["gateway"]["requestBytes"], 23);
+            assert_eq!(
+                record["providerAudit"]["gateway"]["phase"],
+                if failure { "failed" } else { "completed" }
+            );
+            assert_eq!(record["decision"], if failure { "error" } else { "allow" });
+            if failure {
+                assert_eq!(record["reasonCode"], "gateway_request_body_denied");
+                assert!(
+                    record["providerAudit"]["gateway"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("partial or uncertain")
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn gateway_operation_requires_classified_required_scopes_before_credentials() {
     let identity_token_path = write_temp_secret("agent-one-token");
     let missing_token_path = temp_path("missing-git-token");

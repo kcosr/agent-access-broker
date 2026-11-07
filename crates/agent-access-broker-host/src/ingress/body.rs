@@ -379,6 +379,7 @@ async fn admit_body_inner(
                 {
                     return envelope_response(*response).into_response();
                 }
+                let request_method = request.method().clone();
                 let response = next.run(request).await;
                 let response = if ordinary_body && timed_out.load(Ordering::Relaxed) {
                     crate::observability::record_status(StatusCode::REQUEST_TIMEOUT.as_u16());
@@ -391,9 +392,45 @@ async fn admit_body_inner(
                     response
                 };
                 let (parts, body) = response.into_parts();
-                let frames = stream::unfold((body, retained), |(mut body, permit)| async move {
-                    body.frame().await.map(|frame| (frame, (body, permit)))
-                });
+                // Gateway HTTP framing can finish delivery without another body
+                // poll. Release this transport lease at that boundary; any
+                // unfinished upload/disposal owner retains its separate clone.
+                let remaining = if gateway {
+                    if request_method == Method::HEAD
+                        || matches!(parts.status.as_u16(), 204 | 304)
+                        || body.is_end_stream()
+                    {
+                        Some(0)
+                    } else {
+                        parts
+                            .headers
+                            .get(axum::http::header::CONTENT_LENGTH)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .or_else(|| body.size_hint().exact())
+                    }
+                } else {
+                    None
+                };
+                let retained = (remaining != Some(0)).then_some(retained);
+                let frames = stream::unfold(
+                    (body, retained, remaining),
+                    move |(mut body, mut permit, mut remaining)| async move {
+                        let frame = body.frame().await?;
+                        if gateway {
+                            if let Ok(frame) = &frame
+                                && let Some(bytes) = frame.data_ref()
+                                && let Some(left) = remaining.as_mut()
+                            {
+                                *left = left.saturating_sub(bytes.len() as u64);
+                            }
+                            if remaining == Some(0) || frame.is_err() || body.is_end_stream() {
+                                permit.take();
+                            }
+                        }
+                        Some((frame, (body, permit, remaining)))
+                    },
+                );
                 Response::from_parts(parts, Body::new(StreamBody::new(frames)))
             }),
         )

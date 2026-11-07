@@ -22,8 +22,8 @@ const PRODUCTION_CLOSURE_FORBIDDEN = Object.freeze({
 const PRODUCTION_CLOSURE_REPORTED = Object.freeze({ cli: ["core"] });
 // Direct edges of any kind (normal, build or dev) that a role must not have.
 const FORBIDDEN_EDGES = Object.freeze({
-  native: ["core", "host", "assembly", "cli", "adapter"],
-  reference: ["core", "host", "assembly", "cli", "adapter"],
+  native: ["core", "host", "assembly", "cli", "adapter", "gateway"],
+  reference: ["core", "host", "assembly", "cli", "adapter", "gateway"],
   helper: ["core", "host", "assembly", "cli", "adapter", "gateway"],
   gateway: ["core", "host", "assembly", "cli", "native", "reference", "adapter", "gateway"],
   adapter: ["gateway"],

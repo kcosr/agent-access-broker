@@ -460,8 +460,13 @@ a queued POST infeasible and remove it with 429 before its unchanged deadline.
 Credentialed gateway forwarding is audit-gated with
 `providerAudit.gateway.phase = "started"` before upstream credentials are sent,
 followed by a terminal audit record containing upstream status, duration, and
-response byte metadata. Classifier denials before a gateway action is known use
-the synthetic non-grantable action `gateway.classify`.
+response byte metadata. Request capacity remains held until response delivery
+and request upload, including any bounded disposal, have finished. An upstream
+that completes a 2xx response early can still leave an unfinished upload: if that
+upload later fails, the terminal transfer audit is failed and preserves the
+received `upstreamStatus`. The gateway does not replay the request after this
+failure. Classifier denials before a gateway action is known use the synthetic
+non-grantable action `gateway.classify`.
 
 ## OAuth connections
 

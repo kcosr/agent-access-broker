@@ -170,6 +170,14 @@ real CLI and both aggregate and scoped stdio subprocesses against an isolated
 Broker with a synthetic provider. It checks live describe calls while invocation
 capacity is full and mutation-uncertainty messages after short configured timeouts.
 
+The SDK `gateway` tests exercise bounded prefix retention, wire-order replay,
+complete-body proofs and rejection of invalid local protocol outcomes. Host
+`handlers::gateway::contract_tests` use a separate HTTP protocol to check sanitized
+classification, no-credential dispatch, malformed forwarding plans, response-header
+selection and terminal auditing. Core registry tests check linked gateway selection
+and reason ownership; the independent downstream consumer compiles an SDK-only
+gateway and explicitly selects Git in its assembly.
+
 The `git_http_gateway` integration test requires Git, including `git http-backend`.
 It drives real protocol-v2 clone, fetch, and push commands through an in-process
 Broker gateway to a disposable Git repository behind a local TLS origin. Both
@@ -398,7 +406,8 @@ The roles are `sdk` (`agent-access-provider`), `core`, `host`
 (`agent-access`), `native` (backend and OAuth dialect crates, including
 `agent-access-atlassian`, whose helpers Jira and Confluence also use),
 `reference` (`agent-access-conformance`), `adapter` (the MCP and OpenAPI
-import adapters), and `helper` (`agent-access-content`).
+import adapters), `gateway` (`agent-access-git-http`), and `helper`
+(`agent-access-content`).
 `node scripts/check-crate-boundaries.mjs` reads
 `cargo metadata --locked --format-version 1 --all-features` and fails when a
 workspace member has no known role or when a resolved dependency edge crosses
@@ -406,21 +415,23 @@ these boundaries:
 
 - The SDK has no dependency of any kind on another workspace crate.
 - Native, reference, and helper crates have no normal, build, or development
-  dependency on core, host, assembly, CLI, or adapter crates.
+  dependency on core, host, assembly, CLI, adapter, or gateway crates.
+- Gateway dependencies of every kind reach only SDK and helper crates.
+  Adapters cannot depend on a gateway, including through development edges.
 - Adapter normal and build dependencies reach only SDK, helper, and core crates.
 - The transitive normal and build dependency closures of core and the host
-  contain no native, adapter, or reference crate. Development dependencies may
+  contain no native, adapter, reference, or gateway crate. Development dependencies may
   link real backends for tests.
 - The CLI's normal and build closure contains no host, assembly, native,
-  adapter, or reference crate. Its core dependency is reported as allowed.
+  adapter, reference, or gateway crate. Its core dependency is reported as allowed.
 
 It also scans the Rust sources (`src`, `tests`, `benches`, `examples` and
-`build.rs`) of native, adapter, reference, and helper crates and fails on any
+`build.rs`) of native, adapter, reference, helper, and gateway crates and fails on any
 use, under any import path or alias, of the host-only items: the SDK's
 `host::authorize_host_request`, which returns a request carrying a credential,
 and `host::token_as_basic`, which presents a token as HTTP Basic under a
 host-configured username, and core's `gateway_upstream_authorization`, which
-presents a Git gateway's credential and which adapters could otherwise reach
+presents a gateway's credential and which adapters could otherwise reach
 through their core dependency. Those crates present credentials only through
 the upstream client's send methods.
 
@@ -430,7 +441,7 @@ tests.
 `node scripts/public-api.mjs check` regenerates the supported public API
 inventory and fails when it differs from the checked-in `api/` files. It covers
 the SDK and host with and without `test-support`, the assembly library, the
-reviewed selection entry points of the native and import adapter crates the
+reviewed selection entry points of the native, gateway, and import adapter crates the
 assembly links, and the workspace and third-party types those signatures expose.
 After an intended and reviewed API change, run `node scripts/public-api.mjs
 update` and commit the `api/` diff. The check requires the `nightly-2026-07-13`

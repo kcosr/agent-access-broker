@@ -28,8 +28,8 @@
 //! before. The holder's next read fails, at once if it is waiting for a frame
 //! the client may never send, so it reads and forwards nothing more. A successful response leaves a held body
 //! to its holder, as for an upstream that answers before it has read the whole
-//! pack: the exchange is still in progress, and its response keeps the
-//! permits, as the Git gateway's forwarded response does until it ends.
+//! pack. Gateway uploads retain their own lease until body completion or
+//! bounded disposal, independently of a response that has already completed.
 //!
 //! The waiting and discarding task holds the admitted request's concurrency
 //! permits, so a lingering connection still counts against the global and
@@ -195,20 +195,36 @@ impl UnreadBody {
     /// now. A client that asked to continue and was answered before any body
     /// was read has not sent the body, so nothing is discarded for it.
     pub(crate) fn linger<P: Send + 'static>(self, response: Response, permits: P) -> Response {
+        self.linger_response(response, permits, false)
+    }
+
+    /// Gateway response framing may finish before its upstream request body.
+    /// Keep that upload's lease independently, then discard a handed-over body
+    /// within the normal lingering bounds and original request deadline.
+    pub(crate) fn linger_gateway<P: Send + 'static>(
+        self,
+        response: Response,
+        permits: P,
+    ) -> Response {
+        self.linger_response(response, permits, true)
+    }
+
+    fn linger_response<P: Send + 'static>(
+        self,
+        response: Response,
+        permits: P,
+        hold_successful_body: bool,
+    ) -> Response {
         let unsuccessful = !(response.status().is_success() || response.status().is_redirection());
         let mut slot = self.shared.slot.lock().unwrap();
         let state = std::mem::replace(&mut *slot, Slot::Done);
         let Some(tasks) = self.tasks else {
             return response;
         };
-        let deadline = || {
-            linger_deadline(
-                Instant::now(),
-                RequestLifetime::current()
-                    .deadline()
-                    .map(|deadline| deadline.at),
-            )
-        };
+        let request_deadline = RequestLifetime::current()
+            .deadline()
+            .map(|deadline| deadline.at);
+        let deadline = || linger_deadline(Instant::now(), request_deadline);
         let expects_continue = self.expects_continue;
         match state {
             Slot::Left(left) if left.sent(expects_continue) => {
@@ -219,11 +235,17 @@ impl UnreadBody {
                     drop(permits);
                 });
             }
-            Slot::Held if unsuccessful => {
+            Slot::Held if unsuccessful || hold_successful_body => {
                 let (sender, handed_over) = oneshot::channel();
                 *slot = Slot::Awaited(sender);
                 drop(slot);
-                let deadline = deadline();
+                let deadline = if unsuccessful {
+                    deadline()
+                } else {
+                    // A healthy upload keeps its original budget; successful
+                    // response headers must not shorten it to the linger cap.
+                    request_deadline.unwrap_or_else(deadline)
+                };
                 let shared = self.shared.clone();
                 tasks.spawn(async move {
                     // The holder drops the sender without a body when the
@@ -231,7 +253,12 @@ impl UnreadBody {
                     // stopped before the permits are released.
                     match tokio::time::timeout_at(deadline, handed_over).await {
                         Ok(Ok(left)) if left.sent(expects_continue) => {
-                            discard(left.body, deadline).await;
+                            let discard_deadline = if unsuccessful {
+                                deadline
+                            } else {
+                                linger_deadline(Instant::now(), request_deadline)
+                            };
+                            discard(left.body, discard_deadline).await;
                         }
                         Ok(_) => {}
                         Err(_) => shared.expire(),
@@ -239,9 +266,8 @@ impl UnreadBody {
                     drop(permits);
                 });
             }
-            // A successful response leaves a held body to its holder: the
-            // exchange is still in progress and its response keeps the
-            // permits, as the Git gateway's forwarded response does.
+            // Ordinary successful invocations retain their existing operation
+            // owners. Gateway uploads use the independent wait above.
             Slot::Held | Slot::Left(_) | Slot::Awaited(_) | Slot::Done => {}
         }
         response

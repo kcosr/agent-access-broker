@@ -29,7 +29,8 @@ root.
   conformance crate join the workspace.
 - `assembly-repo/` is a downstream distribution, `downstream-broker` `0.3.0`,
   following the [downstream assembly guide](../../docs/downstream-assembly.md).
-  It links `agent-access-broker-host` and production `agent-access-cloudbees-ci`
+  It links `agent-access-broker-host`, production `agent-access-cloudbees-ci`,
+  and the explicitly selected `agent-access-git-http` gateway
   from upstream and `agent-access-conformance` from the provider repository.
   Its library exports `composition()`, which selects CloudBees CI and the
   development-only conformance provider, and `build_identity()`; `main.rs`

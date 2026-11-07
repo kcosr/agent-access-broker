@@ -37,6 +37,7 @@ const PORTAL_RECONNECT: &str = "under My access > Credentials in the Agent Acces
 
 /// The credential a prepared gateway request presents upstream.
 pub(super) enum GatewayAccess {
+    None,
     Static(ExecutionCredential),
     Delegated(GatewayDelegatedAccess),
 }
@@ -53,7 +54,7 @@ pub(super) struct GatewayDelegatedAccess {
 /// The authorization one upstream attempt of a gateway request presents.
 /// It exposes no material.
 pub struct GatewayUpstreamPresentation {
-    authorization: UpstreamAuthorization,
+    authorization: Option<UpstreamAuthorization>,
     /// The delegated access version presented; `None` for a static
     /// credential.
     delegated_version: Option<String>,
@@ -62,8 +63,8 @@ pub struct GatewayUpstreamPresentation {
 impl GatewayUpstreamPresentation {
     /// Host-only: attach with the SDK's host-only
     /// [`authorize_host_request`](agent_access_provider::host::authorize_host_request).
-    pub fn authorization(&self) -> &UpstreamAuthorization {
-        &self.authorization
+    pub fn authorization(&self) -> Option<&UpstreamAuthorization> {
+        self.authorization.as_ref()
     }
 
     /// Whether this presents the caller's OAuth access, whose upstream 401
@@ -132,6 +133,11 @@ impl BrokerRuntime {
                 None => error,
             })?;
         match (access, oauth) {
+            (ExecutionAccess::None, _)
+                if descriptor.is_some_and(|descriptor| !descriptor.execution_required) =>
+            {
+                Ok(GatewayAccess::None)
+            }
             (ExecutionAccess::Static(credential), _) => {
                 self.check_gateway_presentable(&credential)?;
                 Ok(GatewayAccess::Static(credential))
@@ -205,11 +211,15 @@ impl PreparedGatewayOperation {
         gateway: &GatewayConfig,
     ) -> Result<GatewayUpstreamPresentation, ProviderError> {
         match &self.access {
+            GatewayAccess::None => Ok(GatewayUpstreamPresentation {
+                authorization: None,
+                delegated_version: None,
+            }),
             GatewayAccess::Static(credential) => Ok(GatewayUpstreamPresentation {
-                authorization: gateway_upstream_authorization(
+                authorization: Some(gateway_upstream_authorization(
                     &gateway.upstream_token_auth,
                     credential,
-                )?,
+                )?),
                 delegated_version: None,
             }),
             GatewayAccess::Delegated(delegated) => delegated.present(gateway).await,
@@ -281,6 +291,7 @@ impl PreparedGatewayOperation {
             && let Some(gateway) = audit.get_mut("gateway").and_then(Value::as_object_mut)
         {
             let method = match self.access {
+                GatewayAccess::None => "none",
                 GatewayAccess::Static(_) => "token",
                 GatewayAccess::Delegated(_) => "oauth",
             };
@@ -317,7 +328,10 @@ impl GatewayDelegatedAccess {
                 ),
             })?;
         Ok(GatewayUpstreamPresentation {
-            authorization: gateway_delegated_authorization(&gateway.upstream_token_auth, &access)?,
+            authorization: Some(gateway_delegated_authorization(
+                &gateway.upstream_token_auth,
+                &access,
+            )?),
             delegated_version: Some(access.version().to_owned()),
         })
     }

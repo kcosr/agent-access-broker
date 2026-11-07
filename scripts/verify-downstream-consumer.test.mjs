@@ -51,7 +51,7 @@ const commit = "a".repeat(40);
 const providerCommit = "b".repeat(40);
 const upstreamUrl = "file:///stage/upstream";
 const providerUrl = "file:///stage/provider";
-const upstreamNames = new Set([SDK_PACKAGE, "agent-access-core", "agent-access-broker-host", "agent-access-cloudbees-ci", PROVIDER_PACKAGE]);
+const upstreamNames = new Set([SDK_PACKAGE, "agent-access-core", "agent-access-broker-host", "agent-access-cloudbees-ci", "agent-access-git-http", PROVIDER_PACKAGE]);
 const upstream = { canonical: CANONICAL_UPSTREAM_URL, url: upstreamUrl, rev: commit, packages: upstreamNames };
 const provider = { canonical: CANONICAL_PROVIDER_URL, url: providerUrl, rev: providerCommit, packages: new Set([PROVIDER_PACKAGE]) };
 const pin = (url = CANONICAL_UPSTREAM_URL, rev = SENTINEL_REV) => `{ git = "${url}", rev = "${rev}" }`;
@@ -155,7 +155,7 @@ test("the checked-in templates and the maintained provider crate stage cleanly",
   assert.equal(rewriteStagedManifest(normalized.text, [upstream]).rewrites.length, 0);
   const assembly = rewriteStagedManifest(assemblyTemplate, [provider, upstream]);
   assert.deepEqual(assembly.rewrites.map((rewrite) => [rewrite.table, rewrite.package]), [["dependencies", "agent-access-broker-host"],
-    ["dependencies", "agent-access-cloudbees-ci"], ["dependencies", PROVIDER_PACKAGE], ["dev-dependencies", "agent-access-broker-host"]]);
+    ["dependencies", "agent-access-git-http"], ["dependencies", "agent-access-cloudbees-ci"], ["dependencies", PROVIDER_PACKAGE], ["dev-dependencies", "agent-access-broker-host"]]);
   assert.match(assemblyTemplate, new RegExp(`^name = "${ASSEMBLY_PACKAGE}"$`, "m"));
   const pinned = toolchainChannel(read("rust-toolchain.toml"));
   for (const path of ["tests/downstream-consumer/provider-repo/rust-toolchain.toml", "tests/downstream-consumer/assembly-repo/rust-toolchain.toml"]) {

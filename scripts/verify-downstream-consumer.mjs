@@ -1390,7 +1390,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
 
     const candidateLock = parseLockfile(candidateLockText);
     const upstreamNames = new Set(candidateLock.packages.filter((entry) => entry.source === null).map((entry) => entry.name));
-    for (const name of [SDK_PACKAGE, PROVIDER_PACKAGE, CLI_PACKAGE, "agent-access-broker-host", "agent-access-cloudbees-ci"]) {
+    for (const name of [SDK_PACKAGE, PROVIDER_PACKAGE, CLI_PACKAGE, "agent-access-broker-host", "agent-access-cloudbees-ci", "agent-access-git-http"]) {
       if (!upstreamNames.has(name)) throw new Error(`The candidate workspace has no ${name} package`);
     }
     const seed = thirdPartyLockSeed(candidateLockText);
@@ -1741,6 +1741,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
         modules: [
           { crate: CLOUDBEES_PACKAGE, version: locked(CLOUDBEES_PACKAGE, upstreamLock), roles: [{ role: "native", id: "cloudbees_ci" }], revision: commit },
           { crate: PROVIDER_PACKAGE, version: locked(PROVIDER_PACKAGE, providerLock), roles: [{ role: "native", id: "conformance" }], revision: providerCommit },
+          { crate: "agent-access-git-http", version: locked("agent-access-git-http", upstreamLock), roles: [{ role: "gateway", id: "git_http" }], revision: commit },
         ],
       });
       writeFileSync(join(evidence, "expected-status.json"), `${JSON.stringify(expectedStatus, null, 2)}\n`);

@@ -31,6 +31,7 @@ pub use agent_access_provider::deps::tokio::sync::watch::Receiver
 pub mod agent_access_provider::deps::tokio::time
 pub use agent_access_provider::deps::tokio::time::Instant
 pub mod agent_access_provider::deps::toml
+pub use agent_access_provider::deps::toml::Value
 pub mod agent_access_provider::deps::toml::de
 pub use agent_access_provider::deps::toml::de::Error
 pub use agent_access_provider::deps::toml::de::ValueDeserializer
@@ -222,6 +223,11 @@ pub fn agent_access_provider::host::configure_client_profile(reqwest::async_impl
 pub fn agent_access_provider::host::credential_with_profile(agent_access_provider::ExecutionCredential, impl core::convert::Into<alloc::string::String>) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::host::delegated_binding_id([u8; 32]) -> agent_access_provider::DelegatedBindingId
 pub fn agent_access_provider::host::delegated_credential(alloc::sync::Arc<dyn agent_access_provider::DelegatedLease>) -> agent_access_provider::DelegatedCredential
+pub fn agent_access_provider::host::gateway_body(agent_access_provider::GatewayBodyStream, usize, core::time::Duration) -> agent_access_provider::GatewayBody
+pub fn agent_access_provider::host::gateway_body_failure(&agent_access_provider::GatewayBody) -> core::option::Option<agent_access_provider::GatewayBodyError>
+pub fn agent_access_provider::host::gateway_body_is_empty_complete(&agent_access_provider::GatewayBody) -> bool
+pub fn agent_access_provider::host::gateway_body_stream(agent_access_provider::GatewayBody) -> agent_access_provider::GatewayBodyStream
+pub fn agent_access_provider::host::gateway_request_head<'a>(&'a http::method::Method, &'a str, &'a http::header::map::HeaderMap) -> agent_access_provider::GatewayRequestHead<'a>
 pub fn agent_access_provider::host::hook_context(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, agent_access_provider::HookPhase, &'static [&'static agent_access_provider::ProviderReasonDefinition]) -> agent_access_provider::host::HookContext
 pub fn agent_access_provider::host::invocation(agent_access_provider::AdmittedRequest, alloc::vec::Vec<agent_access_provider::BrokerBodyPart>, agent_access_provider::ResourceAttributes, core::option::Option<agent_access_provider::ProviderState>) -> agent_access_provider::ProviderInvocation
 pub fn agent_access_provider::host::port_failure(agent_access_provider::host::HostPort, agent_access_provider::ProviderError) -> agent_access_provider::ProviderError
@@ -702,6 +708,9 @@ pub fn agent_access_provider::test_support::basic_credential(&str, &str) -> agen
 pub fn agent_access_provider::test_support::bearer_credential(&str) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::test_support::credential_with_profile(agent_access_provider::ExecutionCredential, &str) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::test_support::delegated_binding_id(&str) -> agent_access_provider::DelegatedBindingId
+pub fn agent_access_provider::test_support::gateway_body(alloc::vec::Vec<core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>>, usize) -> agent_access_provider::GatewayBody
+pub fn agent_access_provider::test_support::gateway_body_stream(agent_access_provider::GatewayBody) -> agent_access_provider::GatewayBodyStream
+pub fn agent_access_provider::test_support::gateway_request_head<'a>(&'a http::method::Method, &'a str, &'a http::header::map::HeaderMap) -> agent_access_provider::GatewayRequestHead<'a>
 pub async fn agent_access_provider::test_support::in_invocation_hook<F: core::future::future::Future>(&str, &str, F) -> <F as core::future::future::Future>::Output
 pub fn agent_access_provider::test_support::install_trace_capture() -> &'static agent_access_provider::test_support::TraceCaptureDispatcher
 pub fn agent_access_provider::test_support::test_signing_key(u8) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
@@ -1128,6 +1137,125 @@ impl core::marker::Unpin for agent_access_provider::ExecutionAccess
 impl core::marker::UnsafeUnpin for agent_access_provider::ExecutionAccess
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ExecutionAccess
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ExecutionAccess
+#[non_exhaustive] pub enum agent_access_provider::GatewayBodyError
+pub agent_access_provider::GatewayBodyError::IdleTimeout
+pub agent_access_provider::GatewayBodyError::Read
+pub agent_access_provider::GatewayBodyError::Timeout
+pub agent_access_provider::GatewayBodyError::TooLarge
+impl core::clone::Clone for agent_access_provider::GatewayBodyError
+pub fn agent_access_provider::GatewayBodyError::clone(&self) -> agent_access_provider::GatewayBodyError
+impl core::cmp::Eq for agent_access_provider::GatewayBodyError
+impl core::cmp::PartialEq for agent_access_provider::GatewayBodyError
+pub fn agent_access_provider::GatewayBodyError::eq(&self, &agent_access_provider::GatewayBodyError) -> bool
+impl core::error::Error for agent_access_provider::GatewayBodyError
+impl core::fmt::Debug for agent_access_provider::GatewayBodyError
+pub fn agent_access_provider::GatewayBodyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::GatewayBodyError
+pub fn agent_access_provider::GatewayBodyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::GatewayBodyError
+impl core::marker::StructuralPartialEq for agent_access_provider::GatewayBodyError
+impl core::marker::Freeze for agent_access_provider::GatewayBodyError
+impl core::marker::Send for agent_access_provider::GatewayBodyError
+impl core::marker::Sync for agent_access_provider::GatewayBodyError
+impl core::marker::Unpin for agent_access_provider::GatewayBodyError
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayBodyError
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayBodyError
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayBodyError
+#[non_exhaustive] pub enum agent_access_provider::GatewayBodyFrame
+pub agent_access_provider::GatewayBodyFrame::Data(bytes::bytes::Bytes)
+pub agent_access_provider::GatewayBodyFrame::Trailers
+impl core::clone::Clone for agent_access_provider::GatewayBodyFrame
+pub fn agent_access_provider::GatewayBodyFrame::clone(&self) -> agent_access_provider::GatewayBodyFrame
+impl core::fmt::Debug for agent_access_provider::GatewayBodyFrame
+pub fn agent_access_provider::GatewayBodyFrame::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for agent_access_provider::GatewayBodyFrame
+impl core::marker::Send for agent_access_provider::GatewayBodyFrame
+impl core::marker::Sync for agent_access_provider::GatewayBodyFrame
+impl core::marker::Unpin for agent_access_provider::GatewayBodyFrame
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayBodyFrame
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayBodyFrame
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayBodyFrame
+#[non_exhaustive] pub enum agent_access_provider::GatewayHookPhase
+pub agent_access_provider::GatewayHookPhase::Classification
+pub agent_access_provider::GatewayHookPhase::Preflight
+pub agent_access_provider::GatewayHookPhase::Response
+pub agent_access_provider::GatewayHookPhase::Verification
+impl core::clone::Clone for agent_access_provider::GatewayHookPhase
+pub fn agent_access_provider::GatewayHookPhase::clone(&self) -> agent_access_provider::GatewayHookPhase
+impl core::cmp::Eq for agent_access_provider::GatewayHookPhase
+impl core::cmp::PartialEq for agent_access_provider::GatewayHookPhase
+pub fn agent_access_provider::GatewayHookPhase::eq(&self, &agent_access_provider::GatewayHookPhase) -> bool
+impl core::fmt::Debug for agent_access_provider::GatewayHookPhase
+pub fn agent_access_provider::GatewayHookPhase::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::GatewayHookPhase
+impl core::marker::StructuralPartialEq for agent_access_provider::GatewayHookPhase
+impl core::marker::Freeze for agent_access_provider::GatewayHookPhase
+impl core::marker::Send for agent_access_provider::GatewayHookPhase
+impl core::marker::Sync for agent_access_provider::GatewayHookPhase
+impl core::marker::Unpin for agent_access_provider::GatewayHookPhase
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayHookPhase
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayHookPhase
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayHookPhase
+#[non_exhaustive] pub enum agent_access_provider::GatewayProbeStatus
+pub agent_access_provider::GatewayProbeStatus::Invalid
+pub agent_access_provider::GatewayProbeStatus::NeedMore
+pub agent_access_provider::GatewayProbeStatus::Valid
+impl core::clone::Clone for agent_access_provider::GatewayProbeStatus
+pub fn agent_access_provider::GatewayProbeStatus::clone(&self) -> agent_access_provider::GatewayProbeStatus
+impl core::cmp::Eq for agent_access_provider::GatewayProbeStatus
+impl core::cmp::PartialEq for agent_access_provider::GatewayProbeStatus
+pub fn agent_access_provider::GatewayProbeStatus::eq(&self, &agent_access_provider::GatewayProbeStatus) -> bool
+impl core::fmt::Debug for agent_access_provider::GatewayProbeStatus
+pub fn agent_access_provider::GatewayProbeStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::GatewayProbeStatus
+impl core::marker::StructuralPartialEq for agent_access_provider::GatewayProbeStatus
+impl core::marker::Freeze for agent_access_provider::GatewayProbeStatus
+impl core::marker::Send for agent_access_provider::GatewayProbeStatus
+impl core::marker::Sync for agent_access_provider::GatewayProbeStatus
+impl core::marker::Unpin for agent_access_provider::GatewayProbeStatus
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayProbeStatus
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayProbeStatus
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayProbeStatus
+#[non_exhaustive] pub enum agent_access_provider::GatewayReplayProfile
+pub agent_access_provider::GatewayReplayProfile::BodylessCredentialRecovery
+pub agent_access_provider::GatewayReplayProfile::ConfirmedUnprocessed
+pub agent_access_provider::GatewayReplayProfile::Never
+impl core::clone::Clone for agent_access_provider::GatewayReplayProfile
+pub fn agent_access_provider::GatewayReplayProfile::clone(&self) -> agent_access_provider::GatewayReplayProfile
+impl core::cmp::Eq for agent_access_provider::GatewayReplayProfile
+impl core::cmp::PartialEq for agent_access_provider::GatewayReplayProfile
+pub fn agent_access_provider::GatewayReplayProfile::eq(&self, &agent_access_provider::GatewayReplayProfile) -> bool
+impl core::fmt::Debug for agent_access_provider::GatewayReplayProfile
+pub fn agent_access_provider::GatewayReplayProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::GatewayReplayProfile
+impl core::marker::StructuralPartialEq for agent_access_provider::GatewayReplayProfile
+impl core::marker::Freeze for agent_access_provider::GatewayReplayProfile
+impl core::marker::Send for agent_access_provider::GatewayReplayProfile
+impl core::marker::Sync for agent_access_provider::GatewayReplayProfile
+impl core::marker::Unpin for agent_access_provider::GatewayReplayProfile
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayReplayProfile
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayReplayProfile
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayReplayProfile
+#[non_exhaustive] pub enum agent_access_provider::GatewayStatusMatch
+pub agent_access_provider::GatewayStatusMatch::Class(u16)
+pub agent_access_provider::GatewayStatusMatch::Default
+pub agent_access_provider::GatewayStatusMatch::Exact(u16)
+impl core::clone::Clone for agent_access_provider::GatewayStatusMatch
+pub fn agent_access_provider::GatewayStatusMatch::clone(&self) -> agent_access_provider::GatewayStatusMatch
+impl core::cmp::Eq for agent_access_provider::GatewayStatusMatch
+impl core::cmp::PartialEq for agent_access_provider::GatewayStatusMatch
+pub fn agent_access_provider::GatewayStatusMatch::eq(&self, &agent_access_provider::GatewayStatusMatch) -> bool
+impl core::fmt::Debug for agent_access_provider::GatewayStatusMatch
+pub fn agent_access_provider::GatewayStatusMatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::GatewayStatusMatch
+impl core::marker::StructuralPartialEq for agent_access_provider::GatewayStatusMatch
+impl core::marker::Freeze for agent_access_provider::GatewayStatusMatch
+impl core::marker::Send for agent_access_provider::GatewayStatusMatch
+impl core::marker::Sync for agent_access_provider::GatewayStatusMatch
+impl core::marker::Unpin for agent_access_provider::GatewayStatusMatch
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayStatusMatch
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayStatusMatch
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayStatusMatch
 #[non_exhaustive] pub enum agent_access_provider::HeaderEncoding
 pub agent_access_provider::HeaderEncoding::Base64Json
 impl core::clone::Clone for agent_access_provider::HeaderEncoding
@@ -2486,6 +2614,7 @@ pub agent_access_provider::CredentialDescriptor::execution_required: bool
 pub agent_access_provider::CredentialDescriptor::profiles: alloc::vec::Vec<agent_access_provider::CredentialProfile>
 pub agent_access_provider::CredentialDescriptor::service_kinds: alloc::vec::Vec<&'static str>
 pub agent_access_provider::CredentialDescriptor::verification_inputs: alloc::vec::Vec<&'static str>
+pub agent_access_provider::CredentialDescriptor::verification_supported: bool
 impl agent_access_provider::CredentialDescriptor
 pub fn agent_access_provider::CredentialDescriptor::delegated(self, &'static str) -> Self
 pub fn agent_access_provider::CredentialDescriptor::profile(self, impl core::convert::Into<alloc::string::String>, &'static str) -> Self
@@ -2493,6 +2622,7 @@ pub fn agent_access_provider::CredentialDescriptor::service_kinds(self, &[&'stat
 pub fn agent_access_provider::CredentialDescriptor::verification_input(self, &'static str) -> Self
 pub fn agent_access_provider::CredentialDescriptor::with_profile(self, agent_access_provider::CredentialProfile) -> Self
 pub fn agent_access_provider::CredentialDescriptor::without_execution_credential() -> Self
+pub fn agent_access_provider::CredentialDescriptor::without_verification(self) -> Self
 impl core::clone::Clone for agent_access_provider::CredentialDescriptor
 pub fn agent_access_provider::CredentialDescriptor::clone(&self) -> agent_access_provider::CredentialDescriptor
 impl core::cmp::Eq for agent_access_provider::CredentialDescriptor
@@ -2694,6 +2824,275 @@ impl core::marker::Unpin for agent_access_provider::ExecutionCredential
 impl core::marker::UnsafeUnpin for agent_access_provider::ExecutionCredential
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ExecutionCredential
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ExecutionCredential
+#[non_exhaustive] pub struct agent_access_provider::GatewayBody
+impl agent_access_provider::GatewayBody
+pub fn agent_access_provider::GatewayBody::idle_timeout(&self) -> core::time::Duration
+pub fn agent_access_provider::GatewayBody::inspected_bytes(&self) -> usize
+pub fn agent_access_provider::GatewayBody::is_complete(&self) -> bool
+pub fn agent_access_provider::GatewayBody::max_bytes(&self) -> usize
+pub async fn agent_access_provider::GatewayBody::next_frame(&mut self) -> core::result::Result<core::option::Option<agent_access_provider::GatewayBodyFrame>, agent_access_provider::GatewayBodyError>
+impl core::fmt::Debug for agent_access_provider::GatewayBody
+pub fn agent_access_provider::GatewayBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayBody
+impl core::marker::Send for agent_access_provider::GatewayBody
+impl !core::marker::Sync for agent_access_provider::GatewayBody
+impl core::marker::Unpin for agent_access_provider::GatewayBody
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayBody
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayBody
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayBody
+#[non_exhaustive] pub struct agent_access_provider::GatewayClassification
+impl agent_access_provider::GatewayClassification
+pub fn agent_access_provider::GatewayClassification::action(&self) -> &str
+pub fn agent_access_provider::GatewayClassification::into_request(self) -> alloc::boxed::Box<dyn agent_access_provider::GatewayRequest>
+pub fn agent_access_provider::GatewayClassification::new(impl core::convert::Into<alloc::string::String>, agent_access_provider::ResourceScopes, &'static str, alloc::boxed::Box<dyn agent_access_provider::GatewayRequest>) -> Self
+pub fn agent_access_provider::GatewayClassification::request_kind(&self) -> &'static str
+pub fn agent_access_provider::GatewayClassification::scopes(&self) -> &agent_access_provider::ResourceScopes
+impl core::fmt::Debug for agent_access_provider::GatewayClassification
+pub fn agent_access_provider::GatewayClassification::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayClassification
+impl core::marker::Send for agent_access_provider::GatewayClassification
+impl !core::marker::Sync for agent_access_provider::GatewayClassification
+impl core::marker::Unpin for agent_access_provider::GatewayClassification
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayClassification
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayClassification
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayClassification
+#[non_exhaustive] pub struct agent_access_provider::GatewayForwardPlan
+pub agent_access_provider::GatewayForwardPlan::audit: core::option::Option<serde_json::value::Value>
+pub agent_access_provider::GatewayForwardPlan::audit_target: core::option::Option<alloc::string::String>
+pub agent_access_provider::GatewayForwardPlan::body: agent_access_provider::GatewayBody
+pub agent_access_provider::GatewayForwardPlan::headers: http::header::map::HeaderMap
+pub agent_access_provider::GatewayForwardPlan::method: http::method::Method
+pub agent_access_provider::GatewayForwardPlan::relative_target: alloc::string::String
+pub agent_access_provider::GatewayForwardPlan::replay: agent_access_provider::GatewayReplayProfile
+pub agent_access_provider::GatewayForwardPlan::response: agent_access_provider::GatewayResponseProfile
+impl agent_access_provider::GatewayForwardPlan
+pub fn agent_access_provider::GatewayForwardPlan::new(http::method::Method, impl core::convert::Into<alloc::string::String>, agent_access_provider::GatewayBody) -> Self
+pub fn agent_access_provider::GatewayForwardPlan::with_audit(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::GatewayForwardPlan::with_audit_target(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::GatewayForwardPlan::with_headers(self, http::header::map::HeaderMap) -> Self
+pub fn agent_access_provider::GatewayForwardPlan::with_replay(self, agent_access_provider::GatewayReplayProfile) -> Self
+pub fn agent_access_provider::GatewayForwardPlan::with_response(self, agent_access_provider::GatewayResponseProfile) -> Self
+impl core::fmt::Debug for agent_access_provider::GatewayForwardPlan
+pub fn agent_access_provider::GatewayForwardPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayForwardPlan
+impl core::marker::Send for agent_access_provider::GatewayForwardPlan
+impl !core::marker::Sync for agent_access_provider::GatewayForwardPlan
+impl core::marker::Unpin for agent_access_provider::GatewayForwardPlan
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayForwardPlan
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayForwardPlan
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayForwardPlan
+#[non_exhaustive] pub struct agent_access_provider::GatewayManagedAction
+pub agent_access_provider::GatewayManagedAction::accepted_hash: alloc::string::String
+pub agent_access_provider::GatewayManagedAction::action: alloc::string::String
+pub agent_access_provider::GatewayManagedAction::dispatchable: bool
+pub agent_access_provider::GatewayManagedAction::plan: agent_access_provider::GatewayVersionedData
+pub agent_access_provider::GatewayManagedAction::version: u64
+impl agent_access_provider::GatewayManagedAction
+pub fn agent_access_provider::GatewayManagedAction::new(impl core::convert::Into<alloc::string::String>, u64, impl core::convert::Into<alloc::string::String>, bool, agent_access_provider::GatewayVersionedData) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayManagedAction
+pub fn agent_access_provider::GatewayManagedAction::clone(&self) -> agent_access_provider::GatewayManagedAction
+impl core::fmt::Debug for agent_access_provider::GatewayManagedAction
+pub fn agent_access_provider::GatewayManagedAction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayManagedAction
+impl core::marker::Send for agent_access_provider::GatewayManagedAction
+impl core::marker::Sync for agent_access_provider::GatewayManagedAction
+impl core::marker::Unpin for agent_access_provider::GatewayManagedAction
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayManagedAction
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayManagedAction
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayManagedAction
+#[non_exhaustive] pub struct agent_access_provider::GatewayManagedInput
+pub agent_access_provider::GatewayManagedInput::actions: alloc::vec::Vec<agent_access_provider::GatewayManagedAction>
+pub agent_access_provider::GatewayManagedInput::manifest: agent_access_provider::GatewayVersionedData
+pub agent_access_provider::GatewayManagedInput::manifest_generation: u64
+pub agent_access_provider::GatewayManagedInput::manifest_hash: alloc::string::String
+impl agent_access_provider::GatewayManagedInput
+pub fn agent_access_provider::GatewayManagedInput::new(agent_access_provider::GatewayVersionedData, alloc::vec::Vec<agent_access_provider::GatewayManagedAction>) -> Self
+pub fn agent_access_provider::GatewayManagedInput::with_manifest_revision(self, u64, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayManagedInput
+pub fn agent_access_provider::GatewayManagedInput::clone(&self) -> agent_access_provider::GatewayManagedInput
+impl core::fmt::Debug for agent_access_provider::GatewayManagedInput
+pub fn agent_access_provider::GatewayManagedInput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayManagedInput
+impl core::marker::Send for agent_access_provider::GatewayManagedInput
+impl core::marker::Sync for agent_access_provider::GatewayManagedInput
+impl core::marker::Unpin for agent_access_provider::GatewayManagedInput
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayManagedInput
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayManagedInput
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayManagedInput
+#[non_exhaustive] pub struct agent_access_provider::GatewayProbeRequest
+pub agent_access_provider::GatewayProbeRequest::action: alloc::string::String
+pub agent_access_provider::GatewayProbeRequest::audit: core::option::Option<serde_json::value::Value>
+pub agent_access_provider::GatewayProbeRequest::audit_target: core::option::Option<alloc::string::String>
+pub agent_access_provider::GatewayProbeRequest::headers: http::header::map::HeaderMap
+pub agent_access_provider::GatewayProbeRequest::max_response_bytes: usize
+pub agent_access_provider::GatewayProbeRequest::method: http::method::Method
+pub agent_access_provider::GatewayProbeRequest::normalized_input: alloc::string::String
+pub agent_access_provider::GatewayProbeRequest::relative_target: alloc::string::String
+pub agent_access_provider::GatewayProbeRequest::scopes: agent_access_provider::ResourceScopes
+impl agent_access_provider::GatewayProbeRequest
+pub fn agent_access_provider::GatewayProbeRequest::new(impl core::convert::Into<alloc::string::String>, agent_access_provider::ResourceScopes, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, usize) -> Self
+pub fn agent_access_provider::GatewayProbeRequest::with_audit(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::GatewayProbeRequest::with_audit_target(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::GatewayProbeRequest::with_headers(self, http::header::map::HeaderMap) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayProbeRequest
+pub fn agent_access_provider::GatewayProbeRequest::clone(&self) -> agent_access_provider::GatewayProbeRequest
+impl core::fmt::Debug for agent_access_provider::GatewayProbeRequest
+pub fn agent_access_provider::GatewayProbeRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayProbeRequest
+impl core::marker::Send for agent_access_provider::GatewayProbeRequest
+impl core::marker::Sync for agent_access_provider::GatewayProbeRequest
+impl core::marker::Unpin for agent_access_provider::GatewayProbeRequest
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayProbeRequest
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayProbeRequest
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayProbeRequest
+#[non_exhaustive] pub struct agent_access_provider::GatewayRegistration
+impl agent_access_provider::GatewayRegistration
+pub const fn agent_access_provider::GatewayRegistration::audit_key(&self) -> &'static str
+pub fn agent_access_provider::GatewayRegistration::check_failure(&self, agent_access_provider::GatewayHookPhase, &agent_access_provider::ProviderError) -> core::result::Result<(), agent_access_provider::host::ContractViolation>
+pub fn agent_access_provider::GatewayRegistration::counted(&self, &str) -> core::option::Option<bool>
+pub const fn agent_access_provider::GatewayRegistration::domain_reasons(&self) -> &'static [&'static agent_access_provider::ProviderReasonDefinition]
+pub const fn agent_access_provider::GatewayRegistration::kind(&self) -> &'static str
+pub const fn agent_access_provider::GatewayRegistration::managed_builder(&self) -> core::option::Option<agent_access_provider::GatewayManagedPlanBuilder>
+pub const fn agent_access_provider::GatewayRegistration::module(&self) -> agent_access_provider::ModuleMetadata
+pub const fn agent_access_provider::GatewayRegistration::new(agent_access_provider::ModuleMetadata, &'static str, agent_access_provider::GatewayConfigParser) -> Self
+pub fn agent_access_provider::GatewayRegistration::parse_config(&self, toml::value::Value) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayConfig>, alloc::string::String>
+pub const fn agent_access_provider::GatewayRegistration::request_kinds(&self) -> &'static [agent_access_provider::GatewayRequestKind]
+pub const fn agent_access_provider::GatewayRegistration::resource_types(&self) -> &'static [&'static agent_access_provider::ResourceTypeDescriptor]
+pub const fn agent_access_provider::GatewayRegistration::with_audit_key(self, &'static str) -> Self
+pub const fn agent_access_provider::GatewayRegistration::with_domain_reasons(self, &'static [&'static agent_access_provider::ProviderReasonDefinition]) -> Self
+pub const fn agent_access_provider::GatewayRegistration::with_managed_builder(self, agent_access_provider::GatewayManagedPlanBuilder) -> Self
+pub const fn agent_access_provider::GatewayRegistration::with_request_kinds(self, &'static [agent_access_provider::GatewayRequestKind]) -> Self
+pub const fn agent_access_provider::GatewayRegistration::with_resource_types(self, &'static [&'static agent_access_provider::ResourceTypeDescriptor]) -> Self
+impl core::fmt::Debug for agent_access_provider::GatewayRegistration
+pub fn agent_access_provider::GatewayRegistration::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayRegistration
+impl core::marker::Send for agent_access_provider::GatewayRegistration
+impl core::marker::Sync for agent_access_provider::GatewayRegistration
+impl core::marker::Unpin for agent_access_provider::GatewayRegistration
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayRegistration
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayRegistration
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayRegistration
+#[non_exhaustive] pub struct agent_access_provider::GatewayRequestHead<'a>
+impl<'a> agent_access_provider::GatewayRequestHead<'a>
+pub fn agent_access_provider::GatewayRequestHead<'a>::headers(&self) -> &'a http::header::map::HeaderMap
+pub fn agent_access_provider::GatewayRequestHead<'a>::method(&self) -> &'a http::method::Method
+pub fn agent_access_provider::GatewayRequestHead<'a>::path_and_query(&self) -> &'a str
+impl core::fmt::Debug for agent_access_provider::GatewayRequestHead<'_>
+pub fn agent_access_provider::GatewayRequestHead<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::clone::Clone for agent_access_provider::GatewayRequestHead<'a>
+pub fn agent_access_provider::GatewayRequestHead<'a>::clone(&self) -> agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::marker::Copy for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::marker::Freeze for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::marker::Send for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::marker::Sync for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::marker::Unpin for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::marker::UnsafeUnpin for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayRequestHead<'a>
+impl<'a> core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayRequestHead<'a>
+#[non_exhaustive] pub struct agent_access_provider::GatewayRequestKind
+impl agent_access_provider::GatewayRequestKind
+pub const fn agent_access_provider::GatewayRequestKind::counted(&'static str) -> Self
+pub const fn agent_access_provider::GatewayRequestKind::exempt(&'static str) -> Self
+pub const fn agent_access_provider::GatewayRequestKind::is_counted(&self) -> bool
+pub const fn agent_access_provider::GatewayRequestKind::name(&self) -> &'static str
+impl core::clone::Clone for agent_access_provider::GatewayRequestKind
+pub fn agent_access_provider::GatewayRequestKind::clone(&self) -> agent_access_provider::GatewayRequestKind
+impl core::cmp::Eq for agent_access_provider::GatewayRequestKind
+impl core::cmp::PartialEq for agent_access_provider::GatewayRequestKind
+pub fn agent_access_provider::GatewayRequestKind::eq(&self, &agent_access_provider::GatewayRequestKind) -> bool
+impl core::fmt::Debug for agent_access_provider::GatewayRequestKind
+pub fn agent_access_provider::GatewayRequestKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::GatewayRequestKind
+impl core::marker::StructuralPartialEq for agent_access_provider::GatewayRequestKind
+impl core::marker::Freeze for agent_access_provider::GatewayRequestKind
+impl core::marker::Send for agent_access_provider::GatewayRequestKind
+impl core::marker::Sync for agent_access_provider::GatewayRequestKind
+impl core::marker::Unpin for agent_access_provider::GatewayRequestKind
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayRequestKind
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayRequestKind
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayRequestKind
+#[non_exhaustive] pub struct agent_access_provider::GatewayResponseProfile
+pub agent_access_provider::GatewayResponseProfile::bounded_retry_after: bool
+pub agent_access_provider::GatewayResponseProfile::headers: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::GatewayResponseProfile::preserve_content_length: bool
+pub agent_access_provider::GatewayResponseProfile::reject_redirects: bool
+pub agent_access_provider::GatewayResponseProfile::status_headers: alloc::vec::Vec<agent_access_provider::GatewayStatusHeaders>
+pub agent_access_provider::GatewayResponseProfile::translate_unauthorized: bool
+pub agent_access_provider::GatewayResponseProfile::validator: core::option::Option<alloc::sync::Arc<dyn agent_access_provider::GatewayResponseValidator>>
+impl agent_access_provider::GatewayResponseProfile
+pub fn agent_access_provider::GatewayResponseProfile::bounded_retry_after(self) -> Self
+pub fn agent_access_provider::GatewayResponseProfile::new(alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::GatewayResponseProfile::preserve_content_length(self) -> Self
+pub fn agent_access_provider::GatewayResponseProfile::reject_redirects(self) -> Self
+pub fn agent_access_provider::GatewayResponseProfile::translate_unauthorized(self) -> Self
+pub fn agent_access_provider::GatewayResponseProfile::with_status_headers(self, alloc::vec::Vec<agent_access_provider::GatewayStatusHeaders>) -> Self
+pub fn agent_access_provider::GatewayResponseProfile::with_validator(self, alloc::sync::Arc<dyn agent_access_provider::GatewayResponseValidator>) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayResponseProfile
+pub fn agent_access_provider::GatewayResponseProfile::clone(&self) -> agent_access_provider::GatewayResponseProfile
+impl core::fmt::Debug for agent_access_provider::GatewayResponseProfile
+pub fn agent_access_provider::GatewayResponseProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayResponseProfile
+impl core::marker::Send for agent_access_provider::GatewayResponseProfile
+impl core::marker::Sync for agent_access_provider::GatewayResponseProfile
+impl core::marker::Unpin for agent_access_provider::GatewayResponseProfile
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayResponseProfile
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayResponseProfile
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayResponseProfile
+#[non_exhaustive] pub struct agent_access_provider::GatewayServiceContext
+pub agent_access_provider::GatewayServiceContext::auth_modes: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::GatewayServiceContext::broker_hosts: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::GatewayServiceContext::credential_modes: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::GatewayServiceContext::display_name: alloc::string::String
+pub agent_access_provider::GatewayServiceContext::service: alloc::string::String
+pub agent_access_provider::GatewayServiceContext::upstream_base_url: alloc::string::String
+impl agent_access_provider::GatewayServiceContext
+pub fn agent_access_provider::GatewayServiceContext::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::GatewayServiceContext::with_auth_modes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::GatewayServiceContext::with_broker_hosts(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::GatewayServiceContext::with_credential_modes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayServiceContext
+pub fn agent_access_provider::GatewayServiceContext::clone(&self) -> agent_access_provider::GatewayServiceContext
+impl core::fmt::Debug for agent_access_provider::GatewayServiceContext
+pub fn agent_access_provider::GatewayServiceContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayServiceContext
+impl core::marker::Send for agent_access_provider::GatewayServiceContext
+impl core::marker::Sync for agent_access_provider::GatewayServiceContext
+impl core::marker::Unpin for agent_access_provider::GatewayServiceContext
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayServiceContext
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayServiceContext
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayServiceContext
+#[non_exhaustive] pub struct agent_access_provider::GatewayStatusHeaders
+pub agent_access_provider::GatewayStatusHeaders::headers: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::GatewayStatusHeaders::status: agent_access_provider::GatewayStatusMatch
+impl agent_access_provider::GatewayStatusHeaders
+pub fn agent_access_provider::GatewayStatusHeaders::new(agent_access_provider::GatewayStatusMatch, alloc::vec::Vec<alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayStatusHeaders
+pub fn agent_access_provider::GatewayStatusHeaders::clone(&self) -> agent_access_provider::GatewayStatusHeaders
+impl core::fmt::Debug for agent_access_provider::GatewayStatusHeaders
+pub fn agent_access_provider::GatewayStatusHeaders::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayStatusHeaders
+impl core::marker::Send for agent_access_provider::GatewayStatusHeaders
+impl core::marker::Sync for agent_access_provider::GatewayStatusHeaders
+impl core::marker::Unpin for agent_access_provider::GatewayStatusHeaders
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayStatusHeaders
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayStatusHeaders
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayStatusHeaders
+#[non_exhaustive] pub struct agent_access_provider::GatewayVersionedData
+pub agent_access_provider::GatewayVersionedData::data: serde_json::value::Value
+pub agent_access_provider::GatewayVersionedData::version: u32
+impl agent_access_provider::GatewayVersionedData
+pub fn agent_access_provider::GatewayVersionedData::new(u32, serde_json::value::Value) -> Self
+impl core::clone::Clone for agent_access_provider::GatewayVersionedData
+pub fn agent_access_provider::GatewayVersionedData::clone(&self) -> agent_access_provider::GatewayVersionedData
+impl core::fmt::Debug for agent_access_provider::GatewayVersionedData
+pub fn agent_access_provider::GatewayVersionedData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for agent_access_provider::GatewayVersionedData
+impl core::marker::Send for agent_access_provider::GatewayVersionedData
+impl core::marker::Sync for agent_access_provider::GatewayVersionedData
+impl core::marker::Unpin for agent_access_provider::GatewayVersionedData
+impl core::marker::UnsafeUnpin for agent_access_provider::GatewayVersionedData
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::GatewayVersionedData
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayVersionedData
 pub struct agent_access_provider::InvalidReasonCodeId
 impl core::clone::Clone for agent_access_provider::InvalidReasonCodeId
 pub fn agent_access_provider::InvalidReasonCodeId::clone(&self) -> agent_access_provider::InvalidReasonCodeId
@@ -4015,6 +4414,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::SearchProje
 pub agent_access_provider::ServiceCapabilities::actions: alloc::vec::Vec<agent_access_provider::ActionCapabilities>
 pub agent_access_provider::ServiceCapabilities::broker_hosts: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ServiceCapabilities::credential_verification_inputs: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::ServiceCapabilities::credential_verification_supported: bool
 pub agent_access_provider::ServiceCapabilities::display_name: alloc::string::String
 pub agent_access_provider::ServiceCapabilities::gateway_kind: core::option::Option<alloc::string::String>
 pub agent_access_provider::ServiceCapabilities::resource_scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>
@@ -4441,6 +4841,20 @@ pub fn agent_access_provider::DelegatedLease::binding_identity(&self) -> agent_a
 pub fn agent_access_provider::DelegatedLease::mark_rejected(&self, &str) -> core::result::Result<(), agent_access_provider::ProviderError>
 pub fn agent_access_provider::DelegatedLease::recover_after_unauthorized<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::DelegatedAccess, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn agent_access_provider::DelegatedLease::revalidate<'life0, 'async_trait>(&'life0 self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+pub trait agent_access_provider::GatewayConfig: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn agent_access_provider::GatewayConfig::build(&self, &agent_access_provider::GatewayServiceContext) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayProtocol>, agent_access_provider::ProviderBuildError>
+pub fn agent_access_provider::GatewayConfig::descriptor(&self, &agent_access_provider::GatewayServiceContext) -> agent_access_provider::ServiceDescriptor
+pub fn agent_access_provider::GatewayConfig::validate(&self, &agent_access_provider::GatewayServiceContext, &mut alloc::vec::Vec<alloc::string::String>)
+pub trait agent_access_provider::GatewayProtocol: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn agent_access_provider::GatewayProtocol::classify(&self, agent_access_provider::GatewayRequestHead<'_>) -> core::result::Result<agent_access_provider::GatewayClassification, agent_access_provider::ProviderError>
+pub fn agent_access_provider::GatewayProtocol::verification(&self, core::option::Option<&str>) -> core::result::Result<core::option::Option<alloc::boxed::Box<dyn agent_access_provider::GatewayVerificationProbe>>, agent_access_provider::ProviderError>
+pub trait agent_access_provider::GatewayRequest: core::marker::Send
+pub fn agent_access_provider::GatewayRequest::preflight<'async_trait>(alloc::boxed::Box<Self>, agent_access_provider::GatewayBody) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<agent_access_provider::GatewayForwardPlan, agent_access_provider::ProviderError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait
+pub trait agent_access_provider::GatewayResponseValidator: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn agent_access_provider::GatewayResponseValidator::validate(&self, u16, &http::header::map::HeaderMap) -> core::result::Result<http::header::map::HeaderMap, agent_access_provider::ProviderError>
+pub trait agent_access_provider::GatewayVerificationProbe: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn agent_access_provider::GatewayVerificationProbe::request(&self) -> &agent_access_provider::GatewayProbeRequest
+pub fn agent_access_provider::GatewayVerificationProbe::validate_response(&self, u16, &http::header::map::HeaderMap, &[u8], bool) -> core::result::Result<agent_access_provider::GatewayProbeStatus, agent_access_provider::ProviderError>
 pub trait agent_access_provider::OAuthDialect: core::marker::Send + core::marker::Sync + 'static
 pub fn agent_access_provider::OAuthDialect::allows_access_without_refresh(&self) -> bool
 pub fn agent_access_provider::OAuthDialect::authorization_url(&self, &agent_access_provider::OAuthClient<'_>, &agent_access_provider::OAuthPermissionProfile, agent_access_provider::AuthorizationRequest<'_>) -> core::result::Result<url::Url, agent_access_provider::OAuthDialectError>
@@ -4524,6 +4938,9 @@ pub fn agent_access_provider::validate_upstream_allowlist(&str, &[alloc::string:
 pub fn agent_access_provider::validate_upstream_base_url(&str, &str, bool, &mut alloc::vec::Vec<alloc::string::String>) -> core::option::Option<url::Url>
 pub fn agent_access_provider::validate_url_patterns(&str, &[alloc::string::String], agent_access_provider::UrlPatternPolicy, &mut alloc::vec::Vec<alloc::string::String>)
 pub type agent_access_provider::BackendConfigParser = fn(toml::de::deserializer::value::ValueDeserializer<'_>) -> core::result::Result<alloc::boxed::Box<dyn agent_access_provider::BackendConfig>, toml::de::error::Error>
+pub type agent_access_provider::GatewayBodyStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>> + core::marker::Send)>>
+pub type agent_access_provider::GatewayConfigParser = fn(toml::value::Value) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayConfig>, alloc::string::String>
+pub type agent_access_provider::GatewayManagedPlanBuilder = fn(&agent_access_provider::GatewayServiceContext, &agent_access_provider::GatewayManagedInput) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayProtocol>, agent_access_provider::ProviderBuildError>
 pub type agent_access_provider::ProviderByteStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<bytes::bytes::Bytes, agent_access_provider::ProviderStreamError>> + core::marker::Send + 'static)>>
 pub type agent_access_provider::ResourceActionInputs = fn(&agent_access_provider::ResourceSelector) -> core::option::Option<serde_json::map::Map<alloc::string::String, serde_json::value::Value>>
 pub type agent_access_provider::ResourceScopes = alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>>
@@ -4556,6 +4973,12 @@ enum agent_access_provider::EgressDeclaration: non-exhaustive
 enum agent_access_provider::EgressProxySource: non-exhaustive
 enum agent_access_provider::ExactSearchProjection: non-exhaustive
 enum agent_access_provider::ExecutionAccess: non-exhaustive
+enum agent_access_provider::GatewayBodyError: non-exhaustive
+enum agent_access_provider::GatewayBodyFrame: non-exhaustive
+enum agent_access_provider::GatewayHookPhase: non-exhaustive
+enum agent_access_provider::GatewayProbeStatus: non-exhaustive
+enum agent_access_provider::GatewayReplayProfile: non-exhaustive
+enum agent_access_provider::GatewayStatusMatch: non-exhaustive
 enum agent_access_provider::HeaderEncoding: non-exhaustive
 enum agent_access_provider::HookPhase: non-exhaustive
 enum agent_access_provider::InvocationAuthority: non-exhaustive
@@ -4624,6 +5047,19 @@ struct agent_access_provider::DelegatedCredential: tuple fields, private fields
 struct agent_access_provider::EgressProxyConfig: named fields
 struct agent_access_provider::EgressRoute: named fields, private fields
 struct agent_access_provider::ExecutionCredential: named fields, private fields
+struct agent_access_provider::GatewayBody: named fields, private fields, non-exhaustive
+struct agent_access_provider::GatewayClassification: named fields, private fields, non-exhaustive
+struct agent_access_provider::GatewayForwardPlan: named fields, non-exhaustive
+struct agent_access_provider::GatewayManagedAction: named fields, non-exhaustive
+struct agent_access_provider::GatewayManagedInput: named fields, non-exhaustive
+struct agent_access_provider::GatewayProbeRequest: named fields, non-exhaustive
+struct agent_access_provider::GatewayRegistration: named fields, private fields, non-exhaustive
+struct agent_access_provider::GatewayRequestHead: named fields, private fields, non-exhaustive
+struct agent_access_provider::GatewayRequestKind: named fields, private fields, non-exhaustive
+struct agent_access_provider::GatewayResponseProfile: named fields, non-exhaustive
+struct agent_access_provider::GatewayServiceContext: named fields, non-exhaustive
+struct agent_access_provider::GatewayStatusHeaders: named fields, non-exhaustive
+struct agent_access_provider::GatewayVersionedData: named fields, non-exhaustive
 struct agent_access_provider::InvalidReasonCodeId: unit
 struct agent_access_provider::InvocationIdentity: named fields, non-exhaustive
 struct agent_access_provider::InvocationScope: named fields, private fields
@@ -4736,6 +5172,20 @@ trait agent_access_provider::DelegatedLease::binding_identity: required fn
 trait agent_access_provider::DelegatedLease::mark_rejected: required fn
 trait agent_access_provider::DelegatedLease::recover_after_unauthorized: required fn
 trait agent_access_provider::DelegatedLease::revalidate: required fn
+trait agent_access_provider::GatewayConfig: dyn-compatible
+trait agent_access_provider::GatewayConfig::build: required fn
+trait agent_access_provider::GatewayConfig::descriptor: required fn
+trait agent_access_provider::GatewayConfig::validate: required fn
+trait agent_access_provider::GatewayProtocol: dyn-compatible
+trait agent_access_provider::GatewayProtocol::classify: required fn
+trait agent_access_provider::GatewayProtocol::verification: provided fn
+trait agent_access_provider::GatewayRequest: dyn-compatible
+trait agent_access_provider::GatewayRequest::preflight: required fn
+trait agent_access_provider::GatewayResponseValidator: dyn-compatible
+trait agent_access_provider::GatewayResponseValidator::validate: required fn
+trait agent_access_provider::GatewayVerificationProbe: dyn-compatible
+trait agent_access_provider::GatewayVerificationProbe::request: required fn
+trait agent_access_provider::GatewayVerificationProbe::validate_response: required fn
 trait agent_access_provider::OAuthDialect: dyn-compatible
 trait agent_access_provider::OAuthDialect::allows_access_without_refresh: provided fn
 trait agent_access_provider::OAuthDialect::authorization_url: required fn
