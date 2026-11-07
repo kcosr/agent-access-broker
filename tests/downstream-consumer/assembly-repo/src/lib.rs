@@ -30,7 +30,11 @@ const PROVIDER: SourceRevision =
 /// One entry per registered module package, keyed by its crate name and
 /// version. Upstream packages share one release version.
 static MODULES: [ModuleProvenance; 3] = [
-    ModuleProvenance::new("agent-access-git-http", env!("DOWNSTREAM_BROKER_UPSTREAM_VERSION"), UPSTREAM),
+    ModuleProvenance::new(
+        "agent-access-git-http",
+        env!("DOWNSTREAM_BROKER_UPSTREAM_VERSION"),
+        UPSTREAM,
+    ),
     ModuleProvenance::new(
         "agent-access-cloudbees-ci",
         env!("DOWNSTREAM_BROKER_UPSTREAM_VERSION"),
@@ -83,7 +87,10 @@ mod tests {
             composition.native_kinds().collect::<Vec<_>>(),
             ["cloudbees_ci", "conformance"]
         );
-        assert_eq!(composition.gateway_kinds().collect::<Vec<_>>(), ["git_http"]);
+        assert_eq!(
+            composition.gateway_kinds().collect::<Vec<_>>(),
+            ["git_http"]
+        );
     }
 
     #[test]

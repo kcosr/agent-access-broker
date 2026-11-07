@@ -5141,6 +5141,7 @@ fn fake_service_capabilities_json() -> serde_json::Value {
         "service": "fake",
         "displayName": "Fake Provider",
         "surface": "invoke",
+        "credentialVerificationSupported": true,
         "availability": {"state":"available","requirements":[],"message":"Locally available"},
             "scopeTypes": ["project"],
         "actions": [{

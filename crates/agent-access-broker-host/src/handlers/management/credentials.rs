@@ -566,6 +566,20 @@ fn probe_candidates(
             "verification requires the owner's per_user grant on a consuming service",
         ));
     }
+    let eligible = entitled
+        .iter()
+        .filter(|service| {
+            runtime
+                .service_descriptor(service)
+                .is_some_and(|descriptor| descriptor.credentials.verification_supported)
+        })
+        .collect::<Vec<_>>();
+    if eligible.is_empty() {
+        return Err(ProviderError::deny(
+            ReasonCode::ServiceActionDenied,
+            "connection has no eligible credential verification consumer",
+        ));
+    }
     let takes_repository = |service: &str| {
         runtime
             .service_descriptor(service)
@@ -577,8 +591,8 @@ fn probe_candidates(
             })
     };
     let wanted = body.repository.is_some();
-    let candidates = entitled
-        .iter()
+    let candidates = eligible
+        .into_iter()
         .filter(|service| takes_repository(service) == wanted)
         .cloned()
         .collect::<Vec<_>>();
@@ -843,6 +857,20 @@ pub(super) async fn delete_connection_credential(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn selected_probes(
+        runtime: &BrokerRuntime,
+        connection: &str,
+        owner: &IdentityContext,
+        body: Value,
+    ) -> Result<Vec<String>, ProviderError> {
+        probe_candidates(
+            runtime,
+            connection,
+            owner,
+            &serde_json::from_value(body).unwrap(),
+        )
+    }
 
     /// Exercise the ordinary owner/admin handler after test-controlled snapshot
     /// publication, while retaining real management admission and store checks.

@@ -174,8 +174,9 @@ and the upstream executable itself declares none.
 
 ## Example assembly
 
-This assembly, `team-broker`, links production CloudBees CI, Gmail with its
-Google OAuth dialect and the MCP import adapter from upstream, together with the
+This assembly, `team-broker`, links production CloudBees CI, the Git HTTP gateway,
+Gmail with its Google OAuth dialect and the MCP import adapter from upstream,
+together with the
 `example-notes` provider from the
 [SDK guide's worked example](provider-sdk.md#worked-example), which a separate
 repository owns. Its manifest pins both repositories by full revision:
@@ -471,7 +472,8 @@ process. Its templates in
 [`tests/downstream-consumer/`](../tests/downstream-consumer/README.md) stage a
 separately owned provider repository, containing the conformance provider as a
 stand-in for a downstream provider, and a downstream assembly that links
-production CloudBees CI and that provider. Each is staged as its own local Git
+production CloudBees CI, the Git HTTP gateway and that provider. The provider
+repository also compiles and tests an SDK-only gateway fixture. Each is staged as its own local Git
 repository with its own manifest, lockfile and full-revision pins.
 `scripts/verify-downstream-consumer.mjs` builds them `--locked --offline`,
 reviews the lockfiles for one SDK package identity and exact sources, runs the

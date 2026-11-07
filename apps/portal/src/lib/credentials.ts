@@ -75,7 +75,12 @@ export function consumerSummary(consumers: ConnectionConsumer[], otherConsumers:
 
 /** The consumers whose verification needs a repository (Git gateways). */
 export function repositoryConsumers(consumers: ConnectionConsumer[]): ConnectionConsumer[] {
-  return consumers.filter((consumer) => consumer.credentialVerificationInputs.includes("repository"));
+  return consumers.filter((consumer) => consumer.credentialVerificationSupported && consumer.credentialVerificationInputs.includes("repository"));
+}
+
+/** Eligible consumers whose probe requires no additional form fields. */
+export function directVerificationConsumers(consumers: ConnectionConsumer[]): ConnectionConsumer[] {
+  return consumers.filter((consumer) => consumer.credentialVerificationSupported && consumer.credentialVerificationInputs.length === 0);
 }
 
 /** A token type (profile) as the portal names it: its label, else its profile ID. */

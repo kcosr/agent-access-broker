@@ -43,11 +43,7 @@ impl BrokerRuntime {
             || request.max_response_bytes as u128
                 > u128::from(self.config.limits.max_upstream_response_bytes)
             || request.normalized_input.len() > 8192
-            || request.headers.len() > 128
-            || request
-                .headers
-                .keys()
-                .any(|name| reserved_probe_header(name.as_str()))
+            || !valid_probe_headers(&request.headers)
             || request.audit.as_ref().is_some_and(|audit| {
                 serde_json::to_vec(audit).map_or(true, |bytes| bytes.len() > 16 * 1024)
             })
@@ -332,4 +328,47 @@ fn reserved_probe_header(name: &str) -> bool {
                 | "x-request-id"
                 | "x-broker-request-id"
         )
+}
+
+fn valid_probe_headers(headers: &reqwest::header::HeaderMap) -> bool {
+    headers.len() <= 128
+        && headers
+            .iter()
+            .try_fold(0usize, |bytes, (name, value)| {
+                bytes
+                    .checked_add(name.as_str().len())?
+                    .checked_add(value.as_bytes().len())
+            })
+            .is_some_and(|bytes| bytes <= 64 * 1024)
+        && !headers
+            .keys()
+            .any(|name| reserved_probe_header(name.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn probe_headers_bound_total_bytes_and_count_before_transport() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-probe",
+            HeaderValue::from_str(&"a".repeat(64 * 1024 - 7)).unwrap(),
+        );
+        assert!(valid_probe_headers(&headers));
+        headers.append("x-probe", HeaderValue::from_static("b"));
+        assert!(!valid_probe_headers(&headers));
+        headers.clear();
+        for _ in 0..128 {
+            headers.append("x-probe", HeaderValue::from_static("a"));
+        }
+        assert!(valid_probe_headers(&headers));
+        headers.append("x-probe", HeaderValue::from_static("a"));
+        assert!(!valid_probe_headers(&headers));
+        headers.clear();
+        headers.insert("authorization", HeaderValue::from_static("redacted"));
+        assert!(!valid_probe_headers(&headers));
+    }
 }

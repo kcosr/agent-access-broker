@@ -471,6 +471,62 @@ fn response_profile_is_exact_then_class_then_default_and_preserves_upstream_valu
 }
 
 #[test]
+fn repeated_selected_response_headers_fail_as_upstream_ambiguity() {
+    let profile = GatewayResponseProfile::new(vec!["content-type".into()]);
+    let mut headers = HeaderMap::new();
+    headers.append("content-type", HeaderValue::from_static("text/plain"));
+    headers.append("content-type", HeaderValue::from_static("application/json"));
+    let error = selected_response_headers(&HTTP_FIXTURE, &profile, 200, &headers).unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    headers.remove("content-type");
+    headers.append("set-cookie", HeaderValue::from_static("a=private"));
+    headers.append("set-cookie", HeaderValue::from_static("b=private"));
+    assert!(
+        selected_response_headers(&HTTP_FIXTURE, &profile, 200, &headers)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[derive(Debug)]
+struct SelectedHeaderValues(Vec<&'static str>);
+impl agent_access_provider::GatewayResponseValidator for SelectedHeaderValues {
+    fn validate(&self, _: u16, _: &HeaderMap) -> Result<HeaderMap, ProviderError> {
+        let mut headers = HeaderMap::new();
+        for value in &self.0 {
+            headers.append(CONTENT_TYPE, HeaderValue::from_static(value));
+        }
+        Ok(headers)
+    }
+}
+
+#[test]
+fn response_validators_may_omit_but_never_invent_duplicate_or_reorder_values() {
+    let mut headers = HeaderMap::new();
+    headers.append(CONTENT_TYPE, HeaderValue::from_static("text/first"));
+    headers.append(CONTENT_TYPE, HeaderValue::from_static("text/second"));
+    for (values, valid) in [
+        (vec!["text/first"], true),
+        (vec!["text/second"], true),
+        (vec!["text/first", "text/second"], true),
+        (vec!["text/second", "text/first"], false),
+        (vec!["text/first", "text/first"], false),
+        (vec!["text/invented"], false),
+    ] {
+        let profile = GatewayResponseProfile::new(vec!["content-type".into()])
+            .with_validator(Arc::new(SelectedHeaderValues(values.clone())));
+        let result = selected_response_headers(&HTTP_FIXTURE, &profile, 200, &headers);
+        assert_eq!(result.is_ok(), valid, "{values:?}");
+        if let Err(error) = result {
+            assert_eq!(
+                error.reason_code(),
+                ReasonCode::BrokerProviderContractFailed
+            );
+        }
+    }
+}
+
+#[test]
 fn identity_headers_and_debug_omit_secret_values() {
     let mut headers = HeaderMap::new();
     for name in [
