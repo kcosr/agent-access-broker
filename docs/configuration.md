@@ -1927,6 +1927,11 @@ table: this build reserves `jira`, `confluence`, `gitlab`, `cloudbees_ci`,
 `fake`, `gmail`, `teams` and `oauth_stub`, so configuring a provider never
 renames a gateway's service.
 
+Gateway policy identities remain in management, credential setup, grants and
+token options, but ordinary agent service/action discovery omits them. Supply
+the gateway hostname and authentication setup to native Git clients. Explicit
+resource-access inspection for a known gateway service remains available.
+
 Gateway config participates in normal validation and reloads, but it does not
 bind network traffic by itself. Run `agent-access-broker serve` with
 `--gateway-listen <addr>` to expose the dedicated gateway listener. The public
@@ -2057,9 +2062,11 @@ Git settings (`[gateways.<name>.git]`):
   conservative 1 MiB default, further capped by `request_body_max_bytes`. Prefix
   size must be non-zero when set.
 
-Gateway services appear in `/v1/services` and `/v1/capabilities` with
+Management projections, token options and credential setup retain gateway
 `surface = "gateway"`, `gatewayKind`, `brokerHosts`,
-`credentialVerificationInputs = ["repository"]`, and `resourceScopes` metadata. Their actions are grantable policy actions, not `/v1/invoke` actions.
+`credentialVerificationInputs = ["repository"]`, and `resourceScopes` metadata.
+Ordinary `/v1/services` and `/v1/capabilities` discovery omits gateways. Their
+actions are grantable policy actions, not `/v1/invoke` actions.
 For per-user Git gateway credentials, credential verification requires a
 repository input and performs a read-only `repo.fetch` authorization check before
 probing upstream with `git-upload-pack` discovery. The verification probe uses

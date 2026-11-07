@@ -775,73 +775,197 @@ upload_spool_dir = {spool}
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fixed_helpers_describe_noninvoke_services_without_exposing_execution_tools() {
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
-    let broker = MockServer::start().await;
-    let service = json!({"service":"git","displayName":"Git gateway","surface":"gateway","gatewayKind":"git_http","availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[{
-        "action":"repo.fetch", "scopedMcpName":"repo.fetch","readOnly":true,"description":"Fetch repository","requiredScopeTypes":["repository"],"credentialModes":["service"],"lookupRequired":false,"inputSchema":{"type":"object"}
-    }]});
-    Mock::given(method("GET"))
-        .and(path("/v1/spec/catalog"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(agent_access_core::empty_catalog(json!({}))),
-        )
-        .expect(1)
-        .mount(&broker)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/v1/services"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([service])))
-        .mount(&broker)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/v1/services/git"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(service))
-        .mount(&broker)
-        .await;
-    let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("client.toml");
+async fn cli_and_stdio_hide_gateway_discovery_but_retain_known_resource_access() {
+    let application = isolated_broker();
+    let directory = application.directory().clone();
+    let first_token = directory
+        .secret_file("principal-one.token", "gateway-discovery-agent")
+        .unwrap();
+    let second_token = directory
+        .secret_file("principal-two.token", "gateway-discovery-other")
+        .unwrap();
+    let upstream = directory
+        .secret_file("git.token", "synthetic-git-token")
+        .unwrap();
+    let document = format!(
+        r#"{}
+[credentials.service.gitlab_git]
+type = "bearer_token"
+token_ref = {}
+
+[gateways.gitlab_git]
+kind = "git_http"
+display_name = "Git gateway"
+broker_hosts = ["git.example.test"]
+upstream_base_url = "https://upstream.example.test"
+allowed_upstream_hosts = ["https://upstream.example.test/**"]
+auth_modes = ["basic_broker_token"]
+credential_modes = ["service"]
+
+[gateways.gitlab_git.git]
+allow_fetch = true
+allow_push = true
+
+[[policy.resources]]
+id = "git-project"
+resource_type = "git_repository"
+selector = {{ kind = "exact", value = "team/project" }}
+allowed_execution_contexts = ["default"]
+
+[[policy.grants]]
+subjects = ["group:agents"]
+service = "gitlab_git"
+actions = ["repo.fetch"]
+resources = {{ resource_ids = ["git-project"] }}
+credential_mode = "service"
+"#,
+        fake_document(&directory, &first_token, &second_token),
+        toml_string(format_args!("file:{}", upstream.display()))
+    );
+    let broker = application.config_document(document).start().await.unwrap();
+    let config = directory.join("client.toml");
     std::fs::write(
         &config,
         format!(
-            "[service]\nurl = {:?}\n[identity]\ndisabled = true\n",
-            broker.uri()
+            "[service]\nurl = {}\n[identity]\ntoken_file = {}\n",
+            toml_string(broker.public_url()),
+            toml_string(first_token.display())
         ),
     )
     .unwrap();
+    let cli_call = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("AGENT_ACCESS_") {
+                command.env_remove(key);
+            }
+        }
+        command
+            .arg("--config")
+            .arg(&config)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["services", "list"],
+        vec!["services", "list", "--verbose"],
+    ] {
+        let response = cli_call(&args);
+        assert!(
+            response.status.success(),
+            "{}",
+            String::from_utf8_lossy(&response.stderr)
+        );
+        let body: Value = serde_json::from_slice(&response.stdout).unwrap();
+        let services = body
+            .as_array()
+            .or_else(|| body["services"].as_array())
+            .unwrap();
+        assert!(services.iter().any(|service| service["service"] == "fake"));
+        assert!(
+            services
+                .iter()
+                .all(|service| service["service"] != "gitlab_git")
+        );
+    }
+    for service in ["gitlab_git", "missing"] {
+        for args in [
+            vec!["services", "describe", service],
+            vec!["actions", "list", "--service", service],
+            vec!["actions", "list", "--service", service, "--verbose"],
+            vec!["actions", "describe", "--service", service, "repo.fetch"],
+        ] {
+            let response = cli_call(&args);
+            assert!(!response.status.success(), "{args:?}");
+            let body: Value = serde_json::from_slice(&response.stdout).unwrap();
+            assert_eq!(
+                body["reasonCode"], "service_action_denied",
+                "{args:?}: {body}"
+            );
+            assert_eq!(
+                body["error"]["message"],
+                "service is not visible for this identity"
+            );
+        }
+    }
+    let access = cli_call(&[
+        "resource-access",
+        "describe",
+        "--service",
+        "gitlab_git",
+        "--action",
+        "repo.fetch",
+    ]);
+    assert!(
+        access.status.success(),
+        "{}",
+        String::from_utf8_lossy(&access.stderr)
+    );
+    let access: Value = serde_json::from_slice(&access.stdout).unwrap();
+    assert_eq!(access["access"][0]["action"], "repo.fetch");
+    assert_eq!(
+        access["registeredResources"]["items"][0]["value"],
+        "team/project"
+    );
+
     let mut client = McpProcess::start(&config);
     client.initialize().await;
     let tools = client.request("tools/list", json!({})).await;
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 5);
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["_meta"]["agent-access/service"] != "gitlab_git")
+    );
     let listed = client
         .request("tools/call", json!({"name":"services_list","arguments":{}}))
         .await;
-    assert_eq!(
-        listed["result"]["structuredContent"]["services"][0]["surface"],
-        "gateway"
+    assert!(
+        listed["result"]["structuredContent"]["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|service| service["service"] != "gitlab_git")
     );
-    assert_eq!(
-        listed["result"]["structuredContent"]["services"][0]["actions"],
-        json!(["repo.fetch"])
-    );
-    let detail = client
+    let filtered = client
         .request(
             "tools/call",
-            json!({"name":"actions_describe","arguments":{"service":"git","action":"repo.fetch"}}),
+            json!({"name":"services_list","arguments":{"prefix":"gitlab_git"}}),
         )
         .await;
-    assert_eq!(detail["result"]["isError"], false, "{detail}");
-    assert_eq!(detail["result"]["structuredContent"]["service"], "git");
-    assert!(
-        detail["result"]["structuredContent"]
-            .get("mcpTool")
-            .is_none()
+    assert_eq!(
+        filtered["result"]["structuredContent"]["services"],
+        json!([])
     );
-    assert!(detail["result"]["structuredContent"].get("io").is_none());
+    for service in ["gitlab_git", "missing"] {
+        for (name, mut arguments) in [
+            ("services_describe", json!({})),
+            ("actions_list", json!({"resource":"team/project"})),
+            ("actions_describe", json!({"action":"repo.fetch"})),
+        ] {
+            arguments["service"] = json!(service);
+            let response = client
+                .request("tools/call", json!({"name":name,"arguments":arguments}))
+                .await;
+            assert_eq!(response["result"]["isError"], true, "{response}");
+            assert_eq!(
+                response["result"]["structuredContent"]["reasonCode"], "service_action_denied",
+                "{response}"
+            );
+        }
+    }
+    let page = client.request("tools/call", json!({"name":"resource_access_describe","arguments":{"service":"gitlab_git","action":"repo.fetch"}})).await;
+    assert_eq!(page["result"]["isError"], false, "{page}");
+    assert_eq!(
+        page["result"]["structuredContent"]["access"][0]["resourceType"],
+        "git_repository"
+    );
+    let denied = client.request("tools/call", json!({"name":"resource_access_describe","arguments":{"service":"gitlab_git","action":"repo.push"}})).await;
+    assert_eq!(denied["result"]["isError"], true, "{denied}");
     client.finish().await;
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -211,9 +211,9 @@ struct SelfServiceLimit {
     window_seconds: u32,
 }
 
-/// Effective limits for the services `/v1/services` would list for this
-/// request: the same identity, agent-token caveats, grants, and execution
-/// context. `/v1/me` never requires an execution context, so a missing,
+/// Effective limits for policy-visible invoke and gateway services under this
+/// request's identity, agent-token caveats, grants, and execution context.
+/// `/v1/me` never requires an execution context, so a missing,
 /// invalid, or token-denied context yields an empty list instead of an error.
 async fn me_service_limits(
     snapshot: &RuntimeSnapshot,
@@ -722,14 +722,17 @@ async fn service_discovery_response(
             ))
             .into_response()
         };
-        let Some(discovery) = context.snapshot.runtime.service_discovery(
-            &context.identity,
-            context
-                .execution_context
-                .as_ref()
-                .expect("discovery context"),
-            &service,
-        ) else {
+        let runtime = &context.snapshot.runtime;
+        let execution_context = context
+            .execution_context
+            .as_ref()
+            .expect("discovery context");
+        let discovery = if resource_access {
+            runtime.service_discovery(&context.identity, execution_context, &service)
+        } else {
+            runtime.agent_service_discovery(&context.identity, execution_context, &service)
+        };
+        let Some(discovery) = discovery else {
             return envelope_response(not_found_envelope(
                 request_id,
                 new_broker_request_id(),

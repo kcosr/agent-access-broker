@@ -739,7 +739,7 @@ async fn me_lists_visible_service_limits_under_toml_authority_without_override_m
         json!([{"service":"fake","requests":2,"windowSeconds":60}])
     );
 
-    // Services the caller cannot see are omitted, like /v1/services.
+    // Services outside the caller's policy authority are omitted.
     fixture
         .publish(2, |config| {
             config.policy.grants[0].subjects = vec!["user:alice".to_string()];

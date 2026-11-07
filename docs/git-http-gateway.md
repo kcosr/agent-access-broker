@@ -56,22 +56,24 @@ serves GitLab REST and remains available independently of the Git module.
 
 ## Access surfaces and examples
 
-Git HTTP gateways are used through ordinary Git smart HTTP clients, not
-`agent-access invoke`, JSON `send`, or direct `/v1/invoke` HTTP calls. Gateway
-services and their actions are excluded from ordinary agent service/action
-lists and descriptions, MCP tools, and invoke/send runtime specs. Administrators
-still configure grants for `repo.fetch` and `repo.push`, and service, credential
-and explicit access-inspection views retain those policy identities.
-
-Use the CLI to inspect repository access and verify a personal token. Git smart
-HTTP reference discovery (`GET .../info/refs`) is a separate protocol operation
-and remains available to authorized Git clients.
+Git HTTP gateways are used through ordinary Git smart HTTP clients. An
+administrator supplies the gateway address and authentication setup. Gateways
+and their policy actions are omitted from ordinary service/action lists and
+describes over HTTP, CLI and MCP, and from invoke/send runtime specs. They remain
+available in credential and OAuth setup, grants, token restrictions and audit.
+The CLI can verify a credential and inspect resource access when the gateway
+service ID is already known:
 
 ```bash
 agent-access resource-access describe --service gitlab_git --action repo.fetch
 # Verify your token for the gitlab credential connection through the gateway
 agent-access --url http://127.0.0.1:8787 credentials verify gitlab --service gitlab_git --repository team/project
 ```
+
+Explicit resource-access inspection still applies the caller's grants, context,
+token restrictions and local credential readiness. Git smart HTTP reference
+discovery (`info/refs`) is part of the Git protocol and remains available under
+normal gateway authorization.
 
 Git clients point at the gateway listener host. When prompted for HTTP Basic
 credentials, use the configured username (`agent-access` by default) and an
@@ -153,7 +155,7 @@ a grant or selects credentials.
 
 ## Actions and authentication
 
-The gateway defines these policy actions when enabled in `[gateways.<name>.git]`:
+The gateway registers these policy actions when enabled in `[gateways.<name>.git]`:
 
 | Action | Required scope type | Enabled by |
 | --- | --- | --- |
@@ -436,6 +438,11 @@ consuming or forwarding the pack, retains existing request slots, and shares
 the original ingress body deadline. Observed pending cancellation removes the
 request without a charge or dispatch; delayed disconnect detection means a
 client timeout alone cannot prove a push was not applied.
+
+Configured personal allowances remain visible in `/v1/me.serviceLimits` and
+administrator service-limits routes. Gateways are excluded from ordinary
+service describe, so callers cannot observe live pack-POST queues or admission
+estimates through HTTP, CLI or MCP discovery.
 
 If that body deadline has already elapsed during initial admission, before a
 rate grant or queue insertion, the pack POST returns HTTP 400

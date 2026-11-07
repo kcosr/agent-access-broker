@@ -3478,6 +3478,8 @@ impl BrokerRuntime {
             .collect()
     }
 
+    /// Ordinary agent discovery includes invoke services only. Gateway policy
+    /// identities remain available through management and explicit access queries.
     pub fn visible_services(
         &self,
         identity: &IdentityContext,
@@ -3490,6 +3492,7 @@ impl BrokerRuntime {
             None,
         )
         .iter()
+        .filter(|service| matches!(service.descriptor.surface, ServiceSurface::Invoke))
         .map(|service| DiscoveredService {
             capabilities: service.descriptor.capabilities(),
             availability: service.availability.clone(),
@@ -3907,6 +3910,8 @@ impl BrokerRuntime {
         self.services.keys().cloned().collect()
     }
 
+    /// Ordinary agent service detail; gateways use their protocol surface and
+    /// are not advertised through this projection.
     pub fn service_capabilities(
         &self,
         identity: &IdentityContext,
@@ -3920,7 +3925,7 @@ impl BrokerRuntime {
             Some(service),
         )
         .into_iter()
-        .next()
+        .find(|service| matches!(service.descriptor.surface, ServiceSurface::Invoke))
         .map(|service| DiscoveredService {
             capabilities: service.descriptor.capabilities(),
             availability: service.availability,

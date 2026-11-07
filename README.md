@@ -20,8 +20,8 @@ adds further restrictions, audit logging, rate limiting, and attribution.
 per-caller allowances with optional shared service caps configured in TOML.
 Bounded waiting preserves each caller's request order and takes turns among
 eligible callers. The same caps apply to native, imported and command-backed
-services, and to Git gateway pack POSTs. Existing service describe commands expose
-effective policy and live process-local admission estimates; see
+services, and to Git gateway pack POSTs. Service describe commands expose
+invoke services' effective policy and live process-local admission estimates; see
 [live service limits](docs/http-api.md#live-service-limits).
 Imported services use the same TOML wait policy alongside their managed rate
 settings; see [import operator setup](docs/imported-services.md#operator-setup).
@@ -200,6 +200,11 @@ HTTP, local stdio MCP, or authenticated HTTP MCP. Git clients use the Git smart
 HTTP gateway. MCP action tools publish their arguments as a plain object schema,
 and an unsupported argument is refused with an error that names it and lists the
 accepted ones; see [tool arguments](docs/mcp.md#tool-arguments).
+
+Gateway addresses and authentication come from administrator-provided client
+setup. Gateways are omitted from ordinary agent service/action discovery;
+their grants, credentials and token restrictions remain visible in management,
+and callers can inspect resource access for a known gateway service.
 
 ```mermaid
 flowchart LR

@@ -1638,6 +1638,12 @@ containment failures retain their existing classifications.
 
 ### Discovery filtering
 
+Ordinary agent service/action lists and describes include invoke services only.
+Gateway descriptors remain in the shared registry for policy, credentials,
+OAuth setup, token options and audit. Explicit resource-access queries for a
+known gateway remain caller-authorized; they do not advertise gateways through
+ordinary discovery. Native clients receive gateway addresses during setup.
+
 Caller discovery first evaluates current policy, execution context and token
 restrictions, then inspects the credentials required by each effective action and
 resource region. Missing or locally unusable execution or lookup material hides
@@ -1701,9 +1707,10 @@ so clients must refresh discovery or reconnect after credential changes.
 
 CLI and the five local MCP discovery helpers share projection code over broker
 capability sources. Provider descriptions and raw schemas are broker-owned;
-local MCP wrapper schemas reuse the native tool projection. Full service
-visibility includes separate execution surfaces, whereas native MCP execution
-and augmented invoke-action detail use caller runtime catalog visibility.
+local MCP wrapper schemas reuse the native tool projection. Ordinary service
+visibility and action detail exclude gateways, while explicit resource-access
+inspection uses the shared policy/availability path. Native MCP execution and
+augmented invoke-action detail use caller runtime catalog visibility.
 
 ### Service-scoped policy management
 
@@ -2558,7 +2565,9 @@ Global administrators manage managed-store overrides through
 `/v1/admin/principals/{principal}/service-limits`, which reports each configured
 service's effective limit and whether an override supplies it; callers see
 their own effective limits, without that distinction, as `/v1/me`
-`serviceLimits`, filtered to the services `/v1/services` would show them.
+`serviceLimits`, filtered by their identity, token caveats, grants and execution
+context. This includes permitted gateway services, independently of their
+exclusion from ordinary service/action discovery.
 
 `max_wait` resolves from the service, then default, then zero independently of
 principal rate overrides. One waiting budget covers both allowances. Positive

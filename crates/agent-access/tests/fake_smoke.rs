@@ -4163,7 +4163,7 @@ fn cli_broker_status_gets_exact_endpoint_and_prints_response() {
 }
 
 #[test]
-fn cli_noninvoke_action_describe_calls_exact_endpoint_once_and_preserves_identity_headers() {
+fn cli_gateway_action_describe_rejects_raw_metadata_without_catalog_fallback() {
     let mut capabilities = fake_service_capabilities_json();
     capabilities["surface"] = serde_json::json!("gateway");
     let (base_url, server) = spawn_one_shot_json_stub(
@@ -4190,15 +4190,12 @@ fn cli_noninvoke_action_describe_calls_exact_endpoint_once_and_preserves_identit
         ])
         .output()
         .unwrap();
+    assert!(!output.status.success());
     assert!(
-        output.status.success(),
-        "discovery describe failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+            .contains("service is not visible or does not exist")
     );
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["action"], "echo");
-    assert_eq!(value["inputSchema"]["type"], "object");
+    assert!(output.stdout.is_empty());
     server.join().unwrap();
 }
 

@@ -102,6 +102,12 @@ actions and exposes typed wrappers for supported services.
   admission may renew the caller's own Microsoft membership (see
   `docs/design.md`). Keep management and setup previews independent so missing
   credentials cannot prevent onboarding.
+- Ordinary agent service/action lists and describes exclude gateways, including
+  Git, across HTTP, CLI and MCP. Keep gateway descriptors in the registry and
+  preserve management, credential/OAuth setup, grants, token options, audit and
+  caller-authorized resource-access inspection for a known service. Filter the
+  agent projections, never the common policy or availability helpers. Gateway
+  addresses come from client setup; Git protocol ref discovery is separate.
 - Resource-access discovery describes effective single-target coverage separately
   per action and resource type, with explicit unscoped actions, admitted execution
   context and service availability. Scoped enforcement distinguishes Broker

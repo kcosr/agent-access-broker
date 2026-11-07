@@ -378,6 +378,95 @@ async fn mcp_discovery_and_native_calls_use_real_policy_and_shared_definitions()
 }
 
 #[tokio::test]
+async fn mcp_gateway_discovery_is_hidden_but_known_resource_access_remains_available() {
+    let fixture = Fixture::new(|config| {
+        config
+            .gateways
+            .insert("gitlab_git".into(), test_git_gateway_config());
+        config.credentials.service.insert(
+            "gitlab_git".into(),
+            config.credentials.service["fake"].clone(),
+        );
+        config.policy.grants.push(PolicyGrantConfig {
+            subjects: vec!["user:mcp-user".into()],
+            execution_contexts: None,
+            service: "gitlab_git".into(),
+            actions: vec!["repo.fetch".into()],
+            resources: selected_resources(&[("repository", &["sip/service"])]),
+            credential_mode: "service".into(),
+            priority: None,
+        });
+    })
+    .await;
+    let session = fixture.initialize().await;
+    let tools = fixture.rpc(&session, 2, "tools/list", json!({})).await;
+    assert!(
+        tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|tool| tool["_meta"]["agent-access/service"] != "gitlab_git")
+    );
+    let services = fixture.call(&session, 3, "services_list", json!({})).await;
+    assert!(
+        structured(&services)["services"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|service| service["service"] != "gitlab_git")
+    );
+    let filtered = fixture
+        .call(&session, 4, "services_list", json!({"prefix":"gitlab_git"}))
+        .await;
+    assert_eq!(structured(&filtered)["services"], json!([]));
+    let mut id = 5;
+    for service in ["gitlab_git", "missing"] {
+        for (helper, mut args) in [
+            ("services_describe", json!({})),
+            ("actions_list", json!({"resource":"sip/service"})),
+            ("actions_describe", json!({"action":"repo.fetch"})),
+        ] {
+            args["service"] = json!(service);
+            let response = fixture.call(&session, id, helper, args).await;
+            id += 1;
+            assert_eq!(response["result"]["isError"], true, "{helper}: {response}");
+            assert_eq!(
+                structured(&response),
+                &json!({"error":{"code":"mcp_tool_error","message":"Service is not visible or does not exist"}}),
+                "{response}"
+            );
+            let text: Value =
+                serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                    .unwrap();
+            assert_eq!(&text, structured(&response));
+        }
+    }
+    let access = fixture
+        .call(
+            &session,
+            id,
+            "resource_access_describe",
+            json!({"service":"gitlab_git","action":"repo.fetch"}),
+        )
+        .await;
+    assert_eq!(access["result"]["isError"], false, "{access}");
+    assert_eq!(
+        structured(&access)["access"][0]["resourceType"],
+        "git_repository"
+    );
+    assert_eq!(structured(&access)["access"][0]["action"], "repo.fetch");
+    let denied = fixture
+        .call(
+            &session,
+            id + 1,
+            "resource_access_describe",
+            json!({"service":"gitlab_git","action":"repo.push"}),
+        )
+        .await;
+    assert_eq!(denied["result"]["isError"], true, "{denied}");
+}
+
+#[tokio::test]
 async fn mcp_file_fields_and_helper_errors_are_rejected_without_poisoning_session() {
     let fixture = Fixture::new(|_| {}).await;
     let session = fixture.initialize().await;

@@ -2180,6 +2180,24 @@ summary. This validates a real agent client and broker without upstream calls;
 it does not establish connectivity to a deployed broker or provider. Remove
 temporary tokens/configuration and stop the local broker after the run.
 
+## Gateway discovery boundary
+
+Gateway discovery regressions cover HTTP lists and direct lookups, the real CLI
+and stdio MCP process against an isolated Broker, and HTTP MCP helpers. They
+assert that Git gateways are absent from ordinary service/action discovery while
+explicit resource-access inspection retains granted repository scopes. Core
+checks retain the gateway's management and token-option metadata; existing Git
+credential verification, OAuth and protocol tests cover the independent native
+client path.
+
+The focused tests are
+`tests::discovery::gateway_agent_discovery_matches_missing_services_and_keeps_explicit_access`
+and `tests::mcp::mcp_gateway_discovery_is_hidden_but_known_resource_access_remains_available`
+in the host library, and
+`cli_and_stdio_hide_gateway_discovery_but_retain_known_resource_access` in the
+CLI's `mcp_stdio` integration test. The HTTP regression also retains gateway
+allowances in `/v1/me.serviceLimits` under the caller's token restrictions.
+
 ## Downstream HTTP MCP
 
 `cargo test -p agent-access-broker-host --lib tests::mcp::` exercises the real public
