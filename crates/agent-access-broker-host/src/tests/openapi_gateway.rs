@@ -5,6 +5,7 @@ use super::*;
 use axum::http::header::{CONTENT_LENGTH, HOST};
 use axum::http::{HeaderMap, HeaderValue};
 
+mod credentials;
 mod failures;
 mod fixture;
 mod lifecycle;

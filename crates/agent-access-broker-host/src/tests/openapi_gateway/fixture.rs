@@ -565,9 +565,12 @@ impl Fixture {
             .bearer_auth(token)
     }
     pub fn issue_agent(&self, read_only: bool) -> String {
+        self.issue_agent_for("alice", read_only)
+    }
+    pub fn issue_agent_for(&self, principal: &str, read_only: bool) -> String {
         issue(
             &self.seed,
-            "alice",
+            principal,
             BrokerTokenClass::AgentInvoke,
             json!({"allowedServices":[SERVICE],"allowedExecutionContexts":["default"],"readOnly":read_only}),
         )
@@ -600,6 +603,21 @@ impl Fixture {
         source: DefinitionSource,
         auth: UpstreamAuth,
         document: &Value,
+    ) -> Value {
+        self.create_and_discover_with_bindings(
+            source,
+            auth,
+            document,
+            &[ImportedCredentialMode::Service],
+        )
+        .await
+    }
+    pub async fn create_and_discover_with_bindings(
+        &self,
+        source: DefinitionSource,
+        auth: UpstreamAuth,
+        document: &Value,
+        modes: &[ImportedCredentialMode],
     ) -> Value {
         let mut definition = super::super::imports_foundation::definition();
         definition.service = SERVICE.into();
@@ -634,21 +652,22 @@ impl Fixture {
             definition
                 .connection_settings
                 .insert("securityScheme".into(), "access".into());
-            vec![ImportedCredentialBinding::token(
-                ImportedCredentialMode::Service,
-                match auth {
-                    UpstreamAuth::Bearer => ImportedCredentialDelivery::Bearer,
-                    UpstreamAuth::Basic => ImportedCredentialDelivery::Basic,
-                    UpstreamAuth::Header => ImportedCredentialDelivery::RawHeader {
-                        name: "X-Inventory-Key".into(),
-                    },
-                    UpstreamAuth::Anonymous => unreachable!(),
+            let delivery = match auth {
+                UpstreamAuth::Bearer => ImportedCredentialDelivery::Bearer,
+                UpstreamAuth::Basic => ImportedCredentialDelivery::Basic,
+                UpstreamAuth::Header => ImportedCredentialDelivery::RawHeader {
+                    name: "X-Inventory-Key".into(),
                 },
-            )]
+                UpstreamAuth::Anonymous => unreachable!(),
+            };
+            modes
+                .iter()
+                .map(|mode| ImportedCredentialBinding::token(*mode, delivery.clone()))
+                .collect()
         };
         self.admin_ok(Method::POST, "/v1/admin/imports", Some(json!(definition)))
             .await;
-        if auth != UpstreamAuth::Anonymous {
+        if auth != UpstreamAuth::Anonymous && modes.contains(&ImportedCredentialMode::Service) {
             let mut secret = versions(&self.detail().await);
             secret["token"] = json!(UPSTREAM_TOKEN);
             if auth == UpstreamAuth::Basic {
@@ -733,10 +752,41 @@ impl Fixture {
         .await;
     }
     pub async fn grant(&self, actions: &[&str]) {
+        self.grant_for("alice", actions, "service", None).await;
+    }
+    pub async fn grant_for(
+        &self,
+        principal: &str,
+        actions: &[&str],
+        mode: &str,
+        priority: Option<i32>,
+    ) {
         self.admin_ok(Method::POST, "/v1/admin/policy/grants", Some(json!({
-            "subjects":["user:alice"],"executionContexts":["default"],"service":SERVICE,"actions":actions,
-            "resources":{"resourceIds":[],"resourceGroupIds":[]},"credentialMode":"service"
+            "subjects":[format!("user:{principal}")],"executionContexts":["default"],"service":SERVICE,"actions":actions,
+            "resources":{"resourceIds":[],"resourceGroupIds":[]},"credentialMode":mode,"priority":priority
         }))).await;
+    }
+    pub async fn put_personal(&self, principal: &str, auth: UpstreamAuth, token: &str) {
+        let mut secret = json!({"token":token});
+        if auth == UpstreamAuth::Basic {
+            secret["username"] = json!(format!("synthetic-{principal}"));
+        }
+        let saved = self
+            .admin_ok(
+                Method::PUT,
+                &format!("/v1/admin/principals/{principal}/credentials/connections/{SERVICE}"),
+                Some(json!({"secret":secret})),
+            )
+            .await;
+        assert!(!saved.to_string().contains(token));
+    }
+    pub async fn remove_personal(&self, principal: &str) {
+        self.admin_ok(
+            Method::DELETE,
+            &format!("/v1/admin/principals/{principal}/credentials/connections/{SERVICE}"),
+            None,
+        )
+        .await;
     }
     pub async fn terminal(&self, id: &str) -> Value {
         tokio::time::timeout(Duration::from_secs(5), async {
