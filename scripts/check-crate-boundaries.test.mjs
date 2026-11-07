@@ -164,7 +164,7 @@ test("provider-side crates must not use host-only credential attachment or prese
     "agent-access-broker-host": [{ path: "crates/agent-access-broker-host/src/handlers/gateway.rs", text: "authorize_host_request(builder, &auth)\n" }],
   };
   const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => sources[pkg.name] ?? []);
-  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic", "gateway_upstream_authorization"]);
+  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic", "gateway_upstream_authorization", "gateway_body", "gateway_body_stream", "gateway_request_head"]);
   assert.deepEqual(errors, [
     "agent-access-conformance (reference) must not use host-only authorize_host_request; found at crates/agent-access-conformance/tests/it.rs:1",
     "agent-access-conformance (reference) must not use host-only token_as_basic; found at crates/agent-access-conformance/tests/it.rs:2",
@@ -225,9 +225,17 @@ test("gateway dependencies reach only SDK and helpers for every edge kind", () =
   }
 });
 
-test("gateway sources cannot attach or present credentials through host-only helpers", () => {
+test("gateway sources cannot attach credentials or replace host-owned request bodies and heads", () => {
   for (const item of HOST_ONLY_ITEMS) {
-    const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => pkg.name === "agent-access-git-http" ? [{ path: "src/lib.rs", text: `use agent_access_provider::host::${item};` }] : []);
-    assert.equal(errors.length, 1, item);
+    for (const source of [
+      `use agent_access_provider::host::${item};`,
+      `use agent_access_provider::host::{${item} as replaced};`,
+      `let value = agent_access_provider::host::${item}(input);`,
+    ]) {
+      const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => pkg.name === "agent-access-git-http" ? [{ path: "src/lib.rs", text: source }] : []);
+      assert.equal(errors.length, 1, item);
+    }
   }
+  const fixtures = hostOnlyUseViolations(metadata(baseRoles), (pkg) => pkg.name === "agent-access-git-http" ? [{ path: "src/tests.rs", text: "use agent_access_provider::test_support::{synthetic_gateway_body, synthetic_gateway_request_head, replay_gateway_body};" }] : []);
+  assert.deepEqual(fixtures, []);
 });

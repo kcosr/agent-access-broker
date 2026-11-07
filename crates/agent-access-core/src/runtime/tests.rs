@@ -6668,12 +6668,14 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
 
 #[tokio::test]
 async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
-    for (name, upload_first, failure, forced) in [
-        ("upload-first", true, false, false),
-        ("response-first", false, false, false),
-        ("late-failure", false, true, false),
-        ("failure-first", true, true, false),
-        ("shutdown", false, false, true),
+    for (name, upload_first, failure, forced, decision) in [
+        ("upload-first", true, false, false, Decision::Allow),
+        ("response-first", false, false, false, Decision::Allow),
+        ("late-failure", false, true, false, Decision::Allow),
+        ("failure-first", true, true, false, Decision::Allow),
+        ("denial-after-dispatch", false, true, false, Decision::Deny),
+        ("error-after-dispatch", false, true, false, Decision::Error),
+        ("shutdown", false, false, true, Decision::Allow),
     ] {
         let audit_path = temp_path(&format!("gateway-joined-{name}.jsonl"));
         let (sink, registry) =
@@ -6708,6 +6710,10 @@ async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
             finish_upload(upload.take().unwrap());
         }
         let mut completed = started;
+        completed.decision = decision.clone();
+        if decision != Decision::Allow {
+            completed.reason_code = Some(ReasonCode::GatewayRequestBodyDenied.into());
+        }
         completed.upstream_status = Some(200);
         completed.provider_audit.as_mut().unwrap()["gateway"] = json!({
             "phase": "completed", "responseBytes": 4, "requestBytes": 7,
@@ -6768,6 +6774,29 @@ async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
             }
         }
     }
+}
+
+#[test]
+fn retained_invoke_descriptor_without_provider_is_unavailable_for_verification() {
+    let mut runtime = BrokerRuntime::new(base_fake_config()).unwrap();
+    // A disabled or unlinked invoke import retains its descriptor while its
+    // executable provider is absent. Exercise that published runtime shape.
+    let descriptor = ServiceDescriptor::new("retained_import", "Retained import")
+        .with_credentials(agent_access_provider::CredentialDescriptor::default());
+    assert!(descriptor.credentials.verification_supported);
+    Arc::make_mut(&mut runtime.services).insert("retained_import".into(), Arc::new(descriptor));
+    assert!(!runtime.providers.contains_key("retained_import"));
+    assert!(runtime.gateway_config("retained_import").is_none());
+    let error = runtime
+        .preflight_execution_credential_verification(
+            "retained_import",
+            &IdentityContext::anonymous(),
+            CredentialVerificationInput::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+    assert_eq!(error.message, "service is not supported");
 }
 
 #[tokio::test]

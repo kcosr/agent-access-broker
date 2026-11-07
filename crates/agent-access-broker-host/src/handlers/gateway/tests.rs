@@ -425,16 +425,130 @@ async fn gateway_outbound_request_filters_inbound_secrets_and_injects_execution_
 fn gateway_cap_helpers_detect_declared_overflow() {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_LENGTH, HeaderValue::from_static("11"));
-    assert!(content_length_exceeds(&headers, 10));
-    assert!(!content_length_exceeds(&headers, 11));
+    assert!(parsed_content_length(&headers).unwrap().unwrap() > 10);
+    assert!(parsed_content_length(&headers).unwrap().unwrap() <= 11);
 
     let mut response_headers = reqwest::header::HeaderMap::new();
     response_headers.insert(
         reqwest::header::CONTENT_LENGTH,
         reqwest::header::HeaderValue::from_static("12"),
     );
-    assert!(response_content_length_exceeds(&response_headers, 11));
-    assert!(!response_content_length_exceeds(&response_headers, 12));
+    assert!(parsed_content_length(&response_headers).unwrap().unwrap() > 11);
+    assert!(parsed_content_length(&response_headers).unwrap().unwrap() <= 12);
+}
+
+#[test]
+fn content_length_requires_equal_decimal_values_across_all_fields() {
+    for (fields, expected) in [
+        (vec![], Ok(None)),
+        (vec!["0"], Ok(Some(0))),
+        (vec!["00012, 12", "12"], Ok(Some(12))),
+        (vec!["\t12 , 12\t"], Ok(Some(12))),
+        (vec!["12", "13"], Err(())),
+        (vec!["12, 13"], Err(())),
+        (vec!["+12"], Err(())),
+        (vec!["12x"], Err(())),
+        (vec!["12,"], Err(())),
+        (vec![""], Err(())),
+        (vec!["18446744073709551616"], Err(())),
+    ] {
+        let mut headers = HeaderMap::new();
+        for field in &fields {
+            headers.append(CONTENT_LENGTH, HeaderValue::from_str(field).unwrap());
+        }
+        assert_eq!(parsed_content_length(&headers), expected, "{fields:?}");
+    }
+}
+
+#[test]
+fn basic_only_git_preserves_required_reason_for_unsupported_authorization_schemes() {
+    let matched = MatchedGateway {
+        service: "gitlab_git".into(),
+        config: test_gateway_config(),
+    };
+    for value in [
+        "Bearer token",
+        "Negotiate token",
+        "Basic",
+        "basic dXNlcjpwYXNz",
+        "Digest token",
+    ] {
+        let headers =
+            HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_str(value).unwrap())]);
+        let error = basic_broker_token(&headers, &matched).unwrap_err();
+        assert_eq!(
+            error.reason_code(),
+            ReasonCode::GatewayAuthRequired,
+            "{value}"
+        );
+        assert_eq!(error.message, "gateway basic auth is required");
+    }
+    let headers =
+        HeaderMap::from_iter([(AUTHORIZATION, HeaderValue::from_static("Basic invalid"))]);
+    assert_eq!(
+        basic_broker_token(&headers, &matched)
+            .unwrap_err()
+            .reason_code(),
+        ReasonCode::GatewayAuthInvalid
+    );
+}
+
+#[tokio::test]
+async fn git_pack_post_trailers_are_discarded_without_losing_data() {
+    let limits = GatewayForwardLimits {
+        request_body_max_bytes: 4096,
+        response_body_max_bytes: 1024,
+        idle_timeout: Duration::from_secs(1),
+    };
+    for kind in [
+        GitRequestKind::UploadPackPost,
+        GitRequestKind::ReceivePackPost,
+    ] {
+        let payload = if matches!(kind, GitRequestKind::ReceivePackPost) {
+            receive_pack_payload(
+                RECEIVE_PACK_OLD,
+                RECEIVE_PACK_NEW,
+                "refs/heads/main",
+                Some("report-status"),
+                b"PACK",
+            )
+        } else {
+            b"want data".to_vec()
+        };
+        let frames = vec![
+            Ok::<_, io::Error>(hyper::body::Frame::data(Bytes::copy_from_slice(&payload))),
+            Ok(hyper::body::Frame::trailers(HeaderMap::from_iter([(
+                axum::http::HeaderName::from_static("x-trailer"),
+                HeaderValue::from_static("hidden"),
+            )]))),
+        ];
+        let body = Body::new(http_body_util::StreamBody::new(stream::iter(frames)));
+        let headers = HeaderMap::from_iter([(
+            CONTENT_TYPE,
+            HeaderValue::from_static(if matches!(kind, GitRequestKind::ReceivePackPost) {
+                "application/x-git-receive-pack-request"
+            } else {
+                "application/x-git-upload-pack-request"
+            }),
+        )]);
+        let mut gateway = test_gateway_config();
+        gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] = toml::Value::Boolean(true);
+        let plan = fixture_git_plan(&gateway, kind, "sip/service", &headers, body, &limits)
+            .await
+            .unwrap();
+        assert!(plan.discard_request_trailers);
+        let GatewayPreparedRequestBody::Stream {
+            body,
+            failure,
+            progress,
+        } = prepare_protocol_request_body(plan.body, plan.discard_request_trailers, &limits, None)
+        else {
+            panic!("pack POST must retain a streamed body");
+        };
+        assert_eq!(&body.collect().await.unwrap().to_bytes()[..], payload);
+        assert_eq!(failure.load(Ordering::Relaxed), REPLAY_FAILURE_NONE);
+        assert_eq!(progress.bytes.load(Ordering::Relaxed), payload.len() as u64);
+    }
 }
 
 #[tokio::test]
@@ -1320,7 +1434,7 @@ async fn gateway_send_watchdog_tracks_upload_and_response_header_idle_timeouts()
 }
 
 #[tokio::test]
-async fn gateway_forwarding_maps_streamed_upload_pack_cap_to_413() {
+async fn gateway_forwarding_maps_dispatched_upload_pack_cap_to_uncertain_error() {
     let temp = test_temp_dir();
     let token_path = temp.join("gateway-upload-cap-token");
     let identity_token_path = temp.join("identity-upload-cap-token");
@@ -1388,7 +1502,7 @@ async fn gateway_forwarding_maps_streamed_upload_pack_cap_to_413() {
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
     assert_eq!(
         response.headers()[REASON_CODE_HEADER],
         ReasonCode::GatewayRequestCapExceeded.as_str()
@@ -1398,10 +1512,91 @@ async fn gateway_forwarding_maps_streamed_upload_pack_cap_to_413() {
     let records = audit_records(&audit_path);
     assert!(records.iter().any(|record| {
         record["agentRequestId"] == "gateway-upload-cap-forward"
-            && record["decision"] == "deny"
+            && record["decision"] == "error"
             && record["reasonCode"] == ReasonCode::GatewayRequestCapExceeded.as_str()
             && record["providerAudit"]["gateway"]["phase"] == "failed"
+            && record["providerAudit"]["gateway"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("partial or uncertain"))
     }));
+}
+
+#[tokio::test]
+async fn unsubmitted_upload_drop_preserves_final_fence_denial() {
+    let temp = test_temp_dir();
+    let token_path = temp.join("upstream-token");
+    let identity_path = temp.join("identity-token");
+    let audit_path = temp.join("audit.jsonl");
+    std::fs::write(&token_path, "upstream-token").unwrap();
+    std::fs::write(&identity_path, "identity-token").unwrap();
+    let runtime = BrokerRuntime::new(test_forwarding_config(
+        &token_path,
+        &identity_path,
+        &audit_path,
+    ))
+    .unwrap();
+    let identity = runtime.identity_from_principal_groups(
+        "gateway-user".into(),
+        None,
+        Some("gateway-user".into()),
+        vec!["gateway-users".into()],
+        None,
+        None,
+    );
+    let mut prepared = runtime
+        .prepare_gateway_operation(
+            test_governed_operation(OperationContext {
+                agent_request_id: "unsubmitted-upload".into(),
+                broker_request_id: "unsubmitted-upload".into(),
+                identity,
+                service: "gitlab_git".into(),
+                action: "repo.fetch".into(),
+                source: agent_access_core::SourceContext::unknown(),
+            }),
+            ResourceScopes::from([("repository".into(), vec!["sip/service".into()])]),
+        )
+        .await
+        .unwrap();
+    runtime
+        .start_prepared_gateway_operation(&mut prepared, json!({"gateway":{"requestBytes":0}}))
+        .await
+        .unwrap();
+    let progress = Arc::new(GatewayRequestUploadProgress::new());
+    *progress.audit.lock().unwrap() = prepared.retain_gateway_request_body();
+    drop(GatewayUploadOwner {
+        progress,
+        _permits: None,
+    });
+    let response = runtime
+        .fail_prepared_gateway_operation(
+            prepared,
+            ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "gateway dispatch generation retired",
+            )
+            .with_audit(json!({"gateway":{"requestBytes":0}})),
+        )
+        .await;
+    assert_eq!(
+        response.envelope.decision,
+        agent_access_provider::Decision::Deny
+    );
+    drain_gateway_test_audit(&runtime).await;
+    let records = audit_records(&audit_path);
+    let terminal: Vec<_> = records
+        .iter()
+        .filter(|record| record["providerAudit"]["gateway"]["phase"] == "failed")
+        .collect();
+    assert_eq!(terminal.len(), 1, "{records:?}");
+    assert_eq!(terminal[0]["decision"], "deny");
+    assert_eq!(terminal[0]["reasonCode"], "service_action_denied");
+    assert_eq!(terminal[0]["providerAudit"]["gateway"]["requestBytes"], 0);
+    assert!(
+        !terminal[0]["providerAudit"]["gateway"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("uncertain")
+    );
 }
 
 #[tokio::test]
@@ -3511,7 +3706,12 @@ async fn prepare_gateway_request_body(
             .await?
         }
     };
-    Ok(prepare_protocol_request_body(plan.body, limits, None))
+    Ok(prepare_protocol_request_body(
+        plan.body,
+        plan.discard_request_trailers,
+        limits,
+        None,
+    ))
 }
 async fn gateway_request_body_bytes(
     method: &Method,
@@ -3586,7 +3786,7 @@ fn gateway_request_stream_body(
     Arc<AtomicU8>,
     Arc<GatewayRequestUploadProgress>,
 ) {
-    match prepare_protocol_request_body(protocol_body(body, limits), limits, None) {
+    match prepare_protocol_request_body(protocol_body(body, limits), false, limits, None) {
         GatewayPreparedRequestBody::Stream {
             body,
             failure,

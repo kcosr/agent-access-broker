@@ -15,6 +15,12 @@ impl BrokerRuntime {
         service: &str,
         input: Option<&str>,
     ) -> Result<Box<dyn GatewayVerificationProbe>, ProviderError> {
+        if self.gateway_config(service).is_none() {
+            return Err(ProviderError::deny(
+                ReasonCode::ServiceActionDenied,
+                "service is not supported",
+            ));
+        }
         let descriptor = self.services.get(service).ok_or_else(|| {
             ProviderError::deny(ReasonCode::ServiceActionDenied, "service is not supported")
         })?;

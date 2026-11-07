@@ -330,7 +330,7 @@ impl ScopeRequestFixture {
 }
 
 /// A bounded synthetic protocol body; inspection and replay use the production wrapper.
-pub fn gateway_body(
+pub fn synthetic_gateway_body(
     frames: Vec<Result<crate::GatewayBodyFrame, crate::GatewayBodyError>>,
     max_bytes: usize,
 ) -> crate::GatewayBody {
@@ -342,7 +342,7 @@ pub fn gateway_body(
 }
 
 /// A sanitized synthetic head for protocol tests.
-pub fn gateway_request_head<'a>(
+pub fn synthetic_gateway_request_head<'a>(
     method: &'a reqwest::Method,
     path_and_query: &'a str,
     headers: &'a reqwest::header::HeaderMap,
@@ -351,6 +351,6 @@ pub fn gateway_request_head<'a>(
 }
 
 /// Observes every original frame after protocol inspection.
-pub fn gateway_body_stream(body: crate::GatewayBody) -> crate::GatewayBodyStream {
+pub fn replay_gateway_body(body: crate::GatewayBody) -> crate::GatewayBodyStream {
     crate::host::gateway_body_stream(body)
 }

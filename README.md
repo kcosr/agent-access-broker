@@ -212,6 +212,8 @@ Gateway addresses and authentication come from administrator-provided client
 setup. Gateways are omitted from ordinary agent service/action discovery;
 their grants, credentials and token restrictions remain visible in management,
 and callers can inspect resource access for a known gateway service.
+Gateway uploads that fail after dispatch are reported as errors with a partial
+or uncertain upstream outcome; pack POSTs are never retried automatically.
 
 ```mermaid
 flowchart LR

@@ -459,6 +459,10 @@ host-configured username, and core's `gateway_upstream_authorization`, which
 presents a gateway's credential and which adapters could otherwise reach
 through their core dependency. Those crates present credentials only through
 the upstream client's send methods.
+The same fence covers `host::gateway_body`, `host::gateway_body_stream` and
+`host::gateway_request_head`, so gateway modules cannot replace the admitted
+request body or sanitized head. Protocol tests use the separate synthetic
+constructors and replay observer in SDK `test_support`.
 
 Its unit tests use synthetic metadata and sources and run with the other script
 tests.

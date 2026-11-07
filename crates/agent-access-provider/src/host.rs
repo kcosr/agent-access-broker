@@ -566,7 +566,8 @@ pub fn token_as_basic(username: impl Into<String>) -> CredentialPlacement {
     CredentialPlacement::token_as_basic(username.into())
 }
 
-/// Lends a request head after the host removes credential and identity carriers.
+/// Host-only: lends a request head after removing credential and identity carriers.
+/// Protocol modules cannot construct or replace the host's sanitized head.
 pub fn gateway_request_head<'a>(
     method: &'a reqwest::Method,
     path_and_query: &'a str,
@@ -575,7 +576,8 @@ pub fn gateway_request_head<'a>(
     crate::GatewayRequestHead::new(method, path_and_query, headers)
 }
 
-/// Constructs the bounded, replay-preserving body consumed by a protocol hook.
+/// Host-only: constructs the bounded, replay-preserving body consumed by a protocol hook.
+/// Protocol modules retain the body supplied to preflight and cannot replace it.
 pub fn gateway_body(
     stream: crate::GatewayBodyStream,
     max_bytes: usize,
@@ -584,7 +586,8 @@ pub fn gateway_body(
     crate::GatewayBody::new(stream, max_bytes, idle_timeout)
 }
 
-/// Takes back every inspected byte followed by the remaining inbound stream.
+/// Host-only: takes back every inspected byte followed by the remaining inbound stream.
+/// Protocol modules inspect through `GatewayBody` and return that same body.
 pub fn gateway_body_stream(body: crate::GatewayBody) -> crate::GatewayBodyStream {
     body.into_stream()
 }

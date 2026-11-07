@@ -731,6 +731,9 @@ pub struct GatewayForwardPlan {
     pub relative_target: String,
     pub headers: HeaderMap,
     pub body: GatewayBody,
+    /// Discard inbound HTTP trailers after protocol inspection. The default
+    /// rejects them; no trailer field is ever forwarded upstream.
+    pub discard_request_trailers: bool,
     pub response: GatewayResponseProfile,
     pub replay: GatewayReplayProfile,
     pub audit: Option<Value>,
@@ -743,6 +746,7 @@ impl GatewayForwardPlan {
             relative_target: relative_target.into(),
             headers: HeaderMap::new(),
             body,
+            discard_request_trailers: false,
             response: GatewayResponseProfile::new(vec!["content-type".into()]),
             replay: GatewayReplayProfile::Never,
             audit: None,
@@ -751,6 +755,12 @@ impl GatewayForwardPlan {
     }
     pub fn with_headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
+        self
+    }
+    /// Preserve protocol semantics that ignore trailing HTTP metadata.
+    /// Inspected and remaining data bytes keep their original order and limits.
+    pub fn discard_request_trailers(mut self) -> Self {
+        self.discard_request_trailers = true;
         self
     }
     pub fn with_response(mut self, profile: GatewayResponseProfile) -> Self {
@@ -925,7 +935,7 @@ mod tests {
             Ok(GatewayBodyFrame::Trailers),
             Ok(GatewayBodyFrame::Data(Bytes::from_static(b"last"))),
         ];
-        let mut body = crate::test_support::gateway_body(frames, 16);
+        let mut body = crate::test_support::synthetic_gateway_body(frames, 16);
         assert!(matches!(
             body.next_frame().await.unwrap(),
             Some(GatewayBodyFrame::Data(_))
@@ -944,7 +954,7 @@ mod tests {
     }
     #[tokio::test]
     async fn protocol_inspection_is_bounded() {
-        let mut body = crate::test_support::gateway_body(
+        let mut body = crate::test_support::synthetic_gateway_body(
             vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"over cap")))],
             3,
         );
@@ -974,7 +984,7 @@ mod tests {
             GatewayBodyError::Timeout,
             GatewayBodyError::IdleTimeout,
         ] {
-            let mut body = crate::test_support::gateway_body(
+            let mut body = crate::test_support::synthetic_gateway_body(
                 vec![
                     Ok(GatewayBodyFrame::Data(Bytes::from_static(b"prefix"))),
                     Err(failure),
@@ -998,11 +1008,11 @@ mod tests {
     }
     #[tokio::test]
     async fn complete_body_proof_requires_eof_and_retains_every_byte() {
-        let mut empty = crate::test_support::gateway_body(Vec::new(), 16);
+        let mut empty = crate::test_support::synthetic_gateway_body(Vec::new(), 16);
         assert!(!crate::host::gateway_body_is_empty_complete(&empty));
         assert!(empty.next_frame().await.unwrap().is_none());
         assert!(crate::host::gateway_body_is_empty_complete(&empty));
-        let mut body = crate::test_support::gateway_body(
+        let mut body = crate::test_support::synthetic_gateway_body(
             vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"data")))],
             16,
         );
@@ -1015,7 +1025,7 @@ mod tests {
     }
     #[tokio::test]
     async fn empty_frames_cannot_grow_retention_or_extend_inspection_forever() {
-        let mut body = crate::test_support::gateway_body(
+        let mut body = crate::test_support::synthetic_gateway_body(
             (0..33)
                 .map(|_| Ok(GatewayBodyFrame::Data(Bytes::new())))
                 .collect(),
@@ -1051,7 +1061,8 @@ mod tests {
     }
     #[tokio::test]
     async fn bodyless_recovery_proof_rejects_trailers_without_data() {
-        let mut body = crate::test_support::gateway_body(vec![Ok(GatewayBodyFrame::Trailers)], 16);
+        let mut body =
+            crate::test_support::synthetic_gateway_body(vec![Ok(GatewayBodyFrame::Trailers)], 16);
         body.next_frame().await.unwrap();
         assert!(body.next_frame().await.unwrap().is_none());
         assert!(body.is_complete());
@@ -1131,7 +1142,7 @@ mod tests {
             let plan = GatewayForwardPlan::new(
                 method.clone(),
                 "/items",
-                crate::test_support::gateway_body(Vec::new(), 8),
+                crate::test_support::synthetic_gateway_body(Vec::new(), 8),
             );
             let mut probe =
                 GatewayProbeRequest::new("items.read", ResourceScopes::new(), "", "/items", 128);

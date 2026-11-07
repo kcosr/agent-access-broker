@@ -43,6 +43,9 @@ export const HOST_ONLY_ITEMS = Object.freeze([
   "authorize_host_request",
   "token_as_basic",
   "gateway_upstream_authorization",
+  "gateway_body",
+  "gateway_body_stream",
+  "gateway_request_head",
 ]);
 const HOST_ONLY_FENCED_ROLES = Object.freeze(["native", "adapter", "reference", "helper", "gateway"]);
 // The Rust source locations of a package, relative to its manifest directory.

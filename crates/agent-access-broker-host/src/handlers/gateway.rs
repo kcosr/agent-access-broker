@@ -201,13 +201,18 @@ struct GatewayUploadOwner {
 
 impl Drop for GatewayUploadOwner {
     fn drop(&mut self) {
-        self.progress
-            .finish_audit(Some(ReasonCode::UpstreamProtocolFailed));
+        self.progress.finish_audit(
+            self.progress
+                .dispatched
+                .load(Ordering::Relaxed)
+                .then_some(ReasonCode::UpstreamProtocolFailed),
+        );
     }
 }
 
 struct GatewayRequestUploadProgress {
     updates: AtomicU64,
+    dispatched: AtomicBool,
     started: AtomicBool,
     complete: AtomicBool,
     bytes: Arc<AtomicU64>,
@@ -224,6 +229,7 @@ impl GatewayRequestUploadProgress {
     fn new() -> Self {
         Self {
             updates: AtomicU64::new(0),
+            dispatched: AtomicBool::new(false),
             started: AtomicBool::new(false),
             complete: AtomicBool::new(false),
             bytes: Arc::new(AtomicU64::new(0)),
@@ -564,6 +570,30 @@ async fn gateway_dispatch_admitted(
         &operation_context.execution_context,
         &classified.resource_scopes,
     ) {
+        return gateway_runtime_response(
+            runtime
+                .reject_gateway_operation_without_credential(
+                    operation_context,
+                    classified.resource_scopes,
+                    error,
+                )
+                .await,
+        );
+    }
+    let head_error = match parsed_content_length(request.headers()) {
+        Ok(Some(length)) if u128::from(length) > limits.request_body_max_bytes as u128 => {
+            Some(ProviderError::deny(
+                ReasonCode::GatewayRequestCapExceeded,
+                "gateway request body exceeds configured cap",
+            ))
+        }
+        Err(()) => Some(ProviderError::deny(
+            ReasonCode::GatewayRequestBodyDenied,
+            "gateway request Content-Length is invalid",
+        )),
+        _ => None,
+    };
+    if let Some(error) = head_error {
         return gateway_runtime_response(
             runtime
                 .reject_gateway_operation_without_credential(
@@ -1078,12 +1108,20 @@ fn basic_broker_token(
     headers: &HeaderMap,
     matched_gateway: &MatchedGateway,
 ) -> Result<String, ProviderError> {
+    let basic_only = matched_gateway.config.auth_modes.as_slice() == ["basic_broker_token"];
+    let required = || {
+        ProviderError::deny(
+            ReasonCode::GatewayAuthRequired,
+            if basic_only {
+                "gateway basic auth is required"
+            } else {
+                "gateway authentication is required"
+            },
+        )
+    };
     let mut values = headers.get_all(AUTHORIZATION).iter();
     let Some(raw) = values.next() else {
-        return Err(ProviderError::deny(
-            ReasonCode::GatewayAuthRequired,
-            "gateway authentication is required",
-        ));
+        return Err(required());
     };
     if values.next().is_some() {
         return Err(ProviderError::deny(
@@ -1093,6 +1131,10 @@ fn basic_broker_token(
     }
     let invalid = || ProviderError::deny(ReasonCode::GatewayAuthInvalid, "gateway auth is invalid");
     let raw = raw.to_str().map_err(|_| invalid())?;
+    // Preserve the Basic-only wire contract of existing Git gateways.
+    if basic_only && !raw.starts_with("Basic ") {
+        return Err(required());
+    }
     let (scheme, encoded) = raw.split_once(' ').ok_or_else(invalid)?;
     if scheme.eq_ignore_ascii_case("Bearer") {
         if !matched_gateway
@@ -1143,7 +1185,12 @@ async fn forward_prepared_gateway(
     } = ownership;
     let method = plan.method.clone();
     let limits = gateway_forward_limits(&runtime, &gateway);
-    let request_body = prepare_protocol_request_body(plan.body, &limits, permits.clone());
+    let request_body = prepare_protocol_request_body(
+        plan.body,
+        plan.discard_request_trailers,
+        &limits,
+        permits.clone(),
+    );
     let protocol_audit = GatewayAuditDetails {
         kind: gateway.kind.clone(),
         key: registration.audit_key().to_owned(),
@@ -1332,7 +1379,7 @@ async fn forward_prepared_gateway(
             );
         }
     };
-    if upstream_response.status() == reqwest::StatusCode::UNAUTHORIZED
+    if upstream_response.response.status() == reqwest::StatusCode::UNAUTHORIZED
         && presentation.is_delegated()
     {
         drop(upstream_response);
@@ -1367,13 +1414,15 @@ async fn forward_prepared_gateway(
             }
         };
     }
-    let status = upstream_response.status().as_u16();
-    let headers = upstream_response.headers().clone();
+    let status = upstream_response.response.status().as_u16();
+    let headers = upstream_response.response.headers().clone();
     let body_forbidden = method == Method::HEAD || status == 204 || status == 304;
     let expected_body_bytes = if body_forbidden {
         Some(0)
     } else {
-        content_length_value(&headers).and_then(|length| usize::try_from(length).ok())
+        upstream_response
+            .content_length
+            .and_then(|length| usize::try_from(length).ok())
     };
     let response_error = if plan.response.translate_unauthorized && status == 401 {
         Some(ProviderError::error(
@@ -1386,7 +1435,9 @@ async fn forward_prepared_gateway(
             "gateway upstream redirect is not permitted",
         ))
     } else if !body_forbidden
-        && response_content_length_exceeds(&headers, limits.response_body_max_bytes)
+        && upstream_response
+            .content_length
+            .is_some_and(|length| u128::from(length) > limits.response_body_max_bytes as u128)
     {
         Some(ProviderError::error(
             ReasonCode::GatewayResponseCapExceeded,
@@ -1450,7 +1501,7 @@ async fn forward_prepared_gateway(
             started,
             limits,
             protocol_audit,
-            body: Box::pin(upstream_response.bytes_stream()),
+            body: Box::pin(upstream_response.response.bytes_stream()),
             permits,
             expected_body_bytes,
         }))
@@ -1489,6 +1540,11 @@ impl GatewayAttemptAudit<'_> {
     }
 }
 
+struct GatewayUpstreamResponse {
+    response: reqwest::Response,
+    content_length: Option<u64>,
+}
+
 /// Sends one upstream attempt, rejecting ambiguous response framing before
 /// status-driven credential recovery, body completion, or header selection.
 async fn send_gateway_upstream(
@@ -1498,14 +1554,17 @@ async fn send_gateway_upstream(
     idle_timeout: Duration,
     audit: &GatewayAttemptAudit<'_>,
     started: Instant,
-) -> Result<reqwest::Response, ProviderError> {
+) -> Result<GatewayUpstreamResponse, ProviderError> {
     let timed_out = |message: &'static str| {
         ProviderError::error(ReasonCode::UpstreamTimeout, message)
             .with_upstream(None, Some(elapsed_millis(started)))
             .with_audit(audit.value())
     };
+    if let Some(progress) = &upload_progress {
+        progress.dispatched.store(true, Ordering::Relaxed);
+    }
     match gateway_send_with_upload_watchdog(builder.send(), upload_progress, idle_timeout).await {
-        Ok(response) => {
+        Ok(mut response) => {
             // Hyper gives Transfer-Encoding precedence while retaining a supplied
             // Content-Length. Refuse the conflict before raw Content-Length can
             // cause premature completion, truncated delivery, or a credential retry.
@@ -1522,7 +1581,27 @@ async fn send_gateway_upstream(
                 )
                 .with_audit(audit.value()));
             }
-            Ok(response)
+            let content_length = parsed_content_length(response.headers()).map_err(|()| {
+                ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "gateway upstream Content-Length is invalid",
+                )
+                .with_upstream(
+                    Some(response.status().as_u16()),
+                    Some(elapsed_millis(started)),
+                )
+                .with_audit(audit.value())
+            })?;
+            if let Some(length) = content_length {
+                response.headers_mut().insert(
+                    CONTENT_LENGTH,
+                    HeaderValue::from_str(&length.to_string()).expect("decimal Content-Length"),
+                );
+            }
+            Ok(GatewayUpstreamResponse {
+                response,
+                content_length,
+            })
         }
         Err(GatewaySendError::Inner(error)) => {
             let duration_ms = elapsed_millis(started);
@@ -1559,7 +1638,7 @@ async fn retry_bodyless_gateway(
     idle_timeout: Duration,
     audit: &GatewayAttemptAudit<'_>,
     started: Instant,
-) -> Result<reqwest::Response, ProviderError> {
+) -> Result<GatewayUpstreamResponse, ProviderError> {
     let rejected = |error: ProviderError| {
         error
             .with_upstream(Some(401), Some(elapsed_millis(started)))
@@ -1576,7 +1655,7 @@ async fn retry_bodyless_gateway(
         None => return Err(contract_failure()),
     };
     let response = send_gateway_upstream(retry, None, None, idle_timeout, audit, started).await?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+    if response.response.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err(rejected(prepared.reject_upstream_presentation(
             &presentation,
             agent_access_core::GatewayUpstreamRejection::AfterRecovery,
@@ -1644,24 +1723,24 @@ fn cap_to_usize(cap: u64) -> usize {
     usize::try_from(cap).unwrap_or(usize::MAX)
 }
 
-#[cfg(test)]
-fn content_length_exceeds(headers: &HeaderMap, cap: usize) -> bool {
-    content_length_value(headers).is_some_and(|length| length > cap as u128)
-}
-
-fn content_length_value(headers: &HeaderMap) -> Option<u128> {
-    headers
-        .get(CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u128>().ok())
-}
-
-fn response_content_length_exceeds(headers: &reqwest::header::HeaderMap, cap: usize) -> bool {
-    headers
-        .get(reqwest::header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u128>().ok())
-        .is_some_and(|length| length > cap as u128)
+/// Accept one decimal length, including repeated fields or comma lists only
+/// when every member is the same u64. Always rebuild the emitted field.
+fn parsed_content_length(headers: &HeaderMap) -> Result<Option<u64>, ()> {
+    let mut result = None;
+    for field in headers.get_all(CONTENT_LENGTH) {
+        for value in field.to_str().map_err(|_| ())?.split(',') {
+            let value = value.trim_matches([' ', '\t']);
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(());
+            }
+            let length = value.parse::<u64>().map_err(|_| ())?;
+            if result.is_some_and(|previous| previous != length) {
+                return Err(());
+            }
+            result = Some(length);
+        }
+    }
+    Ok(result)
 }
 
 fn timeout_error(message: &'static str) -> ProviderError {
@@ -1837,17 +1916,17 @@ fn reqwest_error_to_provider_error(
     replay_failure: u8,
 ) -> ProviderError {
     let replay_error = match replay_failure {
-        REPLAY_FAILURE_CAP_EXCEEDED => Some(ProviderError::deny(
+        REPLAY_FAILURE_CAP_EXCEEDED => Some(ProviderError::error(
             ReasonCode::GatewayRequestCapExceeded,
-            "gateway request body exceeds configured cap",
+            "gateway request body exceeds configured cap; upstream execution may be partial or uncertain",
         )),
-        REPLAY_FAILURE_TIMEOUT => Some(ProviderError::deny(
+        REPLAY_FAILURE_TIMEOUT => Some(ProviderError::error(
             ReasonCode::GatewayRequestBodyDenied,
-            "gateway request body read timed out",
+            "gateway request body read timed out; upstream execution may be partial or uncertain",
         )),
-        REPLAY_FAILURE_BODY_READ => Some(ProviderError::deny(
+        REPLAY_FAILURE_BODY_READ => Some(ProviderError::error(
             ReasonCode::GatewayRequestBodyDenied,
-            "gateway request body stream failed",
+            "gateway request body stream failed; upstream execution may be partial or uncertain",
         )),
         _ => None,
     };
@@ -2144,7 +2223,17 @@ pub(crate) fn gateway_runtime_response(
                 .map(|error| error.message.clone())
         })
         .unwrap_or_else(|| response.envelope.decision.as_str().to_string());
+    let upload_error = response.envelope.decision == agent_access_provider::Decision::Error
+        && matches!(
+            reason.as_ref().and_then(ReasonCodeId::standard),
+            Some(ReasonCode::GatewayRequestCapExceeded | ReasonCode::GatewayRequestBodyDenied)
+        );
     let (status, _, _) = envelope_response(response);
+    let status = if upload_error {
+        StatusCode::BAD_GATEWAY
+    } else {
+        status
+    };
     with_retry_after(
         gateway_error_response(status, &broker_request_id, reason, &body, false),
         retry_after,

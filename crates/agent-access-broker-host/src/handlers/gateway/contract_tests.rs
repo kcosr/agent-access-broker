@@ -7,6 +7,7 @@ use agent_access_provider::{
     ProviderReasonDefinition, ServiceDescriptor, ServiceSurface,
 };
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use tokio::net::TcpListener;
@@ -114,6 +115,10 @@ impl GatewayRequest for HttpRequest {
         self: Box<Self>,
         mut body: GatewayBody,
     ) -> Result<GatewayForwardPlan, ProviderError> {
+        assert_ne!(
+            self.path, "/known-overcap",
+            "declared cap refusal must precede protocol inspection"
+        );
         if self.path == "/swallow-body-failure" {
             let _ = body.next_frame().await;
         } else {
@@ -554,6 +559,84 @@ fn identity_headers_and_debug_omit_secret_values() {
     assert_eq!(clean.len(), 2);
 }
 
+#[test]
+fn connection_nominated_request_headers_are_removed_before_classification() {
+    let mut headers = HeaderMap::new();
+    headers.append(
+        "connection",
+        HeaderValue::from_static("keep-alive, If-None-Match"),
+    );
+    headers.append(
+        "connection",
+        HeaderValue::from_static(" X-Transient , x-repeat"),
+    );
+    headers.append("if-none-match", HeaderValue::from_static("private-tag"));
+    headers.append("x-transient", HeaderValue::from_static("private-value"));
+    headers.append("x-repeat", HeaderValue::from_static("one"));
+    headers.append("x-repeat", HeaderValue::from_static("two"));
+    headers.append(
+        "accept",
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    assert_eq!(
+        protocol_headers(&headers),
+        HeaderMap::from_iter([(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static("application/octet-stream")
+        ),])
+    );
+}
+
+#[tokio::test]
+async fn known_length_over_cap_is_denied_before_protocol_inspection_or_upstream_dispatch() {
+    let temp = crate::tests::test_temp_dir();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (runtime, state, authorization) = runtime_fixture(
+        &format!("https://{}", listener.local_addr().unwrap()),
+        &temp,
+    );
+    let body = Body::from_stream(
+        stream::iter([b"one!", b"two!", b"end!"])
+            .map(|bytes| Ok::<_, io::Error>(Bytes::copy_from_slice(bytes))),
+    );
+    let mut request = request(Method::POST, "/known-overcap", &authorization, body);
+    request
+        .headers_mut()
+        .insert(CONTENT_LENGTH, HeaderValue::from_static("12"));
+    let response = crate::router::build_gateway_router(state)
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_request_cap_exceeded"
+    );
+    assert!(
+        timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+    let _ = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let records = agent_access_core::test_support::read_audit_records(
+        agent_access_core::AuditStoreType::Jsonl,
+        &temp.join("audit.jsonl"),
+    );
+    assert!(records.iter().any(|record| record["decision"] == "deny"
+        && record["reasonCode"] == "gateway_request_cap_exceeded"));
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["providerAudit"]["gateway"]["phase"] == "started")
+    );
+}
+
 fn tls_fixture() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../agent-access-core/tests/fixtures/outbound-tls")
@@ -681,7 +764,7 @@ fn response_validators_cannot_rewrite_upstream_values_or_select_reserved_headers
         let plan = GatewayForwardPlan::new(
             Method::GET,
             "/items",
-            agent_access_provider::test_support::gateway_body(vec![], 8),
+            agent_access_provider::test_support::synthetic_gateway_body(vec![], 8),
         )
         .with_response(profile);
         assert_eq!(
@@ -871,6 +954,110 @@ async fn ambiguous_short_length_chunked_response_is_rejected() {
 #[tokio::test]
 async fn unambiguous_chunked_response_completes_with_all_bytes() {
     assert_raw_response_framing(None).await;
+}
+
+#[tokio::test]
+async fn upstream_content_length_is_validated_and_canonicalized_before_completion() {
+    for (method, status, length, payload, expected, canonical) in [
+        (Method::HEAD, 200, "12x", "", StatusCode::BAD_GATEWAY, None),
+        (Method::GET, 304, "12x", "", StatusCode::BAD_GATEWAY, None),
+        (Method::HEAD, 200, "4, 5", "", StatusCode::BAD_GATEWAY, None),
+        (
+            Method::GET,
+            200,
+            "0004, 4",
+            "data",
+            StatusCode::OK,
+            Some("4"),
+        ),
+        (
+            Method::HEAD,
+            200,
+            "004096, 4096",
+            "",
+            StatusCode::OK,
+            Some("4096"),
+        ),
+        (
+            Method::GET,
+            304,
+            "004096, 4096",
+            "",
+            StatusCode::NOT_MODIFIED,
+            Some("4096"),
+        ),
+        (
+            Method::GET,
+            200,
+            "1025, 1025",
+            "",
+            StatusCode::BAD_GATEWAY,
+            None,
+        ),
+    ] {
+        let temp = crate::tests::test_temp_dir();
+        let response = format!(
+            "HTTP/1.1 {status} Fixture\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{payload}"
+        );
+        let (url, ready, upstream) = tls_origin(Some(response.into_bytes()));
+        let (runtime, state, authorization) = runtime_fixture(&url, &temp);
+        ready.send(()).unwrap();
+        let response = crate::router::build_gateway_router(state)
+            .oneshot(request(
+                method.clone(),
+                "/items",
+                &authorization,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{method} {status} {length}");
+        if let Some(canonical) = canonical {
+            assert_eq!(response.headers()[CONTENT_LENGTH], canonical);
+        } else {
+            assert_eq!(
+                response.headers()[REASON_CODE_HEADER],
+                if length == "1025, 1025" {
+                    "gateway_response_cap_exceeded"
+                } else {
+                    "upstream_protocol_failed"
+                }
+            );
+        }
+        let received = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        if expected != StatusCode::BAD_GATEWAY {
+            assert_eq!(&received[..], payload.as_bytes());
+        }
+        assert!(!upstream.await.unwrap().1);
+        runtime
+            .shutdown_audit(Duration::from_secs(5))
+            .await
+            .unwrap();
+        let records = agent_access_core::test_support::read_audit_records(
+            agent_access_core::AuditStoreType::Jsonl,
+            &temp.join("audit.jsonl"),
+        );
+        let terminal: Vec<_> = records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record["providerAudit"]["gateway"]["phase"].as_str(),
+                    Some("failed" | "completed")
+                )
+            })
+            .collect();
+        assert_eq!(terminal.len(), 1, "{records:?}");
+        assert_eq!(
+            terminal[0]["decision"],
+            if expected == StatusCode::BAD_GATEWAY {
+                "error"
+            } else {
+                "allow"
+            }
+        );
+    }
 }
 
 async fn assert_raw_response_framing(content_length: Option<usize>) {

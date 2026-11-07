@@ -708,11 +708,11 @@ pub fn agent_access_provider::test_support::basic_credential(&str, &str) -> agen
 pub fn agent_access_provider::test_support::bearer_credential(&str) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::test_support::credential_with_profile(agent_access_provider::ExecutionCredential, &str) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::test_support::delegated_binding_id(&str) -> agent_access_provider::DelegatedBindingId
-pub fn agent_access_provider::test_support::gateway_body(alloc::vec::Vec<core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>>, usize) -> agent_access_provider::GatewayBody
-pub fn agent_access_provider::test_support::gateway_body_stream(agent_access_provider::GatewayBody) -> agent_access_provider::GatewayBodyStream
-pub fn agent_access_provider::test_support::gateway_request_head<'a>(&'a http::method::Method, &'a str, &'a http::header::map::HeaderMap) -> agent_access_provider::GatewayRequestHead<'a>
 pub async fn agent_access_provider::test_support::in_invocation_hook<F: core::future::future::Future>(&str, &str, F) -> <F as core::future::future::Future>::Output
 pub fn agent_access_provider::test_support::install_trace_capture() -> &'static agent_access_provider::test_support::TraceCaptureDispatcher
+pub fn agent_access_provider::test_support::replay_gateway_body(agent_access_provider::GatewayBody) -> agent_access_provider::GatewayBodyStream
+pub fn agent_access_provider::test_support::synthetic_gateway_body(alloc::vec::Vec<core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>>, usize) -> agent_access_provider::GatewayBody
+pub fn agent_access_provider::test_support::synthetic_gateway_request_head<'a>(&'a http::method::Method, &'a str, &'a http::header::map::HeaderMap) -> agent_access_provider::GatewayRequestHead<'a>
 pub fn agent_access_provider::test_support::test_signing_key(u8) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
 pub macro agent_access_provider::module_metadata!
 #[non_exhaustive] pub enum agent_access_provider::ActionIo
@@ -2860,12 +2860,14 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayCla
 pub agent_access_provider::GatewayForwardPlan::audit: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::GatewayForwardPlan::audit_target: core::option::Option<alloc::string::String>
 pub agent_access_provider::GatewayForwardPlan::body: agent_access_provider::GatewayBody
+pub agent_access_provider::GatewayForwardPlan::discard_request_trailers: bool
 pub agent_access_provider::GatewayForwardPlan::headers: http::header::map::HeaderMap
 pub agent_access_provider::GatewayForwardPlan::method: http::method::Method
 pub agent_access_provider::GatewayForwardPlan::relative_target: alloc::string::String
 pub agent_access_provider::GatewayForwardPlan::replay: agent_access_provider::GatewayReplayProfile
 pub agent_access_provider::GatewayForwardPlan::response: agent_access_provider::GatewayResponseProfile
 impl agent_access_provider::GatewayForwardPlan
+pub fn agent_access_provider::GatewayForwardPlan::discard_request_trailers(self) -> Self
 pub fn agent_access_provider::GatewayForwardPlan::new(http::method::Method, impl core::convert::Into<alloc::string::String>, agent_access_provider::GatewayBody) -> Self
 pub fn agent_access_provider::GatewayForwardPlan::with_audit(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::GatewayForwardPlan::with_audit_target(self, impl core::convert::Into<alloc::string::String>) -> Self

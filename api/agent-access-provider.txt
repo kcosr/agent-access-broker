@@ -2703,12 +2703,14 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::GatewayCla
 pub agent_access_provider::GatewayForwardPlan::audit: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::GatewayForwardPlan::audit_target: core::option::Option<alloc::string::String>
 pub agent_access_provider::GatewayForwardPlan::body: agent_access_provider::GatewayBody
+pub agent_access_provider::GatewayForwardPlan::discard_request_trailers: bool
 pub agent_access_provider::GatewayForwardPlan::headers: http::header::map::HeaderMap
 pub agent_access_provider::GatewayForwardPlan::method: http::method::Method
 pub agent_access_provider::GatewayForwardPlan::relative_target: alloc::string::String
 pub agent_access_provider::GatewayForwardPlan::replay: agent_access_provider::GatewayReplayProfile
 pub agent_access_provider::GatewayForwardPlan::response: agent_access_provider::GatewayResponseProfile
 impl agent_access_provider::GatewayForwardPlan
+pub fn agent_access_provider::GatewayForwardPlan::discard_request_trailers(self) -> Self
 pub fn agent_access_provider::GatewayForwardPlan::new(http::method::Method, impl core::convert::Into<alloc::string::String>, agent_access_provider::GatewayBody) -> Self
 pub fn agent_access_provider::GatewayForwardPlan::with_audit(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::GatewayForwardPlan::with_audit_target(self, impl core::convert::Into<alloc::string::String>) -> Self

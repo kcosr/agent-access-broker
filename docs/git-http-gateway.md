@@ -289,6 +289,9 @@ upload-pack body. The configured request-body cap applies to the transmitted
 compressed bytes, and any upstream decoded-size limits remain the upstream
 server's responsibility.
 
+After protocol inspection, pack POSTs discard trailing HTTP metadata without
+changing or replaying their data bytes. Trailer fields never reach the upstream.
+
 Discovery GET requests and receive-pack POSTs reject `Content-Encoding` after
 the gateway request is authenticated and action-scoped, but before credentials
 are resolved. Receive-pack compression is not supported because push bodies must
@@ -403,6 +406,10 @@ continued progress does not extend it. Both uploads and downloads remain bounded
 by `streaming_idle_timeout_ms` for stalled request uploads, upstream response
 header waits, and response body streaming, plus byte caps, rate limits, and
 concurrency limits. Downloads have no total transfer deadline.
+Declared request lengths above the cap are refused before upstream dispatch.
+If an upload fails after dispatch, its terminal audit reports an error and a
+partial or uncertain upstream outcome. When response headers are still pending,
+the broker returns HTTP 502; it never retries a pack POST.
 
 `git-upload-pack` and `git-receive-pack` POSTs are service invocations: each
 POST is counted once against the caller's per-principal limit for the gateway's
