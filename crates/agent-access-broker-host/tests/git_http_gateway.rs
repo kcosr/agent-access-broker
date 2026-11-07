@@ -432,10 +432,43 @@ async fn git_http_gateway_child() {
     let drained = broker.join().await.unwrap();
     assert_eq!(drained.unfinished_operations(), 0);
     assert_eq!(drained.audit_error(), None);
-    let interrupted_audit: Vec<serde_json::Value> = fs::read_to_string(root.join("audit.jsonl"))
+    let records: Vec<serde_json::Value> = fs::read_to_string(root.join("audit.jsonl"))
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect();
+    let mut discoveries = 0;
+    let mut counted_posts = 0;
+    let mut probes = 0;
+    for record in &records {
+        if record["providerAudit"]["gateway"]["phase"] != "started" {
+            continue;
+        }
+        match record["providerAudit"]["gateway"]["method"].as_str() {
+            Some("GET") => {
+                discoveries += 1;
+                assert!(
+                    record["providerAudit"].get("admission").is_none(),
+                    "reference discovery must retain its admission exemption: {record}"
+                );
+            }
+            Some("POST") => {
+                counted_posts += 1;
+                assert_eq!(record["providerAudit"]["admission"]["outcome"], "admitted");
+                if record["providerAudit"]["git"]["probe"] == true {
+                    probes += 1;
+                }
+            }
+            method => panic!("unexpected Git method in audit: {method:?}"),
+        }
+    }
+    assert!(discoveries > 0 && counted_posts > 0);
+    assert_eq!(
+        probes, 1,
+        "the large-push probe must enter counted admission"
+    );
+    let interrupted_audit: Vec<_> = records
+        .into_iter()
         .filter(|record| {
             record["agentRequestId"] == INTERRUPTED_PUSH_ID
                 && record["providerAudit"]["gateway"]["method"] == "POST"
