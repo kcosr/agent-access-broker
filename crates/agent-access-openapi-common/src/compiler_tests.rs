@@ -606,7 +606,7 @@ fn source_semicolon_paths_fail_complete_discovery_in_both_dialects() {
             document["paths"][path] = json!({"get":{"responses":{"200":{"description":"ok"}}}});
             assert_eq!(
                 compile(&document, GatewayAuthenticationSelection::Anonymous).unwrap_err(),
-                "matrix/path parameters are unsupported in gateway source paths"
+                "gateway path contains an unsafe component"
             );
         }
     }

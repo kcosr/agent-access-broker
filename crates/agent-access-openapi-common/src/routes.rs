@@ -60,7 +60,7 @@ fn decode_segment(raw: &str) -> Result<String, String> {
         .into_owned();
     if decoded == "."
         || decoded == ".."
-        || decoded.contains(['/', '\\', '%'])
+        || decoded.contains(['/', '\\', '%', ';'])
         || decoded.chars().any(char::is_control)
     {
         return Err("gateway path contains an unsafe component".into());
@@ -75,7 +75,7 @@ fn encode_segment(value: &str, literal: bool) -> String {
         // these changes raw-path routing semantics for literal custom verbs.
         if byte.is_ascii_alphanumeric()
             || b"-._~".contains(&byte)
-            || literal && b"!$&'()*+,;=:@".contains(&byte)
+            || literal && b"!$&'()*+,=:@".contains(&byte)
         {
             result.push(char::from(byte));
         } else {
@@ -129,9 +129,6 @@ fn encode_components(components: &[String]) -> String {
 
 fn segments(path: &str) -> Result<Vec<Segment>, String> {
     let parts = decoded_path(path)?;
-    if parts.iter().any(|part| part.contains(';')) {
-        return Err("matrix/path parameters are unsupported in gateway source paths".into());
-    }
     let mut names = BTreeSet::new();
     parts
         .into_iter()

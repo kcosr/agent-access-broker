@@ -462,10 +462,10 @@ fn canonical_paths_preserve_raw_pchar_and_literal_custom_verbs() {
     for path in [
         "/v1/name:cancel",
         "/a@b",
-        "/x=y;z",
+        "/x=y:z",
         "/a+b",
         "/tags/a,b",
-        "/!$&'()*+,;=:@",
+        "/!$&'()*+,=:@",
     ] {
         assert_eq!(canonical_path(path).unwrap(), path);
     }
@@ -498,10 +498,14 @@ fn path_parameter_semicolons_cannot_bypass_literal_guards_or_form_traversal_segm
         "/items/%2e%2e%3B/comments",
         "/items/ordinary/..;",
         "/items/admin;SENTINEL",
+        "/other/foo;x",
+        "/absent/foo%3Bx",
+        "/unknown/..;/comments",
     ] {
         let error = matcher.select("GET", path).err().unwrap();
-        assert_eq!(error, "gateway path parameter contains an unsafe component");
+        assert_eq!(error, "gateway path contains an unsafe component");
         assert_eq!(routes.select("GET", path).err().unwrap(), error);
+        assert_eq!(canonical_path(path).unwrap_err(), error);
         assert!(!error.contains("SENTINEL"));
     }
     let guard = matcher.select("POST", "/items/admin").unwrap().unwrap();
@@ -552,7 +556,7 @@ fn source_and_retained_guards_reject_literal_semicolon_components() {
         let routes = manifest(&["/items/{id}", path]);
         assert_eq!(
             routes.validate().unwrap_err(),
-            "matrix/path parameters are unsupported in gateway source paths"
+            "gateway path contains an unsafe component"
         );
         assert!(routes.matcher().is_err());
         let mut current = manifest(&["/items/{id}"]);

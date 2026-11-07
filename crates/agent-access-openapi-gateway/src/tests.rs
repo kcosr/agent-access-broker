@@ -516,6 +516,9 @@ fn path_parameters_cannot_bypass_literal_guards_with_semicolon_suffixes() {
         "/items/admin%3Bx",
         "/items/..;",
         "/items/%2E%2E%3B",
+        "/other/foo;x",
+        "/absent/foo%3Bx",
+        "/unknown/..;/comments",
     ] {
         let error = classify(protocol.as_ref(), &Method::GET, path, &HeaderMap::new()).unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
