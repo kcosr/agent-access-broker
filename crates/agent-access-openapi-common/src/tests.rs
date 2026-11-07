@@ -511,18 +511,25 @@ fn path_parameter_semicolons_cannot_bypass_literal_guards_or_form_traversal_segm
 
 #[test]
 fn declared_literal_pchar_is_distinct_from_encoded_parameter_values() {
-    let routes = manifest(&["/items/{id}", "/items/admin;x", "/jobs/{id}/action:run"]);
+    let routes = manifest(&[
+        "/items/{id}",
+        "/items/admin:action@kind+tag=x",
+        "/jobs/{id}/action:run",
+    ]);
     let matcher = routes.matcher().unwrap();
-    let literal = matcher.select("GET", "/items/admin;x").unwrap().unwrap();
-    assert_eq!(literal.template, "/items/admin;x");
-    assert_eq!(literal.canonical_path, "/items/admin;x");
+    let literal = matcher
+        .select("GET", "/items/admin:action@kind+tag=x")
+        .unwrap()
+        .unwrap();
+    assert_eq!(literal.template, "/items/admin:action@kind+tag=x");
+    assert_eq!(literal.canonical_path, "/items/admin:action@kind+tag=x");
     assert_eq!(
         matcher
-            .select("GET", "/items/admin%3Bx")
+            .select("GET", "/items/admin%3Aaction%40kind%2Btag%3Dx")
             .unwrap()
             .unwrap()
             .template,
-        "/items/admin;x"
+        "/items/admin:action@kind+tag=x"
     );
     for path in ["/jobs/a@b+c=d/action:run", "/jobs/a%40b%2Bc%3Dd/action:run"] {
         let selected = matcher.select("GET", path).unwrap().unwrap();
@@ -532,6 +539,26 @@ fn declared_literal_pchar_is_distinct_from_encoded_parameter_values() {
             .validate_request_parameters(&selected, None, &HeaderMap::new())
             .unwrap();
         assert_eq!(request.relative_target, selected.canonical_path);
+    }
+}
+
+#[test]
+fn source_and_retained_guards_reject_literal_semicolon_components() {
+    for path in [
+        "/items/admin;x",
+        "/items/..;/comments",
+        "/items/{id;variant}",
+    ] {
+        let routes = manifest(&["/items/{id}", path]);
+        assert_eq!(
+            routes.validate().unwrap_err(),
+            "matrix/path parameters are unsupported in gateway source paths"
+        );
+        assert!(routes.matcher().is_err());
+        let mut current = manifest(&["/items/{id}"]);
+        let before = current.clone();
+        assert!(current.merge_retained(&routes).is_err());
+        assert_eq!(current, before);
     }
 }
 

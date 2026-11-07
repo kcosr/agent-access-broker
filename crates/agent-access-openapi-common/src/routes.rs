@@ -129,6 +129,9 @@ fn encode_components(components: &[String]) -> String {
 
 fn segments(path: &str) -> Result<Vec<Segment>, String> {
     let parts = decoded_path(path)?;
+    if parts.iter().any(|part| part.contains(';')) {
+        return Err("matrix/path parameters are unsupported in gateway source paths".into());
+    }
     let mut names = BTreeSet::new();
     parts
         .into_iter()

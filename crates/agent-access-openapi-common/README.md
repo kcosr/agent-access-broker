@@ -22,8 +22,9 @@ most-specific guard before checking its method and dispatch eligibility.
 Forwarding reconstructs the path from that selected template. Literal segments
 retain declared punctuation, including custom verbs such as `action:run`.
 Captured parameter values are percent-encoded using only unreserved characters;
-for example, `a@b+c` becomes `a%40b%2Bc`. Semicolons in parameter values are
-rejected whether supplied raw or percent-encoded, so an upstream that strips
-semicolon path parameters cannot collapse a template capture onto a guarded
-literal route or a traversal segment. Declared literal punctuation remains
-subject to its own source-derived route guard.
+for example, `a@b+c` becomes `a%40b%2Bc`. Matrix/path parameters are unsupported:
+source paths containing semicolons fail complete discovery, and semicolons in
+captured parameter values are rejected whether supplied raw or percent-encoded.
+This prevents an upstream that strips semicolon suffixes from collapsing a path
+onto a guarded literal route or a traversal segment. Other declared literal
+punctuation remains subject to its own source-derived route guard.

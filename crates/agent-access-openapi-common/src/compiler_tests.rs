@@ -598,3 +598,16 @@ fn declared_client_identity_and_routing_headers_are_unsupported_at_discovery() {
         }
     }
 }
+
+#[test]
+fn source_semicolon_paths_fail_complete_discovery_in_both_dialects() {
+    for path in ["/items/admin;x", "/items/..;/comments"] {
+        for mut document in [source(), json!({"swagger":"2.0","paths":{}})] {
+            document["paths"][path] = json!({"get":{"responses":{"200":{"description":"ok"}}}});
+            assert_eq!(
+                compile(&document, GatewayAuthenticationSelection::Anonymous).unwrap_err(),
+                "matrix/path parameters are unsupported in gateway source paths"
+            );
+        }
+    }
+}
