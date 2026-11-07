@@ -13,14 +13,14 @@ them with `scripts/public-api.mjs` and review the diff.
 | `agent-access-broker-host.txt` | The Broker host with its default features. |
 | `agent-access-broker-host.test-support.txt` | The host with its `test-support` feature: isolated broker applications for acceptance tests. |
 | `agent-access-broker.txt` | The assembly library: `composition()` and `build_identity()`. |
-| `<native or adapter crate>.txt` | The crate's reviewed selection entry points only. |
+| `<native, adapter or gateway crate>.txt` | The crate's reviewed selection entry points only. |
 
 The surfaces come from each workspace crate's `[package.metadata.agent-access]
 role`. SDK and host crates are inventoried with their default features and, when
 they declare it, with their `test-support` feature (`<crate>.test-support.txt`).
-Native and import adapter crates that the assembly links are restricted to the
+Native, import adapter and gateway crates that the assembly links are restricted to the
 root exports listed in `SELECTION_ENTRY_POINTS` in `scripts/public-api.mjs`:
-their backend, OAuth dialect and import adapter registrations. The check fails
+their backend, OAuth dialect, import adapter and gateway registrations. The check fails
 until every such crate has reviewed entry points, and rejects entry points for any
 other crate. Core, helper, reference and CLI crates have no surface of their own.
 
@@ -66,6 +66,14 @@ The inventory deliberately does not record:
   break downstream source.
 - Items that exist only for other targets: the inventory covers the native host
   target's configuration.
+
+Gateway protocol types are part of the SDK root surface. Implementable hooks are
+`GatewayConfig`, `GatewayProtocol`, `GatewayRequest`, and
+`GatewayVerificationProbe`; registrations and per-instance contexts use constructors
+and builders. The SDK exposes host-only body/head constructors separately from
+feature-gated test constructors. Git's supported module selection export is
+`agent_access_git_http::GIT_HTTP_GATEWAY`. Assembly composition and build status
+include the `gateway` role; the API inventory tracks those additions.
 
 ## Construction and exhaustiveness policy
 

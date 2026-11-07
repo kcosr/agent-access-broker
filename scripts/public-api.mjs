@@ -75,7 +75,7 @@ const roleOf = (pkg) => pkg.metadata?.["agent-access"]?.role;
 const libraryOf = (pkg) => pkg.targets?.find((target) => target.kind.includes("lib"))?.name;
 
 // The supported surfaces, from `cargo metadata --no-deps` and the reviewed
-// selection entry points. Every native or adapter crate an assembly links must
+// selection entry points. Every native, adapter or gateway crate an assembly links must
 // have entry points, and every entry point must belong to such a crate. A
 // surface names its requested features, which select its file; the features
 // Cargo activates for them come from `resolvedSurfaceFeatures`.
@@ -129,7 +129,7 @@ export function inventorySurfaces(metadata, entryPoints = SELECTION_ENTRY_POINTS
   }
   for (const name of Object.keys(entryPoints).sort()) {
     if (!shipped.has(name)) {
-      errors.push(`${name} has selection entry points but is not a native or adapter crate linked by the assembly`);
+      errors.push(`${name} has selection entry points but is not a native, adapter or gateway crate linked by the assembly`);
     }
   }
   if (errors.length) throw new Error(`Public API surfaces are inconsistent:\n${errors.map((error) => `  ${error}`).join("\n")}`);

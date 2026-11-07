@@ -57,6 +57,12 @@ Optional [membership renewal](docs/operator-guide.md#microsoft-membership-renewa
 keeps group-derived access working after one sign-in while people and their
 agents use the Broker.
 
+The [gateway SDK](docs/provider-sdk.md#gateway-protocols) also supports compiled
+protocol modules for native HTTP clients. The shipped Git smart HTTP gateway uses
+that contract; assemblies explicitly select its registration. The host retains
+identity, policy, credentials, admission, transfer limits and audit ownership.
+See [assembly selection](docs/downstream-assembly.md#selecting-modules).
+
 ## Supported integrations
 
 Native integrations pair action permissions with the following resource controls:

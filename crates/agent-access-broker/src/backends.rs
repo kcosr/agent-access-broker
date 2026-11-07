@@ -89,6 +89,10 @@ mod tests {
                 "oauth_stub"
             ]
         );
+        assert_eq!(
+            composition.gateway_kinds().collect::<Vec<_>>(),
+            ["git_http", "openapi_gateway"]
+        );
         assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "gitlab"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "atlassian"));
@@ -149,6 +153,7 @@ mod tests {
                 "agent-access-command-import: import command",
                 "agent-access-confluence: native confluence",
                 "agent-access-fake: native fake, native oauth_stub, oauth stub",
+                "agent-access-git-http: gateway git_http",
                 "agent-access-gitlab: native gitlab, oauth gitlab",
                 "agent-access-gmail: native gmail, oauth google",
                 "agent-access-jira: native jira",

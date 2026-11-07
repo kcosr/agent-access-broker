@@ -342,6 +342,16 @@ impl BackendRegistry {
                     .any(|descriptor| descriptor.id() == resource_type)
             })
             .map(|registration| registration.kind())
+            .or_else(|| {
+                self.gateway_registrations()
+                    .find(|registration| {
+                        registration
+                            .resource_types()
+                            .iter()
+                            .any(|descriptor| descriptor.id() == resource_type)
+                    })
+                    .map(|registration| registration.kind())
+            })
     }
 
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
@@ -592,6 +602,110 @@ mod tests {
         "Not A Name",
         STUB_OAUTH_DIALECT.dialect(),
     );
+
+    fn gateway_config(
+        _: toml::Value,
+    ) -> Result<Arc<dyn agent_access_provider::GatewayConfig>, String> {
+        Err("not used in registration validation".into())
+    }
+    static GATEWAY_REASON: agent_access_provider::ProviderReasonDefinition =
+        agent_access_provider::ProviderReasonDefinition::deny(
+            "fixture_http_missing",
+            agent_access_provider::ProviderFailureStatus::NotFound,
+        );
+    static VALID_GATEWAY: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "fixture_http",
+            gateway_config,
+        )
+        .with_domain_reasons(&[&GATEWAY_REASON]);
+    static DUPLICATE_REQUEST: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "duplicate_request",
+            gateway_config,
+        )
+        .with_request_kinds(&[
+            agent_access_provider::GatewayRequestKind::counted("request"),
+            agent_access_provider::GatewayRequestKind::counted("request"),
+        ]);
+    static FOREIGN_REASON: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "other",
+            gateway_config,
+        )
+        .with_domain_reasons(&[&GATEWAY_REASON]);
+    static RESERVED_KIND: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "broker",
+            gateway_config,
+        );
+    static RESERVED_AUDIT: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "bad_audit",
+            gateway_config,
+        )
+        .with_audit_key("method");
+    static DUPLICATE_RESOURCE: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "bad_resource",
+            gateway_config,
+        )
+        .with_resource_types(&[&GIT_REPOSITORY_RESOURCE]);
+
+    #[test]
+    fn gateway_registration_checks_identity_accounting_reasons_and_resource_ownership() {
+        let registry = BackendRegistry::empty()
+            .with_gateways([&VALID_GATEWAY])
+            .unwrap();
+        assert!(registry.gateway("fixture_http").is_some());
+        assert_eq!(
+            registry.gateway("fixture_http").unwrap().counted("request"),
+            Some(true)
+        );
+        assert_eq!(
+            registry
+                .gateway("fixture_http")
+                .unwrap()
+                .counted("unregistered"),
+            None
+        );
+        assert!(
+            registry
+                .with_gateways([&VALID_GATEWAY])
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("registered more than once"))
+        );
+        for (registration, message) in [
+            (&DUPLICATE_REQUEST, "invalid or duplicate request kind"),
+            (&FOREIGN_REASON, "invalid or reserved domain reason"),
+            (&RESERVED_KIND, "invalid or reserved"),
+            (&RESERVED_AUDIT, "invalid or reserved audit key"),
+            (&DUPLICATE_RESOURCE, "git_repository"),
+        ] {
+            let errors = BackendRegistry::empty()
+                .with_gateways([registration])
+                .unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.contains(message)),
+                "{errors:?}"
+            );
+        }
+        let errors = BackendRegistry::empty()
+            .with_gateways([&VALID_GATEWAY, &FOREIGN_REASON])
+            .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("declared by both"))
+        );
+    }
 
     #[test]
     fn an_empty_registry_has_no_fixture_dialect_service_or_resource_type() {

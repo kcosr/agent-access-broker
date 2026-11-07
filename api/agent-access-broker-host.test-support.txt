@@ -225,6 +225,7 @@ pub struct agent_access_broker_host::BrokerComposition
 impl agent_access_broker_host::BrokerComposition
 pub fn agent_access_broker_host::BrokerComposition::builder() -> agent_access_broker_host::BrokerCompositionBuilder
 pub fn agent_access_broker_host::BrokerComposition::configured_service_descriptors(&self, &str) -> core::result::Result<alloc::vec::Vec<agent_access_provider::descriptor::ServiceDescriptor>, agent_access_core::config_error::ConfigError>
+pub fn agent_access_broker_host::BrokerComposition::gateway_kinds(&self) -> impl core::iter::traits::iterator::Iterator<Item = &'static str> + '_
 pub fn agent_access_broker_host::BrokerComposition::http_route_specs(&self) -> alloc::vec::Vec<agent_access_core::api::HttpRouteSpec>
 pub fn agent_access_broker_host::BrokerComposition::import_kinds(&self) -> impl core::iter::traits::iterator::Iterator<Item = &'static str> + '_
 pub fn agent_access_broker_host::BrokerComposition::native_kinds(&self) -> impl core::iter::traits::iterator::Iterator<Item = &'static str> + '_
@@ -244,6 +245,7 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_broker_host::BrokerC
 pub struct agent_access_broker_host::BrokerCompositionBuilder
 impl agent_access_broker_host::BrokerCompositionBuilder
 pub fn agent_access_broker_host::BrokerCompositionBuilder::build(self) -> core::result::Result<agent_access_broker_host::BrokerComposition, agent_access_broker_host::CompositionError>
+pub fn agent_access_broker_host::BrokerCompositionBuilder::gateway(self, &'static agent_access_provider::gateway::GatewayRegistration) -> Self
 pub fn agent_access_broker_host::BrokerCompositionBuilder::import_adapter(self, agent_access_core::imports::registration::ImportedAdapterRegistration) -> Self
 pub fn agent_access_broker_host::BrokerCompositionBuilder::native(self, &'static agent_access_provider::backend::BackendRegistration) -> Self
 pub fn agent_access_broker_host::BrokerCompositionBuilder::oauth(self, &'static agent_access_provider::oauth_dialect::OAuthDialectRegistration) -> Self

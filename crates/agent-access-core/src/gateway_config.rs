@@ -83,6 +83,51 @@ impl GatewayConfig {
             self.protocol_fields.clone().into_iter().collect(),
         ))
     }
+
+    /// Pins a module's relative target to this configured origin and base path.
+    pub fn upstream_url(
+        &self,
+        target: &str,
+    ) -> Result<url::Url, agent_access_provider::ProviderError> {
+        use agent_access_provider::{ProviderError, ReasonCode};
+        let invalid = || {
+            ProviderError::error(
+                ReasonCode::GatewayUpstreamDenied,
+                "gateway upstream target is invalid",
+            )
+        };
+        if !target.starts_with('/')
+            || target.starts_with("//")
+            || target.len() > 64 * 1024
+            || target.contains(['#', '\\'])
+            || target.chars().any(char::is_control)
+        {
+            return Err(invalid());
+        }
+        let (path, query) = target
+            .split_once('?')
+            .map_or((target, None), |(path, query)| (path, Some(query)));
+        for segment in path.split('/') {
+            let decoded = percent_encoding::percent_decode_str(segment)
+                .decode_utf8()
+                .map_err(|_| invalid())?;
+            if matches!(decoded.as_ref(), "." | "..")
+                || decoded.contains(['/', '\\'])
+                || decoded.chars().any(char::is_control)
+            {
+                return Err(invalid());
+            }
+        }
+        let mut url = url::Url::parse(&self.upstream_base_url).map_err(|_| invalid())?;
+        let base = url.path().trim_end_matches('/');
+        let path = format!("{base}{path}");
+        url.set_path(&path);
+        url.set_query(query);
+        if !agent_access_provider::url_allowed_by_patterns(&url, &self.allowed_upstream_hosts) {
+            return Err(invalid());
+        }
+        Ok(url)
+    }
 }
 pub(crate) fn default_basic_broker_token_username() -> String {
     "agent-access".into()

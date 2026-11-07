@@ -24,6 +24,17 @@ All notable changes to this project are documented in this file.
   across this schema change requires the pre-migration backup. See
   [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
 
+- **Gateway modules require explicit assembly selection.** Downstream assemblies
+  using Git must link `agent-access-git-http` and select `GIT_HTTP_GATEWAY` with
+  `BrokerComposition::builder().gateway(...)`. The standard assembly includes it.
+  Keep upstream crate revisions aligned and regenerate the lockfile. Existing Git
+  TOML, action IDs, resources and credentials keep their shapes; no stored-policy
+  migration is required. Gateway configuration/protocol hooks now belong to the
+  public SDK and module inventory has a `gateway` role. Connection consumer
+  responses require `credentialVerificationSupported`; upgrade Broker, CLI and
+  portal together. See [assembly selection](docs/downstream-assembly.md#selecting-modules)
+  and [gateway authoring](docs/provider-sdk.md#gateway-protocols).
+
 - **Agent token issuance requires explicit context permission and a read-only choice.**
   Upgrade Broker, CLI and portal together. `agentTokenIssuance` is now a complete
   `{mode, allowedExecutionContexts}` object; scalar writes are rejected. Effective
@@ -422,6 +433,11 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- Gateway request capacity and terminal audit now join upload, response and bounded
+  unread-body disposal. Empty or fixed-length responses release their delivery
+  owner at the framing boundary; early upstream success followed by upload failure
+  remains one failed transfer with the observed upstream status.
 
 - Jira Markdown writes no longer combine inline code with incompatible bold,
   italic, or strikethrough marks. Code text, safe links, and surrounding text

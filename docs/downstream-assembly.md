@@ -32,6 +32,9 @@ receives is described in its [trust model](provider-sdk.md#trust-model).
   static, such as `agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND` or a
   downstream provider's registration. Selection order is the order resource
   types are listed in.
+- `.gateway(&REGISTRATION)` selects a protocol gateway, such as
+  `agent_access_git_http::GIT_HTTP_GATEWAY`. Configuring `kind = "git_http"`
+  requires that selection; the standard assembly already includes it.
 - `.oauth(&DIALECT)` selects an OAuth companion, such as
   `agent_access_gmail::GOOGLE_OAUTH_DIALECT`. Several providers can share one
   dialect.
@@ -46,7 +49,7 @@ receives is described in its [trust model](provider-sdk.md#trust-model).
   conflicting module identities.
 
 Building rejects invalid identifiers, the reserved native kind `broker`, and
-duplicate native kinds, resource types, dialects (including import companions),
+duplicate native or gateway kinds, resource types, dialects (including import companions),
 adapters and domain reason codes. The host's own `git_repository` resource type
 is always registered. Development fixtures, such as the `fake` provider, may be
 selected in any assembly. Configuring one still requires a non-production
@@ -187,6 +190,7 @@ publish = false
 [dependencies]
 agent-access-broker-host = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "<full upstream commit>" }
 agent-access-cloudbees-ci = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "<full upstream commit>" }
+agent-access-git-http = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "<full upstream commit>" }
 agent-access-gmail = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "<full upstream commit>" }
 agent-access-mcp-upstream = { git = "https://github.com/kcosr/agent-access-broker.git", rev = "<full upstream commit>" }
 example-notes = { git = "https://git.example.com/notes-team/notes-provider.git", rev = "<full provider commit>" }
@@ -217,6 +221,7 @@ use agent_access_broker_host::{
 };
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
+use agent_access_git_http::GIT_HTTP_GATEWAY;
 use example_notes::NOTES_BACKEND;
 
 /// Every module this distribution can configure, in resource-type listing order.
@@ -225,6 +230,7 @@ pub fn composition() -> Result<BrokerComposition, CompositionError> {
         .native(&CLOUDBEES_CI_BACKEND)
         .native(&GMAIL_BACKEND)
         .native(&NOTES_BACKEND)
+        .gateway(&GIT_HTTP_GATEWAY)
         .oauth(&GOOGLE_OAUTH_DIALECT)
         .import_adapter(agent_access_mcp_upstream::registration())
         .build()
@@ -243,9 +249,10 @@ const fn upstream(crate_name: &'static str) -> ModuleProvenance {
 
 /// One entry per registered module package. Gmail's backend and Google dialect
 /// share a package, as do the MCP adapter and its OAuth companion.
-static MODULES: [ModuleProvenance; 4] = [
+static MODULES: [ModuleProvenance; 5] = [
     upstream("agent-access-cloudbees-ci"),
     upstream("agent-access-gmail"),
+    upstream("agent-access-git-http"),
     upstream("agent-access-mcp-upstream"),
     ModuleProvenance::new("example-notes", env!("TEAM_BROKER_NOTES_VERSION"), NOTES),
 ];
@@ -346,6 +353,7 @@ agent-access-broker-host = { path = "../agent-access-broker/crates/agent-access-
 agent-access-cloudbees-ci = { path = "../agent-access-broker/crates/agent-access-cloudbees-ci" }
 agent-access-core = { path = "../agent-access-broker/crates/agent-access-core" }
 agent-access-gmail = { path = "../agent-access-broker/crates/agent-access-gmail" }
+agent-access-git-http = { path = "../agent-access-broker/crates/agent-access-git-http" }
 agent-access-mcp-upstream = { path = "../agent-access-broker/crates/agent-access-mcp-upstream" }
 agent-access-provider = { path = "../agent-access-broker/crates/agent-access-provider" }
 ```
