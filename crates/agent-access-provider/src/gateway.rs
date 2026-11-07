@@ -503,6 +503,7 @@ pub struct GatewayBody {
     idle_timeout: Duration,
     ended: bool,
     failed: Option<GatewayBodyError>,
+    non_data_frames: u8,
 }
 impl fmt::Debug for GatewayBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -522,6 +523,7 @@ impl GatewayBody {
             idle_timeout,
             ended: false,
             failed: None,
+            non_data_frames: 0,
         }
     }
     pub fn max_bytes(&self) -> usize {
@@ -562,6 +564,17 @@ impl GatewayBody {
                 Err(error)
             }
             Some(Ok(frame)) => {
+                let contributes_bytes =
+                    matches!(&frame, GatewayBodyFrame::Data(bytes) if !bytes.is_empty());
+                if contributes_bytes {
+                    self.non_data_frames = 0;
+                } else {
+                    self.non_data_frames = self.non_data_frames.saturating_add(1);
+                    if self.non_data_frames > 32 {
+                        self.failed = Some(GatewayBodyError::Read);
+                        return Err(GatewayBodyError::Read);
+                    }
+                }
                 if let GatewayBodyFrame::Data(bytes) = &frame {
                     let total = self.inspected_bytes.checked_add(bytes.len());
                     if total.is_none_or(|total| total > self.max_bytes) {
@@ -570,7 +583,9 @@ impl GatewayBody {
                     }
                     self.inspected_bytes = total.expect("checked above");
                 }
-                self.inspected.push_back(frame.clone());
+                if !matches!(&frame, GatewayBodyFrame::Data(bytes) if bytes.is_empty()) {
+                    self.inspected.push_back(frame.clone());
+                }
                 Ok(Some(frame))
             }
         }
@@ -579,10 +594,15 @@ impl GatewayBody {
         if let Some(error) = self.failed {
             return Box::pin(futures_util::stream::once(async move { Err(error) }));
         }
+        if self.ended {
+            return Box::pin(futures_util::stream::iter(
+                self.inspected.into_iter().map(Ok),
+            ));
+        }
         Box::pin(futures_util::stream::iter(self.inspected.into_iter().map(Ok)).chain(self.stream))
     }
     pub(crate) fn is_empty_complete(&self) -> bool {
-        self.is_complete() && self.inspected_bytes == 0
+        self.is_complete() && self.inspected.is_empty()
     }
     pub(crate) fn failure(&self) -> Option<GatewayBodyError> {
         self.failed
@@ -595,9 +615,14 @@ impl GatewayBody {
 pub enum GatewayReplayProfile {
     /// No application-level resubmission. Safe connection recovery is host-owned.
     Never,
-    /// The host may replace an OAuth lease and retry a bodyless discovery once.
+    /// The host may replace an OAuth lease and retry discovery once only after
+    /// proving complete EOF with no retained data or trailer frames.
     BodylessCredentialRecovery,
-    /// Only request-specific evidence of non-processing permits resubmission.
+    /// Permission, not a promise of resubmission: the host also needs complete
+    /// safely retained request bytes and request-specific transport evidence
+    /// of non-processing. Replayability, a method, timeout, reset or bare GOAWAY
+    /// never establishes that evidence. A host without such evidence retries
+    /// nothing; ordinary safe connection recovery remains independent.
     ConfirmedUnprocessed,
 }
 
@@ -744,6 +769,10 @@ pub struct GatewayProbeRequest {
     pub method: Method,
     pub headers: HeaderMap,
     pub max_response_bytes: usize,
+    /// Bounded protocol facts stored under the registration's audit key.
+    pub audit: Option<Value>,
+    /// Optional safe path template for host transport diagnostics.
+    pub audit_target: Option<String>,
 }
 impl fmt::Debug for GatewayProbeRequest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -770,10 +799,20 @@ impl GatewayProbeRequest {
             method: Method::GET,
             headers: HeaderMap::new(),
             max_response_bytes,
+            audit: None,
+            audit_target: None,
         }
     }
     pub fn with_headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
+        self
+    }
+    pub fn with_audit(mut self, audit: Value) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+    pub fn with_audit_target(mut self, target: impl Into<String>) -> Self {
+        self.audit_target = Some(target.into());
         self
     }
 }
@@ -952,6 +991,51 @@ mod tests {
         assert!(body.next_frame().await.unwrap().is_none());
         assert!(body.is_complete());
         assert_eq!(body.inspected_bytes(), 4);
+        assert!(!crate::host::gateway_body_is_empty_complete(&body));
+    }
+    #[tokio::test]
+    async fn empty_frames_cannot_grow_retention_or_extend_inspection_forever() {
+        let mut body = crate::test_support::gateway_body(
+            (0..33)
+                .map(|_| Ok(GatewayBodyFrame::Data(Bytes::new())))
+                .collect(),
+            16,
+        );
+        for _ in 0..32 {
+            body.next_frame().await.unwrap();
+        }
+        assert!(body.inspected.is_empty());
+        assert_eq!(body.next_frame().await.unwrap_err(), GatewayBodyError::Read);
+        assert_eq!(
+            crate::host::gateway_body_failure(&body),
+            Some(GatewayBodyError::Read)
+        );
+    }
+    #[tokio::test]
+    async fn a_complete_body_replays_without_repolling_a_non_fused_source() {
+        let stream =
+            futures_util::stream::unfold(Some(Bytes::from_static(b"0000")), |frame| async {
+                frame.map(|bytes| (Ok(GatewayBodyFrame::Data(bytes)), None))
+            });
+        let mut body = crate::host::gateway_body(Box::pin(stream), 1024, Duration::from_secs(1));
+        body.next_frame().await.unwrap().unwrap();
+        assert!(body.next_frame().await.unwrap().is_none());
+        assert!(body.is_complete());
+        let frames = crate::host::gateway_body_stream(body)
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(frames.len(), 1);
+        assert!(
+            matches!(&frames[0], Ok(GatewayBodyFrame::Data(bytes)) if bytes == b"0000".as_slice())
+        );
+    }
+    #[tokio::test]
+    async fn bodyless_recovery_proof_rejects_trailers_without_data() {
+        let mut body = crate::test_support::gateway_body(vec![Ok(GatewayBodyFrame::Trailers)], 16);
+        body.next_frame().await.unwrap();
+        assert!(body.next_frame().await.unwrap().is_none());
+        assert!(body.is_complete());
+        assert_eq!(body.inspected_bytes(), 0);
         assert!(!crate::host::gateway_body_is_empty_complete(&body));
     }
     #[test]
