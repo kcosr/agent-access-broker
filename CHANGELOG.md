@@ -23,6 +23,7 @@ All notable changes to this project are documented in this file.
   together. Existing imports retain their definitions and credentials; rollback
   across this schema change requires the pre-migration backup. See
   [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104))
 
 - **Gateway modules require explicit assembly selection.** Downstream assemblies
   using Git must link `agent-access-git-http` and select `GIT_HTTP_GATEWAY` with
@@ -168,6 +169,7 @@ All notable changes to this project are documented in this file.
   as `OTHER` to keep caller-supplied method text out of diagnostics. See
   [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports)
   and the [HTTP gateway setup guide](docs/http-gateway-setup.md).
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104))
 
 - **Context-limited account/group issuance and read-only agent tokens.** A mode
   dropdown and dynamic context checklist define each enabled policy. Explicit
