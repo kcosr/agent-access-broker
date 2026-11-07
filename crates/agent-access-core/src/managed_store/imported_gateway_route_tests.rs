@@ -262,6 +262,22 @@ fn gateway_routes_migration_is_additive_requires_admission_and_supports_backup_r
     .unwrap();
     assert_eq!(migrated.imported_catalog().unwrap(), original);
     migrated
+        .create_principal(
+            PrincipalWriteRequest {
+                principal_id: "admin".into(),
+                kind: "user".into(),
+                display_name: None,
+                email: None,
+                external_subject: None,
+                created_by: "test".into(),
+                role: crate::PrincipalRole::Admin,
+                self_service_enabled: None,
+                agent_token_issuance: test_principal_issuance(PrincipalAgentTokenIssuance::Inherit),
+            },
+            &test_execution_contexts(),
+        )
+        .unwrap();
+    migrated
         .create_imported_service_with_routes(
             {
                 let mut value = definition();

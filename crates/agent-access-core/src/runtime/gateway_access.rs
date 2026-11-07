@@ -551,7 +551,7 @@ mod tests {
         let key_path = temp.path().join("key");
         std::fs::write(
             &key_path,
-            base64::engine::general_purpose::STANDARD.encode([7u8; 32]),
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7u8; 32]),
         )
         .unwrap();
         let ring = crate::CredentialKeyRing::load(&crate::CredentialEncryptionConfig {
