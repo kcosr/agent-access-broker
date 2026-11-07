@@ -9,6 +9,7 @@ mod accounting;
 mod credentials;
 mod failures;
 mod fixture;
+mod guide;
 mod lifecycle;
 mod privacy;
 mod transfers;

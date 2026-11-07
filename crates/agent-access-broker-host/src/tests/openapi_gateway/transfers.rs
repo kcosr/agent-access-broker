@@ -298,3 +298,105 @@ async fn openapi_gateway_preserves_upstream_errors_but_translates_auth_and_rejec
     );
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn openapi_gateway_preserves_encoded_response_bytes_and_raw_form_uploads() {
+    let upstream = Upstream::start().await;
+    let fixture = Fixture::ready(
+        &upstream,
+        UpstreamAuth::Anonymous,
+        &["encoded_blob", "upload_form"],
+    )
+    .await;
+    let response = fixture
+        .gateway(Method::GET, "/encoded", "encoded-response")
+        .header("Accept-Encoding", "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[CONTENT_ENCODING], "gzip");
+    assert_eq!(
+        response.headers()[CONTENT_LENGTH],
+        ENCODED_BLOB.len().to_string()
+    );
+    assert_eq!(response.bytes().await.unwrap().as_ref(), ENCODED_BLOB);
+    let terminal = fixture.terminal("encoded-response").await;
+    assert_eq!(
+        terminal["providerAudit"]["gateway"]["responseBytes"],
+        ENCODED_BLOB.len()
+    );
+    assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "completed");
+    assert_eq!(
+        upstream.api_requests()[0].headers["accept-encoding"],
+        "identity"
+    );
+
+    let form = b"name=a%2Bb&name=c+d&opaque=%00%ff&empty=&extra=%252F";
+    let response = fixture
+        .gateway(Method::POST, "/form", "raw-form")
+        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(form.to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    let seen = upstream.api_requests();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[1].body, form);
+    assert_eq!(
+        seen[1].headers[CONTENT_TYPE],
+        "application/x-www-form-urlencoded"
+    );
+    assert_eq!(upstream.writes(), 1);
+    assert_eq!(fixture.terminal("raw-form").await["decision"], "allow");
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn openapi_gateway_authenticated_upstream_401_is_translated_for_each_static_credential_carrier()
+ {
+    for auth in [
+        UpstreamAuth::Bearer,
+        UpstreamAuth::Basic,
+        UpstreamAuth::Header,
+    ] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::ready(&upstream, auth, &["error_status"]).await;
+        let response = fixture
+            .gateway(Method::GET, "/errors/401", "static-upstream-401")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FAILED_DEPENDENCY);
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            "upstream_unauthorized"
+        );
+        assert!(response.headers().get(WWW_AUTHENTICATE).is_none());
+        assert!(response.headers().get("set-cookie").is_none());
+        let body = response.text().await.unwrap();
+        for secret in [
+            "synthetic backend 401",
+            "private-upstream",
+            UPSTREAM_TOKEN,
+            fixture.agent.as_str(),
+        ] {
+            assert!(!body.contains(secret));
+        }
+        let seen = upstream.api_requests();
+        assert_eq!(seen.len(), 1, "401 must not cause replay");
+        let carrier = if auth == UpstreamAuth::Header {
+            "x-inventory-key"
+        } else {
+            "authorization"
+        };
+        assert!(seen[0].headers.contains_key(carrier));
+        let terminal = fixture.terminal("static-upstream-401").await;
+        assert_eq!(terminal["upstreamStatus"], 401);
+        assert_eq!(terminal["reasonCode"], "upstream_unauthorized");
+        assert_eq!(terminal["decision"], "error");
+        fixture.stop().await;
+    }
+}

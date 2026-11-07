@@ -15,6 +15,11 @@ pub(super) const SERVICE: &str = "inventory";
 pub(super) const GATEWAY_HOST: &str = "inventory.gateway.example.test";
 pub(super) const UPSTREAM_TOKEN: &str = "synthetic-inventory-upstream-token";
 pub(super) const BLOB: &[u8] = b"\x00\x01\x02\xffbinary\r\nbytes\x00";
+// Gzip stream of BLOB with zero timestamp, retained as exact wire bytes.
+pub(super) const ENCODED_BLOB: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 99, 96, 100, 250, 159, 148, 153, 151, 88, 84, 201, 203, 149,
+    84, 89, 146, 90, 204, 0, 0, 85, 247, 198, 65, 18, 0, 0, 0,
+];
 
 #[derive(Clone, Copy)]
 pub(super) enum Dialect {
@@ -257,12 +262,18 @@ async fn upstream(
             .unwrap();
     }
     match head.uri.path() {
-        "/api/blob" => {
+        "/api/blob" | "/api/encoded" | "/api/artifacts/build-123" => {
             let ranged = head
                 .headers
                 .get("range")
                 .is_some_and(|value| value == "bytes=2-5");
-            let bytes = if ranged { &BLOB[2..6] } else { BLOB };
+            let bytes = if head.uri.path() == "/api/encoded" {
+                ENCODED_BLOB
+            } else if ranged {
+                &BLOB[2..6]
+            } else {
+                BLOB
+            };
             let response = response
                 .status(if ranged {
                     StatusCode::PARTIAL_CONTENT
@@ -272,7 +283,13 @@ async fn upstream(
                 .header(CONTENT_TYPE, "application/octet-stream")
                 .header(CONTENT_LENGTH, bytes.len())
                 .header("X-Checksum", "synthetic-checksum")
+                .header("X-Api-Version", "1")
                 .header("ETag", "\"synthetic-v1\"");
+            let response = if head.uri.path() == "/api/encoded" {
+                response.header(CONTENT_ENCODING, "gzip")
+            } else {
+                response
+            };
             let response = if ranged {
                 response.header("Content-Range", format!("bytes 2-5/{}", BLOB.len()))
             } else {
@@ -293,6 +310,10 @@ async fn upstream(
         "/api/conditional" => response
             .status(StatusCode::NOT_MODIFIED)
             .header("ETag", "\"synthetic-v1\"")
+            .body(Body::empty())
+            .unwrap(),
+        "/api/items/widget" if head.method == Method::PUT => response
+            .status(StatusCode::NO_CONTENT)
             .body(Body::empty())
             .unwrap(),
         "/api/stream" => {
@@ -372,6 +393,7 @@ pub(super) fn document(dialect: Dialect, auth: UpstreamAuth, endpoint: &str) -> 
         ("/blob", "get", "download_blob", None),
         ("/blob", "head", "head_blob", None),
         ("/blob", "options", "options_blob", None),
+        ("/encoded", "get", "encoded_blob", None),
         ("/empty", "get", "empty_result", None),
         ("/conditional", "get", "conditional", None),
         ("/stream", "get", "stream_blob", None),
@@ -380,6 +402,12 @@ pub(super) fn document(dialect: Dialect, auth: UpstreamAuth, endpoint: &str) -> 
             "post",
             "upload_bytes",
             Some("application/octet-stream"),
+        ),
+        (
+            "/form",
+            "post",
+            "upload_form",
+            Some("application/x-www-form-urlencoded"),
         ),
     ] {
         operation(path, method, id, json!([]), media);
@@ -503,6 +531,10 @@ impl Fixture {
         .await;
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
             .timeout(Duration::from_secs(10))
             .build()
             .unwrap();
@@ -733,7 +765,7 @@ impl Fixture {
                         "{tool}"
                     );
                     json!({"source":tool["definition"]["source"],"action":name,
-                "readOnly":!matches!(*name, "update_item"|"upload_bytes"|"write_then_drop")})
+                "readOnly":!matches!(*name, "update_item"|"upload_bytes"|"upload_form"|"write_then_drop")})
                 })
                 .collect(),
         );
