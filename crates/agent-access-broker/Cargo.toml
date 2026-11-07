@@ -8,6 +8,7 @@ license.workspace = true
 role = "assembly"
 
 [dependencies]
+agent-access-git-http = { path = "../agent-access-git-http" }
 agent-access-broker-host = { path = "../agent-access-broker-host" }
 agent-access-atlassian = { path = "../agent-access-atlassian" }
 agent-access-teams = { path = "../agent-access-teams" }

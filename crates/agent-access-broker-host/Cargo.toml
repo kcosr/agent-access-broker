@@ -47,6 +47,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+agent-access-git-http = { path = "../agent-access-git-http" }
 tokio = { workspace = true, features = ["test-util"] }
 # The host's own integration tests use its test support.
 agent-access-broker-host = { path = ".", features = ["test-support"] }

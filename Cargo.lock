@@ -106,6 +106,7 @@ dependencies = [
  "agent-access-confluence",
  "agent-access-core",
  "agent-access-fake",
+ "agent-access-git-http",
  "agent-access-gitlab",
  "agent-access-gmail",
  "agent-access-jira",
@@ -134,6 +135,7 @@ dependencies = [
  "agent-access-conformance",
  "agent-access-core",
  "agent-access-fake",
+ "agent-access-git-http",
  "agent-access-gitlab",
  "agent-access-gmail",
  "agent-access-jira",
@@ -282,6 +284,7 @@ dependencies = [
  "agent-access-cloudbees-ci",
  "agent-access-confluence",
  "agent-access-fake",
+ "agent-access-git-http",
  "agent-access-gitlab",
  "agent-access-gmail",
  "agent-access-jira",
@@ -336,6 +339,23 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "url",
+]
+
+[[package]]
+name = "agent-access-git-http"
+version = "0.2.0"
+dependencies = [
+ "agent-access-provider",
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
  "url",
 ]
 

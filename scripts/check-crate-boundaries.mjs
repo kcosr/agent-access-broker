@@ -9,22 +9,24 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(SCRIPT_PATH), "..");
 
-export const ROLES = Object.freeze(["sdk", "core", "host", "assembly", "cli", "native", "reference", "adapter", "helper"]);
+export const ROLES = Object.freeze(["sdk", "core", "host", "assembly", "cli", "native", "reference", "adapter", "helper", "gateway"]);
 const PRODUCTION_KINDS = new Set(["normal", "build"]);
 
 // Production closures that must stay free of these roles. The CLI's current
 // core dependency is internal product implementation and is reported, not rejected.
 const PRODUCTION_CLOSURE_FORBIDDEN = Object.freeze({
-  core: ["native", "adapter", "reference"],
-  host: ["native", "adapter", "reference"],
-  cli: ["host", "assembly", "native", "adapter", "reference"],
+  core: ["native", "adapter", "reference", "gateway"],
+  host: ["native", "adapter", "reference", "gateway"],
+  cli: ["host", "assembly", "native", "adapter", "reference", "gateway"],
 });
 const PRODUCTION_CLOSURE_REPORTED = Object.freeze({ cli: ["core"] });
 // Direct edges of any kind (normal, build or dev) that a role must not have.
 const FORBIDDEN_EDGES = Object.freeze({
   native: ["core", "host", "assembly", "cli", "adapter"],
   reference: ["core", "host", "assembly", "cli", "adapter"],
-  helper: ["core", "host", "assembly", "cli", "adapter"],
+  helper: ["core", "host", "assembly", "cli", "adapter", "gateway"],
+  gateway: ["core", "host", "assembly", "cli", "native", "reference", "adapter", "gateway"],
+  adapter: ["gateway"],
 });
 // Roles that an adapter's production edges may reach.
 const ADAPTER_PRODUCTION_TARGETS = new Set(["sdk", "helper", "core"]);
@@ -42,7 +44,7 @@ export const HOST_ONLY_ITEMS = Object.freeze([
   "token_as_basic",
   "gateway_upstream_authorization",
 ]);
-const HOST_ONLY_FENCED_ROLES = Object.freeze(["native", "adapter", "reference", "helper"]);
+const HOST_ONLY_FENCED_ROLES = Object.freeze(["native", "adapter", "reference", "helper", "gateway"]);
 // The Rust source locations of a package, relative to its manifest directory.
 const SOURCE_ROOTS = Object.freeze(["src", "tests", "benches", "examples", "build.rs"]);
 

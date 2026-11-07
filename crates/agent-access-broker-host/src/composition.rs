@@ -47,6 +47,13 @@ impl BrokerComposition {
         self.registry.imported_adapter_kinds()
     }
 
+    /// Selected gateway protocol kinds, independent of configured service IDs.
+    pub fn gateway_kinds(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.registry
+            .gateway_registrations()
+            .map(|registration| registration.kind())
+    }
+
     /// Every resource type the broker and its selected natives define.
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
         self.registry.resource_types()
@@ -104,7 +111,13 @@ impl BrokerComposition {
                 )
             });
         let mut packages = BTreeMap::<_, Vec<ModuleRole>>::new();
-        for (module, role) in natives.chain(dialects).chain(imports) {
+        let gateways = self.registry.gateway_registrations().map(|registration| {
+            (
+                registration.module(),
+                ModuleRole::new(ModuleRoleKind::Gateway, registration.kind()),
+            )
+        });
+        for (module, role) in natives.chain(dialects).chain(imports).chain(gateways) {
             packages
                 .entry((module.crate_name(), module.crate_version()))
                 .or_default()
@@ -146,6 +159,7 @@ pub struct BrokerCompositionBuilder {
     natives: Vec<&'static BackendRegistration>,
     oauth_dialects: Vec<&'static OAuthDialectRegistration>,
     import_adapters: Vec<ImportedAdapterRegistration>,
+    gateways: Vec<&'static agent_access_provider::GatewayRegistration>,
 }
 
 impl BrokerCompositionBuilder {
@@ -169,6 +183,15 @@ impl BrokerCompositionBuilder {
         self
     }
 
+    /// Selects a reviewed linked gateway protocol implementation.
+    pub fn gateway(
+        mut self,
+        registration: &'static agent_access_provider::GatewayRegistration,
+    ) -> Self {
+        self.gateways.push(registration);
+        self
+    }
+
     /// Validates the selections together: identifiers must be valid, the
     /// native kind `broker` is reserved, and service kinds, resource types,
     /// dialects (including import companions) and adapters must be unique.
@@ -176,6 +199,7 @@ impl BrokerCompositionBuilder {
         let registry = BackendRegistry::new(self.natives)
             .and_then(|registry| registry.with_oauth_dialects(self.oauth_dialects))
             .and_then(|registry| registry.with_imported_adapters(self.import_adapters))
+            .and_then(|registry| registry.with_gateways(self.gateways))
             .map_err(CompositionError::composition)?;
         Ok(BrokerComposition {
             registry: Arc::new(registry),

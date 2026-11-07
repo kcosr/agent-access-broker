@@ -1771,6 +1771,8 @@ pub struct BrokerRuntime {
     config: Arc<BrokerConfig>,
     execution_context_registry: crate::ConfiguredExecutionContexts,
     providers: Arc<BTreeMap<String, Arc<dyn Provider>>>,
+    gateways: Arc<BTreeMap<String, Arc<dyn agent_access_provider::GatewayProtocol>>>,
+    gateway_configs: Arc<BTreeMap<String, GatewayConfig>>,
     /// The command hooks of available command imports, keyed by service.
     /// Each is the same object as the service's entry in `providers`.
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
@@ -2379,7 +2381,32 @@ impl BrokerRuntime {
             &trusted_callers,
             &identity_sources,
         )?;
+        let gateways = config
+            .gateways
+            .iter()
+            .map(|(service, gateway)| {
+                let module =
+                    gateway
+                        .module_config(config.providers.registry())
+                        .map_err(|message| {
+                            RuntimeError::Config(ConfigError::Invalid {
+                                errors: vec![format!("gateways.{service}: {message}")],
+                            })
+                        })?;
+                let protocol =
+                    module
+                        .build(&gateway.service_context(service))
+                        .map_err(|error| {
+                            RuntimeError::Config(ConfigError::Invalid {
+                                errors: error.diagnostics().to_vec(),
+                            })
+                        })?;
+                Ok((service.clone(), protocol))
+            })
+            .collect::<Result<BTreeMap<_, _>, RuntimeError>>()?;
         let mut runtime = Self {
+            gateways: Arc::new(gateways),
+            gateway_configs: Arc::new(config.gateways.clone()),
             identity_sources: Arc::new(identity_sources),
             audit,
             effective_credentials: Arc::new(config.credentials.clone()),
@@ -3721,6 +3748,28 @@ impl BrokerRuntime {
     }
 
     /// The validated descriptor for a configured provider or gateway service.
+    pub fn gateway_protocol(
+        &self,
+        service: &str,
+    ) -> Option<Arc<dyn agent_access_provider::GatewayProtocol>> {
+        self.gateways.get(service).cloned()
+    }
+    pub fn gateway_config(&self, service: &str) -> Option<&GatewayConfig> {
+        self.gateway_configs.get(service)
+    }
+    pub fn gateway_configs(&self) -> &BTreeMap<String, GatewayConfig> {
+        &self.gateway_configs
+    }
+    pub fn gateway_registration(
+        &self,
+        service: &str,
+    ) -> Option<&'static agent_access_provider::GatewayRegistration> {
+        self.config
+            .providers
+            .registry()
+            .gateway(&self.gateway_config(service)?.kind)
+    }
+
     pub fn service_descriptor(&self, service: &str) -> Option<Arc<ServiceDescriptor>> {
         self.services.get(service).cloned()
     }
@@ -4570,7 +4619,12 @@ impl BrokerRuntime {
         identity: &IdentityContext,
         input: CredentialVerificationInput,
     ) -> Result<CredentialVerificationInput, ProviderError> {
-        if !gateway.git.as_ref().is_some_and(|git| git.allow_fetch) {
+        if !self.services.get(service).is_some_and(|descriptor| {
+            descriptor
+                .actions
+                .iter()
+                .any(|action| action.action == "repo.fetch")
+        }) {
             return Err(ProviderError::deny(
                 ReasonCode::ServiceActionDenied,
                 "git gateway fetch is not enabled",
@@ -7261,7 +7315,9 @@ fn build_service_descriptors(
         services.insert(service.clone(), Arc::new(provider.descriptor.clone()));
     }
     for (service, gateway) in &config.gateways {
-        if let Some(descriptor) = gateway_service_descriptor(service, gateway) {
+        if let Some(descriptor) =
+            gateway_service_descriptor(service, gateway, config.providers.registry())
+        {
             services.insert(service.clone(), Arc::new(descriptor));
         }
     }
@@ -7279,84 +7335,12 @@ fn build_service_descriptors(
 pub(crate) fn gateway_service_descriptor(
     service: &str,
     gateway: &GatewayConfig,
+    registry: &crate::BackendRegistry,
 ) -> Option<ServiceDescriptor> {
-    if gateway.kind != "git_http" {
-        return None;
-    }
-    let git_action = |action: &str, description: &str| {
-        ActionDescriptor::new(
-            action,
-            description,
-            json!({
-                "type": "object",
-                "additionalProperties": false
-            }),
-        )
-        .scope("repository")
-        .credential_modes(gateway.credential_modes.iter().cloned())
-    };
-    let mut actions = Vec::new();
-    if gateway.git.as_ref().is_some_and(|git| git.allow_fetch) {
-        actions.push(
-            git_action(
-                "repo.fetch",
-                "Fetch from a Git repository through the broker gateway",
-            )
-            .read_only(),
-        );
-    }
-    if gateway.git.as_ref().is_some_and(|git| git.allow_push) {
-        actions.push(git_action(
-            "repo.push",
-            "Push to a Git repository through the broker gateway",
-        ));
-    }
-    let per_user = gateway
-        .credential_modes
-        .iter()
-        .any(|mode| mode == "per_user");
-    // Verifying a Git credential reads one repository's refs. A personal
-    // credential connection may also select OAuth, whose access the gateway
-    // presents like a token.
-    let credentials = if per_user {
-        CredentialDescriptor::default()
-            .verification_input("repository")
-            .profile("git-basic-api-token", "basic_api_token")
-            .profile("git-bearer-token", "bearer_token")
-            .delegated(if gateway.git.as_ref().is_some_and(|git| git.allow_push) {
-                "Lets agents fetch and push Git repositories as your account."
-            } else {
-                "Lets agents fetch Git repositories as your account."
-            })
-    } else {
-        CredentialDescriptor::default().verification_input("repository")
-    };
-    Some(
-        ServiceDescriptor::new(service, gateway.display_name.clone())
-            .with_surface(ServiceSurface::Gateway {
-                kind: gateway.kind.clone(),
-                broker_hosts: gateway.broker_hosts.clone(),
-            })
-            .with_resource_scopes(BTreeMap::from([(
-                "repository".to_string(),
-                ResourceScopeCapabilities::new(
-                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
-                    vec![
-                        "exact".to_string(),
-                        "namespace".to_string(),
-                        "all".to_string(),
-                    ],
-                ),
-            )]))
-            .with_actions(actions)
-            .with_credentials(credentials),
-    )
-    .map(
-        |descriptor| match UpstreamAuthority::from_base_url(&gateway.upstream_base_url) {
-            Ok(authority) => descriptor.with_upstream_authority(authority),
-            Err(_) => descriptor,
-        },
-    )
+    gateway
+        .module_config(registry)
+        .ok()
+        .map(|module| module.descriptor(&gateway.service_context(service)))
 }
 
 fn toml_identity_groups(config: &BrokerConfig, principal: &str) -> (Vec<String>, Vec<String>) {

@@ -107,6 +107,8 @@ fn registry_of(
         .expect("linked OAuth dialects register consistently")
         .with_imported_adapters(import_adapters())
         .expect("linked imported adapters register consistently")
+        .with_gateways([&agent_access_git_http::GIT_HTTP_GATEWAY])
+        .expect("linked gateways register consistently")
 }
 
 pub(crate) fn composition() -> BrokerComposition {
@@ -121,6 +123,7 @@ pub(crate) fn composition() -> BrokerComposition {
         builder = builder.import_adapter(adapter);
     }
     builder
+        .gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)
         .build()
         .expect("linked modules compose consistently")
 }

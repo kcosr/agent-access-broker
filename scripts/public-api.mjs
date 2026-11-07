@@ -24,7 +24,7 @@ const FULL_SURFACE_ROLES = new Set(["sdk", "host", "assembly"]);
 // Also inventoried with their test-support feature, when they declare one.
 const TEST_SUPPORT_ROLES = new Set(["sdk", "host"]);
 // Inventoried through their reviewed selection entry points only.
-const SELECTION_ROLES = new Set(["native", "adapter"]);
+const SELECTION_ROLES = new Set(["native", "adapter", "gateway"]);
 const SYSROOT_CRATES = new Set(["core", "alloc", "std", "proc_macro", "test"]);
 const CAPTURE_MAX_BYTES = 512 * 1024 * 1024;
 const DIFF_LINE_LIMIT = 4000;
@@ -32,6 +32,7 @@ const DIFF_LINE_LIMIT = 4000;
 // The reviewed selection entry points of every native, OAuth-dialect and import
 // adapter crate the assembly links. Each path names a root export.
 export const SELECTION_ENTRY_POINTS = Object.freeze({
+  "agent-access-git-http": ["agent_access_git_http::GIT_HTTP_GATEWAY"],
   "agent-access-atlassian": ["agent_access_atlassian::ATLASSIAN_OAUTH_DIALECT"],
   "agent-access-cloudbees-ci": ["agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND"],
   "agent-access-command-import": ["agent_access_command_import::registration"],

@@ -30,7 +30,9 @@ pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {
         ])
         .expect("core backends register consistently")
         .with_oauth_dialects([&STUB_OAUTH_DIALECT])
-        .expect("core OAuth dialects register consistently"),
+        .expect("core OAuth dialects register consistently")
+        .with_gateways([&agent_access_git_http::GIT_HTTP_GATEWAY])
+        .expect("core gateway modules register consistently"),
     )
 }
 
