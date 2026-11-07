@@ -30,7 +30,10 @@ individual provider actions from the broker's runtime catalog, including Jira,
 Confluence, GitLab, CloudBees CI, Gmail, and Teams operations, plus five broker discovery
 helpers. It does
 not expose generic `invoke`/`send` tools, broker management operations, or
-gateway execution. Discovery helpers can describe that separate surface.
+gateway execution. Ordinary service/action discovery also omits gateways,
+including Git. Native clients use the administrator-provided gateway address
+and authentication setup. `resource_access_describe` can inspect caller-authorized
+access to a known gateway service; it does not list gateway services.
 
 Server instructions start with the calling rule: provider action fields belong
 inside `inputs`, with supported options beside it; discovery helpers take flat
@@ -646,14 +649,15 @@ a single-target policy check, not proof of upstream existence or permission for
 every target in a compound request. Invocation still reauthorizes the request.
 
 Aggregate stdio helpers use ordinary `/v1/services` visibility, including
-anonymous access where the broker permits it, non-invoke surfaces, and supported
+anonymous access where the broker permits it and supported
 non-agent token classes. Their fixed names resolve through a bounded helper
 registry without fetching the authenticated provider catalog. Native provider
 tools require the complete caller runtime catalog and its bounded registry. Descriptions and raw schemas come from broker
 capability definitions. Invoke `actions_describe` additionally checks the fresh
 caller catalog and returns its IO, sensitive-field, presentation metadata and
-exact native MCP wrapper schema. Non-invoke details omit `mcpTool`, as do actions
-with an unavailable aggregate name (with `mcpToolUnavailable` explaining why).
+exact native MCP wrapper schema. Gateways are omitted from ordinary service/action
+lists and details. Actions with an unavailable aggregate name omit `mcpTool`,
+with `mcpToolUnavailable` explaining why.
 Invoke-action
 detail requires authentication: an anonymous caller receives the catalog's HTTP
 401 as a broker tool error (CLI exit 6). Use `services_describe` for raw

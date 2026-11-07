@@ -172,6 +172,20 @@ pub struct ServiceDiscovery<'a> {
 }
 
 impl BrokerRuntime {
+    /// Ordinary service/action discovery excludes gateway protocol services.
+    /// Explicit resource-access inspection uses `service_discovery` instead.
+    pub fn agent_service_discovery<'a>(
+        &'a self,
+        identity: &'a IdentityContext,
+        context: &'a ExecutionContext,
+        service: &str,
+    ) -> Option<ServiceDiscovery<'a>> {
+        self.service_discovery(identity, context, service)
+            .filter(|discovery| matches!(discovery.capabilities.surface, ServiceSurface::Invoke))
+    }
+
+    /// Caller-authorized service access, including gateways. This is shared by
+    /// explicit resource-access inspection and ordinary discovery projections.
     pub fn service_discovery<'a>(
         &'a self,
         identity: &'a IdentityContext,

@@ -18701,7 +18701,8 @@ mod tests {
                         "description": "View project",
                         "requiredScopeTypes": ["repository"],
                         "credentialModes": ["per_user", "service"],
-                        "inputSchema": {"type": "object"}
+                        "inputSchema": {"type": "object"},
+                        "futureField": {"preserved": true}
                     },
                     {
                         "action": "merge_request.draft_note.publish",
@@ -18726,7 +18727,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_service_projections_preserve_labels_and_canonical_surface() {
+    fn discovery_service_projections_preserve_invoke_labels_and_omit_gateways() {
         let compact = project_service_list(
             discovery_services_fixture(),
             &discovery_projection(None, false),
@@ -18748,7 +18749,9 @@ mod tests {
             &discovery_projection(None, true),
         )
         .unwrap();
-        assert_eq!(verbose[1]["actions"][0]["futureField"]["preserved"], true);
+        assert_eq!(verbose.as_array().unwrap().len(), 1);
+        assert_eq!(verbose[0]["service"], "gitlab");
+        assert_eq!(verbose[0]["actions"][0]["futureField"]["preserved"], true);
         let empty = project_service_list(
             discovery_services_fixture(),
             &discovery_projection(Some("G"), false),

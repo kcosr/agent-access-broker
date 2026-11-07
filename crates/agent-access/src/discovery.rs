@@ -227,59 +227,55 @@ pub(crate) async fn action_describe(
     input(crate::validate_action_argument(action))?;
     let raw = service_describe(settings, service).await?;
     let parsed = crate::parse_discovery_service(raw)?;
-    let invoke = parsed.capabilities.surface == "invoke";
-    let (capability, mut detail) = crate::discovery_actions(parsed)?
+    let (capability, _) = crate::discovery_actions(parsed)?
         .into_iter()
         .find(|(candidate, _)| candidate.action == action)
         .ok_or_else(|| InputError("action is not visible or does not exist".into()))?;
-    if invoke {
-        // Catalog visibility intentionally differs from /services for some token classes.
-        let catalog_value = get(
-            settings,
-            "/v1/spec/catalog",
-            &[],
-            crate::ResponseShape::Object,
-        )
-        .await?;
-        if catalog_value.get("version").and_then(Value::as_str)
-            != Some(agent_access_core::API_CATALOG_VERSION)
-        {
-            bail!("unsupported broker catalog version");
-        }
-        let catalog: ApiCatalog = serde_json::from_value(catalog_value.clone())
-            .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
-        let entry = catalog.services.iter().find(|candidate| candidate.service == service && candidate.surface == "invoke")
-            .and_then(|service| service.actions.iter().find(|candidate| candidate.action == action))
-            .ok_or_else(|| InputError("action detail is unavailable in the caller-visible catalog; request service capabilities or refresh discovery".into()))?;
-        let common: ActionCapabilities = serde_json::from_value(serde_json::to_value(entry)?)
-            .context("invalid catalog action definition")?;
-        if common != capability {
-            return Err(InputError(
-                "discovery data changed between requests; retry discovery".into(),
-            )
-            .into());
-        }
-        // Preserve public action details, excluding MCP projection source metadata.
-        detail = catalog_value["services"]
-            .as_array()
-            .and_then(|services| services.iter().find(|value| value["service"] == service))
-            .and_then(|service| service["actions"].as_array())
-            .and_then(|actions| actions.iter().find(|value| value["action"] == action))
-            .cloned()
-            .context("invalid broker catalog action")?;
-        // A helper can perform several broker reads. Rebuild from this fresh
-        // catalog so the selected name and schema share one snapshot.
-        let registry = agent_access_core::mcp::ToolRegistry::build(
-            &catalog,
-            view,
-            agent_access_core::mcp::ProjectionMode::Stdio,
-            agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
-        )?;
-        if let Some(tool) = registry.action_detail(service, action) {
-            detail["mcpTool"] = tool;
-        } else if let Some(issue) = registry.action_unavailable(service, action) {
-            detail["mcpToolUnavailable"] = json!(issue.code.as_str());
-        }
+    // Catalog visibility intentionally differs from /services for some token classes.
+    let catalog_value = get(
+        settings,
+        "/v1/spec/catalog",
+        &[],
+        crate::ResponseShape::Object,
+    )
+    .await?;
+    if catalog_value.get("version").and_then(Value::as_str)
+        != Some(agent_access_core::API_CATALOG_VERSION)
+    {
+        bail!("unsupported broker catalog version");
+    }
+    let catalog: ApiCatalog = serde_json::from_value(catalog_value.clone())
+        .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
+    let entry = catalog.services.iter().find(|candidate| candidate.service == service && candidate.surface == "invoke")
+        .and_then(|service| service.actions.iter().find(|candidate| candidate.action == action))
+        .ok_or_else(|| InputError("action detail is unavailable in the caller-visible catalog; request service capabilities or refresh discovery".into()))?;
+    let common: ActionCapabilities = serde_json::from_value(serde_json::to_value(entry)?)
+        .context("invalid catalog action definition")?;
+    if common != capability {
+        return Err(
+            InputError("discovery data changed between requests; retry discovery".into()).into(),
+        );
+    }
+    // Preserve public action details, excluding MCP projection source metadata.
+    let mut detail = catalog_value["services"]
+        .as_array()
+        .and_then(|services| services.iter().find(|value| value["service"] == service))
+        .and_then(|service| service["actions"].as_array())
+        .and_then(|actions| actions.iter().find(|value| value["action"] == action))
+        .cloned()
+        .context("invalid broker catalog action")?;
+    // A helper can perform several broker reads. Rebuild from this fresh
+    // catalog so the selected name and schema share one snapshot.
+    let registry = agent_access_core::mcp::ToolRegistry::build(
+        &catalog,
+        view,
+        agent_access_core::mcp::ProjectionMode::Stdio,
+        agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
+    )?;
+    if let Some(tool) = registry.action_detail(service, action) {
+        detail["mcpTool"] = tool;
+    } else if let Some(issue) = registry.action_unavailable(service, action) {
+        detail["mcpToolUnavailable"] = json!(issue.code.as_str());
     }
     if let Some(object) = detail.as_object_mut() {
         object.remove("scopedMcpName");
@@ -554,20 +550,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn noninvoke_describe_does_not_fetch_catalog() {
+    async fn gateway_describe_cannot_fall_back_to_raw_action_metadata() {
         for surface in ["gateway"] {
             let server = MockServer::start().await;
             mount(&server, "/v1/services/gitlab", 200, service(surface)).await;
-            let detail = action_describe(
+            let error = action_describe(
                 &settings(&server),
                 &agent_access_core::mcp::McpView::Aggregate,
                 "gitlab",
                 "repo.fetch",
             )
             .await
-            .unwrap();
-            assert!(detail.get("mcpTool").is_none());
-            assert_eq!(detail["futureField"], "preserved");
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "service is not visible or does not exist"
+            );
             assert_eq!(server.received_requests().await.unwrap().len(), 1);
         }
     }
@@ -585,7 +583,7 @@ mod tests {
             ))
             .mount(&server)
             .await;
-        mount(&server, "/v1/services/gitlab", 200, service("gateway")).await;
+        mount(&server, "/v1/services/gitlab", 200, service("invoke")).await;
         assert_eq!(
             actions_list(
                 &settings(&server),
