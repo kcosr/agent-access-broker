@@ -59,50 +59,50 @@ impl PausedRequest {
 
 #[tokio::test]
 async fn openapi_gateway_revoked_broker_identity_is_rechecked_after_started_audit_before_send() {
-    let upstream = Upstream::start().await;
-    let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["read_item"]).await;
-    let waiting = PausedRequest::start(
-        &fixture,
+    for phase in [
         GatewayDispatchPhase::BeforeSend,
-        "token-revoked-before-send",
-    )
-    .await;
-    let runtime = fixture.broker.runtime();
-    let store = runtime.managed_store().unwrap();
-    let tokens = store.list_broker_tokens_for_principal("alice").unwrap();
-    let token = tokens
-        .iter()
-        .find(|token| token.name == "gateway acceptance")
-        .unwrap();
-    store.revoke_broker_token(&token.token_id, "admin").unwrap();
-    let response = waiting.release().await;
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(
-        response.headers()[REASON_CODE_HEADER],
-        "gateway_auth_invalid"
-    );
-    response.bytes().await.unwrap();
-    assert!(upstream.api_requests().is_empty());
-    assert_eq!(
-        fixture.terminal("token-revoked-before-send").await["reasonCode"],
-        "gateway_auth_invalid"
-    );
-    let fresh = fixture.issue_agent(false);
-    let response = fixture
-        .gateway_as(
-            &fresh,
-            Method::GET,
-            "/items/alpha",
-            "new-token-after-revoke",
-        )
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    response.bytes().await.unwrap();
-    assert_eq!(upstream.api_requests().len(), 1);
-    drop(runtime);
-    fixture.stop().await;
+        GatewayDispatchPhase::AfterMaterialRecheck,
+    ] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["read_item"]).await;
+        let waiting = PausedRequest::start(&fixture, phase, "token-revoked-before-send").await;
+        let runtime = fixture.broker.runtime();
+        let store = runtime.managed_store().unwrap();
+        let tokens = store.list_broker_tokens_for_principal("alice").unwrap();
+        let token = tokens
+            .iter()
+            .find(|token| token.name == "gateway acceptance")
+            .unwrap();
+        store.revoke_broker_token(&token.token_id, "admin").unwrap();
+        let response = waiting.release().await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()[REASON_CODE_HEADER],
+            "gateway_auth_invalid"
+        );
+        response.bytes().await.unwrap();
+        assert!(upstream.api_requests().is_empty());
+        assert_eq!(
+            fixture.terminal("token-revoked-before-send").await["reasonCode"],
+            "gateway_auth_invalid"
+        );
+        let fresh = fixture.issue_agent(false);
+        let response = fixture
+            .gateway_as(
+                &fresh,
+                Method::GET,
+                "/items/alpha",
+                "new-token-after-revoke",
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.bytes().await.unwrap();
+        assert_eq!(upstream.api_requests().len(), 1);
+        drop(runtime);
+        fixture.stop().await;
+    }
 }
 
 #[tokio::test]

@@ -124,6 +124,7 @@ async fn openapi_gateway_future_route_envelope_stays_unavailable_and_reserved_of
                 broker.running().public_url()
             ))
             .bearer_auth(&admin)
+            .header(REQUEST_ID_HEADER, format!("{label}-management"))
             .send()
             .await
             .unwrap();

@@ -306,9 +306,10 @@ impl PreparedGatewayOperation {
     }
 
     /// Host-only final metadata check for selected personal material, off the
-    /// async executor. After this await, recheck the cheap dispatch and identity
-    /// proofs immediately before sending. Local material mutations retire the
-    /// captured proof across this await; no replacement credential is resolved.
+    /// async executor, before the final identity revalidation. After all awaits,
+    /// recheck the cheap dispatch and identity proofs immediately before sending.
+    /// Local material mutations retire the captured proof across later awaits;
+    /// no replacement credential is resolved.
     pub async fn recheck_imported_material(&self) -> Result<(), ProviderError> {
         self.access.recheck_imported_material().await
     }

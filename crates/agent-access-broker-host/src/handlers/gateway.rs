@@ -1233,9 +1233,19 @@ async fn forward_prepared_gateway(
         return gateway_runtime_response(*response);
     }
     #[cfg(test)]
-    if let Some(state) = reloadable {
+    if let Some(state) = &reloadable {
         state
             .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::BeforeSend)
+            .await;
+    }
+    // Material mutations retire an in-memory proof across subsequent awaits.
+    // Recheck identity last: identity-store revocation need not publish a new
+    // runtime snapshot and must not be hidden by a contended material query.
+    let material = prepared.recheck_imported_material().await;
+    #[cfg(test)]
+    if let Some(state) = &reloadable {
+        state
+            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterMaterialRecheck)
             .await;
     }
     // Generated gateways must keep the original identity and generation through
@@ -1278,14 +1288,6 @@ async fn forward_prepared_gateway(
         proof
             .reloadable
             .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterIdentityRecheck)
-            .await;
-    }
-    let material = prepared.recheck_imported_material().await;
-    #[cfg(test)]
-    if let Some(proof) = &dispatch_proof {
-        proof
-            .reloadable
-            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterMaterialRecheck)
             .await;
     }
     let validated = material

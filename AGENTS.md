@@ -1162,8 +1162,9 @@ a prepared request. Rewrap preserves material identity. Strip selected credentia
 and configured identity-source headers before protocol hooks and reject module
 replacements. The adapter declares request headers through its core interface;
 core rejects configured identity collisions without parsing protocol plan JSON.
-Keep SQLite work off asynchronous executor workers and perform only cheap
-in-memory proof checks after the final awaited material recheck. Concrete parameter
+Keep SQLite work off asynchronous executor workers. Check material before the
+final identity revalidation, then perform only cheap in-memory proof checks after
+the last await. Concrete parameter
 values, queries, bodies and arbitrary headers never enter generated-gateway audit
 facts; classifier denials record only a bounded method and safe gateway kind.
 
