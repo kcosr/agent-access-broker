@@ -328,14 +328,14 @@ impl BrokerRuntime {
             )
         })?;
         for tool in &mut discovery.tools {
-            if tool.unsupported_reason.is_none() {
-                if let Err(message) = super::imports::validate_gateway_request_headers(
+            if tool.unsupported_reason.is_none()
+                && let Err(message) = super::imports::validate_gateway_request_headers(
                     &self.config,
                     adapter,
                     &tool.definition,
-                ) {
-                    tool.unsupported_reason = Some(message.into());
-                }
+                )
+            {
+                tool.unsupported_reason = Some(message.into());
             }
         }
         Ok((discovery, versions))

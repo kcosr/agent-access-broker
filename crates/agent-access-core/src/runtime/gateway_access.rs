@@ -515,6 +515,11 @@ mod tests {
         use std::sync::mpsc;
         use std::time::Duration;
         let temp = tempfile::TempDir::new().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let registry = crate::ConfiguredExecutionContexts::from_config(None).unwrap();
         let store = crate::ManagedStore::open(
             &crate::ManagedStoreConfig {

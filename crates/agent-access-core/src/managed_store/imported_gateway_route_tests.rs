@@ -193,6 +193,11 @@ fn gateway_route_first_release_envelope_and_hash_are_frozen() {
 #[test]
 fn gateway_routes_migration_is_additive_requires_admission_and_supports_backup_restore() {
     let temp = tempfile::TempDir::new().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let config = ManagedStoreConfig {
         kind: "sqlite".into(),
         path: temp.path().join("store.sqlite").display().to_string(),

@@ -563,7 +563,7 @@ mod tests {
             }
         }
         fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
-            unreachable!("gateway actions have no scoped MCP name")
+            Err("gateway actions have no scoped MCP name".into())
         }
         fn build(
             &self,
