@@ -10,6 +10,9 @@ use http::{HeaderMap, Method};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
+// Empty frames carry no bytes but still consume work while finding presence.
+const MAX_EMPTY_PREFIX_FRAMES: usize = 32;
+
 // Deliberately no Debug: these values can carry caller secrets.
 pub(crate) struct Request {
     pub operation: Arc<Operation>,
@@ -38,15 +41,20 @@ impl GatewayRequest for Request {
         // already classified action or its empty resource scope.
         let validated = plan
             .validate_request_parameters(&matched, Some(&self.raw_query), &self.headers)
-            .map_err(|_| {
-                ProviderError::deny(
-                    ReasonCode::InputInvalid,
-                    "gateway request parameters do not match the accepted operation",
-                )
-            })?;
+            // The shared profile returns only bounded, value-free literals.
+            .map_err(|message| ProviderError::deny(ReasonCode::InputInvalid, message))?;
+        let mut empty_frames = 0;
         let present = loop {
             match body.next_frame().await.map_err(body_error)? {
-                Some(GatewayBodyFrame::Data(bytes)) if bytes.is_empty() => continue,
+                Some(GatewayBodyFrame::Data(bytes)) if bytes.is_empty() => {
+                    empty_frames += 1;
+                    if empty_frames > MAX_EMPTY_PREFIX_FRAMES {
+                        return Err(ProviderError::deny(
+                            ReasonCode::GatewayRequestBodyDenied,
+                            "gateway request body has excessive empty frames",
+                        ));
+                    }
+                }
                 Some(GatewayBodyFrame::Data(_)) => break true,
                 None => break false,
                 Some(_) => {
@@ -63,12 +71,10 @@ impl GatewayRequest for Request {
             .headers
             .get("content-type")
             .and_then(|value| value.to_str().ok());
-        plan.validate_body(present, content_type).map_err(|_| {
-            ProviderError::deny(
-                ReasonCode::GatewayRequestBodyDenied,
-                "gateway request body does not match the accepted operation",
-            )
-        })?;
+        plan.validate_body(present, content_type)
+            .map_err(|message| {
+                ProviderError::deny(ReasonCode::GatewayRequestBodyDenied, message)
+            })?;
 
         let mut status_headers = Vec::new();
         for (status, response) in &plan.responses {

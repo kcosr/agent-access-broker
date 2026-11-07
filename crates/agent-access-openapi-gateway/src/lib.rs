@@ -2,6 +2,10 @@
 //!
 //! This module receives no credentials or upstream clients. The host owns identity,
 //! grants, credential presentation, transfer limits, dispatch fences and completion.
+//! The import adapter checks accepted security against the execution binding before
+//! supplying this candidate; credential modes are grant modes, not a substitute for
+//! that check. Every retained V1 plan is validated, including inactive plans, so a
+//! corrupt or unsupported retained record cannot silently publish a partial service.
 mod protocol;
 mod request;
 

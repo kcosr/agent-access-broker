@@ -213,6 +213,10 @@ async fn parameter_denial_is_deferred_until_preflight() {
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    assert_eq!(
+        error.message,
+        "gateway request has an undeclared query parameter"
+    );
     assert!(!format!("{error:?}").contains("SECRET"));
 }
 
@@ -384,6 +388,11 @@ async fn response_validator_uses_exact_class_default_and_never_returns_reserved_
         assert!(headers.contains_key(selected));
     }
     upstream.insert("x-api-version", HeaderValue::from_static("SECRET"));
+    let headers = validator.validate(200, &upstream).unwrap();
+    assert_eq!(headers.len(), 1);
+    assert!(headers.contains_key("content-type"));
+    // Invalid optional values are omitted. Ambiguous repeated fields remain errors.
+    upstream.append("x-api-version", HeaderValue::from_static("2"));
     let error = validator.validate(200, &upstream).unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     assert!(!error.message.contains("SECRET"));
@@ -421,7 +430,9 @@ async fn response_validator_rejects_ambiguous_fields_and_preserves_encoding_and_
         ReasonCode::UpstreamProtocolFailed
     );
     upstream.insert("retry-after", HeaderValue::from_static("SECRET"));
-    assert!(validator.validate(429, &upstream).is_err());
+    let headers = validator.validate(429, &upstream).unwrap();
+    assert_eq!(headers.len(), 1);
+    assert!(headers.contains_key("content-encoding"));
 }
 
 #[tokio::test]
@@ -446,4 +457,37 @@ async fn raw_json_is_forwarded_without_claiming_body_schema_validation() {
     assert!(
         matches!(&frames[..], [Ok(GatewayBodyFrame::Data(bytes))] if bytes.as_ref() == b"opaque non-JSON bytes")
     );
+}
+
+#[tokio::test]
+async fn body_presence_inspection_has_an_empty_frame_budget() {
+    let protocol = build(&input(plan("GET", "/items", "list"))).unwrap();
+    let classified =
+        classify(protocol.as_ref(), &Method::GET, "/items", &HeaderMap::new()).unwrap();
+    let frames = (0..33)
+        .map(|_| Ok(GatewayBodyFrame::Data(Bytes::new())))
+        .collect();
+    let error = classified
+        .into_request()
+        .preflight(test_support::gateway_body(frames, 1))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
+    assert_eq!(
+        error.message,
+        "gateway request body has excessive empty frames"
+    );
+}
+
+#[test]
+fn corrupt_retained_plan_does_not_publish_a_partial_service() {
+    let mut candidate = input(plan("GET", "/items", "list"));
+    candidate.actions.push(GatewayManagedAction::new(
+        "retained.read",
+        1,
+        "c".repeat(64),
+        false,
+        GatewayVersionedData::new(1, json!({})),
+    ));
+    assert!(build(&candidate).is_err());
 }
