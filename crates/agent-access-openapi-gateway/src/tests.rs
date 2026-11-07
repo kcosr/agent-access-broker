@@ -492,16 +492,35 @@ async fn optional_nontext_metadata_does_not_discard_success_or_error_response() 
 }
 
 #[tokio::test]
-async fn compiled_routes_preserve_custom_verb_and_parameter_pchar() {
+async fn compiled_routes_preserve_literal_custom_verbs_and_encode_parameter_values() {
     let protocol = build(&input(plan("POST", "/jobs/{id}/action:run", "run"))).unwrap();
-    let target = "/jobs/a@b+c;d=e/action:run";
+    let target = "/jobs/a@b+c=d/action:run";
     let forwarded = classify(protocol.as_ref(), &Method::POST, target, &HeaderMap::new())
         .unwrap()
         .into_request()
         .preflight(body(b""))
         .await
         .unwrap();
-    assert_eq!(forwarded.relative_target, target);
+    assert_eq!(forwarded.relative_target, "/jobs/a%40b%2Bc%3Dd/action:run");
+}
+
+#[test]
+fn path_parameters_cannot_bypass_literal_guards_with_semicolon_suffixes() {
+    let mut candidate = input(plan("GET", "/items/{id}", "get"));
+    candidate.manifest.data["paths"]["/items/admin"] = json!({"methods": {
+        "GET":{"source":{"operationId":"admin"},"current":true,"supported":true}
+    }});
+    let protocol = build(&candidate).unwrap();
+    for path in [
+        "/items/admin;x",
+        "/items/admin%3Bx",
+        "/items/..;",
+        "/items/%2E%2E%3B",
+    ] {
+        let error = classify(protocol.as_ref(), &Method::GET, path, &HeaderMap::new()).unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(error.message, "gateway request target is invalid");
+    }
 }
 
 #[tokio::test]
