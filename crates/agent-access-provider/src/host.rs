@@ -565,3 +565,26 @@ pub fn authorize_host_request(
 pub fn token_as_basic(username: impl Into<String>) -> CredentialPlacement {
     CredentialPlacement::token_as_basic(username.into())
 }
+
+/// Lends a request head after the host removes credential and identity carriers.
+pub fn gateway_request_head<'a>(
+    method: &'a reqwest::Method,
+    path_and_query: &'a str,
+    headers: &'a reqwest::header::HeaderMap,
+) -> crate::GatewayRequestHead<'a> {
+    crate::GatewayRequestHead::new(method, path_and_query, headers)
+}
+
+/// Constructs the bounded, replay-preserving body consumed by a protocol hook.
+pub fn gateway_body(
+    stream: crate::GatewayBodyStream,
+    max_bytes: usize,
+    idle_timeout: Duration,
+) -> crate::GatewayBody {
+    crate::GatewayBody::new(stream, max_bytes, idle_timeout)
+}
+
+/// Takes back every inspected byte followed by the remaining inbound stream.
+pub fn gateway_body_stream(body: crate::GatewayBody) -> crate::GatewayBodyStream {
+    body.into_stream()
+}

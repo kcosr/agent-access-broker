@@ -189,6 +189,7 @@ mod domain_reason;
 mod egress_config;
 mod error;
 mod finalization;
+mod gateway;
 pub mod host;
 mod identifiers;
 mod invocation;
@@ -269,6 +270,14 @@ pub use egress_config::{EgressDeclaration, EgressProxyConfig, EgressProxySource,
 pub use error::ProviderBuildError;
 pub use finalization::{
     ProviderFinalizationContext, ProviderFinalizationGuard, current_provider_finalization,
+};
+pub use gateway::{
+    GatewayBody, GatewayBodyError, GatewayBodyFrame, GatewayBodyStream, GatewayClassification,
+    GatewayConfig, GatewayConfigParser, GatewayForwardPlan, GatewayHookPhase, GatewayManagedAction,
+    GatewayManagedInput, GatewayManagedPlanBuilder, GatewayProbeRequest, GatewayProbeStatus,
+    GatewayProtocol, GatewayRegistration, GatewayReplayProfile, GatewayRequest, GatewayRequestHead,
+    GatewayRequestKind, GatewayResponseProfile, GatewayResponseValidator, GatewayServiceContext,
+    GatewayStatusHeaders, GatewayStatusMatch, GatewayVerificationProbe, GatewayVersionedData,
 };
 pub use identifiers::{ResourceScopes, is_action_name, is_service_name};
 pub use invocation::{

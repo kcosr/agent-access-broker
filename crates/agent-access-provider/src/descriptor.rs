@@ -208,6 +208,8 @@ pub struct CredentialDescriptor {
     /// Inputs credential verification needs besides the credential, such as
     /// `repository` for a check that reads one repository.
     pub verification_inputs: Vec<&'static str>,
+    /// Whether the service implements active credential verification.
+    pub verification_supported: bool,
 }
 
 impl CredentialDescriptor {
@@ -229,6 +231,12 @@ impl CredentialDescriptor {
 
     pub fn verification_input(mut self, input: &'static str) -> Self {
         self.verification_inputs.push(input);
+        self
+    }
+
+    /// Keeps setup and readiness available without offering an active probe.
+    pub fn without_verification(mut self) -> Self {
+        self.verification_supported = false;
         self
     }
 
@@ -269,6 +277,7 @@ impl Default for CredentialDescriptor {
             service_kinds: Vec::new(),
             profiles: Vec::new(),
             verification_inputs: Vec::new(),
+            verification_supported: true,
         }
     }
 }
@@ -715,6 +724,7 @@ impl ServiceDescriptor {
             gateway_kind,
             broker_hosts: self.broker_hosts(),
             credential_verification_inputs: self.credential_verification_inputs(),
+            credential_verification_supported: self.credentials.verification_supported,
             scope_types: self.resource_scopes.keys().cloned().collect(),
             resource_scopes: self.resource_scopes.clone(),
             actions: self

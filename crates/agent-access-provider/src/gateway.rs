@@ -1,0 +1,853 @@
+//! Linked HTTP protocol modules. Identity, credentials, transport and delivery
+//! ownership stay in the host; modules only classify and validate protocol data.
+use crate::{
+    Decision, ModuleMetadata, ProviderBuildError, ProviderError, ProviderReasonDefinition,
+    ReasonCode, ResourceScopes, ResourceTypeDescriptor, ServiceDescriptor,
+};
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures_util::{Stream, StreamExt};
+use reqwest::{Method, header::HeaderMap};
+use serde_json::Value;
+use std::{collections::VecDeque, fmt, pin::Pin, sync::Arc, time::Duration};
+
+pub type GatewayConfigParser = fn(toml::Value) -> Result<Arc<dyn GatewayConfig>, String>;
+pub type GatewayManagedPlanBuilder = fn(
+    &GatewayServiceContext,
+    &GatewayManagedInput,
+) -> Result<Arc<dyn GatewayProtocol>, ProviderBuildError>;
+const DEFAULT_REQUEST_KINDS: &[GatewayRequestKind] = &[GatewayRequestKind::counted("request")];
+
+/// A protocol kind selected by an assembly, independent of its service instances.
+#[derive(Debug)]
+pub struct GatewayRegistration {
+    module: ModuleMetadata,
+    kind: &'static str,
+    parse: GatewayConfigParser,
+    request_kinds: &'static [GatewayRequestKind],
+    resource_types: &'static [&'static ResourceTypeDescriptor],
+    domain_reasons: &'static [&'static ProviderReasonDefinition],
+    managed_builder: Option<GatewayManagedPlanBuilder>,
+    audit_key: &'static str,
+}
+
+impl GatewayRegistration {
+    pub const fn new(
+        module: ModuleMetadata,
+        kind: &'static str,
+        parse: GatewayConfigParser,
+    ) -> Self {
+        Self {
+            module,
+            kind,
+            parse,
+            request_kinds: DEFAULT_REQUEST_KINDS,
+            resource_types: &[],
+            domain_reasons: &[],
+            managed_builder: None,
+            audit_key: "gateway",
+        }
+    }
+    pub const fn with_request_kinds(mut self, kinds: &'static [GatewayRequestKind]) -> Self {
+        self.request_kinds = kinds;
+        self
+    }
+    pub const fn with_resource_types(
+        mut self,
+        types: &'static [&'static ResourceTypeDescriptor],
+    ) -> Self {
+        self.resource_types = types;
+        self
+    }
+    pub const fn with_domain_reasons(
+        mut self,
+        reasons: &'static [&'static ProviderReasonDefinition],
+    ) -> Self {
+        self.domain_reasons = reasons;
+        self
+    }
+    pub const fn with_managed_builder(mut self, builder: GatewayManagedPlanBuilder) -> Self {
+        self.managed_builder = Some(builder);
+        self
+    }
+    pub const fn with_audit_key(mut self, key: &'static str) -> Self {
+        self.audit_key = key;
+        self
+    }
+    pub const fn module(&self) -> ModuleMetadata {
+        self.module
+    }
+    pub const fn kind(&self) -> &'static str {
+        self.kind
+    }
+    pub const fn request_kinds(&self) -> &'static [GatewayRequestKind] {
+        self.request_kinds
+    }
+    pub const fn resource_types(&self) -> &'static [&'static ResourceTypeDescriptor] {
+        self.resource_types
+    }
+    pub const fn domain_reasons(&self) -> &'static [&'static ProviderReasonDefinition] {
+        self.domain_reasons
+    }
+    pub const fn managed_builder(&self) -> Option<GatewayManagedPlanBuilder> {
+        self.managed_builder
+    }
+    pub const fn audit_key(&self) -> &'static str {
+        self.audit_key
+    }
+    pub fn parse_config(&self, fields: toml::Value) -> Result<Arc<dyn GatewayConfig>, String> {
+        (self.parse)(fields)
+    }
+    pub fn counted(&self, kind: &str) -> Option<bool> {
+        self.request_kinds
+            .iter()
+            .find(|entry| entry.name == kind)
+            .map(|entry| entry.counted)
+    }
+    /// Checks a module-generated failure, never an ordinary upstream HTTP response.
+    pub fn check_failure(
+        &self,
+        phase: GatewayHookPhase,
+        error: &ProviderError,
+    ) -> Result<(), crate::host::ContractViolation> {
+        use crate::host::ContractViolation;
+        let reason = error.reason_code();
+        if reason.host_port().is_some() {
+            return Err(ContractViolation::HostPortNotPermitted);
+        }
+        if let Some(definition) = reason.domain() {
+            return self
+                .domain_reasons
+                .iter()
+                .any(|declared| **declared == *definition)
+                .then_some(())
+                .ok_or(ContractViolation::UnregisteredDomainReason);
+        }
+        let Some(code) = reason.standard() else {
+            return Err(ContractViolation::HostOnlyReason);
+        };
+        let permitted = match phase {
+            GatewayHookPhase::Classification => matches!(
+                code,
+                ReasonCode::GatewayRuleNotFound
+                    | ReasonCode::GatewayMethodDenied
+                    | ReasonCode::GatewayQueryDenied
+                    | ReasonCode::GitServiceDenied
+                    | ReasonCode::GatewayHeaderDenied
+                    | ReasonCode::InputInvalid
+            ),
+            GatewayHookPhase::Preflight => matches!(
+                code,
+                ReasonCode::GatewayHeaderDenied
+                    | ReasonCode::GatewayRequestBodyDenied
+                    | ReasonCode::GitRefDenied
+                    | ReasonCode::GitCapabilityDenied
+                    | ReasonCode::InputInvalid
+                    | ReasonCode::BodyMalformed
+                    | ReasonCode::BodySizeDenied
+                    | ReasonCode::BodyFormatUnsupported
+                    | ReasonCode::UpstreamTimeout
+            ),
+            GatewayHookPhase::Verification => matches!(
+                code,
+                ReasonCode::InputInvalid
+                    | ReasonCode::VerificationMismatch
+                    | ReasonCode::GatewayRuleNotFound
+                    | ReasonCode::ScopeUnresolved
+                    | ReasonCode::UpstreamUnauthorized
+                    | ReasonCode::UpstreamForbidden
+                    | ReasonCode::UpstreamFailed
+                    | ReasonCode::UpstreamProtocolFailed
+            ),
+            GatewayHookPhase::Response => matches!(
+                code,
+                ReasonCode::UpstreamProtocolFailed
+                    | ReasonCode::UpstreamFailed
+                    | ReasonCode::GatewayHeaderDenied
+            ),
+        };
+        if !permitted {
+            return Err(ContractViolation::HostOnlyReason);
+        }
+        let error_allowed = error.decision() == Decision::Error
+            && ((phase == GatewayHookPhase::Verification
+                && matches!(
+                    code,
+                    ReasonCode::UpstreamUnauthorized
+                        | ReasonCode::UpstreamForbidden
+                        | ReasonCode::UpstreamFailed
+                        | ReasonCode::UpstreamProtocolFailed
+                ))
+                || (phase == GatewayHookPhase::Preflight && code == ReasonCode::UpstreamTimeout)
+                || (phase == GatewayHookPhase::Response
+                    && matches!(
+                        code,
+                        ReasonCode::UpstreamProtocolFailed | ReasonCode::UpstreamFailed
+                    )));
+        if error.decision() != Decision::Deny && !error_allowed {
+            return Err(ContractViolation::ReasonNotPermitted);
+        }
+        Ok(())
+    }
+}
+
+/// Protocol hooks cannot report host authentication, authorization or accounting decisions.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayHookPhase {
+    Classification,
+    Preflight,
+    Verification,
+    Response,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayRequestKind {
+    name: &'static str,
+    counted: bool,
+}
+impl GatewayRequestKind {
+    pub const fn counted(name: &'static str) -> Self {
+        Self {
+            name,
+            counted: true,
+        }
+    }
+    pub const fn exempt(name: &'static str) -> Self {
+        Self {
+            name,
+            counted: false,
+        }
+    }
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+    pub const fn is_counted(&self) -> bool {
+        self.counted
+    }
+}
+
+/// Nonsecret settings the host supplies to one configured or managed protocol.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayServiceContext {
+    pub service: String,
+    pub display_name: String,
+    pub broker_hosts: Vec<String>,
+    pub upstream_base_url: String,
+    pub credential_modes: Vec<String>,
+    pub auth_modes: Vec<String>,
+}
+impl GatewayServiceContext {
+    pub fn new(
+        service: impl Into<String>,
+        display_name: impl Into<String>,
+        upstream_base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            service: service.into(),
+            display_name: display_name.into(),
+            upstream_base_url: upstream_base_url.into(),
+            broker_hosts: Vec::new(),
+            credential_modes: Vec::new(),
+            auth_modes: Vec::new(),
+        }
+    }
+    pub fn with_broker_hosts(mut self, hosts: Vec<String>) -> Self {
+        self.broker_hosts = hosts;
+        self
+    }
+    pub fn with_credential_modes(mut self, modes: Vec<String>) -> Self {
+        self.credential_modes = modes;
+        self
+    }
+    pub fn with_auth_modes(mut self, modes: Vec<String>) -> Self {
+        self.auth_modes = modes;
+        self
+    }
+}
+
+/// A strict module-owned configuration. All methods are local and offline.
+pub trait GatewayConfig: fmt::Debug + Send + Sync {
+    fn validate(&self, context: &GatewayServiceContext, errors: &mut Vec<String>);
+    fn descriptor(&self, context: &GatewayServiceContext) -> ServiceDescriptor;
+    fn build(
+        &self,
+        context: &GatewayServiceContext,
+    ) -> Result<Arc<dyn GatewayProtocol>, ProviderBuildError>;
+}
+
+/// A bounded, explicitly versioned serialized plan or route manifest.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayVersionedData {
+    pub version: u32,
+    pub data: Value,
+}
+impl GatewayVersionedData {
+    pub fn new(version: u32, data: Value) -> Self {
+        Self { version, data }
+    }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayManagedAction {
+    pub action: String,
+    pub version: u64,
+    pub accepted_hash: String,
+    pub dispatchable: bool,
+    pub plan: GatewayVersionedData,
+}
+impl GatewayManagedAction {
+    pub fn new(
+        action: impl Into<String>,
+        version: u64,
+        accepted_hash: impl Into<String>,
+        dispatchable: bool,
+        plan: GatewayVersionedData,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            version,
+            accepted_hash: accepted_hash.into(),
+            dispatchable,
+            plan,
+        }
+    }
+}
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayManagedInput {
+    pub manifest: GatewayVersionedData,
+    pub actions: Vec<GatewayManagedAction>,
+    pub manifest_generation: u64,
+    pub manifest_hash: String,
+}
+impl GatewayManagedInput {
+    pub fn new(manifest: GatewayVersionedData, actions: Vec<GatewayManagedAction>) -> Self {
+        Self {
+            manifest,
+            actions,
+            manifest_generation: 0,
+            manifest_hash: String::new(),
+        }
+    }
+    pub fn with_manifest_revision(mut self, generation: u64, hash: impl Into<String>) -> Self {
+        self.manifest_generation = generation;
+        self.manifest_hash = hash.into();
+        self
+    }
+}
+
+/// Sanitized request head. The host removes authentication and identity carriers.
+#[derive(Debug, Clone, Copy)]
+pub struct GatewayRequestHead<'a> {
+    method: &'a Method,
+    path_and_query: &'a str,
+    headers: &'a HeaderMap,
+}
+impl<'a> GatewayRequestHead<'a> {
+    pub(crate) fn new(method: &'a Method, path_and_query: &'a str, headers: &'a HeaderMap) -> Self {
+        Self {
+            method,
+            path_and_query,
+            headers,
+        }
+    }
+    pub fn method(&self) -> &'a Method {
+        self.method
+    }
+    pub fn path_and_query(&self) -> &'a str {
+        self.path_and_query
+    }
+    pub fn headers(&self) -> &'a HeaderMap {
+        self.headers
+    }
+}
+
+pub trait GatewayProtocol: fmt::Debug + Send + Sync {
+    fn classify(
+        &self,
+        head: GatewayRequestHead<'_>,
+    ) -> Result<GatewayClassification, ProviderError>;
+    /// Construct a bounded protocol probe. `None` means verification is unsupported.
+    fn verification(
+        &self,
+        _input: Option<&str>,
+    ) -> Result<Option<Box<dyn GatewayVerificationProbe>>, ProviderError> {
+        Ok(None)
+    }
+}
+
+pub struct GatewayClassification {
+    action: String,
+    scopes: ResourceScopes,
+    request_kind: &'static str,
+    request: Box<dyn GatewayRequest>,
+}
+impl GatewayClassification {
+    pub fn new(
+        action: impl Into<String>,
+        scopes: ResourceScopes,
+        request_kind: &'static str,
+        request: Box<dyn GatewayRequest>,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            scopes,
+            request_kind,
+            request,
+        }
+    }
+    pub fn action(&self) -> &str {
+        &self.action
+    }
+    pub fn scopes(&self) -> &ResourceScopes {
+        &self.scopes
+    }
+    pub fn request_kind(&self) -> &'static str {
+        self.request_kind
+    }
+    pub fn into_request(self) -> Box<dyn GatewayRequest> {
+        self.request
+    }
+}
+impl fmt::Debug for GatewayClassification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GatewayClassification")
+            .field("action", &self.action)
+            .field("request_kind", &self.request_kind)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+pub trait GatewayRequest: Send {
+    async fn preflight(
+        self: Box<Self>,
+        body: GatewayBody,
+    ) -> Result<GatewayForwardPlan, ProviderError>;
+}
+
+/// Trailer values are deliberately withheld; a protocol can reject their presence.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum GatewayBodyFrame {
+    Data(Bytes),
+    Trailers,
+}
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayBodyError {
+    TooLarge,
+    Timeout,
+    IdleTimeout,
+    Read,
+}
+impl fmt::Display for GatewayBodyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::TooLarge => "gateway body exceeds its limit",
+            Self::Timeout | Self::IdleTimeout => "gateway body read timed out",
+            Self::Read => "gateway body could not be read",
+        })
+    }
+}
+impl std::error::Error for GatewayBodyError {}
+pub type GatewayBodyStream =
+    Pin<Box<dyn Stream<Item = Result<GatewayBodyFrame, GatewayBodyError>> + Send>>;
+
+/// Host-owned body with bounded inspection and automatic byte-exact replay.
+/// Every inspected frame remains owned by this value until the host forwards it.
+pub struct GatewayBody {
+    stream: GatewayBodyStream,
+    inspected: VecDeque<GatewayBodyFrame>,
+    inspected_bytes: usize,
+    max_bytes: usize,
+    idle_timeout: Duration,
+    ended: bool,
+}
+impl fmt::Debug for GatewayBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GatewayBody")
+            .field("inspected_bytes", &self.inspected_bytes)
+            .field("max_bytes", &self.max_bytes)
+            .finish_non_exhaustive()
+    }
+}
+impl GatewayBody {
+    pub(crate) fn new(stream: GatewayBodyStream, max_bytes: usize, idle_timeout: Duration) -> Self {
+        Self {
+            stream,
+            inspected: VecDeque::new(),
+            inspected_bytes: 0,
+            max_bytes,
+            idle_timeout,
+            ended: false,
+        }
+    }
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+    pub fn idle_timeout(&self) -> Duration {
+        self.idle_timeout
+    }
+    /// Reads the next frame for inspection, retaining it for ordered forwarding.
+    pub async fn next_frame(&mut self) -> Result<Option<GatewayBodyFrame>, GatewayBodyError> {
+        if self.ended {
+            return Ok(None);
+        }
+        let next = tokio::time::timeout(self.idle_timeout, self.stream.next())
+            .await
+            .map_err(|_| GatewayBodyError::IdleTimeout)?;
+        match next {
+            None => {
+                self.ended = true;
+                Ok(None)
+            }
+            Some(Err(error)) => Err(error),
+            Some(Ok(frame)) => {
+                if let GatewayBodyFrame::Data(bytes) = &frame {
+                    self.inspected_bytes = self
+                        .inspected_bytes
+                        .checked_add(bytes.len())
+                        .ok_or(GatewayBodyError::TooLarge)?;
+                    if self.inspected_bytes > self.max_bytes {
+                        return Err(GatewayBodyError::TooLarge);
+                    }
+                }
+                self.inspected.push_back(frame.clone());
+                Ok(Some(frame))
+            }
+        }
+    }
+    pub(crate) fn into_stream(self) -> GatewayBodyStream {
+        Box::pin(futures_util::stream::iter(self.inspected.into_iter().map(Ok)).chain(self.stream))
+    }
+}
+
+/// Recovery is never inferred from an HTTP method or a replayable body.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayReplayProfile {
+    /// No application-level resubmission. Safe connection recovery is host-owned.
+    Never,
+    /// The host may replace an OAuth lease and retry a bodyless discovery once.
+    BodylessCredentialRecovery,
+    /// Only request-specific evidence of non-processing permits resubmission.
+    ConfirmedUnprocessed,
+}
+
+/// Explicit finite response-header selections. Host reserved-header checks always apply.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayResponseProfile {
+    pub headers: Vec<String>,
+    pub status_headers: Vec<GatewayStatusHeaders>,
+    pub translate_unauthorized: bool,
+    pub reject_redirects: bool,
+    pub preserve_content_length: bool,
+    pub validator: Option<Arc<dyn GatewayResponseValidator>>,
+}
+impl GatewayResponseProfile {
+    pub fn new(headers: Vec<String>) -> Self {
+        Self {
+            headers,
+            status_headers: Vec::new(),
+            translate_unauthorized: false,
+            reject_redirects: false,
+            preserve_content_length: false,
+            validator: None,
+        }
+    }
+    pub fn with_status_headers(mut self, headers: Vec<GatewayStatusHeaders>) -> Self {
+        self.status_headers = headers;
+        self
+    }
+    pub fn translate_unauthorized(mut self) -> Self {
+        self.translate_unauthorized = true;
+        self
+    }
+    pub fn reject_redirects(mut self) -> Self {
+        self.reject_redirects = true;
+        self
+    }
+    pub fn preserve_content_length(mut self) -> Self {
+        self.preserve_content_length = true;
+        self
+    }
+    pub fn with_validator(mut self, validator: Arc<dyn GatewayResponseValidator>) -> Self {
+        self.validator = Some(validator);
+        self
+    }
+}
+/// Bounded response metadata validation, with no body, credential or transport access.
+/// The host checks all returned names against the profile and its reserved fields.
+pub trait GatewayResponseValidator: fmt::Debug + Send + Sync {
+    fn validate(&self, status: u16, headers: &HeaderMap) -> Result<HeaderMap, ProviderError>;
+}
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayStatusMatch {
+    Exact(u16),
+    Class(u16),
+    Default,
+}
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayStatusHeaders {
+    pub status: GatewayStatusMatch,
+    pub headers: Vec<String>,
+}
+impl GatewayStatusHeaders {
+    pub fn new(status: GatewayStatusMatch, headers: Vec<String>) -> Self {
+        Self { status, headers }
+    }
+}
+
+#[non_exhaustive]
+pub struct GatewayForwardPlan {
+    pub method: Method,
+    pub relative_target: String,
+    pub headers: HeaderMap,
+    pub body: GatewayBody,
+    pub response: GatewayResponseProfile,
+    pub replay: GatewayReplayProfile,
+    pub audit: Option<Value>,
+    pub audit_target: Option<String>,
+}
+impl GatewayForwardPlan {
+    pub fn new(method: Method, relative_target: impl Into<String>, body: GatewayBody) -> Self {
+        Self {
+            method,
+            relative_target: relative_target.into(),
+            headers: HeaderMap::new(),
+            body,
+            response: GatewayResponseProfile::new(vec!["content-type".into()]),
+            replay: GatewayReplayProfile::Never,
+            audit: None,
+            audit_target: None,
+        }
+    }
+    pub fn with_headers(mut self, headers: HeaderMap) -> Self {
+        self.headers = headers;
+        self
+    }
+    pub fn with_response(mut self, profile: GatewayResponseProfile) -> Self {
+        self.response = profile;
+        self
+    }
+    pub fn with_replay(mut self, replay: GatewayReplayProfile) -> Self {
+        self.replay = replay;
+        self
+    }
+    pub fn with_audit(mut self, audit: Value) -> Self {
+        self.audit = Some(audit);
+        self
+    }
+    pub fn with_audit_target(mut self, target: impl Into<String>) -> Self {
+        self.audit_target = Some(target.into());
+        self
+    }
+}
+impl fmt::Debug for GatewayForwardPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GatewayForwardPlan")
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The host authorizes this action and these scopes before presenting a credential.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct GatewayProbeRequest {
+    pub action: String,
+    pub scopes: ResourceScopes,
+    pub normalized_input: String,
+    pub relative_target: String,
+    pub method: Method,
+    pub headers: HeaderMap,
+    pub max_response_bytes: usize,
+}
+impl GatewayProbeRequest {
+    pub fn new(
+        action: impl Into<String>,
+        scopes: ResourceScopes,
+        normalized_input: impl Into<String>,
+        relative_target: impl Into<String>,
+        max_response_bytes: usize,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            scopes,
+            normalized_input: normalized_input.into(),
+            relative_target: relative_target.into(),
+            method: Method::GET,
+            headers: HeaderMap::new(),
+            max_response_bytes,
+        }
+    }
+    pub fn with_headers(mut self, headers: HeaderMap) -> Self {
+        self.headers = headers;
+        self
+    }
+}
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayProbeStatus {
+    NeedMore,
+    Valid,
+    Invalid,
+}
+pub trait GatewayVerificationProbe: fmt::Debug + Send + Sync {
+    fn request(&self) -> &GatewayProbeRequest;
+    fn validate_response(
+        &self,
+        status: u16,
+        headers: &HeaderMap,
+        prefix: &[u8],
+        eof: bool,
+    ) -> Result<GatewayProbeStatus, ProviderError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CredentialDescriptor, ServiceSurface};
+
+    #[derive(Debug)]
+    struct Fixture;
+    fn parse(value: toml::Value) -> Result<Arc<dyn GatewayConfig>, String> {
+        if value.as_table().is_none_or(|table| !table.is_empty()) {
+            return Err("fixture gateway has no protocol settings".into());
+        }
+        Ok(Arc::new(Fixture))
+    }
+    static REGISTRATION: GatewayRegistration =
+        GatewayRegistration::new(crate::module_metadata!(), "http_fixture", parse);
+    impl GatewayConfig for Fixture {
+        fn validate(&self, _: &GatewayServiceContext, _: &mut Vec<String>) {}
+        fn descriptor(&self, context: &GatewayServiceContext) -> ServiceDescriptor {
+            ServiceDescriptor::new(&context.service, &context.display_name)
+                .with_surface(ServiceSurface::Gateway {
+                    kind: "http_fixture".into(),
+                    broker_hosts: context.broker_hosts.clone(),
+                })
+                .with_credentials(
+                    CredentialDescriptor::without_execution_credential().without_verification(),
+                )
+        }
+        fn build(
+            &self,
+            _: &GatewayServiceContext,
+        ) -> Result<Arc<dyn GatewayProtocol>, ProviderBuildError> {
+            Ok(Arc::new(Fixture))
+        }
+    }
+    impl GatewayProtocol for Fixture {
+        fn classify(
+            &self,
+            head: GatewayRequestHead<'_>,
+        ) -> Result<GatewayClassification, ProviderError> {
+            if head.path_and_query() != "/items" {
+                return Err(ProviderError::deny(
+                    ReasonCode::GatewayRuleNotFound,
+                    "route not found",
+                ));
+            }
+            Ok(GatewayClassification::new(
+                "items.read",
+                ResourceScopes::new(),
+                "request",
+                Box::new(Fixture),
+            ))
+        }
+    }
+    #[async_trait]
+    impl GatewayRequest for Fixture {
+        async fn preflight(
+            self: Box<Self>,
+            body: GatewayBody,
+        ) -> Result<GatewayForwardPlan, ProviderError> {
+            Ok(GatewayForwardPlan::new(Method::GET, "/items", body))
+        }
+    }
+    #[tokio::test]
+    async fn inspection_replays_frames_once_then_the_unread_remainder() {
+        let frames = vec![
+            Ok(GatewayBodyFrame::Data(Bytes::from_static(b"first"))),
+            Ok(GatewayBodyFrame::Trailers),
+            Ok(GatewayBodyFrame::Data(Bytes::from_static(b"last"))),
+        ];
+        let mut body = crate::test_support::gateway_body(frames, 16);
+        assert!(matches!(
+            body.next_frame().await.unwrap(),
+            Some(GatewayBodyFrame::Data(_))
+        ));
+        assert!(matches!(
+            body.next_frame().await.unwrap(),
+            Some(GatewayBodyFrame::Trailers)
+        ));
+        let frames = crate::host::gateway_body_stream(body)
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(frames.len(), 3);
+        assert!(matches!(&frames[0], Ok(GatewayBodyFrame::Data(bytes)) if bytes == "first"));
+        assert!(matches!(&frames[1], Ok(GatewayBodyFrame::Trailers)));
+        assert!(matches!(&frames[2], Ok(GatewayBodyFrame::Data(bytes)) if bytes == "last"));
+    }
+    #[tokio::test]
+    async fn protocol_inspection_is_bounded() {
+        let mut body = crate::test_support::gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"over cap")))],
+            3,
+        );
+        assert_eq!(
+            body.next_frame().await.unwrap_err(),
+            GatewayBodyError::TooLarge
+        );
+    }
+    #[test]
+    fn module_failures_do_not_claim_host_auth_policy_or_accounting_outcomes() {
+        for code in [
+            ReasonCode::GatewayAuthInvalid,
+            ReasonCode::ServiceActionDenied,
+            ReasonCode::RateLimited,
+            ReasonCode::BrokerTokenExpired,
+        ] {
+            assert!(
+                REGISTRATION
+                    .check_failure(
+                        GatewayHookPhase::Classification,
+                        &ProviderError::deny(code, "invalid module outcome")
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            REGISTRATION
+                .check_failure(
+                    GatewayHookPhase::Classification,
+                    &ProviderError::deny(ReasonCode::GatewayRuleNotFound, "route not found")
+                )
+                .is_ok()
+        );
+        assert_eq!(REGISTRATION.counted("request"), Some(true));
+        assert_eq!(REGISTRATION.counted("undeclared"), None);
+    }
+    #[test]
+    fn instances_share_kind_without_sharing_service_identity() {
+        let first = GatewayServiceContext::new("first", "First", "https://api.example.com");
+        let second = GatewayServiceContext::new("second", "Second", "https://api.example.com");
+        assert_eq!(Fixture.descriptor(&first).service, "first");
+        assert_eq!(Fixture.descriptor(&second).service, "second");
+        assert!(
+            !Fixture
+                .descriptor(&first)
+                .credentials
+                .verification_supported
+        );
+    }
+}
