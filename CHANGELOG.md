@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
   responses require `credentialVerificationSupported`; upgrade Broker, CLI and
   portal together. See [assembly selection](docs/downstream-assembly.md#selecting-modules)
   and [gateway authoring](docs/provider-sdk.md#gateway-protocols).
+  ([#103](https://github.com/kcosr/agent-access-broker/pull/103))
 
 - **Gateway services are omitted from ordinary agent discovery.** HTTP service
   and action lists/describes, CLI discovery, and HTTP/stdio MCP discovery helpers
