@@ -514,3 +514,31 @@ fn anonymous_mode_cannot_forward_another_declared_security_scheme_as_a_parameter
         );
     }
 }
+
+#[test]
+fn neutral_json_decoder_retains_explicit_limits_duplicate_checks_and_safe_diagnostics() {
+    assert_eq!(
+        decode_bounded_document_json(br#"{"value":[1,true,null]}"#, 128, 3).unwrap(),
+        json!({"value":[1,true,null]})
+    );
+    assert_eq!(
+        decode_bounded_document_json(b"{}", 1, 64).unwrap_err(),
+        "definition exceeds JSON byte limit"
+    );
+    assert_eq!(
+        decode_bounded_document_json(br#"{"a":{"b":0}}"#, 128, 1).unwrap_err(),
+        "definition exceeds JSON depth limit"
+    );
+    assert_eq!(
+        decode_bounded_document_json(br#"{"SENTINEL":1,"SENTINEL":2}"#, 128, 64).unwrap_err(),
+        "duplicate JSON member in definition"
+    );
+    assert_eq!(
+        decode_bounded_document_json(br#"{} {}"#, 128, 64).unwrap_err(),
+        "definition must contain exactly one JSON value"
+    );
+    assert_eq!(
+        decode_bounded_document_json(br#"{"SENTINEL": invalid}"#, 128, 64).unwrap_err(),
+        "definition must be bounded JSON"
+    );
+}

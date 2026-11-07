@@ -11,6 +11,7 @@ mod schema;
 mod source;
 
 pub use compile::compile_gateway_document;
+pub use json::decode_bounded_document_json;
 pub use model::*;
 pub use profile::{
     GATEWAY_COMMON_REQUEST_HEADERS, GATEWAY_COMMON_RESPONSE_HEADERS, GatewayValidatedParameters,

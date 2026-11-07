@@ -10,6 +10,7 @@ role = "adapter"
 [dependencies]
 agent-access-core = { path = "../agent-access-core" }
 agent-access-provider = { path = "../agent-access-provider" }
+agent-access-openapi-common = { path = "../agent-access-openapi-common" }
 async-trait.workspace = true
 futures-util.workspace = true
 http.workspace = true

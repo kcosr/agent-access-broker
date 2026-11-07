@@ -28,7 +28,8 @@ pub fn compile_gateway_document(
     {
         return Err("selected gateway security scheme is invalid".into());
     }
-    let document = crate::json::decode(bytes)?;
+    let document =
+        decode_bounded_document_json(bytes, GATEWAY_MAX_DOCUMENT_BYTES, GATEWAY_MAX_DEPTH)?;
     let (dialect, version) = Dialect::identify(&document)?;
     let schemes_collection = match dialect {
         Dialect::OpenApi31 => document.pointer("/components/securitySchemes"),

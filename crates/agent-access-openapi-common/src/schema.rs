@@ -1,6 +1,7 @@
 //! Finite parameter validation; request and response body schemas never enter this validator.
 use regex::RegexBuilder;
 use serde_json::{Value, json};
+use std::cmp::Ordering;
 
 pub(crate) const MAX_VALUE_BYTES: usize = 4096;
 
@@ -136,10 +137,8 @@ pub(crate) fn validate_schema(schema: &Value, array_allowed: bool) -> Result<(),
     {
         return Err("parameter string bounds conflict".into());
     }
-    if let (Some(min), Some(max)) = (
-        fields.get("minimum").and_then(Value::as_f64),
-        fields.get("maximum").and_then(Value::as_f64),
-    ) && min > max
+    if let (Some(min), Some(max)) = (fields.get("minimum"), fields.get("maximum"))
+        && numeric_order(min, max) == Some(Ordering::Greater)
     {
         return Err("parameter numeric bounds conflict".into());
     }
@@ -161,6 +160,13 @@ fn integer(value: &Value) -> Option<i128> {
         .as_i64()
         .map(i128::from)
         .or_else(|| value.as_u64().map(i128::from))
+}
+
+fn numeric_order(left: &Value, right: &Value) -> Option<Ordering> {
+    match (integer(left), integer(right)) {
+        (Some(left), Some(right)) => Some(left.cmp(&right)),
+        _ => left.as_f64()?.partial_cmp(&right.as_f64()?),
+    }
 }
 
 pub(crate) fn scalar(raw: &str, schema: &Value) -> Result<Value, String> {
@@ -256,37 +262,34 @@ pub(crate) fn scalar(raw: &str, schema: &Value) -> Result<Value, String> {
         if !number.is_finite()
             || schema
                 .get("minimum")
-                .and_then(Value::as_f64)
-                .is_some_and(|v| number < v)
+                .is_some_and(|bound| numeric_order(&value, bound).is_none_or(|order| order.is_lt()))
             || schema
                 .get("maximum")
-                .and_then(Value::as_f64)
-                .is_some_and(|v| number > v)
-            || schema
-                .get("exclusiveMinimum")
-                .and_then(Value::as_f64)
-                .is_some_and(|v| number <= v)
-            || schema
-                .get("exclusiveMaximum")
-                .and_then(Value::as_f64)
-                .is_some_and(|v| number >= v)
+                .is_some_and(|bound| numeric_order(&value, bound).is_none_or(|order| order.is_gt()))
+            || schema.get("exclusiveMinimum").is_some_and(|bound| {
+                numeric_order(&value, bound).is_none_or(|order| !order.is_gt())
+            })
+            || schema.get("exclusiveMaximum").is_some_and(|bound| {
+                numeric_order(&value, bound).is_none_or(|order| !order.is_lt())
+            })
         {
             return Err("gateway parameter violates its numeric bound".into());
         }
-        if let Some(divisor) = schema.get("multipleOf").and_then(Value::as_f64) {
-            let ratio = number / divisor;
-            if !ratio.is_finite()
-                || (ratio - ratio.round()).abs() > f64::EPSILON * ratio.abs().max(1.0) * 4.0
-            {
+        if let Some(divisor) = schema.get("multipleOf") {
+            let violates = match (integer(&value), integer(divisor)) {
+                (Some(value), Some(divisor)) => divisor <= 0 || value % divisor != 0,
+                _ => {
+                    let ratio = number / divisor.as_f64().ok_or("invalid numeric divisor")?;
+                    !ratio.is_finite()
+                        || (ratio - ratio.round()).abs() > f64::EPSILON * ratio.abs().max(1.0) * 4.0
+                }
+            };
+            if violates {
                 return Err("gateway parameter violates its multipleOf bound".into());
             }
         }
-        if schema.get("format").and_then(Value::as_str) == Some("int32")
-            && value.as_i64().is_none_or(|n| i32::try_from(n).is_err())
-            || schema.get("format").and_then(Value::as_str) == Some("int64")
-                && value.as_i64().is_none()
-            || schema.get("format").and_then(Value::as_str) == Some("float")
-                && !(number as f32).is_finite()
+        if schema.get("format").and_then(Value::as_str) == Some("float")
+            && !(number as f32).is_finite()
         {
             return Err("gateway parameter violates its numeric format".into());
         }

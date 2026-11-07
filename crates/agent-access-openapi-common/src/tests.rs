@@ -349,3 +349,24 @@ fn integer_bounds_do_not_lose_precision_above_f64_exact_range() {
     crate::schema::scalar("9007199254740992", &schema).unwrap();
     assert!(crate::schema::scalar("9007199254740993", &schema).is_err());
 }
+
+#[test]
+fn number_integer_bounds_and_multiples_remain_exact_above_f64_precision() {
+    let schema = json!({"type":"number","maximum":9007199254740992u64});
+    crate::schema::validate_schema(&schema, false).unwrap();
+    crate::schema::scalar("9007199254740992", &schema).unwrap();
+    assert!(crate::schema::scalar("9007199254740993", &schema).is_err());
+    let schema = json!({"type":"number","minimum":9007199254740993u64});
+    crate::schema::scalar("9007199254740993", &schema).unwrap();
+    assert!(crate::schema::scalar("9007199254740992", &schema).is_err());
+    let schema = json!({"type":"number","multipleOf":2});
+    crate::schema::scalar("9007199254740992", &schema).unwrap();
+    assert!(crate::schema::scalar("9007199254740993", &schema).is_err());
+}
+
+#[test]
+fn overflowing_numeric_multiple_ratio_is_rejected() {
+    let schema = json!({"type":"number","multipleOf":1e-308});
+    crate::schema::validate_schema(&schema, false).unwrap();
+    assert!(crate::schema::scalar("1e308", &schema).is_err());
+}
