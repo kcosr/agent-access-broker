@@ -461,6 +461,50 @@ async fn response_validator_preserves_encoding_and_leaves_retry_after_to_host() 
 }
 
 #[tokio::test]
+async fn optional_nontext_metadata_does_not_discard_success_or_error_response() {
+    let mut operation = plan("GET", "/items", "list");
+    operation["responses"] = json!({
+        "default":{"headers":[{"name":"X-Api-Version","schema":{"type":"string"}}],"contentTypes":[]}
+    });
+    let protocol = build(&input(operation)).unwrap();
+    let forwarded = classify(protocol.as_ref(), &Method::GET, "/items", &HeaderMap::new())
+        .unwrap()
+        .into_request()
+        .preflight(body(b""))
+        .await
+        .unwrap();
+    let mut upstream = HeaderMap::new();
+    upstream.insert(
+        "content-type",
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    upstream.insert(
+        "content-disposition",
+        HeaderValue::from_bytes(b"attachment; filename=\"r\xe9sum\xe9.pdf\"").unwrap(),
+    );
+    upstream.insert("x-api-version", HeaderValue::from_bytes(b"v\xff").unwrap());
+    let validator = forwarded.response.validator.as_ref().unwrap();
+    for status in [200, 404, 500] {
+        let selected = validator.validate(status, &upstream).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected["content-type"], "application/octet-stream");
+    }
+}
+
+#[tokio::test]
+async fn compiled_routes_preserve_custom_verb_and_parameter_pchar() {
+    let protocol = build(&input(plan("POST", "/jobs/{id}/action:run", "run"))).unwrap();
+    let target = "/jobs/a@b+c;d=e/action:run";
+    let forwarded = classify(protocol.as_ref(), &Method::POST, target, &HeaderMap::new())
+        .unwrap()
+        .into_request()
+        .preflight(body(b""))
+        .await
+        .unwrap();
+    assert_eq!(forwarded.relative_target, target);
+}
+
+#[tokio::test]
 async fn raw_json_is_forwarded_without_claiming_body_schema_validation() {
     let mut operation = plan("POST", "/items", "write");
     operation["requestBody"] = json!({"required":true,"mediaTypes":["application/json"]});
@@ -498,10 +542,7 @@ async fn body_presence_inspection_has_an_empty_frame_budget() {
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
-    assert_eq!(
-        error.message,
-        "gateway request body has excessive empty frames"
-    );
+    assert_eq!(error.message, "gateway request body could not be read");
 }
 
 #[test]

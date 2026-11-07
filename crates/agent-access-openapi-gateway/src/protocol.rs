@@ -1,5 +1,6 @@
 use agent_access_openapi_common::{
-    GATEWAY_MAX_PATHS, GatewayPlanV1, GatewayRouteManifestV1, validate_endpoint,
+    GATEWAY_MAX_PATHS, GatewayPlanV1, GatewayRouteManifestV1, GatewayRouteMatcher,
+    validate_endpoint,
 };
 use agent_access_provider::{
     GatewayClassification, GatewayManagedInput, GatewayProtocol, GatewayRequestHead,
@@ -20,7 +21,7 @@ pub(crate) struct Operation {
 
 #[derive(Debug)]
 pub(crate) struct Protocol {
-    pub manifest: GatewayRouteManifestV1,
+    pub routes: GatewayRouteMatcher,
     pub operations: BTreeMap<(String, String), Arc<Operation>>,
     pub upstream_base: String,
     pub manifest_generation: u64,
@@ -84,7 +85,7 @@ pub(crate) fn build(
         }
     }
     Ok(Arc::new(Protocol {
-        manifest,
+        routes: manifest.matcher().map_err(invalid)?,
         operations,
         upstream_base: endpoint.to_string(),
         manifest_generation: input.manifest_generation,
@@ -119,7 +120,7 @@ impl GatewayProtocol for Protocol {
             .split_once('?')
             .unwrap_or((head.path_and_query(), ""));
         let selected = self
-            .manifest
+            .routes
             .select(head.method().as_str(), path)
             .map_err(|_| {
                 ProviderError::deny(

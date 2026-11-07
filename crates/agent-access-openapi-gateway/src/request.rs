@@ -10,9 +10,6 @@ use http::{HeaderMap, Method};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
-// Empty frames carry no bytes but still consume work while finding presence.
-const MAX_EMPTY_PREFIX_FRAMES: usize = 32;
-
 // Deliberately no Debug: these values can carry caller secrets.
 pub(crate) struct Request {
     pub operation: Arc<Operation>,
@@ -43,18 +40,11 @@ impl GatewayRequest for Request {
             .validate_request_parameters(&matched, Some(&self.raw_query), &self.headers)
             // The shared profile returns only bounded, value-free literals.
             .map_err(|message| ProviderError::deny(ReasonCode::InputInvalid, message))?;
-        let mut empty_frames = 0;
         let present = loop {
             match body.next_frame().await.map_err(body_error)? {
-                Some(GatewayBodyFrame::Data(bytes)) if bytes.is_empty() => {
-                    empty_frames += 1;
-                    if empty_frames > MAX_EMPTY_PREFIX_FRAMES {
-                        return Err(ProviderError::deny(
-                            ReasonCode::GatewayRequestBodyDenied,
-                            "gateway request body has excessive empty frames",
-                        ));
-                    }
-                }
+                // The SDK bounds consecutive empty frames and latches a read
+                // error; no second inspection budget or retained copy is needed.
+                Some(GatewayBodyFrame::Data(bytes)) if bytes.is_empty() => {}
                 Some(GatewayBodyFrame::Data(_)) => break true,
                 None => break false,
                 Some(_) => {
