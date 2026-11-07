@@ -2577,6 +2577,14 @@ responses for `GET /v1/me` (identity summary and `serviceLimits`),
 `GET /v1/services/{service}`, and the service resource/action lists are raw
 JSON. Only their errors use the envelope.
 
+Ordinary agent discovery (`/v1/capabilities`, `/v1/services`, service detail and
+action lists) includes invoke services only. Gateway services, including Git,
+are omitted; direct ordinary lookups return the existing 403
+`service_action_denied` missing/not-visible response. The internal descriptors
+remain available to management, credential/OAuth setup, grants, token scopes
+and audit. Gateway addresses and authentication are supplied through native-client
+setup. A caller may explicitly inspect resource access for a known gateway ID.
+
 ### Live service limits
 
 `GET /v1/services/{service}`, `agent-access services describe SERVICE`, and the
@@ -2708,7 +2716,9 @@ inventories remain independent. Refresh discovery after resolving a requirement.
 `GET /v1/services/{service}/resource-access` accepts optional `action`
 (an exact canonical action name), `resourceType`, `prefix`, `limit` (default 50,
 range 1–100), and opaque `cursor`. The JSON send operation is
-`resource_access.describe`. Without `resourceType`, all action-bound types and
+`resource_access.describe`. This explicit query supports known gateway service
+IDs as well as invoke services, subject to caller authority and local credential
+readiness. Without `resourceType`, all action-bound types and
 unscoped actions are described. The response separates policy access from
 registered references. `executionContext` identifies the admitted context;
 `availability` uses the service list's credential-readiness and remediation shape,
@@ -2800,11 +2810,10 @@ The original service capability endpoints retain their full response shapes;
 compact CLI/MCP service lists are projections of those canonical definitions.
 
 
-Visible service entries include `surface`. Provider services report
-`"invoke"`. Gateway services report `"gateway"` and may also include
-`gatewayKind`, `brokerHosts`, `credentialVerificationInputs`, and
-`resourceScopes`; these actions are grantable policy actions and are not
-callable through `/v1/invoke`.
+Ordinary visible service entries report `surface: "invoke"`. Management
+projections retain gateway policy identities with `surface: "gateway"`,
+`gatewayKind`, `brokerHosts`, `credentialVerificationInputs` and `resourceScopes`;
+gateway actions cannot be called through `/v1/invoke`.
 
 ### ManagementEnvelope (self-service and admin management)
 

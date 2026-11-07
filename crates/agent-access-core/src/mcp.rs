@@ -498,6 +498,7 @@ pub fn project_service_list(
     verbose: bool,
 ) -> Result<Value, ProjectionError> {
     let mut services = parse_discovery_services(value)?;
+    services.retain(|service| service.capabilities.surface == "invoke");
     if let Some(prefix) = prefix {
         services.retain(|service| service.capabilities.service.starts_with(prefix));
     }
@@ -544,7 +545,11 @@ pub fn parse_discovery_service(value: Value) -> Result<DiscoveryServiceValue, Pr
     let capabilities =
         serde_json::from_value::<agent_access_provider::ServiceCapabilities>(value.clone())
             .map_err(|_| ProjectionError("service response is invalid"))?;
-    validate_discovery_service(capabilities, value)
+    let service = validate_discovery_service(capabilities, value)?;
+    if service.capabilities.surface != "invoke" {
+        return Err(ProjectionError("service is not visible or does not exist"));
+    }
+    Ok(service)
 }
 
 fn validate_discovery_service(
@@ -1070,6 +1075,25 @@ mod tests {
         assert_eq!(
             discovery_actions(parsed).unwrap()[0].1["futureField"],
             "preserved"
+        );
+    }
+
+    #[test]
+    fn discovery_projections_never_restore_gateway_metadata() {
+        let gateway = json!({"service":"git","displayName":"Git","surface":"gateway","gatewayKind":"git_http","brokerHosts":["git.example.test"],"scopeTypes":[],"availability":{"state":"available","requirements":[],"message":"Locally available"},"actions":[]});
+        for prefix in [None, Some("git")] {
+            assert_eq!(
+                project_service_list(json!([gateway.clone()]), prefix, false).unwrap(),
+                json!({"services":[]})
+            );
+            assert_eq!(
+                project_service_list(json!([gateway.clone()]), prefix, true).unwrap(),
+                json!([])
+            );
+        }
+        assert_eq!(
+            parse_discovery_service(gateway).unwrap_err().to_string(),
+            "service is not visible or does not exist"
         );
     }
 }

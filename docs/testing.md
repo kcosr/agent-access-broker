@@ -2171,6 +2171,14 @@ temporary tokens/configuration and stop the local broker after the run.
 
 ## Downstream HTTP MCP
 
+Gateway discovery regressions cover HTTP lists and direct lookups, the real CLI
+and stdio MCP process against an isolated Broker, and HTTP MCP helpers. They
+assert that Git gateways are absent from ordinary service/action discovery while
+explicit resource-access inspection retains granted repository scopes. Core
+checks retain the gateway's management and token-option metadata; existing Git
+credential verification, OAuth and protocol tests cover the independent native
+client path.
+
 `cargo test -p agent-access-broker-host --lib tests::mcp::` exercises the real public
 router and SDK transport: initialization, helpers, native JSON calls, resource
 denials, current bearer authentication, session ownership, reload/expiry,

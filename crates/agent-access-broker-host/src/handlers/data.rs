@@ -722,14 +722,17 @@ async fn service_discovery_response(
             ))
             .into_response()
         };
-        let Some(discovery) = context.snapshot.runtime.service_discovery(
-            &context.identity,
-            context
-                .execution_context
-                .as_ref()
-                .expect("discovery context"),
-            &service,
-        ) else {
+        let runtime = &context.snapshot.runtime;
+        let execution_context = context
+            .execution_context
+            .as_ref()
+            .expect("discovery context");
+        let discovery = if resource_access {
+            runtime.service_discovery(&context.identity, execution_context, &service)
+        } else {
+            runtime.agent_service_discovery(&context.identity, execution_context, &service)
+        };
+        let Some(discovery) = discovery else {
             return envelope_response(not_found_envelope(
                 request_id,
                 new_broker_request_id(),

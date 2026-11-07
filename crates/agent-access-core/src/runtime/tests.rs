@@ -5661,7 +5661,7 @@ async fn identity_failure_for_operation_is_audited() {
 }
 
 #[test]
-fn git_http_gateways_are_registered_and_visible_in_capabilities() {
+fn git_http_gateways_retain_policy_and_access_metadata_without_agent_discovery() {
     let mut config = base_fake_config();
     config.credentials.service.insert(
         "gitlab_git".to_string(),
@@ -5685,12 +5685,36 @@ fn git_http_gateways_are_registered_and_visible_in_capabilities() {
 
     let runtime = BrokerRuntime::new(config).unwrap();
     assert!(runtime.registered_service_names().contains("gitlab_git"));
-    let services =
-        runtime.visible_services(&IdentityContext::anonymous(), &default_execution_context());
-    let gitlab = services
+    let identity = IdentityContext::anonymous();
+    let context = default_execution_context();
+    let services = runtime.visible_services(&identity, &context);
+    assert!(
+        services
+            .iter()
+            .all(|service| service.service != "gitlab_git")
+    );
+    assert!(
+        runtime
+            .service_capabilities(&identity, &context, "gitlab_git")
+            .is_none()
+    );
+    assert!(
+        runtime
+            .agent_service_discovery(&identity, &context, "gitlab_git")
+            .is_none()
+    );
+    assert!(
+        runtime
+            .capabilities(&identity, &context)
+            .services
+            .iter()
+            .all(|service| service.service != "gitlab_git")
+    );
+    let management = runtime.visible_services_for_management(&identity);
+    let gitlab = management
         .iter()
         .find(|service| service.service == "gitlab_git")
-        .expect("gateway service should be visible");
+        .expect("gateway policy metadata remains available for management");
     assert_eq!(gitlab.display_name, "GitLab Git");
     assert_eq!(gitlab.surface, "gateway");
     assert_eq!(gitlab.gateway_kind.as_deref(), Some("git_http"));
@@ -5716,6 +5740,39 @@ fn git_http_gateways_are_registered_and_visible_in_capabilities() {
     assert_eq!(
         serialized["credentialVerificationInputs"],
         serde_json::json!(["repository"])
+    );
+    assert!(
+        runtime
+            .policy_visible_services(&identity, &context)
+            .iter()
+            .any(|service| service.service == "gitlab_git")
+    );
+    assert!(
+        runtime
+            .configured_service_capabilities()
+            .iter()
+            .any(|service| service.service == "gitlab_git")
+    );
+    let token_options = runtime.agent_token_options_for_identity(&identity);
+    let gateway_option = token_options
+        .services
+        .iter()
+        .find(|service| service.service == "gitlab_git")
+        .unwrap();
+    assert_eq!(gateway_option.broker_hosts, ["git.example.test"]);
+    assert_eq!(gateway_option.actions.len(), 2);
+    let access = runtime
+        .service_discovery(&identity, &context, "gitlab_git")
+        .expect("known gateway remains available for explicit access inspection")
+        .resource_access(&ResourceAccessQuery::default())
+        .unwrap();
+    assert_eq!(access.access.len(), 2);
+    assert!(
+        access
+            .registered_resources
+            .items
+            .iter()
+            .any(|resource| resource.value == "sip/service")
     );
 }
 

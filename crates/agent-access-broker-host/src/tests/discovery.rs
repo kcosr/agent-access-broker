@@ -549,18 +549,18 @@ async fn discovery_agent_caveats_filter_resources_without_catalog_gating() {
         response_json(resources).await["registeredResources"]["items"][0]["value"],
         "TEST"
     );
-    // Gateway remains discoverable even though it has no native invoke tools.
-    let actions = spec_get(
+    // A known gateway remains inspectable without advertising its service/actions.
+    let gateway_access = spec_get(
         fixture.app.clone(),
-        "/v1/services/gitlab_git/actions?resource=sip%2Fservice",
-        "discovery-gateway-actions",
+        "/v1/services/gitlab_git/resource-access?action=repo.fetch",
+        "discovery-gateway-access",
         Some(&fixture.agent_token),
     )
     .await;
-    assert_eq!(actions.status(), StatusCode::OK);
+    assert_eq!(gateway_access.status(), StatusCode::OK);
     assert_eq!(
-        response_json(actions).await["actions"],
-        json!(["repo.fetch"])
+        response_json(gateway_access).await["access"][0]["action"],
+        "repo.fetch"
     );
     let denied_fixture = spec_agent_fixture(&["gitlab"], false).await;
     let hidden = spec_get(
@@ -571,6 +571,83 @@ async fn discovery_agent_caveats_filter_resources_without_catalog_gating() {
     )
     .await;
     assert_eq!(hidden.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn gateway_agent_discovery_matches_missing_services_and_keeps_explicit_access() {
+    let fixture = spec_agent_fixture(&["fake", "gitlab_git"], true).await;
+    for route in ["/v1/services", "/v1/capabilities", "/v1/spec/catalog"] {
+        let response = spec_get(
+            fixture.app.clone(),
+            route,
+            "gateway-discovery-list",
+            Some(&fixture.agent_token),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{route}");
+        let body = response_json(response).await;
+        let services = body
+            .as_array()
+            .or_else(|| body["services"].as_array())
+            .unwrap();
+        assert!(
+            services.iter().any(|service| service["service"] == "fake"),
+            "{body}"
+        );
+        assert!(
+            services
+                .iter()
+                .all(|service| service["service"] != "gitlab_git"),
+            "{body}"
+        );
+    }
+    for service in ["gitlab_git", "missing"] {
+        for suffix in [
+            "",
+            "/actions",
+            "/actions?resource=sip%2Fservice",
+            "/actions?resourceType=invalid&type=unknown",
+        ] {
+            let route = format!("/v1/services/{service}{suffix}");
+            let response = spec_get(
+                fixture.app.clone(),
+                &route,
+                "gateway-discovery-hidden",
+                Some(&fixture.agent_token),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{route}");
+            let body = response_json(response).await;
+            assert_eq!(body["reasonCode"], "service_action_denied", "{body}");
+            assert_eq!(
+                body["error"]["message"], "service is not visible for this identity",
+                "{body}"
+            );
+            assert!(body.get("actions").is_none());
+            assert!(body.get("brokerHosts").is_none());
+        }
+    }
+    // The descriptor and its scopes still enforce the same caller's token boundary.
+    let response = spec_get(
+        fixture.app.clone(),
+        "/v1/services/gitlab_git/resource-access",
+        "gateway-access-retained",
+        Some(&fixture.agent_token),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let access = response_json(response).await;
+    assert_eq!(access["access"][0]["action"], "repo.fetch");
+    assert_eq!(access["access"][0]["resourceType"], "git_repository");
+    let denied = spec_agent_fixture(&["fake"], true).await;
+    let response = spec_get(
+        denied.app,
+        "/v1/services/gitlab_git/resource-access?cursor=invalid",
+        "gateway-access-token-denied",
+        Some(&denied.agent_token),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

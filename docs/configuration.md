@@ -1927,6 +1927,11 @@ table: this build reserves `jira`, `confluence`, `gitlab`, `cloudbees_ci`,
 `fake`, `gmail`, `teams` and `oauth_stub`, so configuring a provider never
 renames a gateway's service.
 
+Gateway policy identities remain in management, credential setup, grants and
+token options, but ordinary agent service/action discovery omits them. Supply
+the gateway hostname and authentication setup to native Git clients. Explicit
+resource-access inspection for a known gateway service remains available.
+
 Gateway config participates in normal validation and reloads, but it does not
 bind network traffic by itself. Run `agent-access-broker serve` with
 `--gateway-listen <addr>` to expose the dedicated gateway listener. The public
