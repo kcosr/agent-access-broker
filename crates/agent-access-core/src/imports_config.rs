@@ -138,7 +138,7 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
             .providers
             .registry()
             .imported_adapter(kind)
-            .is_none_or(|adapter| adapter.endpoint_form() == ImportEndpointForm::Http)
+            .is_some_and(|adapter| adapter.endpoint_form() == ImportEndpointForm::Http)
     });
     if imports.enabled
         && (imports.allowed_kinds.is_empty()
@@ -598,5 +598,137 @@ mod tests {
             "mcp_http",
             "https://tools.example/mcp"
         ));
+    }
+    fn binding(endpoint: &str, host: &str) -> ImportedGatewayBinding {
+        toml::from_str(&format!("endpoint = {endpoint:?}\nbroker_hosts = [{host:?}]\nauth_modes = [\"bearer_broker_token\"]\n")).unwrap()
+    }
+
+    #[test]
+    fn gateway_binding_reserves_canonical_hosts_and_requires_exact_allowed_destination() {
+        let mut config = import_config("development", false);
+        config.imports.allowed_endpoints = vec!["https://api.example/**".into()];
+        config.imports.gateway_bindings.insert(
+            "inventory".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        let errors = |config: &BrokerConfig| {
+            let mut errors = Vec::new();
+            validate_gateway_bindings(config, &mut errors);
+            errors
+        };
+        assert!(errors(&config).is_empty());
+        config.imports.gateway_bindings.insert(
+            "other".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("reserved or duplicate host"))
+        );
+        config.imports.gateway_bindings.remove("other");
+        let mut static_gateway =
+            crate::GatewayConfig::new("git_http", "Git", "https://git.example");
+        static_gateway.broker_hosts = vec!["inventory.gateway.example".into()];
+        config.gateways.insert("git".into(), static_gateway);
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("reserved or duplicate host"))
+        );
+        config.gateways.clear();
+        config
+            .imports
+            .gateway_bindings
+            .get_mut("inventory")
+            .unwrap()
+            .endpoint = "https://unapproved.example/api".into();
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("allowed_endpoints"))
+        );
+        config
+            .imports
+            .gateway_bindings
+            .get_mut("inventory")
+            .unwrap()
+            .endpoint = "https://api.example/**".into();
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("fixed HTTP(S)"))
+        );
+    }
+
+    #[test]
+    fn gateway_binding_rejects_identity_collisions_unsafe_ingress_and_oversized_caps() {
+        let mut config = import_config("production", false);
+        config.imports.allowed_endpoints = vec!["http://api.example/**".into()];
+        config.imports.gateway_bindings.insert(
+            "broker".into(),
+            binding("http://api.example/api", "api.gateway.example"),
+        );
+        let mut errors = Vec::new();
+        validate_gateway_bindings(&config, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("invalid service identity"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("HTTPS in production"))
+        );
+        let mut entry = config.imports.gateway_bindings.remove("broker").unwrap();
+        entry.auth_modes = vec!["anonymous".into()];
+        entry.redirect_policy = "same_origin".into();
+        entry.request_body_max_bytes = Some(config.limits.max_http_body_bytes + 1);
+        config
+            .imports
+            .gateway_bindings
+            .insert("inventory".into(), entry);
+        errors.clear();
+        validate_gateway_bindings(&config, &mut errors);
+        for expected in ["auth_modes", "redirect_policy", "request_body_max_bytes"] {
+            assert!(errors.iter().any(|error| error.contains(expected)));
+        }
+    }
+
+    #[test]
+    fn unavailable_adapter_kinds_keep_syntax_admission_and_no_execution_authority() {
+        assert!(import_errors("development", false, "unlinked_gateway").is_empty());
+        let mut config = import_config("development", false);
+        config.imports.enabled = true;
+        config.imports.allowed_kinds = vec!["unlinked_gateway".into()];
+        let mut errors = Vec::new();
+        validate_imports(&config, &mut errors);
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("allowed_endpoints"))
+        );
+        assert!(!import_errors("development", false, "BadAdapter").is_empty());
+    }
+    #[test]
+    fn gateway_binding_proxy_secrets_are_preflighted_even_without_an_import() {
+        let mut config = import_config("development", false);
+        let mut binding = binding("https://api.example/api", "inventory.gateway.example");
+        binding.egress_proxy = Some(crate::EgressProxyConfig {
+            url: "https://proxy.example:8443".into(),
+            username_ref: Some("env:AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_USER".into()),
+            password_ref: Some("env:AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_PASSWORD".into()),
+        });
+        config
+            .imports
+            .gateway_bindings
+            .insert("inventory".into(), binding);
+        let error = crate::runtime::preflight_configured_egress_proxies(&config).unwrap_err();
+        assert!(
+            matches!(error, crate::RuntimeError::MissingEnv { label, name }
+            if label == "imports.gateway_bindings.inventory.egress_proxy.username_ref"
+            && name == "AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_USER")
+        );
     }
 }

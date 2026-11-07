@@ -55,11 +55,27 @@ environment = "development"
 # management.enabled, and credential encryption). Disabled by default.
 [imports]
 enabled = false
-allowed_kinds = ["mcp_http", "openapi_http", "command"]
+allowed_kinds = ["mcp_http", "openapi_http", "openapi_gateway", "command"]
 # OpenAPI requires both its API base URL and document URL to be allowed.
 # See docs/imported-openapi.md for an example.
 allowed_endpoints = [] # For example ["https://tools.internal.example/mcp"].
 disabled_services = []
+
+# Reserve an OpenAPI HTTP gateway identity and ingress host before importing it.
+# Requires imports.enabled and its API endpoint in allowed_endpoints; URL sources
+# also require their independently approved document URL.
+# See docs/configuration.md#imported-gateway-bindings.
+# [imports.gateway_bindings.inventory]
+# endpoint = "https://inventory.example/api"
+# broker_hosts = ["inventory.gateway.example"]
+# auth_modes = ["bearer_broker_token", "basic_broker_token"]
+# basic_broker_token_username = "agent-access"
+# allow_forwarded_identity = false
+# redirect_policy = "none"
+# request_body_max_bytes = 1048576
+# response_body_max_bytes = 8388608
+# streaming_idle_timeout_ms = 30000
+# correlation_headers = true
 
 # Operator-approved local executables for the `command` import kind, named by
 # imports as `command:<name>`. Requires "command" in imports.allowed_kinds.

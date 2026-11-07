@@ -674,9 +674,17 @@ impl BrokerRuntime {
                     .registry()
                     .imported_adapter(kind)
                     .is_some_and(|adapter| {
-                        !adapter.development_only()
+                        (!adapter.development_only()
                             || (self.config.deployment.environment != "production"
-                                && self.config.deployment.enable_fake_service)
+                                && self.config.deployment.enable_fake_service))
+                            && adapter.gateway_kind().is_none_or(|kind| {
+                                self.config
+                                    .providers
+                                    .registry()
+                                    .gateway(kind)
+                                    .and_then(|registration| registration.managed_builder())
+                                    .is_some()
+                            })
                     })
             })
             .cloned()
@@ -701,14 +709,14 @@ impl BrokerRuntime {
                     || self.config.imports.disabled_services.contains(service)
                 {
                     Some("This binding is disabled by operator policy.")
-                } else if !self.config.imports.allowed_kinds.iter().any(|kind| {
+                } else if !self.available_import_kinds().iter().any(|kind| {
                     self.config
                         .providers
                         .registry()
                         .imported_adapter(kind)
                         .is_some_and(|adapter| adapter.gateway_kind().is_some())
                 }) {
-                    Some("No permitted gateway import adapter is linked.")
+                    Some("No permitted gateway adapter and protocol module are linked.")
                 } else {
                     None
                 };
@@ -761,9 +769,6 @@ impl BrokerRuntime {
         if record.status != ImportedServiceStatus::Enabled {
             return Some("Imported service is not enabled.");
         }
-        if !destination_allowed(&self.config, &record.definition) {
-            return Some("Imported service is disabled by operator policy.");
-        }
         if self
             .config
             .providers
@@ -772,6 +777,25 @@ impl BrokerRuntime {
             .is_none()
         {
             return Some("The imported adapter is not linked in this broker.");
+        }
+        if let Some(kind) = self
+            .config
+            .providers
+            .registry()
+            .imported_adapter(&record.definition.adapter_kind)
+            .and_then(|adapter| adapter.gateway_kind())
+            && self
+                .config
+                .providers
+                .registry()
+                .gateway(kind)
+                .and_then(|registration| registration.managed_builder())
+                .is_none()
+        {
+            return Some("The imported gateway protocol module is not linked in this broker.");
+        }
+        if !destination_allowed(&self.config, &record.definition) {
+            return Some("Imported service is disabled by operator policy.");
         }
         if !self.imported_executable_available(service) {
             return Some(

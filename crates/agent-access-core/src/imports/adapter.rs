@@ -33,7 +33,8 @@ pub struct ImportedDiscovery {
     pub metadata: Value,
     pub tools: Vec<ImportedDiscoveredTool>,
     /// Complete durable route guards, separate from the expiring preview.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// This in-memory publication candidate is stored only in its dedicated row.
+    #[serde(skip)]
     pub gateway_routes: Option<super::ImportedGatewayRouteCandidate>,
     /// The service-level metadata acceptance stores with the accepted
     /// actions (`imported_services.accepted_metadata_json`), as the adapter
@@ -71,7 +72,6 @@ pub struct ImportedAdapterContext<'a> {
     /// Retained or newly uploaded bytes, supplied only for document discovery.
     document: Option<&'a [u8]>,
     gateway_routes: Option<&'a super::ImportedGatewayRouteRecord>,
-    gateway_actions: &'a [super::ImportedActionDefinition],
 }
 
 impl<'a> ImportedAdapterContext<'a> {
@@ -85,7 +85,6 @@ impl<'a> ImportedAdapterContext<'a> {
             command_registry: None,
             document: None,
             gateway_routes: None,
-            gateway_actions: &[],
         }
     }
 
@@ -110,14 +109,6 @@ impl<'a> ImportedAdapterContext<'a> {
     ) -> Self {
         self.gateway_routes = routes;
         self
-    }
-
-    pub fn with_gateway_actions(mut self, actions: &'a [super::ImportedActionDefinition]) -> Self {
-        self.gateway_actions = actions;
-        self
-    }
-    pub fn gateway_actions(&self) -> &'a [super::ImportedActionDefinition] {
-        self.gateway_actions
     }
 
     pub fn gateway_routes(&self) -> Option<&'a super::ImportedGatewayRouteRecord> {
@@ -161,7 +152,7 @@ pub enum ImportedProvider {
 }
 
 impl ImportedProvider {
-    /// The provider core publishes for the service.
+    /// An invoke provider, absent for a gateway build result.
     pub fn provider(&self) -> Option<Arc<dyn Provider>> {
         match self {
             Self::Upstream(provider) => Some(provider.clone()),
@@ -291,9 +282,10 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     /// The host builds an adapter's clients in the ordinary routing category.
     /// A command import never runs its command here: startup and reload stay
     /// offline. An adapter whose [`Self::endpoint_form`] is `Command` returns
-    /// [`ImportedProvider::Command`]; every other adapter returns
-    /// [`ImportedProvider::Upstream`], and core fails the import closed
-    /// otherwise.
+    /// [`ImportedProvider::Command`]. A gateway adapter returns versioned plans
+    /// in [`ImportedProvider::Gateway`], and other HTTP adapters return
+    /// [`ImportedProvider::Upstream`]. Core checks this role and resolves the
+    /// separately registered gateway builder before publishing the executable.
     fn build(
         &self,
         definition: &ImportedServiceDefinition,

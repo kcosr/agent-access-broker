@@ -218,7 +218,14 @@ impl ImportedAdapter for OpenApiGatewayAdapter {
             return Err(source::credential_error().into());
         }
         let operation = async {
-            let bytes = source::read(&settings, authentication, import.document(), host).await?;
+            let bytes = source::read(
+                &definition.service,
+                &settings,
+                authentication,
+                import.document(),
+                host,
+            )
+            .await?;
             let options = GatewayCompileOptions {
                 endpoint: definition.endpoint.clone(),
                 document_base: settings.document_base.to_string(),

@@ -38,7 +38,7 @@ pub enum GatewayExecutionBinding {
 }
 
 /// A publication fence for the exact admitted service/action and routing generation.
-/// Any relevant catalog, binding, credential or network change retires this flag;
+/// Any relevant catalog, binding, service-slot or network change retires this flag;
 /// it never resolves an old request against a replacement generation.
 #[derive(Clone)]
 pub struct ImportedGatewayDispatchFence {
@@ -206,6 +206,13 @@ pub(in crate::runtime) fn compile_executable(
                 .actions
                 .iter()
                 .map(|action| {
+                    let encoded = serde_json::to_vec(&action.definition)
+                        .map_err(|_| "invalid gateway action definition")?;
+                    if action.version == 0
+                        || format!("{:x}", Sha256::digest(&encoded)) != action.definition_hash
+                    {
+                        return Err("gateway accepted action version or hash is invalid");
+                    }
                     let plan = plans
                         .get(&action.definition.action)
                         .ok_or("gateway operation plan missing")?;

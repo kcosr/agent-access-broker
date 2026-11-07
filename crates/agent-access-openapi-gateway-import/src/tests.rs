@@ -97,6 +97,12 @@ async fn complete_discovery_preserves_removed_literal_guards_and_has_no_automati
     let first = discover(&definition, &document(), None).await;
     assert_eq!(first.tools.len(), 2);
     assert!(
+        serde_json::to_value(&first)
+            .unwrap()
+            .get("gatewayRoutes")
+            .is_none()
+    );
+    assert!(
         first
             .tools
             .iter()

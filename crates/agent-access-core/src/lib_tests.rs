@@ -5238,7 +5238,10 @@ upload_spool_dir = "upload-spool"
 "#;
     let config: BrokerConfig = parse_test_config(raw).unwrap();
     validate_broker_config(&config).unwrap();
-    assert_eq!(config.gateways["gitlab_git"].protocol_fields["git"]["allow_push"].as_bool(), Some(true));
+    assert_eq!(
+        config.gateways["gitlab_git"].protocol_fields["git"]["allow_push"].as_bool(),
+        Some(true)
+    );
     assert_eq!(
         config.policy.grants[0].resources.resource_group_ids,
         vec!["repositories"]

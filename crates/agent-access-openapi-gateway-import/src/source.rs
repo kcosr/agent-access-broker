@@ -38,6 +38,7 @@ fn authorization(
         .map_err(|_| credential_error())
 }
 pub(crate) async fn read(
+    service: &str,
     settings: &Settings,
     authentication: &ImportedDiscoveryAuthentication,
     uploaded: Option<&[u8]>,
@@ -99,6 +100,14 @@ pub(crate) async fn read(
         })?;
     let status = response.status().as_u16();
     complete_upstream_trace(&mut response, None);
+    if status == 429 {
+        return Err(upstream_rate_limited(
+            service,
+            UpstreamRetryAfter::from_headers(response.headers()),
+        )
+        .with_upstream(Some(status), None)
+        .into());
+    }
     if status != 200 {
         let reason = match status {
             401 => ReasonCode::UpstreamUnauthorized,

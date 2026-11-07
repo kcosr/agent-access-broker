@@ -8257,6 +8257,12 @@ pub(crate) fn preflight_configured_egress_proxies(
             gateway.egress_proxy.as_ref(),
         )?;
     }
+    for (service, binding) in &config.imports.gateway_bindings {
+        preflight_egress_proxy(
+            &format!("imports.gateway_bindings.{service}.egress_proxy"),
+            binding.egress_proxy.as_ref(),
+        )?;
+    }
     Ok(())
 }
 
