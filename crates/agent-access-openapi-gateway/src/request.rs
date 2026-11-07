@@ -6,7 +6,7 @@ use agent_access_provider::{
     GatewayStatusMatch, ProviderError, ReasonCode,
 };
 use async_trait::async_trait;
-use http::{HeaderMap, Method};
+use http::{HeaderMap, HeaderValue, Method, header::ACCEPT_ENCODING};
 use serde_json::json;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -36,10 +36,15 @@ impl GatewayRequest for Request {
         };
         // Values are checked only after host admission. They never change the
         // already classified action or its empty resource scope.
-        let validated = plan
+        let mut validated = plan
             .validate_request_parameters(&matched, Some(&self.raw_query), &self.headers)
             // The shared profile returns only bounded, value-free literals.
             .map_err(|message| ProviderError::deny(ReasonCode::InputInvalid, message))?;
+        // Caller negotiation is outside this finite profile. The host sends
+        // this fixed preference and preserves encoded bytes if it is ignored.
+        validated
+            .headers
+            .insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
         let present = loop {
             match body.next_frame().await.map_err(body_error)? {
                 // The SDK bounds consecutive empty frames and latches a read

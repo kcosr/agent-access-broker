@@ -245,7 +245,8 @@ async fn opaque_upload_replays_inspected_prefix_and_drops_identity_headers() {
         .await
         .unwrap();
     assert_eq!(forwarded.relative_target, "/items/SECRET");
-    assert_eq!(forwarded.headers.len(), 1);
+    assert_eq!(forwarded.headers.len(), 2);
+    assert_eq!(forwarded.headers["accept-encoding"], "identity");
     assert_eq!(
         forwarded.headers["content-type"],
         "application/octet-stream"
