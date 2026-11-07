@@ -16,6 +16,7 @@ All notable changes to this project are documented in this file.
   Gateway live queues and admission estimates are no longer exposed through
   describe; configured allowances remain in `/v1/me.serviceLimits` and
   administrator service-limits routes.
+  ([#102](https://github.com/kcosr/agent-access-broker/pull/102))
 
 - **Agent token issuance requires explicit context permission and a read-only choice.**
   Upgrade Broker, CLI and portal together. `agentTokenIssuance` is now a complete
