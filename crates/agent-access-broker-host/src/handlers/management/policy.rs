@@ -104,6 +104,7 @@ pub(crate) struct PolicyServiceCatalog {
     broker_hosts: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     credential_verification_inputs: Vec<String>,
+    credential_verification_supported: bool,
     actions: Vec<PolicyActionCatalog>,
     resource_scopes: BTreeMap<String, PolicyScopeCatalog>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1744,6 +1745,7 @@ pub(crate) fn service_catalog(
         gateway_kind: capabilities.gateway_kind,
         broker_hosts: capabilities.broker_hosts,
         credential_verification_inputs: capabilities.credential_verification_inputs,
+        credential_verification_supported: capabilities.credential_verification_supported,
         actions,
         resource_scopes,
         aggregate_invocation_limit,

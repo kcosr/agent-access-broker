@@ -555,9 +555,9 @@ async fn first_provisioning_lists_entitled_consumers_from_an_empty_store() {
     assert_eq!(
         gitlab["consumers"],
         json!([
-            {"service": "gitlab", "displayName": "GitLab", "credentialVerificationInputs": []},
+            {"service": "gitlab", "displayName": "GitLab", "credentialVerificationInputs": [],"credentialVerificationSupported":true},
             {"service": "gitlab_git", "displayName": "GitLab Git",
-                "credentialVerificationInputs": ["repository"]}
+                "credentialVerificationInputs": ["repository"],"credentialVerificationSupported":true}
         ])
     );
     assert_eq!(gitlab["otherConsumers"], 0);
@@ -645,7 +645,7 @@ async fn hidden_consumers_never_name_a_shared_connection() {
     assert_eq!(
         gitlab["consumers"],
         json!([{"service": "gitlab_git", "displayName": "GitLab Git",
-            "credentialVerificationInputs": ["repository"]}])
+            "credentialVerificationInputs": ["repository"],"credentialVerificationSupported":true}])
     );
     assert_eq!(gitlab["otherConsumers"], 1);
     let schema = fixture

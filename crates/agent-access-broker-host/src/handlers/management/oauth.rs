@@ -305,6 +305,7 @@ fn registration_consumer_view(
                 service: service.clone(),
                 display_name: descriptor.display_name.clone(),
                 credential_verification_inputs: descriptor.credential_verification_inputs(),
+                credential_verification_supported: descriptor.credentials.verification_supported,
             });
         }
     }

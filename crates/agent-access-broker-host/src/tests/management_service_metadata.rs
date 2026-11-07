@@ -268,7 +268,7 @@ fn assert_credential_target_metadata(targets: &Value) {
     assert_eq!(
         git["consumers"],
         json!([{"service": "gitlab_git", "displayName": "GitLab Git",
-            "credentialVerificationInputs": ["repository"]}])
+            "credentialVerificationInputs": ["repository"],"credentialVerificationSupported":true}])
     );
     assert_eq!(git["otherConsumers"], 0);
     assert_eq!(git["tokenProfiles"][0]["profile"], "git-bearer-token");

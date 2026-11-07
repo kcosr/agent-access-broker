@@ -1017,7 +1017,7 @@ async fn connection_rows_describe_services_from_their_descriptors() {
     assert_eq!(
         rows[0]["consumers"],
         json!([{"service": "oauth_stub", "displayName": descriptor.display_name,
-            "credentialVerificationInputs": []}])
+            "credentialVerificationInputs": [],"credentialVerificationSupported":true}])
     );
     assert_eq!(rows[0]["otherConsumers"], 0);
     assert_eq!(rows[0]["connectionDescription"], connection.description);

@@ -2662,7 +2662,7 @@ async fn personal_mode_added_after_acceptance_is_provisioned_and_verified_from_a
     assert_eq!(
         target["consumers"],
         json!([{"service": "tickets", "displayName": "tickets command",
-            "credentialVerificationInputs": []}])
+            "credentialVerificationInputs": [],"credentialVerificationSupported":true}])
     );
     assert!(store.list_credentials(Some("avery")).unwrap().is_empty());
     let (status, stored) = request(
