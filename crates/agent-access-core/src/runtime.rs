@@ -4632,7 +4632,7 @@ impl BrokerRuntime {
     fn preflight_git_http_gateway_credential_verification(
         &self,
         service: &str,
-        gateway: &GatewayConfig,
+        _gateway: &GatewayConfig,
         identity: &IdentityContext,
         input: CredentialVerificationInput,
     ) -> Result<CredentialVerificationInput, ProviderError> {

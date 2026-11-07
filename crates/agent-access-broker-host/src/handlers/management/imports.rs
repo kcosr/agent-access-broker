@@ -183,10 +183,22 @@ fn service_view<'a>(runtime: &BrokerRuntime, record: &'a ImportedServiceRecord) 
     }
 }
 
+fn import_scoped_mcp(runtime: &BrokerRuntime, service: &str) -> Value {
+    if runtime
+        .imported_catalog()
+        .service(service)
+        .is_some_and(|record| record.gateway_routes.is_some())
+    {
+        Value::Null
+    } else {
+        json!(runtime.scoped_mcp_diagnostics(service))
+    }
+}
+
 fn record_result(runtime: &BrokerRuntime, catalog: &ImportedCatalog, service: &str) -> Value {
     let record = catalog.service(service);
     let unavailable = runtime.imported_service_unavailable_reason(service);
-    let mut result = json!({"catalogRevision": catalog.revision, "service":record.map(|record| service_view(runtime, record)), "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)});
+    let mut result = json!({"catalogRevision": catalog.revision, "service":record.map(|record| service_view(runtime, record)), "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":import_scoped_mcp(runtime, service)});
     if let Some(version) = record.and_then(command_version) {
         result["commandVersion"] = json!(version);
     }
@@ -223,6 +235,9 @@ fn preview_scoped_mcp_warnings(
     record: &ImportedServiceRecord,
     preview: Option<&ImportedPreview>,
 ) -> Result<Vec<ScopedMcpWarning>, ManagedStoreError> {
+    if record.gateway_routes.is_some() {
+        return Ok(Vec::new());
+    }
     let Some(preview) = preview else {
         return Ok(Vec::new());
     };
@@ -496,7 +511,7 @@ async fn preview_response(
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
         let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
-        let mut result = json!({"catalogRevision":catalog.revision,"service":service_view(&runtime, record),"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        let mut result = json!({"catalogRevision":catalog.revision,"service":service_view(&runtime, record),"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":import_scoped_mcp(&runtime, &service_owned),"scopedMcpWarnings":warnings});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
         }

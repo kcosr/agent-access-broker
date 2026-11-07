@@ -434,7 +434,7 @@ fn command_version() -> Value {
 fn service_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
         "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
-        "catalogRevision":revision(),"service":service_view(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
+        "catalogRevision":revision(),"service":service_view(),"scopedMcp":{"oneOf":[{"type":"null"},scoped_mcp_readiness()]},"commandVersion":command_version(),
         "resourceTypeEffects":resource_type_effects()
     }})
 }
@@ -485,7 +485,7 @@ fn preview_result() -> Value {
         "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_view(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
-        "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings(),
+        "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":{"oneOf":[{"type":"null"},scoped_mcp_readiness()]},"scopedMcpWarnings":scoped_mcp_warnings(),
         "commandVersion":command_version()
     }})
 }
