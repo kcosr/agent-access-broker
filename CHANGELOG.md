@@ -417,7 +417,13 @@ All notable changes to this project are documented in this file.
 - Gateway request capacity and terminal audit now join upload, response and bounded
   unread-body disposal. Empty or fixed-length responses release their delivery
   owner at the framing boundary; early upstream success followed by upload failure
-  remains one failed transfer with the observed upstream status.
+  remains one failed transfer with the observed upstream status. Responses with
+  both `Transfer-Encoding` and `Content-Length` now fail with
+  `upstream_protocol_failed` before credential recovery or body delivery.
+  Validator-free response profiles also reject repeated selected headers with
+  that reason before body delivery; Git's validator preserves its first
+  `Content-Type` value.
+  ([#103](https://github.com/kcosr/agent-access-broker/pull/103))
 
 - Jira Markdown writes no longer combine inline code with incompatible bold,
   italic, or strikethrough marks. Code text, safe links, and surrounding text

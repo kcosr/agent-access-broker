@@ -221,8 +221,8 @@ use agent_access_broker_host::{
     AssemblyIdentity, BrokerComposition, CompositionError, ModuleProvenance, SourceRevision,
 };
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
-use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
 use agent_access_git_http::GIT_HTTP_GATEWAY;
+use agent_access_gmail::{GMAIL_BACKEND, GOOGLE_OAUTH_DIALECT};
 use example_notes::NOTES_BACKEND;
 
 /// Every module this distribution can configure, in resource-type listing order.

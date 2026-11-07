@@ -2011,9 +2011,12 @@ Gateway keys (`[gateways.<name>]`):
   client repository URLs with or without `.git` and always uses `.git` for
   upstream discovery, fetch, and push. Repository authorization is unchanged.
 - `allowed_upstream_hosts` follows the same allowlist rules as providers.
-- `auth_modes` accepts `basic_broker_token` and `bearer_broker_token`. With Basic,
-  the username must equal `basic_broker_token_username`; both modes carry a
-  Broker token, never an upstream credential.
+- The common `auth_modes` field supports `basic_broker_token` and
+  `bearer_broker_token`; each linked kind declares which modes it accepts. The
+  shipped `git_http` module accepts only `basic_broker_token`, as Git clients
+  send Basic authentication. Other linked kinds may declare bearer support.
+  With Basic, the username must equal `basic_broker_token_username`; both modes
+  carry a Broker token, never an upstream credential.
 - `credential_modes` is required (non-empty); each value must be `service` or
   `per_user` and must have a matching configured credential for a gateway that
   requires one. A linked module may explicitly declare credential-free execution;
