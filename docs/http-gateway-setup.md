@@ -40,7 +40,9 @@ auth_modes = ["bearer_broker_token"]
 allow_forwarded_identity = false
 ```
 
-The binding reserves the service ID, host and exact upstream API destination.
+The binding reserves the service ID, host and exact upstream API destination;
+see the canonical [imported gateway binding configuration](configuration.md#imported-gateway-bindings)
+for field constraints and the listener contract.
 The destination must also pass `imports.allowed_endpoints`. For a document
 fetched from a URL, allow its document destination separately. Uploaded documents
 need no document URL or discovery credential. Enable the managed store and import

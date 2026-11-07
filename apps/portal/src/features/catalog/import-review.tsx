@@ -103,7 +103,7 @@ export function OperationDetails({ definition }: { definition: ImportActionDefin
       {operation.requiredBodyFields?.length ? <span className="wb-muted"> · {operation.requestBodyRequired ? "Required body fields" : "Required fields when body is supplied"}: {operation.requiredBodyFields.join(", ")}</span> : null}
       {operation.noContentStatuses.length ? <span className="wb-muted"> · Declares no response content ({operation.noContentStatuses.join(", ")})</span> : null}
       {operation.gateway ? <span className="wb-muted"> · Body schema not validated by gateway</span> : null}
-      {operation.parameters?.length ? <span className="wb-muted"> · Parameters: {operation.parameters.map((parameter) => `${parameter.location} ${parameter.name}${parameter.required ? " (required)" : " (optional)"}; ${parameter.style}${parameter.explode ? ", explode" : ""}`).join("; ")}</span> : null}
+      {operation.parameters?.length ? <span className="wb-muted"> · Parameters: {operation.parameters.map((parameter) => `${parameter.location} ${parameter.name}${parameter.required ? " (required)" : " (optional)"} — ${parameter.style}${parameter.explode ? ", explode" : ""}`).join("; ")}</span> : null}
       {operation.responseHeaders?.length ? <span className="wb-muted"> · Declared response headers: {operation.responseHeaders.map((response) => `${response.status}: ${response.names.join(", ")}`).join("; ")}</span> : null}
     </p>
   );

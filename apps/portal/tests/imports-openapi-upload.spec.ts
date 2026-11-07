@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { ImportDefinition, ImportPreviewResult } from "../src/import-types";
 import { ADMIN_SESSION } from "./support/command-import-api";
 import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
+import { GATEWAY_BINDING } from "../unit/gateway-import.fixture";
 
 // Mocked management contracts for source choice and uncertain upload recovery.
 // imports-openapi-upload-live.spec.ts exercises real retained-source discovery and grants.
@@ -15,12 +16,12 @@ const file = (name = "inventory.json", text = raw) => ({ name, mimeType: "applic
 function draft(definition: ImportDefinition): ImportPreviewResult {
   return {
     catalogRevision: 4, operatorAllowed: true, importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {}, preview: null,
-    scopedMcp: { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [],
+    scopedMcp: definition.adapterKind === "openapi_gateway" ? null : { ready: false, issues: [{ code: "service_unavailable", actions: [] }], truncated: false }, scopedMcpWarnings: [],
     service: { definition, status: "draft", version: 1, actions: [], slotVersions: {}, credentialInputs: {}, createdAt: "", updatedAt: "", createdBy: "admin", updatedBy: "admin" }
   };
 }
 
-async function mockApi(page: Page) {
+async function mockApi(page: Page, gateway = false) {
   const api = {
     current: null as ImportPreviewResult | null,
     created: [] as ImportDefinition[],
@@ -44,7 +45,7 @@ async function mockApi(page: Page) {
         api.created.push(definition);
         api.current = draft(definition);
         result = api.current;
-      } else result = { catalogRevision: api.current?.catalogRevision ?? 4, operatorEnabled: true, gatewayBindings: [], availableKinds: ["openapi_http"], commandImports: [], importAuthentication: [], services: api.current ? [api.current.service] : [] };
+      } else result = { catalogRevision: api.current?.catalogRevision ?? 4, operatorEnabled: true, gatewayBindings: gateway ? [{ ...GATEWAY_BINDING, available: !api.current }] : [], availableKinds: gateway ? ["openapi_gateway"] : ["openapi_http"], commandImports: [], importAuthentication: [], services: api.current ? [api.current.service] : [] };
     } else if (pathname === "/v1/admin/imports/inventory/document" && method === "PUT") {
       api.events.push("upload");
       const body = request.postDataBuffer()!;
@@ -83,12 +84,17 @@ async function mockApi(page: Page) {
   return api;
 }
 
-async function openCreate(page: Page): Promise<Locator> {
+async function openCreate(page: Page, gateway = false): Promise<Locator> {
   await page.goto(`${assets.baseUrl}/ui/admin/catalog?import=1`);
   const dialog = page.getByRole("dialog", { name: "Import service", exact: true });
-  await dialog.getByLabel("Service ID").fill("inventory");
+  if (gateway) {
+    await dialog.getByLabel("Approved gateway binding", { exact: true }).selectOption("inventory");
+    await dialog.getByLabel("Upstream authentication", { exact: true }).selectOption("anonymous");
+  } else {
+    await dialog.getByLabel("Service ID").fill("inventory");
+    await dialog.getByLabel("API base URL").fill("https://api.example.test/v1");
+  }
   await dialog.getByLabel("Display name").fill("Inventory");
-  await dialog.getByLabel("API base URL").fill("https://api.example.test/v1");
   return dialog;
 }
 
@@ -168,11 +174,11 @@ test("browse, drop, replace and remove enforce one bounded JSON source before cr
   expect(api.errors).toEqual([]);
 });
 
-for (const failure of ["reject", "lost"] as const) {
-  test(`a ${failure === "lost" ? "lost committed response" : "refused upload"} keeps one draft and requires visible current state before retry`, async ({ page }) => {
-    const api = await mockApi(page);
+for (const gateway of [false, true]) for (const failure of ["reject", "lost"] as const) {
+  test(`${gateway ? "Gateway" : "Actions/tools"}: a ${failure === "lost" ? "lost committed response" : "refused upload"} keeps one draft and requires visible current state before retry`, async ({ page }) => {
+    const api = await mockApi(page, gateway);
     api.failNext = failure;
-    const dialog = await openCreate(page);
+    const dialog = await openCreate(page, gateway);
     await dialog.getByRole("button", { name: "Upload file", exact: true }).click();
     await dialog.getByLabel("Choose specification JSON file").setInputFiles(file());
     await dialog.getByRole("button", { name: "Create draft" }).click();
@@ -190,9 +196,15 @@ for (const failure of ["reject", "lost"] as const) {
     await retry.getByRole("button", { name: "Reload current state" }).click();
     await expect(retry).toContainText(`Service revision ${version} · Catalog revision ${revision}`);
     await expect(retry).toContainText("Current state reloaded");
+    if (gateway) {
+      await expect(retry).toContainText("Upstream authentication: Anonymous");
+      await expect(retry).not.toContainText("This service no longer permits document uploads");
+      expect(api.created[0].connectionSettings).toEqual({ definitionSource: "upload", executionAuthentication: "anonymous" });
+    }
     if (failure === "lost") await expect(retry.getByLabel("Stored definition document")).toContainText("inventory.json");
     expect(api.reads).toBeGreaterThan(reads);
     expect(api.uploads).toHaveLength(1);
+    await expect(retry.getByRole("button", { name: "Upload and review" })).toBeEnabled();
     const eventCount = api.events.length;
     await retry.getByRole("button", { name: "Upload and review" }).click();
     await expect(page).toHaveURL(/\/services\/inventory\/import$/);
@@ -204,6 +216,28 @@ for (const failure of ["reject", "lost"] as const) {
     expect(api.errors).toEqual([]);
   });
 }
+
+test("a gateway can replace its uploaded definition and review the replacement", async ({ page }) => {
+  const api = await mockApi(page, true);
+  const create = await openCreate(page, true);
+  await create.getByRole("button", { name: "Upload file", exact: true }).click();
+  await create.getByLabel("Choose specification JSON file").setInputFiles(file());
+  await create.getByRole("button", { name: "Create draft" }).click();
+  await expect(page).toHaveURL(/\/services\/inventory\/import$/);
+  await page.getByRole("button", { name: "Upload replacement", exact: true }).click();
+  const replacement = page.getByRole("dialog", { name: "Upload replacement definition", exact: true });
+  await expect(replacement).toContainText("Upstream authentication: Anonymous");
+  await replacement.getByLabel("Choose specification JSON file").setInputFiles(file("replacement.json"));
+  await expect(replacement.getByRole("button", { name: "Upload and review" })).toBeEnabled();
+  await replacement.getByRole("button", { name: "Upload and review" }).click();
+  await expect(page.getByRole("dialog", { name: "Review discovered operations", exact: true })).toBeVisible();
+  expect(api.created).toHaveLength(1);
+  expect(api.uploads).toHaveLength(2);
+  expect(api.uploads[1].query.get("filename")).toBe("replacement.json");
+  expect(api.uploads[1].body.equals(Buffer.from(raw))).toBe(true);
+  expect(api.current!.service.definition.adapterKind).toBe("openapi_gateway");
+  expect(api.errors).toEqual([]);
+});
 
 test("opening a draft after a lost response reveals the stored document without replaying its upload", async ({ page }) => {
   const api = await mockApi(page);

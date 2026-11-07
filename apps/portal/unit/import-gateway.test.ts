@@ -38,6 +38,14 @@ describe("gateway import configuration", () => {
     }
   });
 
+  test("explains unavailable bindings without applying creation-only reasons to the retained import", () => {
+    const bindings = [{ ...GATEWAY_BINDING, available: false, unavailableReason: "Service identity is already retained" }];
+    const html = renderEditor(undefined, bindings);
+    expect(html).toContain('title="Service identity is already retained"');
+    expect(html).toContain('inventory</span>: Service identity is already retained');
+    expect(renderEditor(gatewayPreview(), bindings)).not.toContain("Service identity is already retained");
+  });
+
   test("retained imports keep immutable exposure and destination even when the binding is removed", () => {
     const data = gatewayPreview();
     const html = renderEditor(data, []);
@@ -83,7 +91,7 @@ describe("gateway operation review", () => {
     expect(html).toContain("GET /items/{id}");
     expect(html).toContain("Anonymous upstream");
     expect(html).toContain("X-Api-Version");
-    expect(html).toContain("path id (required); simple");
+    expect(html).toContain("path id (required) — simple");
     expect(html).toContain("Native HTTP response (streamed)");
     expect(html).toContain("Whole-action access");
     expect(html).not.toContain("Current service-specific MCP");

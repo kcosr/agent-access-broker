@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { ImportPreviewResult, ImportRecordResult } from "../../import-types";
 import type { OpenApiDocumentFile } from "../../lib/import-document";
-import { openApiDocumentSource } from "../../lib/import-openapi";
+import { isOpenApiImport, OPENAPI_GATEWAY_KIND, openApiDocumentSource } from "../../lib/import-openapi";
 import { errorMessage } from "../../lib/helpers";
 import { AdminButton } from "../../components/admin-access";
 import { FormError } from "../../components/form";
@@ -29,7 +29,8 @@ export function ImportDocumentModal({ data, initialFile, initialError, notice, r
   const [needsReload, setNeedsReload] = useState(Boolean(initialError));
   const [reloaded, setReloaded] = useState(false);
   const uploaded = openApiDocumentSource(data.service.definition.connectionSettings) === "upload";
-  const allowed = data.service.definition.adapterKind === "openapi_http" && uploaded && data.operatorAllowed && data.service.status !== "retired";
+  const allowed = isOpenApiImport(data.service.definition.adapterKind) && uploaded && data.operatorAllowed && data.service.status !== "retired";
+  const anonymous = data.service.definition.adapterKind === OPENAPI_GATEWAY_KIND && data.service.definition.connectionSettings.executionAuthentication === "anonymous";
   const ready = file.selected && !file.reading && !file.error && allowed && !needsReload;
   async function reload() {
     setPending(true);
@@ -64,7 +65,7 @@ export function ImportDocumentModal({ data, initialFile, initialError, notice, r
       {notice ? <Banner tone="warning" slim>{notice}</Banner> : null}
       {needsReload ? <Banner tone="warning" slim>The upload was not confirmed. Reload the current document and configuration before trying again.</Banner> : reloaded ? <Banner tone="info" slim>Current state reloaded. Review the document and configuration below before uploading.</Banner> : null}
       <div className="pt-catalog-stack" aria-label="Current import state">
-        <p className="pt-prose wb-small">Definition source: {uploaded ? "Uploaded file" : "From URL"}. API security scheme: {data.service.definition.connectionSettings.securityScheme || "Not selected"}.</p>
+        <p className="pt-prose wb-small">Definition source: {uploaded ? "Uploaded file" : "From URL"}. {anonymous ? "Upstream authentication: Anonymous" : `API security scheme: ${data.service.definition.connectionSettings.securityScheme || "Not selected"}`}.</p>
         {data.service.document ? <ImportDocumentSummary document={data.service.document} /> : <p className="pt-prose wb-small wb-muted">No document is stored.</p>}
         <p className="pt-prose wb-small wb-muted">Service revision {data.service.version} · Catalog revision {data.catalogRevision}</p>
       </div>
