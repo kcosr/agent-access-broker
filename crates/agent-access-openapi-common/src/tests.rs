@@ -297,7 +297,85 @@ fn declared_response_header_schema_and_status_precedence_are_enforced() {
     assert_eq!(plan.response_headers(200, &headers).unwrap().len(), 1);
     assert!(plan.response_headers(201, &headers).unwrap().is_empty());
     headers.insert("x-api-version", HeaderValue::from_static("4"));
-    assert!(plan.response_headers(200, &headers).is_err());
+    assert!(plan.response_headers(200, &headers).unwrap().is_empty());
+}
+
+#[test]
+fn invalid_optional_response_values_are_omitted_without_failing_error_responses() {
+    let mut plan = plan("/file");
+    plan.responses.insert(
+        "4XX".into(),
+        GatewayResponseV1 {
+            headers: vec![
+                GatewayResponseHeaderV1 {
+                    name: "X-Api-Version".into(),
+                    schema: json!({"type":"integer","maximum":3}),
+                },
+                GatewayResponseHeaderV1 {
+                    name: "ETag".into(),
+                    schema: json!({"type":"string","maxLength":3}),
+                },
+                GatewayResponseHeaderV1 {
+                    name: "Retry-After".into(),
+                    schema: json!({"type":"string"}),
+                },
+            ],
+            content_types: vec!["application/json".into()],
+        },
+    );
+    plan.validate().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    headers.insert("x-api-version", HeaderValue::from_static("4"));
+    headers.insert(
+        "retry-after",
+        HeaderValue::from_static("SENTINEL_INVALID_DELAY"),
+    );
+    headers.insert("etag", HeaderValue::from_static("SENTINEL_LONG_ETAG"));
+    headers.insert(
+        "content-disposition",
+        HeaderValue::from_str(&"a".repeat(4097)).unwrap(),
+    );
+    for status in [429, 404, 500] {
+        let filtered = plan.response_headers(status, &headers).unwrap();
+        assert_eq!(filtered["content-type"], "application/json");
+        assert!(!filtered.contains_key("retry-after"));
+        assert!(!filtered.contains_key("content-disposition"));
+        assert!(!filtered.contains_key("x-api-version"));
+        if status < 500 {
+            assert!(!filtered.contains_key("etag"));
+        }
+    }
+    headers.insert("retry-after", HeaderValue::from_static("12"));
+    assert_eq!(
+        plan.response_headers(429, &headers).unwrap()["retry-after"],
+        "12"
+    );
+}
+
+#[test]
+fn ambiguous_or_nontext_selected_response_headers_still_fail() {
+    let mut plan = plan("/file");
+    plan.responses.insert(
+        "default".into(),
+        GatewayResponseV1 {
+            headers: vec![GatewayResponseHeaderV1 {
+                name: "X-Api-Version".into(),
+                schema: json!({"type":"string"}),
+            }],
+            content_types: Vec::new(),
+        },
+    );
+    plan.validate().unwrap();
+    for name in ["retry-after", "x-api-version"] {
+        let mut headers = HeaderMap::new();
+        headers.append(name, HeaderValue::from_static("1"));
+        headers.append(name, HeaderValue::from_static("2"));
+        assert!(plan.response_headers(429, &headers).is_err());
+        headers.clear();
+        headers.insert(name, HeaderValue::from_bytes(&[0xff]).unwrap());
+        assert!(plan.response_headers(429, &headers).is_err());
+    }
 }
 
 #[test]

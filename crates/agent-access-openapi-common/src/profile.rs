@@ -418,28 +418,30 @@ impl GatewayPlanV1 {
         })
     }
 
-    /// Filter and bound declared response fields. Host framing fields are intentionally not copied.
+    /// Filter optional response metadata without discarding useful upstream response bodies.
+    /// Invalid scalar/bounded values are omitted; repeated or non-text selected fields fail.
+    /// Framing, including Content-Length integrity, remains strictly host-owned.
     pub fn response_headers(&self, status: u16, headers: &HeaderMap) -> Result<HeaderMap, String> {
         let mut result = HeaderMap::new();
         for name in GATEWAY_COMMON_RESPONSE_HEADERS {
-            if let Some(value) = single_header(headers, name)? {
-                if *name == "retry-after"
-                    && !valid_retry_after(value.to_str().map_err(|_| "invalid response header")?)
-                {
-                    return Err("gateway Retry-After is invalid".into());
-                }
+            if let Some(value) = response_header(headers, name)? {
                 result.insert(HeaderName::from_static(name), value.clone());
             }
         }
         if let Some(response) = self.response(status) {
             for header in &response.headers {
-                if let Some(value) = single_header(headers, &header.name)? {
-                    schema::scalar(
+                // A declaration can constrain a common field. Remove the common
+                // copy first, so a rejected value cannot survive that constraint.
+                result.remove(&header.name);
+                if let Some(value) = response_header(headers, &header.name)?
+                    && schema::scalar(
                         value
                             .to_str()
                             .map_err(|_| "gateway response header is invalid")?,
                         &header.schema,
-                    )?;
+                    )
+                    .is_ok()
+                {
                     result.insert(
                         HeaderName::from_bytes(header.name.as_bytes())
                             .map_err(|_| "invalid response header")?,
@@ -481,6 +483,22 @@ fn single_header<'a>(
         return Err("gateway protocol header is repeated or exceeds its value profile".into());
     }
     Ok(first)
+}
+
+fn response_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a HeaderValue>, String> {
+    let mut values = headers.get_all(name).iter();
+    let first = values.next();
+    if values.next().is_some() || first.is_some_and(|value| value.to_str().is_err()) {
+        return Err("gateway response header is repeated or is not text".into());
+    }
+    Ok(first.filter(|value| {
+        value.as_bytes().len() <= schema::MAX_VALUE_BYTES
+            && (!name.eq_ignore_ascii_case("retry-after")
+                || valid_retry_after(value.to_str().expect("validated text")))
+    }))
 }
 
 fn common_request_headers(headers: &HeaderMap) -> Result<HeaderMap, String> {
