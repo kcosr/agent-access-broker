@@ -46,7 +46,7 @@ async function mockPreview(page: Page, data: ImportPreviewResult) {
     else if (pathname === "/v1/resource-types" || pathname === "/v1/me") {
       await route.fulfill({ json: pathname === "/v1/me" ? { principal: "admin", serviceLimits: [] } : { resourceTypes: [] } });
       return;
-    } else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["openapi_http"], commandImports: [], importAuthentication: [], services: [data.service] };
+    } else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, gatewayBindings: [], availableKinds: ["openapi_http"], commandImports: [], importAuthentication: [], services: [data.service] };
     else if (pathname === "/v1/admin/imports/inventory/preview") result = data;
     else if (pathname === "/v1/admin/policy/catalog") result = { services: [], resources: [], resourceGroups: [], executionContexts: { allowedValues: ["internal"], defaultContext: "internal", contextRequired: false }, subjects: { users: [], groups: [], anonymous: false } };
     else if (pathname === "/v1/admin/policy/status") result = { policyGeneration: 1, writable: true, authority: "managed", counts: { active: 0, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };

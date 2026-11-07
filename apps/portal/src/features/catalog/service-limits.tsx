@@ -53,6 +53,11 @@ export function LimitsTab({ service, data, onEdit }: { service: CatalogService; 
           ]}
         />
       </SettingsSection>
+      {service.catalog?.surface === "gateway" || imported?.definition.adapterKind === "openapi_gateway" ? (
+        <SettingsSection title="Gateway waiting and transfer limits" description="These limits are managed by the operator in Broker configuration.">
+          <p className="pt-prose wb-small">Waiting policy, request capacity, body size limits and transfer deadlines cannot be changed here. Ask the operator for their configured values. Every classified operation, including GET and HEAD, consumes invocation allowance; streaming holds request capacity until delivery or bounded disposal completes.</p>
+        </SettingsSection>
+      ) : null}
     </SettingsPage>
   );
 }

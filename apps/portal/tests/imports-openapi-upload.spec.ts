@@ -44,7 +44,7 @@ async function mockApi(page: Page) {
         api.created.push(definition);
         api.current = draft(definition);
         result = api.current;
-      } else result = { catalogRevision: api.current?.catalogRevision ?? 4, operatorEnabled: true, availableKinds: ["openapi_http"], commandImports: [], importAuthentication: [], services: api.current ? [api.current.service] : [] };
+      } else result = { catalogRevision: api.current?.catalogRevision ?? 4, operatorEnabled: true, gatewayBindings: [], availableKinds: ["openapi_http"], commandImports: [], importAuthentication: [], services: api.current ? [api.current.service] : [] };
     } else if (pathname === "/v1/admin/imports/inventory/document" && method === "PUT") {
       api.events.push("upload");
       const body = request.postDataBuffer()!;

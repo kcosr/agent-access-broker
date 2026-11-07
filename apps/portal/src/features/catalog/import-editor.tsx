@@ -4,10 +4,10 @@ import { AdminButton } from "../../components/admin-access";
 // command) are fixed after creation; adapter settings and credential delivery
 // are fixed once actions are accepted.
 import { useState, type ReactNode } from "react";
-import type { ImportAuthentication, ImportDefinition, ImportPreviewResult } from "../../import-types";
+import type { ImportAuthentication, ImportDefinition, ImportGatewayBinding, ImportPreviewResult } from "../../import-types";
 import { importSourceKey } from "../../lib/imports";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportPersonalAuth } from "../../lib/import-credentials";
-import { openApiBindings, openApiConnectionSettings, openApiDelivery, openApiDocumentSource, openApiSchemeLabel, openApiSecuritySchemes } from "../../lib/import-openapi";
+import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_ACTIONS_KIND, OPENAPI_GATEWAY_KIND, gatewayConnectionSettings, gatewayIngressLabel, isOpenApiImport, openApiBindings, openApiConnectionSettings, openApiDelivery, openApiDocumentSource, openApiExposureLabel, openApiSchemeLabel, openApiSecuritySchemes, type OpenApiExposure } from "../../lib/import-openapi";
 import type { OpenApiDocumentFile } from "../../lib/import-document";
 import { COMMAND_KIND, CREDENTIAL_KIND_LABEL, commandBindings, commandEndpoint, commandName, credentialModesText } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
@@ -27,6 +27,8 @@ export type ImportEditorProps = {
   availableKinds: string[];
   /** Command names the operator approved for command imports. */
   commandImports?: string[];
+  /** Operator-approved gateway identities; unavailable entries cannot create a new import. */
+  gatewayBindings?: ImportGatewayBinding[];
   /** Imports are enabled by operator configuration (new imports only). */
   operatorEnabled?: boolean;
   onClose: () => void;
@@ -152,20 +154,22 @@ export function ImportEditor(props: ImportEditorProps) {
   // Until the administrator picks one, follow the operator's kinds (they may still be loading).
   const [chosen, setKind] = useState<string | null>(null);
   const kind = chosen ?? old?.adapterKind ?? (availableKinds.includes("mcp_http") ? "mcp_http" : availableKinds[0] ?? "");
+  const families = [...new Set(availableKinds.map((value) => isOpenApiImport(value) ? "openapi" : value))];
+  const family = isOpenApiImport(kind) ? "openapi" : kind;
   const kindPicker = (disabled: boolean) => (
     <Field label="Import type" hint={old ? "The import type is fixed after creation." : undefined}>
-      <Select value={kind} disabled={disabled || Boolean(old)} onChange={(event) => setKind(event.target.value)}>
+      <Select value={family} disabled={disabled || Boolean(old)} onChange={(event) => setKind(event.target.value === "openapi" ? availableKinds.includes(OPENAPI_ACTIONS_KIND) ? OPENAPI_ACTIONS_KIND : OPENAPI_GATEWAY_KIND : event.target.value)}>
         {!kind ? <option value="">No import types enabled</option> : null}
-        {old && !availableKinds.includes(kind) ? <option value={kind}>{kind} (unavailable)</option> : null}
-        {availableKinds.map((value) => (
+        {old && !families.includes(family) ? <option value={family}>{isOpenApiImport(kind) ? "OpenAPI / Swagger" : kind} (unavailable)</option> : null}
+        {families.map((value) => (
           <option key={value} value={value}>
-            {adapterLabel(value)}
+            {value === "openapi" ? "OpenAPI / Swagger" : adapterLabel(value)}
           </option>
         ))}
       </Select>
     </Field>
   );
-  if (kind === "openapi_http") return <OpenApiImportForm {...props} kindPicker={kindPicker} />;
+  if (isOpenApiImport(kind)) return <OpenApiImportForm key={kind} {...props} kind={kind} onKind={setKind} kindPicker={kindPicker} />;
   if (kind === COMMAND_KIND) return <CommandImportForm {...props} kindPicker={kindPicker} />;
   return <McpImportForm {...props} kind={kind} kindPicker={kindPicker} />;
 }
@@ -438,14 +442,19 @@ function McpImportForm({
 
 function OpenApiImportForm({
   data,
+  availableKinds,
+  gatewayBindings = [],
   operatorEnabled = true,
   onClose,
   onSave,
   frame = modalFrame,
-  kindPicker
-}: ImportEditorProps & { kindPicker: (disabled: boolean) => ReactNode }) {
+  kindPicker,
+  kind,
+  onKind
+}: ImportEditorProps & { kind: OpenApiExposure; onKind: (kind: OpenApiExposure) => void; kindPicker: (disabled: boolean) => ReactNode }) {
   const old = data?.service.definition;
   const mutable = !data || (data.service.status === "draft" && data.service.actions.length === 0);
+  const gateway = kind === OPENAPI_GATEWAY_KIND;
   const [name, setName] = useState(old?.service ?? "");
   const [label, setLabel] = useState(old?.displayName ?? "");
   const [endpoint, setEndpoint] = useState(old?.endpoint ?? "");
@@ -457,40 +466,39 @@ function OpenApiImportForm({
   const [securityScheme, setSecurityScheme] = useState(old?.connectionSettings.securityScheme ?? "");
   const [shared, setShared] = useState(!old || old.executionBindings.some((binding) => binding.ownerMode === "service"));
   const [personal, setPersonal] = useState(Boolean(old?.executionBindings.some((binding) => binding.ownerMode === "per_user")));
+  const [authentication, setAuthentication] = useState<"anonymous" | "static">(old?.connectionSettings.executionAuthentication === "anonymous" ? "anonymous" : "static");
   const [requests, setRequests] = useState(String(old?.invocationLimit?.requests ?? ""));
   const [windowSeconds, setWindowSeconds] = useState(String(old?.invocationLimit?.windowSeconds ?? 60));
   const [confirmed, setConfirmed] = useState(false);
   const save = useSave(onSave, onClose);
   const busy = save.pending;
+  const binding = gatewayBindings.find((candidate) => candidate.service === name);
+  const anonymous = gateway && authentication === "anonymous";
 
   const schemes = openApiSecuritySchemes(data?.preview?.manifest);
   const selectedScheme = schemes.find((scheme) => scheme.name === securityScheme);
   const delivery = mutable && selectedScheme ? openApiDelivery(selectedScheme) : old?.executionBindings[0]?.delivery ?? { kind: "bearer" as const };
-  const bindings = openApiBindings(old?.executionBindings ?? [], shared, personal, delivery);
+  const bindings = anonymous ? [] : openApiBindings(old?.executionBindings ?? [], shared, personal, delivery);
   const affected = old && importSourceKey(old.executionBindings) !== importSourceKey(bindings) ? data?.affectedGrants ?? [] : [];
-  const unknownNewScheme = Boolean(securityScheme && !selectedScheme && securityScheme !== old?.connectionSettings.securityScheme);
+  const unknownNewScheme = !anonymous && Boolean(securityScheme && !selectedScheme && securityScheme !== old?.connectionSettings.securityScheme);
 
   const issues = commonIssues({ creating: !old, name, label, endpoint, requests, windowSeconds }, "API base URL");
+  if (gateway && !old && (!binding || !binding.available)) issues.binding = "Select an unused, approved gateway binding.";
   if (source === "url" && mutable && !isUrl(definitionUrl)) issues.definitionUrl = "Enter the OpenAPI / Swagger definition URL as an http(s) URL.";
   if (source === "url" && mutable && documentAuth === "raw_header" && !documentHeader.trim()) issues.documentHeader = "Enter the header that carries the discovery token.";
   if (source === "upload" && !old && !documentFile.selected) issues.documentFile = "Choose a JSON specification file.";
   if (source === "upload" && !old && (documentFile.reading || documentFile.error)) issues.documentFile = documentFile.error ?? "Wait for the specification file to finish loading.";
   const shown = save.attempted ? issues : {};
-  const blocked = (!old && !operatorEnabled) || (!shared && !personal) || unknownNewScheme || (affected.length > 0 && !confirmed) || (source === "upload" && !old && (documentFile.reading || Boolean(documentFile.error)));
+  const blocked = (!old && (!operatorEnabled || !availableKinds.includes(kind))) || (!anonymous && !shared && !personal) || Boolean(issues.binding) || unknownNewScheme || (affected.length > 0 && !confirmed) || (source === "upload" && !old && (documentFile.reading || Boolean(documentFile.error)));
 
   function definition(): ImportDefinition {
+    const draft = { source, definitionUrl, definitionAuthKind: documentAuth, definitionAuthHeader: documentHeader, securityScheme };
     return {
       service: name.trim(),
       displayName: label.trim(),
-      adapterKind: "openapi_http",
+      adapterKind: kind,
       endpoint: endpoint.trim(),
-      connectionSettings: openApiConnectionSettings(old?.connectionSettings, mutable, {
-        source,
-        definitionUrl,
-        definitionAuthKind: documentAuth,
-        definitionAuthHeader: documentHeader,
-        securityScheme
-      }),
+      connectionSettings: gateway ? gatewayConnectionSettings(old?.connectionSettings, mutable, draft, authentication) : openApiConnectionSettings(old?.connectionSettings, mutable, draft),
       executionBindings: bindings,
       discovery: { kind: source === "upload" || documentAuth === "none" ? "anonymous" : "slot" },
       transportAuth: false,
@@ -506,16 +514,38 @@ function OpenApiImportForm({
         </Banner>
       ) : null}
       {kindPicker(busy)}
+      <Field label="Exposure" hint={old ? "Fixed after creation. Create a separate service to use the other mode." : "Choose how clients use this API. This cannot change after creation."}>
+        <Select value={kind} disabled={busy || Boolean(old)} onChange={(event) => { if (isOpenApiImport(event.target.value)) onKind(event.target.value); }}>
+          {[OPENAPI_ACTIONS_KIND, OPENAPI_GATEWAY_KIND].map((mode) => <option key={mode} value={mode} disabled={!availableKinds.includes(mode)}>{openApiExposureLabel(mode as OpenApiExposure)}{!availableKinds.includes(mode) ? " (unavailable)" : ""}</option>)}
+        </Select>
+      </Field>
+      {gateway ? <>
+        <Banner tone="info" slim>{GATEWAY_AUTHORITY_NOTICE}</Banner>
+        <Field label="Approved gateway binding" hint="The operator reserves the service ID, gateway hosts and upstream API base URL." error={shown.binding}>
+          <Select value={name} disabled={busy || Boolean(old)} onChange={(event) => {
+            const selected = gatewayBindings.find((candidate) => candidate.service === event.target.value && candidate.available);
+            setName(selected?.service ?? "");
+            setEndpoint(selected?.endpoint ?? "");
+          }}>
+            <option value="">Select an approved binding</option>
+            {old && !binding ? <option value={old.service}>{old.service} (binding unavailable)</option> : null}
+            {gatewayBindings.map((candidate) => <option key={candidate.service} value={candidate.service} disabled={!candidate.available && candidate.service !== old?.service}>{candidate.service} · {candidate.brokerHosts.join(", ")}{!candidate.available && candidate.service !== old?.service ? " (unavailable)" : ""}</option>)}
+          </Select>
+        </Field>
+        {!old && !gatewayBindings.some((candidate) => candidate.available) ? <p className="pt-catalog-warn">No unused gateway binding is available. Ask the operator to reserve an identity, gateway hostname and approved API destination.</p> : null}
+        {old && !binding ? <p className="pt-catalog-warn">The operator binding is unavailable. The import and its grants are retained, but requests cannot execute.</p> : null}
+        {binding ? <p className="pt-prose wb-small">Broker ingress: {gatewayIngressLabel(binding)}. Native clients use {binding.brokerHosts.join(", ")}; the API authentication below is presented only to the upstream.</p> : null}
+      </> : null}
       <div className="pt-catalog-row">
-        <Field label="Service ID" hint={old ? "Fixed after creation." : "Lowercase; used in grants and agent calls."} error={shown.name}>
-          <Input mono required maxLength={63} value={name} disabled={Boolean(old) || busy} onChange={(event) => setName(event.target.value)} autoComplete="off" spellCheck={false} />
+        <Field label="Service ID" hint={gateway ? "Reserved by the selected gateway binding." : old ? "Fixed after creation." : "Lowercase; used in grants and agent calls."} error={shown.name}>
+          <Input mono required maxLength={63} value={name} disabled={gateway || Boolean(old) || busy} onChange={(event) => setName(event.target.value)} autoComplete="off" spellCheck={false} />
         </Field>
         <Field label="Display name" error={shown.label}>
           <Input required maxLength={256} value={label} disabled={busy} onChange={(event) => setLabel(event.target.value)} />
         </Field>
       </div>
       <Field label="API base URL" hint="API calls go here. This destination must be allowed by your operator." error={shown.endpoint}>
-        <Input mono required type="url" placeholder="https://api.example.test/v1" value={endpoint} disabled={Boolean(old) || busy} onChange={(event) => setEndpoint(event.target.value)} spellCheck={false} />
+        <Input mono required type="url" placeholder="https://api.example.test/v1" value={endpoint} disabled={gateway || Boolean(old) || busy} onChange={(event) => setEndpoint(event.target.value)} spellCheck={false} />
       </Field>
       <fieldset className="pt-fieldset">
         <legend>Definition document</legend>
@@ -561,7 +591,14 @@ function OpenApiImportForm({
         </Banner>
       ) : null}
       <fieldset className="pt-fieldset">
-        <legend>API execution credentials</legend>
+        <legend>{gateway ? "Upstream API authentication" : "API execution credentials"}</legend>
+        {gateway ? <Field label="Upstream authentication" hint="Broker ingress still requires an authenticated caller and grants.">
+          <Select value={authentication} disabled={busy || !mutable} onChange={(event) => setAuthentication(event.target.value as "anonymous" | "static")}>
+            <option value="static">Static credential</option>
+            <option value="anonymous">Anonymous upstream</option>
+          </Select>
+        </Field> : null}
+        {anonymous ? <p className="pt-prose wb-small">No upstream credential is sent. Accept only operations whose definition permits anonymous access; grants use service mode. Broker tokens and trusted identity remain local to the Broker.</p> : <>
         <Checkbox
           label="Shared service credential"
           checked={shared}
@@ -600,8 +637,15 @@ function OpenApiImportForm({
             The discovered scheme now uses different credential delivery. Create a new service to use that destination.
           </Banner>
         ) : null}
+        </>}
         {!mutable ? <p className="pt-prose wb-small">The definition settings and credential delivery are fixed after accepting actions. Create a new service to change them.</p> : null}
+        {gateway ? <p className="pt-prose wb-small">This gateway import has no active credential verification probe. Static credential storage and compatibility checks still apply; delegated OAuth is not supported for OpenAPI imports.</p> : null}
       </fieldset>
+      {gateway ? <>
+        <Banner tone="warning" slim>{GATEWAY_BODY_NOTICE}</Banner>
+        <p className="pt-prose wb-small">{GATEWAY_TEMPLATE_NOTICE}</p>
+        <p className="pt-prose wb-small">Administrators supply the gateway address and authentication setup to native clients. This service is not advertised in ordinary agent discovery or exposed as MCP tools.</p>
+      </> : null}
       <LimitFields requests={requests} windowSeconds={windowSeconds} onRequests={setRequests} onWindow={setWindowSeconds} disabled={busy} issues={shown} />
       <AffectedGrantsCheck count={affected.length} checked={confirmed} onChange={setConfirmed} disabled={busy} />
       <FormError error={save.error} />

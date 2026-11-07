@@ -17,9 +17,10 @@ let server: Server;
 let baseUrl: string;
 const envelope = (result: unknown) => ({ ok: true, result });
 const stamp = { createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", createdBy: "viewer", updatedBy: "viewer" };
-const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationInputs: [] };
-const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationInputs: ["repository"] };
-const mail = { service: "gmail", displayName: "Gmail", credentialVerificationInputs: [] };
+const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationSupported: true, credentialVerificationInputs: [] };
+const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationSupported: true, credentialVerificationInputs: ["repository"] };
+const mail = { service: "gmail", displayName: "Gmail", credentialVerificationSupported: true, credentialVerificationInputs: [] };
+const gateway = { service: "inventory", displayName: "Inventory gateway", credentialVerificationSupported: false, credentialVerificationInputs: [] };
 const fields = [{ name: "token", required: true, secret: true, prompt: "GitLab bearer token", inputMethods: ["prompt", "env", "file", "stdin"] }];
 const gitlabProfile = {
   profile: "gitlab-access-token", label: null, credentialKind: "bearer_token",
@@ -176,6 +177,39 @@ test("one row per connection names the services it serves and verifies through a
   expect(errors).toEqual([]);
 });
 
+test("gateway credentials remain editable without an active Verify probe", async ({ page }) => {
+  const gatewayTarget = { ...target, consumers: [gateway] };
+  const gatewayCredentials = { connections: [{ ...credentials.connections[0], consumers: [gateway] }], retained: [] };
+  const { errors, writes } = await fixture(page, "user", "/ui/credentials", {
+    credentials: gatewayCredentials, targets: [gatewayTarget], botCredentials, botTargets: []
+  });
+  await row(page, "GitLab").getByRole("link", { name: "GitLab", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "GitLab credential", exact: true });
+  await expect(drawer).toContainText("Inventory gateway");
+  await expect(drawer.getByRole("button", { name: "Verify", exact: true })).toHaveCount(0);
+  await expect(drawer.getByRole("region", { name: "Verify through Git", exact: true })).toHaveCount(0);
+  await expect(drawer.getByLabel("GitLab bearer token", { exact: true })).toBeEditable();
+  await expect(drawer.getByRole("button", { name: "Replace credential", exact: true })).toBeVisible();
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("a mixed gateway and Git connection keeps only its eligible verification", async ({ page }) => {
+  const mixedTarget = { ...target, consumers: [gateway, git] };
+  const mixedCredentials = { connections: [{ ...credentials.connections[0], consumers: [gateway, git] }], retained: [] };
+  const { errors, writes } = await fixture(page, "user", "/ui/credentials", {
+    credentials: mixedCredentials, targets: [mixedTarget], botCredentials, botTargets: []
+  });
+  await row(page, "GitLab").getByRole("link", { name: "GitLab", exact: true }).click();
+  const drawer = page.getByRole("complementary", { name: "GitLab credential", exact: true });
+  await expect(drawer.getByRole("button", { name: "Verify", exact: true })).toHaveCount(1);
+  const verifier = drawer.getByRole("region", { name: "Verify through Git", exact: true });
+  await verifier.getByRole("textbox", { name: "Repository", exact: true }).fill("team/project");
+  await verifier.getByRole("button", { name: "Verify", exact: true }).click();
+  await expect.poll(() => writes.find((write) => write.request.endsWith("/verify"))?.body).toEqual({ service: "gitlab_git", repository: "team/project" });
+  expect(errors).toEqual([]);
+});
+
 test("OAuth connections are one row per registration and disconnect names every affected service", async ({ page }) => {
   const { writes } = await fixture(page);
   const gmail = row(page, "Gmail");
@@ -309,7 +343,7 @@ const gitBearer = tokenType("git", "Git", "git-bearer-token", null, "bearer_toke
 const gitBasic = tokenType("git", "Git", "git-basic-api-token", null, "basic_api_token");
 const apiToken = tokenType("conformance", "Conformance", "api_token", "API token", "bearer_token");
 const routedToken = tokenType("conformance", "Conformance", "routed_token", "Routed token", "bearer_token");
-const conformance = { service: "conformance", displayName: "Conformance", credentialVerificationInputs: [] };
+const conformance = { service: "conformance", displayName: "Conformance", credentialVerificationSupported: true, credentialVerificationInputs: [] };
 const storedToken = (connection: string, type: TokenType, ownerPrincipal = "viewer") =>
   ({ credentialId: `credential-${ownerPrincipal}-${connection}`, ownerPrincipal, ownerKind: "user", connection, profile: type.profile, label: type.label, credentialKind: type.credentialKind, metadata: {}, status: "active", verificationStatus: "not_verified", ...stamp });
 const tokenRow = (connection: string, displayName: string, consumers: (typeof rest)[], tokenProfiles: TokenType[], credential: ReturnType<typeof storedToken> | null) =>
@@ -403,7 +437,7 @@ test("a connection accepting several token types asks for one, and its fields an
 });
 
 test("stored tokens show their type's label, and a token of a type no longer accepted is a Not used row", async ({ page }, testInfo) => {
-  const alerts = { service: "alerts", displayName: "Alerts", credentialVerificationInputs: [] };
+  const alerts = { service: "alerts", displayName: "Alerts", credentialVerificationSupported: true, credentialVerificationInputs: [] };
   // The conformance connection stores a routed token; the alerts connection
   // now accepts only routed tokens, so its stored API token is kept but not used.
   const rows = [

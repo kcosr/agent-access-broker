@@ -12,7 +12,7 @@ import { tokenTypeValues } from "../lib/credentials";
 
 /** Whether verifying through this consumer needs a repository to check access against. */
 export function credentialVerificationNeedsRepository(consumer: ConnectionConsumer) {
-  return consumer.credentialVerificationInputs.includes("repository");
+  return consumer.credentialVerificationSupported && consumer.credentialVerificationInputs.includes("repository");
 }
 
 export function useCredentialActions(subject: AccountSubject) {

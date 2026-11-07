@@ -31,8 +31,8 @@ vi.mock("../src/data/queries", () => ({
 import { CredentialDrawer, CredentialRows, CredentialToolbar, useCredentialList } from "../src/features/credentials/credential-list";
 
 const stamp = { createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", createdBy: "viewer", updatedBy: "viewer" };
-const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationInputs: [] };
-const metrics = { service: "metrics", displayName: "Metrics", credentialVerificationInputs: [] };
+const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationSupported: true, credentialVerificationInputs: [] };
+const metrics = { service: "metrics", displayName: "Metrics", credentialVerificationSupported: true, credentialVerificationInputs: [] };
 const token = { credentialId: "credential-ci", ownerPrincipal: "viewer", ownerKind: "user", connection: "ci", profile: "ci-token", label: null, credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
 const credentials: CredentialList = {
   connections: [{ connection: "ci", displayName: "CI", method: "token", consumers: [], otherConsumers: 0, tokenProfiles: [{ profile: "ci-token", label: null, credentialKind: "bearer_token", inputSchema: { connection: "ci", profile: "ci-token", credentialKind: "bearer_token", fields: [] } }], registration: null, remoteRevocation: null, credential: token }],

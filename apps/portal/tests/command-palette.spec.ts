@@ -23,7 +23,7 @@ const service = { service: "jira", displayName: "Jira", surface: "http", actions
 const catalog = { services: [service], subjects: { users: [principal], groups: [userGroup], anonymous: false }, resources: [resource, excludedResource], resourceGroups, executionContexts: { allowedValues: ["default"], defaultContext: "default", contextRequired: false } };
 const config = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
 const grant = { grantRef: "engineering-read", grantId: "engineering-read", writable: true, version: 1, subjects: [`group:${userGroup.groupId}`], service: "jira", actions: [action.action], credentialMode: "service", executionContexts: ["default"], status: "active", resources: { resourceIds: [], resourceGroupIds: [] } };
-const consumers = [{ service: "jira", displayName: "Jira", credentialVerificationInputs: [] }];
+const consumers = [{ service: "jira", displayName: "Jira", credentialVerificationSupported: true, credentialVerificationInputs: [] }];
 const personal = { profile: "personal", label: null, credentialKind: "bearer", inputSchema: { connection: "work-account", profile: "personal", credentialKind: "bearer", fields: [] } };
 const target = { connection: "work-account", displayName: "Jira", consumers, otherConsumers: 0, tokenProfiles: [personal] };
 const credential = { credentialId: "credential-123", ownerPrincipal: "viewer", ownerKind: "user", connection: target.connection, profile: "personal", label: null, credentialKind: "bearer", metadata: {}, status: "active", ...stamp };
@@ -73,7 +73,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", selfServiceEna
     else if (pathname === "/v1/tokens/options") result = { policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, executionContexts: ["default"], services: [{ ...service, executionContexts: ["default"], brokerHosts: [], actions: [{ ...action, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }] }], resources: [resource], resourceGroups: [] };
     else if (pathname === "/v1/credentials/targets") result = [target];
     else if (pathname === "/v1/credentials") result = credentialList;
-    else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, availableKinds: ["mcp_http"], importAuthentication: [], services: [draftImport] };
+    else if (pathname === "/v1/admin/imports") result = { catalogRevision: 1, operatorEnabled: true, gatewayBindings: [], availableKinds: ["mcp_http"], importAuthentication: [], services: [draftImport] };
     else if (pathname === "/v1/admin/imports/metrics-draft/preview") result = { service: draftImport, operatorAllowed: true, catalogRevision: 1, scopedMcp: { ready: false, issues: [], truncated: false }, scopedMcpWarnings: [], importAuthentication: [], affectedGrants: [], affectedGrantsByAction: {}, preview: null };
     else if (pathname.endsWith("/audit/options")) result = { services: [] };
     else if (pathname.endsWith("/audit/events")) result = { records: [], nextCursor: null };

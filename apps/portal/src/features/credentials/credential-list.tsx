@@ -17,6 +17,7 @@ import {
   initialTokenType,
   oauthRowKey,
   repositoryConsumers,
+  directVerificationConsumers,
   retainedRowKey,
   tokenFormReady,
   tokenTypeName,
@@ -537,7 +538,7 @@ function DrawerActions({ model, row }: { model: CredentialListModel; row: Creden
   if (row.kind !== "token" || !row.connection.credential || !writable) return null;
   const connection = row.connection;
   // The broker picks the first consumer with an identity probe; Git gateways need a repository below.
-  const direct = connection.consumers.some((consumer) => !consumer.credentialVerificationInputs.includes("repository"));
+  const direct = directVerificationConsumers(connection.consumers).length > 0;
   const services = consumerSummary(connection.consumers, connection.otherConsumers);
   return (
     <>

@@ -61,6 +61,8 @@ export type OAuthScopeMode = "explicit" | "server_default";
 export type ConnectionConsumer = {
   service: string;
   displayName: string;
+  /** Whether this service offers credential verification, independently of its form inputs. */
+  credentialVerificationSupported: boolean;
   /** Inputs verifying through this service needs besides the credential (a Git gateway: `repository`); empty when none. */
   credentialVerificationInputs: string[];
 };
@@ -675,6 +677,7 @@ export type PolicyServiceCatalog = {
   surface: string;
   gatewayKind?: string | null;
   brokerHosts?: string[];
+  credentialVerificationSupported?: boolean;
   credentialVerificationInputs?: string[];
   actions: PolicyActionCatalog[];
   resourceScopes: Record<string, PolicyScopeCatalog>;

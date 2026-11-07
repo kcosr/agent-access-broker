@@ -110,6 +110,7 @@ function NewImportDialog({ index, onClose }: { index: CatalogIndex; onClose: () 
       authentication={imports?.importAuthentication ?? []}
       availableKinds={imports?.availableKinds ?? []}
       commandImports={imports?.commandImports.map((entry) => entry.name) ?? []}
+      gatewayBindings={imports?.gatewayBindings ?? []}
       operatorEnabled={imports?.operatorEnabled ?? false}
       onClose={() => {
         if (!created.current) onClose();

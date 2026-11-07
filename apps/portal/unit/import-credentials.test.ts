@@ -92,7 +92,7 @@ describe("imported personal authentication", () => {
     expect(unselected).not.toContain("OAuth registration");
     expect(unselected).not.toContain("existing grant(s)");
   });
-  const consumer = { service: "metrics", displayName: "Metrics", credentialVerificationInputs: [] };
+  const consumer = { service: "metrics", displayName: "Metrics", credentialVerificationSupported: true, credentialVerificationInputs: [] };
   const oauthTarget = (overrides: Partial<OAuthConnectionTarget> = {}): OAuthConnectionTarget => ({
     registration: "tools", displayName: "Metrics", connectionDescription: "Read metrics", consumers: [consumer], otherConsumers: 0,
     permissionProfile: "read", scopeMode: "explicit", requestedScopes: ["metrics.read"], target: endpoint,

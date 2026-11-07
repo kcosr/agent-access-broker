@@ -195,7 +195,7 @@ test("retained unavailable selections can be maintained, but not added or duplic
 describe("catalog service index", () => {
   const imports = () => {
     const data = fixture();
-    return { catalogRevision: 4, operatorEnabled: true, availableKinds: ["mcp_http"], commandImports: [], importAuthentication: [], services: [data.service] };
+    return { catalogRevision: 4, operatorEnabled: true, gatewayBindings: [], availableKinds: ["mcp_http"], commandImports: [], importAuthentication: [], services: [data.service] };
   };
   test("merges built-in and imported services with status, action and manager counts", () => {
     const list = imports();
@@ -216,7 +216,7 @@ describe("catalog service index", () => {
   test("new imports are blocked while loading and by operator configuration", () => {
     expect(importBlocker(null)).toContain("Loading");
     expect(importBlocker({ ...imports(), operatorEnabled: false })).toContain("disabled by operator");
-    expect(importBlocker({ ...imports(), availableKinds: [] })).toContain("No import types");
+    expect(importBlocker({ ...imports(), gatewayBindings: [], availableKinds: [] })).toContain("No import types");
     expect(importBlocker(imports())).toBeNull();
   });
   test("imported action rows keep every status; quarantined and retired actions cannot be enabled", () => {

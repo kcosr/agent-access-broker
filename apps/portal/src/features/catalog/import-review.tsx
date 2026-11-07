@@ -18,7 +18,7 @@ import type {
   ImportScopedMcpWarning
 } from "../../import-types";
 import { affectedImportGrants, importClassificationChanges, importItemNoun, importReviewRows, importSelectionError, type ImportReviewRow } from "../../lib/imports";
-import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
+import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_GATEWAY_KIND, isOpenApiImport, openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
 import {
   COMMAND_CHECK_CAVEAT,
   COMMAND_KIND,
@@ -96,10 +96,15 @@ export function OperationDetails({ definition }: { definition: ImportActionDefin
         {operation.method} {operation.path}
       </span>
       {operation.security ? <span className="wb-muted"> · {openApiSchemeLabel(operation.security)}</span> : null}
+      {operation.anonymous ? <span className="wb-muted"> · Anonymous upstream</span> : null}
       {operation.requestMedia !== undefined ? <span className="wb-muted"> · {operation.requestMedia ?? "No request body"}</span> : null}
+      {operation.requestMediaTypes ? <span className="wb-muted"> · {operation.requestMediaTypes.length ? operation.requestMediaTypes.join(", ") : "No request body"}</span> : null}
       {operation.requestBodyRequired !== undefined ? <span className="wb-muted"> · Body {operation.requestBodyRequired ? "required" : "optional"}</span> : null}
       {operation.requiredBodyFields?.length ? <span className="wb-muted"> · {operation.requestBodyRequired ? "Required body fields" : "Required fields when body is supplied"}: {operation.requiredBodyFields.join(", ")}</span> : null}
       {operation.noContentStatuses.length ? <span className="wb-muted"> · Declares no response content ({operation.noContentStatuses.join(", ")})</span> : null}
+      {operation.gateway ? <span className="wb-muted"> · Body schema not validated by gateway</span> : null}
+      {operation.parameters?.length ? <span className="wb-muted"> · Parameters: {operation.parameters.map((parameter) => `${parameter.location} ${parameter.name}${parameter.required ? " (required)" : " (optional)"}; ${parameter.style}${parameter.explode ? ", explode" : ""}`).join("; ")}</span> : null}
+      {operation.responseHeaders?.length ? <span className="wb-muted"> · Declared response headers: {operation.responseHeaders.map((response) => `${response.status}: ${response.names.join(", ")}`).join("; ")}</span> : null}
     </p>
   );
 }
@@ -430,6 +435,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
   const noun = importItemNoun(data.service.definition.adapterKind);
   const items = `${noun}s`;
   const command = data.service.definition.adapterKind === COMMAND_KIND;
+  const gateway = data.service.definition.adapterKind === OPENAPI_GATEWAY_KIND;
   const metadata = data.preview?.manifest.serviceMetadata;
   // The accepted types of a command import and those this preview declares, for action type labels.
   const types = [...(metadata?.resourceTypes ?? []), ...(data.service.acceptedMetadata?.resourceTypes ?? [])];
@@ -492,9 +498,14 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
       <p className="pt-prose wb-small wb-muted">
         Preview expires <Time value={data.preview?.expiresAt} format="datetime" fallback="soon" />. Configuration, credential or catalog changes require a fresh preview.
       </p>
-      {data.service.definition.adapterKind === "openapi_http" && data.preview ? <p className="pt-prose wb-small">Source: {data.preview.manifest.protocolVersion === "2.0" ? "Swagger" : "OpenAPI"} {data.preview.manifest.protocolVersion}</p> : null}
-      <ScopedMcpStatus value={data.scopedMcp} />
-      {data.scopedMcpWarnings.length ? (
+      {isOpenApiImport(data.service.definition.adapterKind) && data.preview ? <p className="pt-prose wb-small">Source: {data.preview.manifest.protocolVersion === "2.0" ? "Swagger" : "OpenAPI"} {data.preview.manifest.protocolVersion} · {gateway ? "HTTP gateway" : "Actions/tools"}</p> : null}
+      {gateway ? <>
+        <Banner tone="info" slim>{GATEWAY_AUTHORITY_NOTICE}</Banner>
+        <Banner tone="warning" slim>{GATEWAY_BODY_NOTICE}</Banner>
+        <p className="pt-prose wb-small">{GATEWAY_TEMPLATE_NOTICE}</p>
+        <p className="pt-prose wb-small">Native clients use the gateway address supplied by an administrator. These policy actions are not advertised in ordinary agent discovery or exposed as MCP tools.</p>
+      </> : data.scopedMcp ? <ScopedMcpStatus value={data.scopedMcp} /> : null}
+      {!gateway && data.scopedMcpWarnings.length ? (
         <Banner tone="warning" slim>
           Provisional service-specific MCP warnings apply to names proposed in this preview. These warnings do not prevent acceptance or aggregate MCP use. Action name edits and
           your final selection may change readiness; the broker checks it again after acceptance.
@@ -528,7 +539,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
             </AdminButton>
           }
         >
-          Select the definition's API security scheme before accepting operations.
+          {gateway ? "Review anonymous upstream access or select the definition's static API security scheme before accepting operations." : "Select the definition's API security scheme before accepting operations."}
         </Banner>
       ) : null}
       <FilterInput value={search} onChange={setSearch} placeholder={`Filter ${items}…`} label={`Filter discovered ${items}`} hotkey={null} />
@@ -561,7 +572,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
             </div>
             {!group.length ? <p className="pt-prose wb-small">No matching {items}.</p> : null}
             {group.map((row) => (
-              <ReviewRow key={row.key} row={row} pending={pending || !writable} update={update} command={command ? { types, caveatId } : null} />
+              <ReviewRow key={row.key} row={row} pending={pending || !writable} update={update} gateway={gateway} command={command ? { types, caveatId } : null} />
             ))}
           </fieldset>
         );
@@ -575,10 +586,10 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
                 {row.action || "Unsupported action"} · {row.change}
               </b>
               <OperationDetails definition={row.tool.definition} />
-              <p className="pt-prose wb-small">Output: {row.tool.definition.download ? "File download" : "JSON"}</p>
+              <p className="pt-prose wb-small">Output: {gateway ? "Native HTTP response (streamed)" : row.tool.definition.download ? "File download" : "JSON"}</p>
               {command && row.change !== "Unsupported" ? <ResourcesCheckedBy definition={row.tool.definition} types={types} caveatId={caveatId} /> : null}
               {row.reason ? <p className="pt-prose wb-small">{row.reason}</p> : null}
-              <ScopedMcpWarningText warning={row.scopedMcpWarning} />
+              {!gateway ? <ScopedMcpWarningText warning={row.scopedMcpWarning} /> : null}
             </div>
           ))}
         </section>
@@ -627,13 +638,15 @@ function ReviewRow({
   row,
   pending,
   update,
-  command
+  command,
+  gateway
 }: {
   row: ImportReviewRow;
   pending: boolean;
   update: (key: string, change: Partial<ImportReviewRow>) => void;
   /** Command actions show who checks their resources. */
   command: { types: readonly ImportResourceTypeDeclaration[]; caveatId: string } | null;
+  gateway: boolean;
 }) {
   const source = row.tool.definition.action;
   return (
@@ -652,11 +665,11 @@ function ReviewRow({
         />
       </div>
       <OperationDetails definition={row.tool.definition} />
-      <p className="pt-prose wb-small">Output: {row.tool.definition.download ? "File download" : "JSON"}</p>
+      <p className="pt-prose wb-small">Output: {gateway ? "Native HTTP response (streamed)" : row.tool.definition.download ? "File download" : "JSON"}</p>
       {command ? <ResourcesCheckedBy definition={row.tool.definition} types={command.types} caveatId={command.caveatId} /> : null}
       <LongText text={row.tool.definition.description} subject={source} />
       {row.reason ? <p className="pt-prose wb-small">{row.reason}</p> : null}
-      <ScopedMcpWarningText warning={row.scopedMcpWarning} />
+      {!gateway ? <ScopedMcpWarningText warning={row.scopedMcpWarning} /> : null}
       <div className="pt-catalog-review-fields">
         <Field label={<>Action name<span className="wb-sr-only"> for {source}</span></>}>
           <Input

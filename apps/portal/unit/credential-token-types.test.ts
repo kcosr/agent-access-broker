@@ -49,7 +49,7 @@ import { chosenTokenType, connectionTokenType, initialTokenType, tokenFormReady,
 import { adminSubject, type AccountSubject } from "../src/app/active-route";
 
 const stamp = { createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", createdBy: "viewer", updatedBy: "viewer" };
-const consumer = { service: "conformance", displayName: "Conformance", credentialVerificationInputs: [] };
+const consumer = { service: "conformance", displayName: "Conformance", credentialVerificationSupported: true, credentialVerificationInputs: [] };
 const inputMethods = ["prompt", "env", "file", "stdin"];
 
 /** A token type of `connection` (display name `display`), with the fields the Broker's input schema gives its kind. */

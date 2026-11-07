@@ -806,6 +806,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   credential ownership, refresh, limits, and invocation outcomes.
 - `docs/imported-openapi.md`: OpenAPI/Swagger document/API destination setup, discovery
   authentication, scheme selection, supported operation profile and write receipts.
+- `docs/http-gateway-setup.md`: approved gateway bindings, hand-authored OpenAPI
+  documents, whole-action grants, raw HTTP bodies and native-client setup. Keep
+  the marked document example aligned with the compiler acceptance fixture.
 - `docs/imported-oauth.md`: approved MCP OAuth registrations, metadata validation,
   discovery onboarding, unknown upstream identity, and optional refresh.
 - `docs/command-imports.md`: operator-approved local command imports:

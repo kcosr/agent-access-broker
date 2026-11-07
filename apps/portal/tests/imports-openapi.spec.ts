@@ -164,7 +164,7 @@ async function signInAndChangePassword(page: Page) {
 async function createDraft(page: Page, privateDocument = false) {
   await page.getByRole("complementary", { name: "Catalog" }).getByRole("button", { name: "Import service", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Import service", exact: true });
-  await dialog.getByLabel("Import type").selectOption("openapi_http");
+  await dialog.getByLabel("Import type").selectOption("openapi");
   await dialog.getByLabel("Service ID").fill(privateDocument ? "private_inventory" : "inventory");
   await dialog.getByLabel("Display name").fill(privateDocument ? "Private inventory" : "Inventory");
   await dialog.getByLabel("API base URL").fill(privateDocument ? privateEndpoint : endpoint);

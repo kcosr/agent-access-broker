@@ -7,7 +7,7 @@ import { useMemo, type ReactNode } from "react";
 import type { ImportActionRecord, ImportActionStatus, ImportPreviewResult, ImportResourceTypeDeclaration } from "../../import-types";
 import type { PolicyActionCatalog } from "../../types";
 import { ACTION_GRANT_LABEL } from "../../lib/helpers";
-import { openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
+import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, openApiOperation, openApiSchemeLabel } from "../../lib/import-openapi";
 import { COMMAND_CHECK_CAVEAT, COMMAND_KIND, commandListingType, commandResourceCheck, resourceCheckParts, resourceCheckText } from "../../lib/import-command";
 import { groupRows, sortRows } from "../../lib/table-sort";
 import { urlParam } from "../../lib/url-state";
@@ -551,12 +551,20 @@ export function ActionDrawer({ model, data }: { model: ServiceActionsModel; data
             items={[
               { label: "Operation", value: <span className="wb-mono">{`${operation.method} ${operation.path}`}</span> },
               operation.security ? { label: "Security", value: openApiSchemeLabel(operation.security) } : null,
+              operation.anonymous ? { label: "Upstream authentication", value: "Anonymous" } : null,
               operation.requestMedia !== undefined ? { label: "Request media", value: operation.requestMedia ?? "No request body" } : null,
+              operation.requestMediaTypes ? { label: "Request media", value: operation.requestMediaTypes.join(", ") || "No request body" } : null,
               operation.requestBodyRequired !== undefined ? { label: "Request body", value: operation.requestBodyRequired ? "Required" : "Optional" } : null,
               operation.requiredBodyFields?.length ? { label: operation.requestBodyRequired ? "Required body fields" : "Required fields when body is supplied", value: operation.requiredBodyFields.join(", ") } : null,
-              operation.noContentStatuses.length ? { label: "No response content", value: operation.noContentStatuses.join(", ") } : null
+              operation.noContentStatuses.length ? { label: "No response content", value: operation.noContentStatuses.join(", ") } : null,
+              operation.responseHeaders?.length ? { label: "Declared response headers", value: operation.responseHeaders.map((response) => `${response.status}: ${response.names.join(", ")}`).join("; ") } : null
             ]}
           />
+          {operation.gateway ? <>
+            <p className="pt-prose wb-small">{GATEWAY_AUTHORITY_NOTICE}</p>
+            <p className="pt-prose wb-small">{GATEWAY_BODY_NOTICE}</p>
+            <p className="pt-prose wb-small">Responses stream as native HTTP, including binary files. No invocation envelope or JSON output conversion is applied.</p>
+          </> : null}
         </DrawerSection>
       ) : null}
       {check && checkParts ? (

@@ -142,15 +142,19 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
-  2.0 and OpenAPI 3.0/3.1 documents by URL or upload, review and accept operations,
-  and authorize native HTTP clients with whole-operation grants. Operator
+  2.0 and OpenAPI 3.1 documents by URL or upload, choose immutable Actions/tools
+  or HTTP gateway exposure, review and accept operations, and authorize native
+  HTTP clients with whole-operation grants. Operator
   `[imports.gateway_bindings.<service>]` entries pin each service's Broker hosts
   and upstream endpoint. Execution requires explicit anonymous access or static
   Basic, bearer or header API-key bindings; unlinked adapters stay unavailable.
   Refresh retains literal route guards and quarantines changed or missing
   accepted operations. Import lists include safe `gatewayBindings` choices;
   gateway services report `scopedMcp: null` and expose no invoke or MCP tools.
-  See [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports).
+  The portal shows raw-body limits and verification eligibility while preserving
+  eligible Git and mixed-connection probes. See
+  [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports)
+  and the [HTTP gateway setup guide](docs/http-gateway-setup.md).
 
 - **Context-limited account/group issuance and read-only agent tokens.** A mode
   dropdown and dynamic context checklist define each enabled policy. Explicit

@@ -34,11 +34,11 @@ import { CredentialDrawer, CredentialRows, CredentialToolbar, credentialCounts, 
 import { adminSubject } from "../src/app/active-route";
 
 const stamp = { createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", createdBy: "admin", updatedBy: "admin" };
-const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationInputs: [] };
-const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationInputs: ["repository"] };
-const mail = { service: "gmail", displayName: "Gmail", credentialVerificationInputs: [] };
-const jira = { service: "jira", displayName: "Jira", credentialVerificationInputs: [] };
-const confluence = { service: "confluence", displayName: "Confluence", credentialVerificationInputs: [] };
+const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationSupported: true, credentialVerificationInputs: [] };
+const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationSupported: true, credentialVerificationInputs: ["repository"] };
+const mail = { service: "gmail", displayName: "Gmail", credentialVerificationSupported: true, credentialVerificationInputs: [] };
+const jira = { service: "jira", displayName: "Jira", credentialVerificationSupported: true, credentialVerificationInputs: [] };
+const confluence = { service: "confluence", displayName: "Confluence", credentialVerificationSupported: true, credentialVerificationInputs: [] };
 const oauthConnection = (connection: string, displayName: string, registration: string, consumers: ConnectionConsumer[], otherConsumers: number, remoteRevocation: RemoteRevocation | null) => ({
   connection, displayName, method: "oauth" as const, consumers, otherConsumers, tokenProfiles: [], registration, remoteRevocation, credential: null
 });

@@ -1,5 +1,6 @@
 import type { ImportActionRecord, ImportClassification, ImportClassificationChange, ImportPreviewResult, ImportScopedMcpWarning, ImportSelection, ImportedServiceRecord, ImportedTool } from "../import-types";
 import { COMMAND_KIND, commandListingType } from "./import-command";
+import { isOpenApiImport } from "./import-openapi";
 
 /** Adapter locators are compared by value, independently of JSON key order. */
 export function importSourceKey(value: unknown): string {
@@ -61,7 +62,7 @@ export function selectedImportActions(rows: ImportReviewRow[]): ImportSelection[
 }
 /** What an adapter's discovered items are called: OpenAPI operations, command actions, MCP tools. */
 export function importItemNoun(adapterKind: string): "operation" | "action" | "tool" {
-  return adapterKind === "openapi_http" ? "operation" : adapterKind === "command" ? "action" : "tool";
+  return isOpenApiImport(adapterKind) ? "operation" : adapterKind === "command" ? "action" : "tool";
 }
 /**
  * Whether the preview may be accepted with no selections: a command preview
