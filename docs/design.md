@@ -2549,7 +2549,9 @@ Global administrators manage managed-store overrides through
 `/v1/admin/principals/{principal}/service-limits`, which reports each configured
 service's effective limit and whether an override supplies it; callers see
 their own effective limits, without that distinction, as `/v1/me`
-`serviceLimits`, filtered to the services `/v1/services` would show them.
+`serviceLimits`, filtered by their identity, token caveats, grants and execution
+context. This includes permitted gateway services, independently of their
+exclusion from ordinary service/action discovery.
 
 `max_wait` resolves from the service, then default, then zero independently of
 principal rate overrides. One waiting budget covers both allowances. Positive

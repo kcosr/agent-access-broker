@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file.
   clients with the gateway address supplied by an administrator. Credential and
   OAuth setup, policy/token management, audit, and explicit resource-access
   inspection for a known gateway remain available; Git traffic is unchanged.
+  Gateway live queues and admission estimates are no longer exposed through
+  describe; configured allowances remain in `/v1/me.serviceLimits` and
+  administrator service-limits routes.
 
 - **Agent token issuance requires explicit context permission and a read-only choice.**
   Upgrade Broker, CLI and portal together. `agentTokenIssuance` is now a complete

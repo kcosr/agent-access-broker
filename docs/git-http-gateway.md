@@ -427,6 +427,11 @@ the original ingress body deadline. Observed pending cancellation removes the
 request without a charge or dispatch; delayed disconnect detection means a
 client timeout alone cannot prove a push was not applied.
 
+Configured personal allowances remain visible in `/v1/me.serviceLimits` and
+administrator service-limits routes. Gateways are excluded from ordinary
+service describe, so callers cannot observe live pack-POST queues or admission
+estimates through HTTP, CLI or MCP discovery.
+
 If that body deadline has already elapsed during initial admission, before a
 rate grant or queue insertion, the pack POST returns HTTP 400
 `gateway_request_body_denied` with the existing plain-text timeout error and

@@ -639,7 +639,41 @@ async fn gateway_agent_discovery_matches_missing_services_and_keeps_explicit_acc
     let access = response_json(response).await;
     assert_eq!(access["access"][0]["action"], "repo.fetch");
     assert_eq!(access["access"][0]["resourceType"], "git_repository");
+    let me = spec_get(
+        fixture.app.clone(),
+        "/v1/me",
+        "gateway-allowance-retained",
+        Some(&fixture.agent_token),
+    )
+    .await;
+    assert_eq!(me.status(), StatusCode::OK);
+    let me = response_json(me).await;
+    assert!(
+        me["serviceLimits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|limit| limit["service"] == "gitlab_git"),
+        "{me}"
+    );
     let denied = spec_agent_fixture(&["fake"], true).await;
+    let me = spec_get(
+        denied.app.clone(),
+        "/v1/me",
+        "gateway-allowance-token-denied",
+        Some(&denied.agent_token),
+    )
+    .await;
+    assert_eq!(me.status(), StatusCode::OK);
+    let me = response_json(me).await;
+    assert!(
+        me["serviceLimits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|limit| limit["service"] != "gitlab_git"),
+        "{me}"
+    );
     let response = spec_get(
         denied.app,
         "/v1/services/gitlab_git/resource-access?cursor=invalid",

@@ -302,8 +302,9 @@ Health and discovery:
 attested identity, or `brokerToken: {readOnly: boolean}` for an admitted issued
 `agent_invoke` token) plus `serviceLimits`: the
 caller's effective [service invocation limit](#rate-limits) for each service
-`GET /v1/services` would list for the same request (identity, agent-token
-caveats, grants, and execution context), ordered by service:
+permitted by the request's identity, agent-token caveats, grants and execution
+context, ordered by service. This policy visibility includes gateways, whose
+configured allowances remain available even though ordinary discovery omits them:
 
 ```json
 {
@@ -2589,7 +2590,10 @@ setup. A caller may explicitly inspect resource access for a known gateway ID.
 
 `GET /v1/services/{service}`, `agent-access services describe SERVICE`, and the
 existing `services_describe` helper in HTTP and local stdio MCP add `limits` for
-an authenticated caller. Visibility, context, token restrictions and credential
+an authenticated caller of an invoke service. Gateways are excluded from describe,
+so callers cannot observe their live pack-POST queues or admission estimates.
+Configured allowances remain in `/v1/me.serviceLimits` and administrator
+service-limits routes. Visibility, context, token restrictions and credential
 usability are checked first. Anonymous detail omits `limits`. The detail also
 includes `scopedMcpReady`, the current service-scoped MCP readiness from the same
 runtime, so scoped clients can validate that view through detail alone. For example:

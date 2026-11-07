@@ -211,9 +211,9 @@ struct SelfServiceLimit {
     window_seconds: u32,
 }
 
-/// Effective limits for the services `/v1/services` would list for this
-/// request: the same identity, agent-token caveats, grants, and execution
-/// context. `/v1/me` never requires an execution context, so a missing,
+/// Effective limits for policy-visible invoke and gateway services under this
+/// request's identity, agent-token caveats, grants, and execution context.
+/// `/v1/me` never requires an execution context, so a missing,
 /// invalid, or token-denied context yields an empty list instead of an error.
 async fn me_service_limits(
     snapshot: &RuntimeSnapshot,
