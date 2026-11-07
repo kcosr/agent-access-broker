@@ -242,20 +242,25 @@ pub(super) fn descriptor_with_contract(
     contract: Option<&ImportedCredentialContract>,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
-    // Arbitrary upstream content may contain private data or credentials.
-    let sensitive_output_pointers: Vec<String> = config
-        .providers
-        .registry()
-        .imported_adapter(&record.definition.adapter_kind)
-        .map(|adapter| adapter.sensitive_output_pointers())
-        .unwrap_or(&["/result"])
-        .iter()
-        .map(|pointer| (*pointer).to_owned())
-        .collect();
     let adapter = config
         .providers
         .registry()
         .imported_adapter(&record.definition.adapter_kind);
+    let gateway = record.gateway_routes.is_some()
+        || adapter.is_some_and(|adapter| adapter.gateway_kind().is_some());
+    // Raw gateway responses have no Broker JSON result envelope. Their
+    // sensitive, private/no-store delivery is enforced by the gateway host,
+    // independently of JSON output pointers used by invoke services.
+    let sensitive_output_pointers: Vec<String> = if gateway {
+        Vec::new()
+    } else {
+        adapter
+            .map(|adapter| adapter.sensitive_output_pointers())
+            .unwrap_or(&["/result"])
+            .iter()
+            .map(|pointer| (*pointer).to_owned())
+            .collect()
+    };
     let mut resource_scopes = BTreeMap::new();
     let actions = record
         .actions
@@ -313,9 +318,7 @@ pub(super) fn descriptor_with_contract(
             None => CredentialDescriptor::default(),
         }
     });
-    if record.gateway_routes.is_some()
-        || adapter.is_some_and(|adapter| adapter.gateway_kind().is_some())
-    {
+    if gateway {
         descriptor.surface = ServiceSurface::Gateway {
             kind: adapter
                 .and_then(|adapter| adapter.gateway_kind())

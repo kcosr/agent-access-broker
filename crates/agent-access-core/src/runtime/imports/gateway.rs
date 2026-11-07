@@ -275,6 +275,88 @@ mod tests {
     use super::*;
     use agent_access_provider::{base_covered_by_patterns, url_allowed_by_patterns};
 
+    fn config() -> BrokerConfig {
+        crate::parse_broker_config_raw(
+            "imports.toml",
+            "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n[limits]\nupload_spool_dir = \"upload-spool\"\n",
+            &Arc::new(crate::BackendRegistry::empty()),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn gateway_descriptors_do_not_claim_json_result_sensitivity_pointers() {
+        let config = config();
+        let record = ImportedServiceRecord {
+            definition: ImportedServiceDefinition {
+                service: "inventory".into(),
+                display_name: "Inventory".into(),
+                adapter_kind: "openapi_gateway".into(),
+                endpoint: "https://api.example/api".into(),
+                connection_settings: BTreeMap::new(),
+                execution_bindings: Vec::new(),
+                discovery: ImportedDiscoveryCredential::Anonymous,
+                transport_auth: false,
+                invocation_limit: None,
+            },
+            status: ImportedServiceStatus::Enabled,
+            version: 1,
+            actions: vec![crate::ImportedActionRecord {
+                definition: ImportedActionDefinition {
+                    action: "read_item".into(),
+                    source: json!({"operationId":"read_item"}),
+                    label: None,
+                    description: "Read an inventory item".into(),
+                    input_schema: json!({"type":"object","additionalProperties":false}),
+                    output_schema: None,
+                    annotations: json!({}),
+                    read_only: true,
+                    download: false,
+                },
+                status: ImportedActionStatus::Enabled,
+                version: 1,
+                definition_hash: "0".repeat(64),
+            }],
+            slot_versions: BTreeMap::new(),
+            accepted_metadata: None,
+            document: None,
+            gateway_routes: Some(
+                crate::imports::ImportedGatewayRouteRecord::next(
+                    None,
+                    crate::imports::ImportedGatewayRouteCandidate::new(
+                        json!({"version":1,"paths":{}}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap(),
+            ),
+            created_at: String::new(),
+            created_by: String::new(),
+            updated_at: String::new(),
+            updated_by: String::new(),
+        };
+        let descriptor = descriptor_with_contract(
+            &record,
+            &config,
+            config.providers.registry().resource_types(),
+            None,
+        );
+        descriptor.validate().unwrap();
+        assert!(descriptor.is_gateway());
+        assert!(!descriptor.credentials.verification_supported);
+        assert!(descriptor.actions[0].sensitive_output_pointers.is_empty());
+
+        // Ordinary invoke descriptors keep the existing JSON pointer rule.
+        let mut ordinary = descriptor;
+        ordinary.surface = ServiceSurface::Invoke;
+        ordinary.actions[0].sensitive_output_pointers = vec!["/result".into()];
+        assert!(ordinary.validate().unwrap_err().iter().any(|error| {
+            error == "inventory.read_item sensitive output /result must point into /result"
+        }));
+        ordinary.actions[0].sensitive_output_pointers = vec!["/result/value".into()];
+        ordinary.validate().unwrap();
+    }
+
     #[test]
     fn managed_gateway_allowlist_pins_endpoint_origin_and_base() {
         for (endpoint, allowed, sibling) in [
@@ -295,12 +377,7 @@ mod tests {
             ),
             ("https://api.example/", "https://api.example/items/1", None),
         ] {
-            let mut config = crate::parse_broker_config_raw(
-                "imports.toml",
-                "[identity]\nmode = \"anonymous\"\nauthority = \"toml\"\n[policy]\nauthority = \"toml\"\ndefault_decision = \"deny\"\n[limits]\nupload_spool_dir = \"upload-spool\"\n",
-                &Arc::new(crate::BackendRegistry::empty()),
-            )
-            .unwrap();
+            let mut config = config();
             config.imports.gateway_bindings.insert(
                 "inventory".into(),
                 toml::from_str(&format!(
