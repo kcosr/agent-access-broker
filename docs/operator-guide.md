@@ -1487,8 +1487,8 @@ Accepted HTTP gateway response declarations containing `*/*` or `type/*` require
 a Broker with [response media range support](http-gateway-setup.md#response-media-declarations),
 without another database migration. Older binaries cannot load any retained
 wildcard plan and leave the containing gateway service, including its other
-actions, unavailable. Disabling or quarantining an individual action does not
-remove its stored plan. Before downgrading, restore a compatible pre-wildcard
+actions, unavailable. Disabling, quarantining or retiring an individual action
+does not remove its stored plan. Before downgrading, restore a compatible pre-wildcard
 managed-state backup with matching configuration, keys and binaries using the
 matched-backup procedure above.
 

@@ -27,7 +27,7 @@ HTTP gateway response declarations support concrete media types and the ranges
 `*/*` and `type/*` as [review metadata](http-gateway-setup.md#response-media-declarations).
 Newly accepted wildcard declarations require a compatible Broker. Older binaries
 cannot load those retained plans and leave the affected gateway service unavailable;
-disabling or quarantining an individual action does not remove its stored plan.
+disabling, quarantining or retiring an individual action does not remove its stored plan.
 Before rolling back, restore a compatible pre-wildcard backup using the
 [matched-backup procedure](operator-guide.md#upgrade-and-rollback). The wildcard
 support itself adds no database migration or new plan version.
