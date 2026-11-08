@@ -38,6 +38,10 @@ Discovery is optional, not a required sequence. Call only tools exposed by the
 client, using its exact names; a client may rename tools or expose only some
 helpers. Tool search is a client capability, not a Broker `search_tools` tool.
 
+Ordinary service/action discovery omits gateways, including Git. Native clients
+use their preconfigured gateway address and authentication. The resource-access
+helper can inspect authorized access to an already known gateway service ID.
+
 These Broker helper names identify capabilities; they are not assumed to be
 directly callable under their bare names in every client:
 

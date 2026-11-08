@@ -313,9 +313,6 @@ impl Handler {
             .map_err(|_| "Cannot project service discovery");
         }
         let service = service.ok_or("Service is required")?;
-        let capabilities = runtime
-            .service_capabilities(&request.identity, &request.context, service)
-            .ok_or("Service is not visible or does not exist")?;
         match name {
             "resource_access_describe" => {
                 let discovery = runtime
@@ -341,7 +338,7 @@ impl Handler {
             }
             "actions_list" => {
                 let discovery = runtime
-                    .service_discovery(&request.identity, &request.context, service)
+                    .agent_service_discovery(&request.identity, &request.context, service)
                     .ok_or("Service is not visible or does not exist")?;
                 serde_json::to_value(discovery.actions(
                     args.get("resource").and_then(Value::as_str),
@@ -351,6 +348,9 @@ impl Handler {
                 .map_err(|_| "Cannot encode action discovery")
             }
             "actions_describe" => {
+                let capabilities = runtime
+                    .service_capabilities(&request.identity, &request.context, service)
+                    .ok_or("Service is not visible or does not exist")?;
                 let name = args
                     .get("action")
                     .and_then(Value::as_str)
@@ -360,34 +360,30 @@ impl Handler {
                     .iter()
                     .find(|a| a.action == name)
                     .ok_or("Action is not visible or does not exist")?;
+                let spec = catalog
+                    .services
+                    .iter()
+                    .find(|s| s.service == service)
+                    .and_then(|s| s.actions.iter().find(|a| a.action == name))
+                    .ok_or("Action detail is unavailable in caller catalog; retry discovery")?;
+                let common: agent_access_provider::ActionCapabilities = serde_json::from_value(
+                    serde_json::to_value(spec).map_err(|_| "Cannot encode action schema")?,
+                )
+                .map_err(|_| "Invalid action schema")?;
+                if &common != action {
+                    return Err("Discovery changed; retry discovery");
+                }
                 let mut detail =
-                    serde_json::to_value(action).map_err(|_| "Cannot encode action definition")?;
-                if capabilities.surface == "invoke" {
-                    let spec = catalog
-                        .services
-                        .iter()
-                        .find(|s| s.service == service)
-                        .and_then(|s| s.actions.iter().find(|a| a.action == name))
-                        .ok_or("Action detail is unavailable in caller catalog; retry discovery")?;
-                    let common: agent_access_provider::ActionCapabilities = serde_json::from_value(
-                        serde_json::to_value(spec).map_err(|_| "Cannot encode action schema")?,
-                    )
-                    .map_err(|_| "Invalid action schema")?;
-                    if &common != action {
-                        return Err("Discovery changed; retry discovery");
-                    }
-                    detail =
-                        serde_json::to_value(spec).map_err(|_| "Cannot encode action schema")?;
-                    if let Some(object) = detail.as_object_mut() {
-                        object.remove("scopedMcpName");
-                    }
-                    if let Some(tool) = registry.action_detail(service, name) {
-                        detail["mcpTool"] = tool;
-                    } else if mcp::action_eligible(spec, ProjectionMode::Http)
-                        && let Some(issue) = registry.action_unavailable(service, name)
-                    {
-                        detail["mcpToolUnavailable"] = json!(issue.code.as_str());
-                    }
+                    serde_json::to_value(spec).map_err(|_| "Cannot encode action schema")?;
+                if let Some(object) = detail.as_object_mut() {
+                    object.remove("scopedMcpName");
+                }
+                if let Some(tool) = registry.action_detail(service, name) {
+                    detail["mcpTool"] = tool;
+                } else if mcp::action_eligible(spec, ProjectionMode::Http)
+                    && let Some(issue) = registry.action_unavailable(service, name)
+                {
+                    detail["mcpToolUnavailable"] = json!(issue.code.as_str());
                 }
                 detail["service"] = json!(service);
                 Ok(detail)

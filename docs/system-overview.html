@@ -625,11 +625,12 @@
     <div class="sec-head">
       <div class="num">03</div>
       <h2>How agents connect</h2>
-      <p>Agents can discover and invoke typed actions through four interfaces.</p>
+      <p>Agents discover and invoke typed actions through Broker interfaces and use Git through its gateway.</p>
     </div>
     <div class="sec-body">
-      <p>Each broker provider exposes a defined set of actions, such as view, search, create, update and trigger, with input and output schemas owned by the broker. An agent discovers which services, resources and actions are available to it, then invokes an action by name. All four interfaces use the same catalog, identity checks and policy checks.</p>
+      <p>Each broker provider exposes a defined set of actions, such as view, search, create, update and trigger, with input and output schemas owned by the broker. An agent discovers which services, resources and actions are available to it, then invokes an action by name. Typed action interfaces share the same catalog, identity checks and policy checks.</p>
       <p>Discovery also checks local execution and lookup credentials. Missing or unusable credentials hide affected actions, schemas and resources, including native MCP tools. An authorized service retains an availability status and setup requirements. Discovery does not contact upstream or refresh OAuth; refresh the tool list or reconnect after credentials change. Management and setup remain available.</p>
+      <p>Ordinary service/action discovery omits gateways, including Git. Native clients receive the gateway address and authentication setup from an administrator. Gateway policy identities remain available in credential setup, grants, token restrictions and audit; callers can explicitly inspect resource access for a known gateway service.</p>
       <table style="margin-top:20px">
         <thead>
           <tr><th>Interface</th><th>Runs as</th><th>Payloads</th><th>Typical use</th></tr>
@@ -663,7 +664,7 @@
       </table>
       <div class="cols2" style="margin-top:24px">
         <ul class="list">
-          <li><b>Discovery.</b> The broker filters service, resource and action listings by the caller's identity, context and policy. Each invocation is authorized separately.</li>
+          <li><b>Discovery.</b> The broker filters invoke-service, resource and action listings by the caller's identity, context and policy. Each invocation is authorized separately.</li>
           <li><b>Service connections.</b> Select one service per client connection to expose raw provider names without a broker prefix. Current grants, backend credentials, rate limits and audit still apply. A connection view does not narrow the token itself.</li>
           <li><b>MCP transports.</b> The stdio server runs beside the agent and supports JSON input and output, file references for uploads and downloads, and saving read or write responses locally. A local save failure is reported separately from confirmed operation success, without replaying the operation. The HTTP endpoint serves remote clients and supports JSON input and output only.</li>
           <li><b>Attachment formats.</b> Authorized Jira and Confluence downloads allow all media types by default, with optional allow/deny patterns independent of exact upload lists. Byte limits and attachment membership checks still apply. Media rules filter declarations without inspecting file contents; see <a href="configuration.md#jira-and-confluence-attachment-media-policy">attachment media policy</a>.</li>

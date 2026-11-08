@@ -42,6 +42,10 @@ Use caller-visible discovery and specs through the same base URL:
 | `GET /v1/spec/catalog` | Canonical actions, input schemas, documentation and I/O capabilities |
 | `GET /v1/spec/openapi.json` | Exact routes, authentication rendering and request/response schemas |
 
+Ordinary service/action discovery omits gateways, including Git. Use the
+administrator-provided native-client setup for gateway traffic. The explicit
+resource-access route still supports an already known gateway service ID.
+
 The runtime catalog contract is `agent-access.catalog.v2`. Select actions by
 canonical service and action IDs, not display names or MCP projections. Read an
 action's `inputSchema` and extended `documentation` for query syntax, content

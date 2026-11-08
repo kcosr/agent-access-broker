@@ -34,6 +34,10 @@ agent-access spec send-schema
 agent-access spec catalog
 ```
 
+Service/action discovery omits gateways, including Git. Native clients use their
+preconfigured gateway address; explicit resource-access inspection remains
+available for an already known gateway service ID.
+
 Replace `SERVICE` and `ACTION` with canonical IDs, not display or MCP tool names.
 The caller-filtered send schema supplies exact envelope variants; the catalog
 and action detail supply the inner `inputSchema`, I/O and response capabilities,
