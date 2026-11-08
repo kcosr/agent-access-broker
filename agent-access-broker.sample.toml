@@ -912,6 +912,7 @@ media_types = []
 max_body_bytes = 1048576
 max_commit_actions = 25
 max_file_bytes = 10485760
+max_inline_text_bytes = 1048576 # file.view ceiling; caller default is 64 KiB
 max_raw_download_bytes = 104857600
 
 [providers.gitlab.search]

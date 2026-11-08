@@ -1,3 +1,5 @@
+#[path = "gitlab_smoke/file_reads.rs"]
+mod file_reads;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "gitlab_smoke/plain_inputs.rs"]
@@ -32,7 +34,7 @@ use agent_access_gitlab::{
     GitlabDiscussionReplyRequest, GitlabDiscussionStateChange, GitlabDiscussionStateChangeRequest,
     GitlabDraftBulkPublishRequest, GitlabDraftNote, GitlabDraftNoteCreateRequest,
     GitlabDraftNoteListRequest, GitlabDraftNoteObjectRequest, GitlabDraftNoteUpdateRequest,
-    GitlabFile, GitlabFileDeleteRequest, GitlabFileMutation, GitlabFileRequest,
+    GitlabFile, GitlabFileDeleteRequest, GitlabFileMetadata, GitlabFileMutation, GitlabFileRequest,
     GitlabFileWriteRequest, GitlabIssue, GitlabIssueCreateRequest, GitlabIssueNoteCreateRequest,
     GitlabIssueSearchRequest, GitlabIssueUpdateRequest, GitlabJob, GitlabJobListRequest,
     GitlabMergeRequest, GitlabMergeRequestCreateRequest, GitlabMergeRequestListRequest,
@@ -43,7 +45,7 @@ use agent_access_gitlab::{
     GitlabPipelineRunRequest, GitlabPositionedDiscussionCreateRequest, GitlabProject,
     GitlabProjectUpload, GitlabProtectedBranch, GitlabProtectedBranchAccessLevel,
     GitlabProtectedBranchListRequest, GitlabProvider, GitlabProviderConfig, GitlabRawFile,
-    GitlabReviewSummaryNoteRequest, GitlabReviewer, GitlabServerVersion,
+    GitlabRepositoryFile, GitlabReviewSummaryNoteRequest, GitlabReviewer, GitlabServerVersion,
     GitlabSuggestionApplyRequest, GitlabUser, GitlabUserSummary, GitlabWebhook,
     GitlabWebhookCustomHeaderRequest, GitlabWebhookDeliveryAttempt, GitlabWebhookDeliveryEvent,
     GitlabWebhookEvent, GitlabWebhookEventListRequest, GitlabWebhookListRequest,
@@ -3966,7 +3968,6 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
 async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
     const OVERSIZED_NOTE_SENTINEL: &str = "oversized-note-sentinel-8b31d7";
     const OVERSIZED_DISCUSSION_SENTINEL: &str = "oversized-discussion-sentinel-4c62a9";
-    const MALFORMED_BASE64_SENTINEL: &str = "malformed-base64-sentinel-1e73bf***";
     const FILE_BASE64_SENTINEL: &str = "ZmlsZS1tYXJrZG93bi1zZW50aW5lbC05ZjhjMmU=";
     const FILE_DECODED_SENTINEL: &str = "file-markdown-sentinel-9f8c2e";
     const FINAL_CAP_SENTINEL: &str = "final-result-cap-sentinel-6a04cd";
@@ -4043,7 +4044,7 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         let file = files
             .get_mut(&("main".to_string(), "README.md".to_string()))
             .unwrap();
-        file.content = Some(MALFORMED_BASE64_SENTINEL.to_string());
+        file.content = Some(FILE_BASE64_SENTINEL.to_string());
         file.size = 1;
     }
     let malformed_file = gitlab_cli(&base_url)
@@ -4056,19 +4057,20 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
             "README.md",
             "--ref",
             "main",
+            "--include-content",
             "--output-format",
             "markdown",
         ])
         .output()
         .unwrap();
     assert_atomic_cli_error(
-        "malformed base64 whole-result Markdown",
+        "mismatched raw file size before Markdown rendering",
         &malformed_file,
-        MALFORMED_BASE64_SENTINEL,
+        FILE_DECODED_SENTINEL,
     );
     assert_eq!(
         take_backend_operations(&backend),
-        ["project", "project", "file"]
+        ["project", "project", "raw_file"]
     );
 
     {
@@ -4089,18 +4091,19 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
             "README.md",
             "--ref",
             "main",
+            "--include-content",
             "--output-format",
             "markdown",
         ])
         .output()
         .unwrap();
-    assert_success("base64 file whole-result Markdown", &file_markdown);
+    assert_success("text file whole-result Markdown", &file_markdown);
     let file_markdown = String::from_utf8(file_markdown.stdout).unwrap();
-    assert!(file_markdown.contains(FILE_BASE64_SENTINEL));
-    assert!(!file_markdown.contains(FILE_DECODED_SENTINEL));
+    assert!(!file_markdown.contains(FILE_BASE64_SENTINEL));
+    assert!(file_markdown.contains(FILE_DECODED_SENTINEL));
     assert_eq!(
         take_backend_operations(&backend),
-        ["project", "project", "file"]
+        ["project", "project", "raw_file"]
     );
 
     let audit = broker.audit().unwrap();
@@ -4115,7 +4118,6 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
     for sentinel in [
         OVERSIZED_NOTE_SENTINEL,
         OVERSIZED_DISCUSSION_SENTINEL,
-        MALFORMED_BASE64_SENTINEL,
         FILE_BASE64_SENTINEL,
         FILE_DECODED_SENTINEL,
     ] {
@@ -4130,10 +4132,12 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         .projects
         .get_mut("sip/service")
         .unwrap()
-        .name = Some(FINAL_CAP_SENTINEL.to_string());
-    let provider_config = gitlab_provider_config(2);
+        .name = Some(format!("{FINAL_CAP_SENTINEL}{}", "p".repeat(70 * 1024)));
+    let mut provider_config = gitlab_provider_config(2);
+    provider_config.content.max_inline_text_bytes = 1;
     let mut capped_document = gitlab_per_user_document();
-    capped_document.max_upstream_response_bytes = Some(64);
+    capped_document.provider = provider_config.clone();
+    capped_document.max_upstream_response_bytes = Some(70 * 1024);
     let capped_broker = start_broker(
         &capped_document,
         gitlab_service(provider_config, capped_backend.clone()),
@@ -4353,8 +4357,14 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     let file_view_json: serde_json::Value = serde_json::from_slice(&file_view.stdout).unwrap();
     assert_eq!(file_view_json["result"]["file"]["filePath"], "README.md");
     assert_eq!(
-        file_view_json["result"]["file"]["contentBase64"],
-        "cmVhZG1lIGNvbnRlbnRz"
+        file_view_json["result"]["file"]["contentStatus"],
+        "not_requested"
+    );
+    assert!(file_view_json["result"]["file"].get("content").is_none());
+    assert!(
+        file_view_json["result"]["file"]
+            .get("contentBase64")
+            .is_none()
     );
 
     let file_raw = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -8937,22 +8947,64 @@ impl GitlabBackend for StubGitlabBackend {
         })
     }
 
-    async fn raw_file(
+    async fn file_metadata(
         &self,
         project_id: u64,
         request: GitlabFileRequest,
-        _byte_cap: u64,
         credential: &agent_access_gitlab::GitlabCredential,
-    ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
-        self.record_credential("raw_file", credential);
-        if project_id != 42 || request.path != "README.md" || request.ref_name != TEST_SHA {
+    ) -> Result<GitlabBackendResponse<GitlabFileMetadata>, GitlabBackendError> {
+        self.record_credential("file_metadata", credential);
+        if project_id != 42 {
             return Err(GitlabBackendError::NotFound);
         }
+        let file = self
+            .files
+            .lock()
+            .unwrap()
+            .get(&(request.ref_name, request.path))
+            .cloned()
+            .ok_or(GitlabBackendError::NotFound)?;
         Ok(GitlabBackendResponse {
-            value: GitlabRawFile {
-                size: Some(15),
+            value: file_read_metadata(file),
+            status: 200,
+            duration_ms: 8,
+        })
+    }
+
+    async fn raw_file(
+        &self,
+        _operation: &'static str,
+        project_id: u64,
+        request: GitlabFileRequest,
+        byte_cap: u64,
+        credential: &agent_access_gitlab::GitlabCredential,
+    ) -> Result<GitlabBackendResponse<GitlabRepositoryFile>, GitlabBackendError> {
+        self.record_credential("raw_file", credential);
+        if project_id != 42
+            || request.path != "README.md"
+            || !matches!(request.ref_name.as_str(), "main" | TEST_SHA)
+        {
+            return Err(GitlabBackendError::NotFound);
+        }
+        let file = self
+            .files
+            .lock()
+            .unwrap()
+            .get(&("main".to_string(), request.path.clone()))
+            .cloned()
+            .ok_or(GitlabBackendError::NotFound)?;
+        let bytes = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            file.content.as_deref().unwrap(),
+        )
+        .expect("stored file fixture must contain base64");
+        let stream =
+            (file.size <= byte_cap).then(|| ProviderResultStream::from_bytes("text/plain", bytes));
+        Ok(GitlabBackendResponse {
+            value: GitlabRepositoryFile {
+                metadata: file_read_metadata(file),
                 content_type: "text/plain".to_string(),
-                stream: ProviderResultStream::from_bytes("text/plain", b"readme contents".to_vec()),
+                stream,
             },
             status: 200,
             duration_ms: 8,
@@ -9339,6 +9391,21 @@ fn protected_branch_access_level(description: &str) -> GitlabProtectedBranchAcce
         group_id: None,
         deploy_key_id: None,
     }
+}
+
+fn file_read_metadata(file: GitlabFile) -> GitlabFileMetadata {
+    let mut metadata = GitlabFileMetadata::new(
+        file.file_name,
+        file.file_path,
+        file.size,
+        file.commit_id.unwrap(),
+    );
+    metadata.content_sha256 = file.content_sha256;
+    metadata.ref_name = file.ref_name;
+    metadata.blob_id = file.blob_id;
+    metadata.last_commit_id = file.last_commit_id;
+    metadata.execute_filemode = file.execute_filemode;
+    metadata
 }
 
 fn file_fixture(path: &str, ref_name: &str, last_commit_id: &str) -> GitlabFile {
@@ -10213,7 +10280,7 @@ allowed_upstream_hosts = {allowed_upstream_hosts}
 provisioning = {{ enabled = {enabled}, max_access_level = {max_access_level}, max_token_lifetime_days = {max_token_lifetime_days}, allowed_token_scopes = {allowed_token_scopes} }}
 attachments = {{ max_bytes = {max_bytes}, max_total_bytes = {max_total_bytes}, media_types = {media_types} }}
 webhooks = {{ allowed_destinations = {allowed_destinations}, allow_disable_ssl_verification = {allow_disable_ssl_verification} }}
-content = {{ max_body_bytes = {max_body_bytes}, max_commit_actions = {max_commit_actions}, max_file_bytes = {max_file_bytes}, max_raw_download_bytes = {max_raw_download_bytes} }}
+content = {{ max_body_bytes = {max_body_bytes}, max_commit_actions = {max_commit_actions}, max_file_bytes = {max_file_bytes}, max_inline_text_bytes = {max_inline_text_bytes}, max_raw_download_bytes = {max_raw_download_bytes} }}
 search = {{ max_results = {max_results}, default_engine = {default_engine}, max_candidate_pages = {max_candidate_pages}, max_upstream_requests = {max_upstream_requests}, max_scan_bytes = {max_scan_bytes}, engines = {{ basic = {{ project_categories = {basic_project_categories}, instance_categories = {basic_instance_categories} }}, advanced = {{ project_categories = {advanced_project_categories}, instance_categories = {advanced_instance_categories} }}, zoekt = {{ project_categories = {zoekt_project_categories}, instance_categories = {zoekt_instance_categories} }} }} }}
 "#,
         api_base_url = toml_string(api_base_url),
@@ -10231,6 +10298,7 @@ search = {{ max_results = {max_results}, default_engine = {default_engine}, max_
         max_body_bytes = content.max_body_bytes,
         max_commit_actions = content.max_commit_actions,
         max_file_bytes = content.max_file_bytes,
+        max_inline_text_bytes = content.max_inline_text_bytes,
         max_raw_download_bytes = content.max_raw_download_bytes,
         max_results = search.max_results,
         default_engine = toml_string(&search.default_engine),

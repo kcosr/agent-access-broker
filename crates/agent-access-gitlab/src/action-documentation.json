@@ -52,7 +52,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access gitlab file raw [OPTIONS] --path <PATH> --ref <REF_NAME> <PROJECT>; run agent-access gitlab file raw --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file raw [OPTIONS] --path <PATH> --ref <REF_NAME> <PROJECT>; run agent-access gitlab file raw --help for flags and input alternatives.",
+    "transfer": "Streams exact repository bytes using metadata from the same raw response, including resolvedRef. LFS files return their stored pointer. The client verifies declared size and computes the output receipt SHA-256; GitLab's possibly converted-content hash is not used as an expected raw-byte checksum. The local output destination never reaches GitLab."
   },
   "file.update": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
@@ -60,18 +61,40 @@
   },
   "file.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Whole-result Markdown preserves contentBase64 without decoding it. Use the separately granted file.raw.download action for raw bytes.",
+    "presentation": "Metadata is returned by default. includeContent=true adds complete UTF-8 text without NUL bytes when it fits the content budget. Whole-result Markdown renders metadata, contentStatus, and included text in a literal fenced block. Use the separately granted file.raw.download action for raw bytes.",
     "inputExamples": [
       {
-        "label": "File view",
+        "label": "File metadata",
         "inputs": {
           "project": "team/project",
           "path": "README.md",
           "ref": "main"
         }
+      },
+      {
+        "label": "Read a small text file",
+        "inputs": {
+          "project": "team/project",
+          "path": "README.md",
+          "ref": "main",
+          "includeContent": true
+        }
+      },
+      {
+        "label": "Read a larger complete text file",
+        "inputs": {
+          "project": "team/project",
+          "path": "src/main.rs",
+          "ref": "main",
+          "includeContent": true,
+          "maxContentBytes": 262144
+        }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access gitlab file view [OPTIONS] --path <PATH> --ref <REF_NAME> <PROJECT>; run agent-access gitlab file view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access gitlab file view [OPTIONS] --path <PATH> --ref <REF_NAME> <PROJECT>; run agent-access gitlab file view --help for flags and input alternatives.",
+    "contentRead": "includeContent defaults to false. With true, maxContentBytes is a whole-file byte budget, not a prefix length: it defaults to the smaller of 64 KiB and the configured max_inline_text_bytes ceiling. Supply a larger positive budget up to the schema maximum for larger inline reads. A supplied budget requires includeContent=true; values above the maximum are rejected, not clamped. The configured ceiling defaults to 1 MiB. Actual serialized response and transport limits still apply. Typed CLI: add --include-content, and optionally --max-content-bytes <MAX_CONTENT_BYTES>.",
+    "contentResult": "file.contentStatus is not_requested, included, too_large, or unsupported_text. content exists only for included, including an empty string for an empty file. too_large returns contentBudgetBytes and metadata, with no partial content. Unsupported text means invalid UTF-8 or a NUL byte; no lossy decoding or transcoding occurs. Authentication, protocol and transfer failures remain errors. contentSha256 is GitLab's content-representation hash and may differ from a raw-byte hash.",
+    "transports": "Use the separately granted file.raw.download action through stdio MCP or CLI for large or binary files. HTTP MCP supports file.view and an explicit larger maxContentBytes budget within the configured ceiling; it does not expose raw download tools. Both MCP result copies and JSON escaping count toward HTTP MCP response limits."
   },
   "issue.create": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",

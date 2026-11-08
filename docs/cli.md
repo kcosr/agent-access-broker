@@ -1643,6 +1643,22 @@ or non-page targets.
 
 ### GitLab REST (typed)
 
+`gitlab file view` returns metadata by default. Add `--include-content` for
+complete UTF-8 text, with a 64 KiB default budget or the lower configured ceiling.
+`--max-content-bytes` requires `--include-content` and can raise that whole-file
+budget up to the configured maximum. Check `result.file.contentStatus` for
+included, too-large, or unsupported text; files are never silently truncated.
+Use `gitlab file raw --output PATH` for larger or binary files. Its receipt hash
+is computed from the saved bytes, independently of GitLab's content-representation
+hash. See [repository file reads](providers-gitlab-rest.md#repository-file-reads).
+
+```bash
+agent-access gitlab file view team/project --path README.md --ref main
+agent-access gitlab file view team/project --path README.md --ref main --include-content
+agent-access gitlab file view team/project --path src/main.rs --ref main --include-content --max-content-bytes 262144
+agent-access gitlab file raw team/project --path assets/archive.zip --ref main --output archive.zip
+```
+
 Upload one project attachment with
 `agent-access gitlab project upload team/project --file session.html --content-type text/html`.
 Use `--project-url URL` instead of the project path when needed. MIME type is

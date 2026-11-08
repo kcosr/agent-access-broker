@@ -1563,7 +1563,7 @@ approval-rule list/view reads;
 branch and protected-branch list/view; protected-branch verify; file view;
 commit list/view; pipeline list/view; and job list/view. They assert semantic
 field completeness and stable ordering, body-bearing search/list behavior,
-nested-note structure, collision-safe literal commit messages and file base64,
+nested-note structure, collision-safe literal commit messages and file text,
 ordinary protected-branch verification results, exact pagination metadata on
 issue/MR searches, note/discussion lists, and every merge-request review-context
 collection plus draft-note lists, one terminal LF, and safe closure of

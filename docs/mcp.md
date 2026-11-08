@@ -82,6 +82,17 @@ does not guarantee another authorized match. See
 [GitLab search](providers-gitlab-rest.md#repository-discovery-and-content-search)
 and the selected action's usage documentation.
 
+GitLab `file.view` returns metadata by default on both transports. To read text,
+set `inputs.includeContent` to true; add `inputs.maxContentBytes` for a larger
+complete-file budget within the action schema's maximum. The default budget is
+64 KiB or the lower configured ceiling. Check `file.contentStatus` before using
+`file.content`: oversized and unsupported text return metadata with an explicit
+omission status. HTTP MCP can use these larger inline reads but still applies
+its serialized response limit, including both text and structured result copies
+and JSON escaping. Stdio MCP can instead use `file.raw.download` with an absolute
+`outputPath` for larger or binary files. See
+[repository file reads](providers-gitlab-rest.md#repository-file-reads).
+
 Teams `notification.send` uses the same destination alias and `simple` or
 `microsoft` content modes on both MCP transports. Local stdio `requestFile`
 contains the complete action input object; HTTP MCP takes inline inputs. The

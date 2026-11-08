@@ -6,6 +6,7 @@ mod access;
 mod backend;
 mod config;
 mod documentation;
+mod file_reads;
 mod oauth;
 mod present;
 mod provisioning;
@@ -107,7 +108,8 @@ const MERGE_REQUEST_SEARCH_ORDER_BY: &[&str] = &[
     "popularity",
     "title",
 ];
-const GITLAB_INLINE_FILE_JSON_OVERHEAD: u64 = 2048;
+const GITLAB_INLINE_FILE_JSON_OVERHEAD: u64 = 4 * GITLAB_FILE_METADATA_MAX_BYTES as u64;
+const GITLAB_DEFAULT_INLINE_TEXT_BUDGET: u64 = 64 * 1024;
 const GITLAB_DEFAULT_BRANCH_NAMES: &[&str] = &["main", "master"];
 const GITLAB_COMMIT_ACTIONS: &[&str] = &["create", "update", "move", "delete", "chmod"];
 const GITLAB_ISSUE_VALIDATION_FIELDS: &[&str] = &["description", "title"];
@@ -4842,133 +4844,6 @@ impl GitlabProvider {
         ))
     }
 
-    async fn invoke_file_view(
-        &self,
-        request: ProviderInvocation,
-    ) -> Result<ProviderResult, ProviderError> {
-        let inputs = parse_file_view_inputs(request.inputs())?;
-        let project = self.lookup_project_for_invoke(request.admitted()).await?;
-        let credential = &self.execution_credential(&request)?;
-        let response = self
-            .backend
-            .file(
-                project.id,
-                GitlabFileRequest {
-                    path: inputs.path.clone(),
-                    ref_name: inputs.ref_name.clone(),
-                },
-                credential,
-            )
-            .await
-            .map_err(gitlab_backend_error)?;
-        ensure_file_path_matches(&inputs.path, &response.value)?;
-        let result_file = gitlab_file_inline_result(
-            response.value,
-            self.config.content.max_file_bytes,
-            self.limits.max_upstream_response_bytes,
-        )?;
-        Ok(gitlab_result(
-            "file.view",
-            &project,
-            Some(json!({
-                "file": format!("{}:{}:{}", project.path_with_namespace, inputs.ref_name, inputs.path)
-            })),
-            response.status,
-            response.duration_ms,
-            json!({ "file": result_file }),
-            self.backend.egress_proxy_audit(credential),
-        ))
-    }
-
-    async fn invoke_file_raw_download(
-        &self,
-        request: ProviderInvocation,
-    ) -> Result<ProviderResult, ProviderError> {
-        let inputs = parse_file_view_inputs(request.inputs())?;
-        let project = self.lookup_project_for_invoke(request.admitted()).await?;
-        let lookup_credential = &self.lookup_credential(&request)?;
-        let metadata = self
-            .backend
-            .file(
-                project.id,
-                GitlabFileRequest {
-                    path: inputs.path.clone(),
-                    ref_name: inputs.ref_name.clone(),
-                },
-                lookup_credential,
-            )
-            .await
-            .map_err(gitlab_lookup_backend_error)?
-            .value;
-        ensure_file_path_matches(&inputs.path, &metadata)?;
-        validate_gitlab_raw_download_size(
-            metadata.size,
-            self.config.content.max_raw_download_bytes,
-        )?;
-        let resolved_ref = required_file_commit_id(&metadata)?;
-        let credential = &self.execution_credential(&request)?;
-        let response = self
-            .backend
-            .raw_file(
-                project.id,
-                GitlabFileRequest {
-                    path: inputs.path.clone(),
-                    ref_name: resolved_ref.clone(),
-                },
-                self.config
-                    .content
-                    .max_raw_download_bytes
-                    .min(self.limits.max_download_bytes),
-                credential,
-            )
-            .await
-            .map_err(gitlab_backend_error)?;
-        if response
-            .value
-            .size
-            .is_some_and(|size| size > self.config.content.max_raw_download_bytes)
-        {
-            return Err(ProviderError::deny(
-                ReasonCode::AttachmentSizeDenied,
-                "GitLab raw file download exceeded the configured byte cap",
-            ));
-        }
-        let mut result = json!({
-            "project": project.path_with_namespace,
-            "projectId": project.id,
-            "path": metadata.file_path,
-            "ref": inputs.ref_name,
-            "resolvedRef": resolved_ref,
-            "contentType": response.value.content_type,
-            "size": metadata.size,
-        });
-        if let Some(sha256) = metadata.content_sha256.clone() {
-            result["sha256"] = json!(sha256);
-        }
-        let stream = response.value.stream.with_expected_size(
-            metadata.size,
-            "GitLab raw file response size did not match metadata",
-        );
-        let audit = json!({
-            "gitlab": {
-                "operation": "file.raw.download",
-                "project": project.path_with_namespace,
-                "namespace": project.path_with_namespace.split('/').next().unwrap_or(""),
-                "projectId": project.id,
-                "path": result["path"],
-                "ref": result["ref"],
-                "resolvedRef": result["resolvedRef"],
-                "contentType": result["contentType"],
-                "size": metadata.size,
-                "sha256": metadata.content_sha256,
-                "egressProxy": self.backend.egress_proxy_audit(credential),
-            }
-        });
-        Ok(ProviderResult::new(result).with_stream(stream).with_audit(audit).with_upstream(Some(response.status), Some(response.duration_ms)).with_object_ids(json!({
-                "file": format!("{}:{}:{}", project.path_with_namespace, inputs.ref_name, inputs.path)
-            })))
-    }
-
     async fn invoke_file_create(
         &self,
         request: ProviderInvocation,
@@ -7169,19 +7044,21 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
         .audit_input("requiredPatterns", "Required patterns"),
         gitlab_read_action(
             "file.view",
-            "View bounded GitLab repository file metadata and inline content",
-            file_view_schema(),
+            "View GitLab file metadata, optionally including complete bounded UTF-8 text",
+            file_view_schema(config.content.max_inline_text_bytes),
         )
         .audit_input("project", "Project")
         .audit_input("path", "File path")
         .audit_input("ref", "Ref")
+        .audit_input("includeContent", "Include content")
+        .audit_input("maxContentBytes", "Content byte budget")
         .documentation(json!({
             "content":"Reads files from a project's source repository. Wiki pages are separate and cannot be read through this action. Full wiki-page reading is not currently supported by the Broker."
         })),
         gitlab_read_action(
             "file.raw.download",
             "Download a bounded GitLab repository file as a raw stream",
-            file_view_schema(),
+            file_locator_schema(),
         )
         .audit_input("project", "Project")
         .audit_input("path", "File path")
@@ -8513,7 +8390,7 @@ fn protected_branch_verify_schema() -> Value {
     })
 }
 
-fn file_view_schema() -> Value {
+fn file_locator_schema() -> Value {
     json!({
         "type": "object",
         "required": ["project", "path", "ref"],
@@ -8524,6 +8401,20 @@ fn file_view_schema() -> Value {
         },
         "additionalProperties": false
     })
+}
+
+fn file_view_schema(max_inline_text_bytes: u64) -> Value {
+    let mut schema = file_locator_schema();
+    schema["properties"]["includeContent"] = json!({
+        "type": "boolean", "default": false,
+        "description": "Include complete UTF-8 text without NUL bytes when it fits the whole-file byte budget. Metadata only by default."
+    });
+    schema["properties"]["maxContentBytes"] = json!({
+        "type": "integer", "minimum": 1, "maximum": max_inline_text_bytes,
+        "default": GITLAB_DEFAULT_INLINE_TEXT_BUDGET.min(max_inline_text_bytes),
+        "description": "Whole-file content byte budget; requires includeContent=true. Values above the configured maximum are rejected, not clamped. Does not return a prefix or bypass transport response limits."
+    });
+    schema
 }
 
 fn file_create_schema() -> Value {
@@ -9033,9 +8924,16 @@ struct ProtectedBranchVerifyInputs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct FileViewInputs {
+struct FileLocatorInputs {
     path: String,
     ref_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileViewInputs {
+    locator: FileLocatorInputs,
+    include_content: bool,
+    content_budget_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10698,7 +10596,7 @@ fn parse_branch_create_inputs(inputs: &Value) -> Result<GitlabBranchCreateReques
     Ok(GitlabBranchCreateRequest { branch, ref_name })
 }
 
-fn parse_file_view_inputs(inputs: &Value) -> Result<FileViewInputs, ProviderError> {
+fn parse_file_locator_inputs(inputs: &Value) -> Result<FileLocatorInputs, ProviderError> {
     let object = input_object(inputs, "gitlab file inputs are invalid")?;
     reject_unknown_keys(
         object,
@@ -10710,7 +10608,56 @@ fn parse_file_view_inputs(inputs: &Value) -> Result<FileViewInputs, ProviderErro
     let ref_name = required_object_string(object, "ref")?;
     validate_gitlab_file_path(&path)?;
     validate_ref_name(&ref_name)?;
-    Ok(FileViewInputs { path, ref_name })
+    Ok(FileLocatorInputs { path, ref_name })
+}
+
+fn parse_file_view_inputs(
+    inputs: &Value,
+    max_inline_text_bytes: u64,
+) -> Result<FileViewInputs, ProviderError> {
+    let object = input_object(inputs, "gitlab file inputs are invalid")?;
+    reject_unknown_keys(
+        object,
+        &[
+            "project",
+            "path",
+            "ref",
+            "includeContent",
+            "maxContentBytes",
+        ],
+        "gitlab file inputs are invalid",
+    )?;
+    let _ = required_project_field(object)?;
+    let path = required_object_string(object, "path")?;
+    let ref_name = required_object_string(object, "ref")?;
+    validate_gitlab_file_path(&path)?;
+    validate_ref_name(&ref_name)?;
+    let include_content =
+        optional_input_bool(object.get("includeContent"), "includeContent")?.unwrap_or(false);
+    let content_budget_bytes = if let Some(value) = object.get("maxContentBytes") {
+        if !include_content {
+            return Err(ProviderError::deny(
+                ReasonCode::InputInvalid,
+                "maxContentBytes requires includeContent=true",
+            ));
+        }
+        value
+            .as_u64()
+            .filter(|value| *value > 0 && *value <= max_inline_text_bytes)
+            .ok_or_else(|| {
+                ProviderError::deny(
+                    ReasonCode::InputInvalid,
+                    "maxContentBytes must be a positive integer within the configured maximum",
+                )
+            })?
+    } else {
+        GITLAB_DEFAULT_INLINE_TEXT_BUDGET.min(max_inline_text_bytes)
+    };
+    Ok(FileViewInputs {
+        locator: FileLocatorInputs { path, ref_name },
+        include_content,
+        content_budget_bytes,
+    })
 }
 
 fn parse_file_create_inputs(
@@ -13671,24 +13618,6 @@ fn ensure_file_path_matches(expected: &str, observed: &GitlabFile) -> Result<(),
     ))
 }
 
-fn required_file_commit_id(file: &GitlabFile) -> Result<String, ProviderError> {
-    let commit_id = file.commit_id.as_deref().ok_or_else(|| {
-        ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "GitLab file metadata did not include commit_id",
-        )
-    })?;
-    if !(7..=64).contains(&commit_id.len())
-        || !commit_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "GitLab file metadata commit_id was invalid",
-        ));
-    }
-    Ok(commit_id.to_string())
-}
-
 fn file_mutation_preflight_ref<'a>(
     branch: &'a str,
     start_branch: Option<&'a str>,
@@ -13916,57 +13845,6 @@ fn add_gitlab_content_write_audit(
             ),
         ],
     );
-}
-
-fn gitlab_file_inline_result(
-    file: GitlabFile,
-    max_file_bytes: u64,
-    max_upstream_response_bytes: u64,
-) -> Result<Value, ProviderError> {
-    if file.size > max_file_bytes {
-        return Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "GitLab file exceeds inline content cap; use file.raw.download",
-        ));
-    }
-    if let Some(content) = file.content.as_deref() {
-        let estimated_json_bytes = (content.len() as u64)
-            .saturating_add(file.file_path.len() as u64)
-            .saturating_add(GITLAB_INLINE_FILE_JSON_OVERHEAD);
-        if estimated_json_bytes > max_upstream_response_bytes {
-            return Err(ProviderError::deny(
-                ReasonCode::InputInvalid,
-                "GitLab file is too large for inline JSON; use file.raw.download",
-            ));
-        }
-        if file.encoding.as_deref() == Some("base64") {
-            let decoded = BASE64.decode(content).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "GitLab file content was not valid base64",
-                )
-            })?;
-            if decoded.len() as u64 != file.size {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "GitLab file content size did not match metadata",
-                ));
-            }
-        }
-    }
-    Ok(json!({
-        "fileName": file.file_name,
-        "filePath": file.file_path,
-        "size": file.size,
-        "encoding": file.encoding,
-        "contentBase64": file.content,
-        "contentSha256": file.content_sha256,
-        "ref": file.ref_name,
-        "blobId": file.blob_id,
-        "commitId": file.commit_id,
-        "lastCommitId": file.last_commit_id,
-        "executeFilemode": file.execute_filemode,
-    }))
 }
 
 fn branch_write_audit(branch: &str, ref_name: Option<&str>, safety: &GitlabBranchSafety) -> Value {

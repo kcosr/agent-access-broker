@@ -1634,6 +1634,7 @@ media_types = []            # unrestricted; include text/html in any explicit al
 max_body_bytes = 1048576      # 1 MiB; default
 max_commit_actions = 25       # default
 max_file_bytes = 10485760     # 10 MiB; default
+max_inline_text_bytes = 1048576  # 1 MiB; file.view ceiling, 64 KiB caller default
 max_raw_download_bytes = 104857600  # 100 MiB; default
 
 [providers.gitlab.search]
@@ -1708,6 +1709,19 @@ allow_disable_ssl_verification = false
   bounds GitLab raw file, current merge-request raw diff, and CI job trace
   downloads. It must not exceed
   `limits.max_download_bytes`.
+- `[providers.gitlab.content].max_inline_text_bytes` defaults to 1 MiB and
+  limits complete text returned by `file.view` with `includeContent = true`.
+  The request budget defaults to the smaller of 64 KiB and this ceiling;
+  callers can explicitly raise `maxContentBytes` up to the advertised maximum.
+  This setting does not change file-write or diff limits. Metadata-only views
+  remain available for files above every content-transfer cap. The ceiling must
+  be non-zero, and six times the ceiling plus a 64 KiB metadata/envelope
+  allowance must fit `limits.max_upstream_response_bytes`. Actual JSON,
+  Markdown and MCP output limits also apply: HTTP MCP includes text and
+  structured result copies, and JSON escaping adds bytes. Raising the inline
+  ceiling or lowering `mcp.max_response_bytes` can produce a delivery-limit
+  error even when the file fits its byte budget. See
+  [repository file reads](providers-gitlab-rest.md#repository-file-reads).
 - `[providers.gitlab.search].max_results` defaults to `50`; it bounds `project.list`,
   repository discovery, native content search, issue/MR list searches,
   note/discussion lists, and every merge-request review-context collection. It must be non-zero and may not exceed GitLab's single-page REST

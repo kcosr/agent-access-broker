@@ -1029,6 +1029,20 @@ node scripts/verify-release-provenance.mjs <full-commit-or-exact-tag> --build-se
 Remote compiler/Cargo and service configuration are unverified. Both modes
 require a clean, unchanged source revision and neither publishes a release.
 
+## GitLab repository file reads
+
+Keep `file.view` metadata-only by default, using the selected execution
+credential and a metadata `HEAD`. Explicit `includeContent` reads complete raw
+UTF-8 text without NUL; `maxContentBytes` is a whole-file budget, never a prefix
+length. Keep its small default separate from the configurable inline ceiling
+and shared write/diff limits. Expose expected omission states without hiding
+upstream errors. Content reads and downloads use metadata from the same raw
+response as their bytes; preserve resolved commit/blob identity and reject
+missing or malformed metadata without a fallback request. GitLab's content hash
+can describe converted text and must not become an expected raw-byte checksum.
+Keep actual MCP serialization limits independent of raw content admission, and
+keep decoded content out of audit and diagnostics.
+
 ## GitLab credential issuance
 
 GitLab bot provisioning is implemented in `crates/agent-access-gitlab/src/provisioning.rs`;

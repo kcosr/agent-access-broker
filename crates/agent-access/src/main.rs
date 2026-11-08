@@ -4509,6 +4509,12 @@ enum GitlabFileCommand {
         path: String,
         #[arg(long = "ref")]
         ref_name: String,
+        /// Include complete UTF-8 text when it fits the requested budget.
+        #[arg(long)]
+        include_content: bool,
+        /// Whole-file byte budget; requires --include-content.
+        #[arg(long, requires = "include_content", value_parser = clap::value_parser!(u64).range(1..))]
+        max_content_bytes: Option<u64>,
         #[command(flatten)]
         response: WholeOutputArgs,
     },
@@ -8536,16 +8542,23 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 project,
                 path,
                 ref_name,
+                include_content,
+                max_content_bytes,
                 response,
             } => {
+                let mut inputs = serde_json::json!({
+                    "project": project,
+                    "path": path,
+                    "ref": ref_name,
+                    "includeContent": include_content,
+                });
+                if let Some(maximum) = max_content_bytes {
+                    inputs["maxContentBytes"] = serde_json::json!(maximum);
+                }
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.file.view",
-                    serde_json::json!({
-                        "project": project,
-                        "path": path,
-                        "ref": ref_name,
-                    }),
+                    inputs,
                     None,
                     response.output_format,
                 )

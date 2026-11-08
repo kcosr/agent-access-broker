@@ -2170,7 +2170,8 @@ GitLab advertises whole-result Markdown on these retrieval families:
 
 The semantic templates render the already-produced result rather than dumping
 JSON. They preserve meaningful present metadata, collection order, opaque
-pagination tokens, file-view `contentBase64`, and literal commit messages.
+pagination tokens, file-view content status and included literal text, and
+literal commit messages.
 Issue/MR search and note/discussion collections include only native bodies that
 were already returned. Raw file and job-trace downloads advertise neither
 feature; raw MR diff is also a stream and advertises neither feature. Mutation

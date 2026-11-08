@@ -157,7 +157,13 @@ Repository discovery accepts GitLab's defaulted keyset pagination links while
 preserving the requested filters and repository authorization on every page.
 `project.view` includes description, last activity, and star count when supplied
 by GitLab. Wiki search returns snippets; full wiki-page reading is not currently
-supported, and `file.view` reads source-repository files only.
+supported, and `file.view` reads source-repository files only. File views return
+metadata by default; `includeContent: true` adds complete readable text within a
+64 KiB default budget. Callers can request larger files with `maxContentBytes`,
+up to the separately configured inline-text ceiling (1 MiB by default). The
+typed CLI uses `--include-content` and `--max-content-bytes`. HTTP MCP supports
+these inline reads; stdio MCP and CLI can use `file.raw.download` to save larger
+or binary files locally. See [repository file reads](docs/providers-gitlab-rest.md#repository-file-reads).
 
 Administrators can import [MCP HTTP servers](docs/imported-services.md),
 [OpenAPI 3.1 and Swagger 2.0 JSON definitions](docs/imported-openapi.md), and operator-approved

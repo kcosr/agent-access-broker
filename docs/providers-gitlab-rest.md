@@ -1514,8 +1514,8 @@ dump. It includes every meaningful present result field in stable order and
 preserves exact identifiers, SHAs, timestamps, booleans, URLs, collection
 order, counts, and opaque continuation tokens. Issue and merge-request searches
 and note/discussion lists render only descriptions or bodies already contained
-in their normal result. `file.view` preserves `contentBase64` in a
-collision-safe fenced block without decoding it, and commit messages are
+in their normal result. `file.view` renders its content status and any requested
+text in a collision-safe literal fenced block, and commit messages are
 literal preformatted text rather than outer-document Markdown. GitLab bodies
 are parsed and safely re-emitted for whole-result composition so an unclosed
 fence, list, raw HTML block, or extension cannot consume later broker metadata.
@@ -1550,7 +1550,7 @@ truncation.
 Malformed or oversized upstream content, complexity exhaustion, or rendered
 output overflow fails atomically as sanitized
 `upstream_protocol_failed`/502—there is no native or partial fallback. Native
-bodies, rendered bodies, whole-result Markdown, file base64, arbitrary literal
+bodies, rendered bodies, whole-result Markdown, file contents, arbitrary literal
 values, and pagination tokens are excluded from audit records, tracing, logs,
 errors, metric labels, and object identifiers.
 
@@ -1590,16 +1590,77 @@ the current default branch, `main`, `master`, and any caller-supplied
 diagnostic only; GitLab-side protected branch enforcement remains the security
 boundary for upstream merges and direct GitLab access.
 
-Repository file view accepts `project`, `path`, and `ref` and reads files from
-the project's source repository. Wiki pages are separate and cannot be read
-through `file.view`; full wiki-page reading is not currently supported by the
-Broker. Inline file content is returned as `contentBase64` only when it fits
-`providers.gitlab.content.max_file_bytes` and the configured upstream JSON
-response cap; larger files should be retrieved with `file.raw.download`.
-`file.raw.download` returns a broker-managed raw stream and does not place file
-bytes in the JSON response or audit log. Raw downloads resolve file metadata
-first and stream from the metadata commit SHA, returned as `resolvedRef`, so a
-movable branch or tag cannot change between metadata lookup and byte streaming.
+### Repository file reads
+
+`file.view` accepts `project`, `path`, and `ref` and returns metadata from the
+project's source repository by default. It uses a metadata-only `HEAD` request
+with the selected execution credential. Metadata remains available when the file
+exceeds the inline or raw-download byte limits. Wiki pages are separate and
+cannot be read through this action; full wiki-page reading is not currently
+supported by the Broker.
+
+Both view modes use the existing repository-scoped `file.view` authority;
+`includeContent` is an output choice, not a separate metadata-only grant.
+
+Set `includeContent: true` to request the complete file as `file.content` text.
+The optional `maxContentBytes` is a whole-file byte budget, never a prefix length.
+Its default is the smaller of 64 KiB and
+`providers.gitlab.content.max_inline_text_bytes`, whose default is 1 MiB.
+Callers can explicitly request a larger budget up to that configured ceiling,
+which is published as the input schema's `maximum`. A supplied budget requires
+`includeContent: true` and must be a positive integer within the ceiling;
+larger values are rejected rather than clamped.
+
+```json
+{
+  "project": "team/project",
+  "path": "src/main.rs",
+  "ref": "main",
+  "includeContent": true,
+  "maxContentBytes": 262144
+}
+```
+
+`file.contentStatus` makes the result explicit:
+
+| Status | Content result |
+| --- | --- |
+| `not_requested` | Metadata only. |
+| `included` | `content` contains complete UTF-8 text without NUL bytes; an empty file returns `""`. |
+| `too_large` | Metadata and `contentBudgetBytes` show the applied budget; `content` is absent. |
+| `unsupported_text` | Content is not valid UTF-8 or contains NUL; `content` is absent. |
+
+The Broker preserves text bytes, including a UTF-8 BOM, line endings, and the
+presence or absence of a trailing newline. It does not transcode, replace invalid
+characters, or return a partial file. Declared size is checked before consuming
+the body, so an oversized file reports `too_large` without checking its text
+encoding. Authentication, malformed metadata, timeout, and incomplete or
+inconsistent transfers remain errors.
+
+Content reads use one raw GitLab response for both metadata and bytes, under the
+selected execution credential. The returned commit and blob identify that
+response even if the requested branch or tag moves. GitLab and its reverse proxy
+must preserve the repository-file metadata headers on `HEAD` and raw `GET`
+responses; missing required metadata fails explicitly. `contentSha256`, when
+present, is GitLab's content-representation hash: GitLab can convert text before
+hashing it, so this value is not a guaranteed raw-byte checksum.
+
+HTTP MCP supports these inline reads, including explicitly raised budgets. Its
+actual serialized response limit still applies to both text and structured
+result copies, including JSON escaping. CLI, stdio MCP, and whole-result Markdown
+also retain their response limits. A file fitting `maxContentBytes` does not
+override a delivery or presentation limit.
+
+For larger or binary files, use the separately granted `file.raw.download` action
+through CLI or stdio MCP with a local output destination. HTTP MCP does not expose
+raw download tools. Downloads stream exact bytes with metadata from the same raw
+response, including the serving commit as `resolvedRef`; no file bytes enter the
+JSON receipt or audit log. The client checks the declared length and computes the
+receipt's `output.sha256` from bytes written. It does not compare raw bytes with
+GitLab's potentially converted-content hash. Both file-read paths return a stored
+Git LFS pointer rather than fetching its referenced LFS object.
+
+### Other repository and CI operations
 
 File create/update/delete act on one relative repository path on a non-default,
 unprotected branch. Create requires absent target file; update and delete require
