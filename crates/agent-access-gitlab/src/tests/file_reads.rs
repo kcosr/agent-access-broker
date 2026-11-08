@@ -1,5 +1,7 @@
 use super::*;
 use futures_util::StreamExt;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use wiremock::matchers::header;
 
 const COMMIT: &str = "1111111111111111111111111111111111111111";
@@ -7,6 +9,7 @@ const BLOB: &str = "2222222222222222222222222222222222222222";
 const LAST_COMMIT: &str = "3333333333333333333333333333333333333333";
 // GitLab may hash a converted representation rather than the raw bytes.
 const GITLAB_CONTENT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const STREAM_BODY_SENTINEL: &str = "PRIVATE_INLINE_STREAM_BODY_SENTINEL";
 
 fn file_provider(
     server: &MockServer,
@@ -427,6 +430,150 @@ async fn file_authorization_failures_remain_failures_in_both_view_modes() {
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
     }
+}
+
+struct FileResponseWorker(tokio::task::JoinHandle<()>);
+
+impl Drop for FileResponseWorker {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn assert_inline_stream_failure(
+    framing: String,
+    declared_size: usize,
+    body: String,
+    stall: bool,
+    expected: ReasonCode,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (finish, finished) = tokio::sync::oneshot::channel::<()>();
+    let mut worker = FileResponseWorker(tokio::spawn(async move {
+        for (request_line, credential, is_file) in [
+            (
+                "GET /api/v4/projects/sip%2Fservice HTTP/1.1",
+                "Bearer project-lookup-token",
+                false,
+            ),
+            (
+                "GET /api/v4/projects/42/repository/files/README.md/raw?ref=main HTTP/1.1",
+                "Bearer file-execution-token",
+                true,
+            ),
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0, "request ended before its headers");
+                request.extend_from_slice(&buffer[..count]);
+                assert!(
+                    request.len() <= 16 * 1024,
+                    "request headers exceeded fixture limit"
+                );
+            }
+            let request = std::str::from_utf8(&request).unwrap();
+            assert_eq!(request.lines().next(), Some(request_line));
+            assert!(request.lines().any(|line| {
+                line.split_once(':').is_some_and(|(name, value)| {
+                    name.eq_ignore_ascii_case("authorization") && value.trim() == credential
+                })
+            }));
+            let response = if is_file {
+                format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\n{framing}\r\nContent-Type: text/plain\r\nX-Gitlab-File-Name: README.md\r\nX-Gitlab-File-Path: README.md\r\nX-Gitlab-Size: {declared_size}\r\nX-Gitlab-Commit-Id: {COMMIT}\r\n\r\n{body}"
+                )
+            } else {
+                let project = r#"{"id":42,"path_with_namespace":"sip/service"}"#;
+                format!(
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{project}",
+                    project.len()
+                )
+            };
+            socket.write_all(response.as_bytes()).await.unwrap();
+            if is_file && stall {
+                // The caller releases this socket after the provider's idle timeout.
+                let _ = finished.await;
+                break;
+            }
+            socket.shutdown().await.unwrap();
+        }
+    }));
+
+    let mut config = config();
+    config.api_base_url = format!("http://{address}/api/v4");
+    config.allowed_upstream_hosts = vec![format!("http://{address}/api/v4/**")];
+    let mut host = agent_access_provider::test_support::TestHost::default();
+    host.limits.streaming_idle_timeout_ms = 100;
+    let provider = GitlabProvider::new(config, &host.context()).unwrap();
+    let mut inputs = file_inputs("README.md");
+    inputs["includeContent"] = json!(true);
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        provider.invoke(file_invocation("file.view", inputs)),
+    )
+    .await;
+    let _ = finish.send(());
+    tokio::time::timeout(Duration::from_secs(2), &mut worker.0)
+        .await
+        .expect("file response fixture did not finish")
+        .unwrap();
+    let error = result
+        .expect("file.view did not enforce its streaming timeout")
+        .expect_err("an incomplete or malformed body must not return partial file content");
+    assert_eq!(error.reason_code(), expected);
+    assert!(!error.message.contains(STREAM_BODY_SENTINEL));
+}
+
+#[tokio::test]
+async fn text_view_rejects_chunked_bodies_shorter_or_longer_than_gitlab_size() {
+    for declared_size in [
+        STREAM_BODY_SENTINEL.len() + 1,
+        STREAM_BODY_SENTINEL.len() - 1,
+    ] {
+        assert_inline_stream_failure(
+            "Transfer-Encoding: chunked".to_string(),
+            declared_size,
+            format!(
+                "{:x}\r\n{STREAM_BODY_SENTINEL}\r\n0\r\n\r\n",
+                STREAM_BODY_SENTINEL.len()
+            ),
+            false,
+            ReasonCode::UpstreamProtocolFailed,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn text_view_rejects_truncated_content_length_body() {
+    let declared_size = STREAM_BODY_SENTINEL.len() + 1;
+    assert_inline_stream_failure(
+        format!("Content-Length: {declared_size}"),
+        declared_size,
+        STREAM_BODY_SENTINEL.to_string(),
+        false,
+        ReasonCode::UpstreamConnectionFailed,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn text_view_reports_idle_timeout_without_partial_content() {
+    assert_inline_stream_failure(
+        "Transfer-Encoding: chunked".to_string(),
+        STREAM_BODY_SENTINEL.len() + 1,
+        format!(
+            "{:x}\r\n{STREAM_BODY_SENTINEL}\r\n",
+            STREAM_BODY_SENTINEL.len()
+        ),
+        true,
+        ReasonCode::UpstreamTimeout,
+    )
+    .await;
 }
 
 #[tokio::test]

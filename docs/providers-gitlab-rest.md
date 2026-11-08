@@ -1641,9 +1641,10 @@ Content reads use one raw GitLab response for both metadata and bytes, under the
 selected execution credential. The returned commit and blob identify that
 response even if the requested branch or tag moves. GitLab and its reverse proxy
 must preserve the repository-file metadata headers on `HEAD` and raw `GET`
-responses; missing required metadata fails explicitly. `contentSha256`, when
-present, is GitLab's content-representation hash: GitLab can convert text before
-hashing it, so this value is not a guaranteed raw-byte checksum.
+responses; missing or empty required metadata fails explicitly. Empty optional
+metadata headers are treated as absent. `contentSha256`, when present, is GitLab's
+content-representation hash: GitLab can convert text before hashing it, so this
+value is not a guaranteed raw-byte checksum.
 
 HTTP MCP supports these inline reads, including explicitly raised budgets. Its
 actual serialized response limit still applies to both text and structured

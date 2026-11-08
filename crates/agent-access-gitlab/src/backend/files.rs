@@ -162,7 +162,7 @@ fn file_metadata_from_headers(
         file_size(required_file_header(headers, "x-gitlab-size")?)?,
         file_object_id(required_file_header(headers, "x-gitlab-commit-id")?)?.to_string(),
     );
-    metadata.content_sha256 = file_header(headers, "x-gitlab-content-sha256")?
+    metadata.content_sha256 = optional_metadata_header(headers, "x-gitlab-content-sha256")?
         .map(|hash| {
             if hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                 return Err(file_protocol("GitLab file content SHA-256 is invalid"));
@@ -170,14 +170,14 @@ fn file_metadata_from_headers(
             Ok(hash.to_string())
         })
         .transpose()?;
-    metadata.ref_name = file_header(headers, "x-gitlab-ref")?.map(str::to_string);
-    metadata.blob_id = file_header(headers, "x-gitlab-blob-id")?
+    metadata.ref_name = optional_metadata_header(headers, "x-gitlab-ref")?.map(str::to_string);
+    metadata.blob_id = optional_metadata_header(headers, "x-gitlab-blob-id")?
         .map(|value| file_object_id(value).map(str::to_string))
         .transpose()?;
-    metadata.last_commit_id = file_header(headers, "x-gitlab-last-commit-id")?
+    metadata.last_commit_id = optional_metadata_header(headers, "x-gitlab-last-commit-id")?
         .map(|value| file_object_id(value).map(str::to_string))
         .transpose()?;
-    metadata.execute_filemode = file_header(headers, "x-gitlab-execute-filemode")?
+    metadata.execute_filemode = optional_metadata_header(headers, "x-gitlab-execute-filemode")?
         .map(|value| match value {
             "true" => Ok(true),
             "false" => Ok(false),
@@ -188,6 +188,28 @@ fn file_metadata_from_headers(
 }
 
 fn file_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a str>, GitlabBackendError> {
+    let value = file_header_value(headers, name)?;
+    if value.is_some_and(str::is_empty) {
+        return Err(file_protocol(
+            "GitLab file metadata contains an invalid value",
+        ));
+    }
+    Ok(value)
+}
+
+fn optional_metadata_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a str>, GitlabBackendError> {
+    // GitLab stringifies nullable metadata values into empty header values.
+    // Duplicates, invalid UTF-8 and control characters still fail first.
+    Ok(file_header_value(headers, name)?.filter(|value| !value.is_empty()))
+}
+
+fn file_header_value<'a>(
     headers: &'a HeaderMap,
     name: &str,
 ) -> Result<Option<&'a str>, GitlabBackendError> {
@@ -202,7 +224,7 @@ fn file_header<'a>(
     }
     let value = std::str::from_utf8(value.as_bytes())
         .map_err(|_| file_protocol("GitLab file metadata is not UTF-8"))?;
-    if value.is_empty() || value.chars().any(char::is_control) {
+    if value.chars().any(char::is_control) {
         return Err(file_protocol(
             "GitLab file metadata contains an invalid value",
         ));

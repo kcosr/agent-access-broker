@@ -107,6 +107,60 @@ fn metadata_preserves_unicode_and_accepts_optional_headers_absent() {
 }
 
 #[test]
+fn nullable_optional_metadata_headers_match_absent_values_but_reject_invalid_values() {
+    let optional = [
+        "x-gitlab-ref",
+        "x-gitlab-blob-id",
+        "x-gitlab-last-commit-id",
+        "x-gitlab-content-sha256",
+        "x-gitlab-execute-filemode",
+    ];
+    let mut absent = headers("README.md", 3);
+    let mut empty = absent.clone();
+    for name in optional {
+        absent.remove(name);
+        empty.insert(name, HeaderValue::from_static(""));
+    }
+    assert_eq!(
+        file_metadata_from_headers(&empty, "README.md").unwrap(),
+        file_metadata_from_headers(&absent, "README.md").unwrap()
+    );
+
+    for name in optional {
+        for duplicate in [
+            HeaderValue::from_static(""),
+            headers("README.md", 3)[name].clone(),
+        ] {
+            let mut invalid = empty.clone();
+            invalid.append(name, duplicate);
+            assert!(
+                file_metadata_from_headers(&invalid, "README.md").is_err(),
+                "{name}"
+            );
+        }
+        for value in [b"\t".as_slice(), b"\xff".as_slice()] {
+            let mut invalid = empty.clone();
+            invalid.insert(name, HeaderValue::from_bytes(value).unwrap());
+            assert!(
+                file_metadata_from_headers(&invalid, "README.md").is_err(),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn transport_headers_remain_strict_for_empty_and_duplicate_values() {
+    for name in ["content-type", "content-length", "content-encoding"] {
+        let mut values = headers("README.md", 3);
+        values.insert(name, HeaderValue::from_static(""));
+        assert!(file_header(&values, name).is_err(), "{name}");
+        values.append(name, HeaderValue::from_static(""));
+        assert!(file_header(&values, name).is_err(), "{name}");
+    }
+}
+
+#[test]
 fn metadata_rejects_missing_duplicated_or_malformed_values_without_echoing_them() {
     for name in [
         "x-gitlab-file-name",
@@ -119,6 +173,16 @@ fn metadata_rejects_missing_duplicated_or_malformed_values_without_echoing_them(
         assert!(
             file_metadata_from_headers(&missing, "README.md").is_err(),
             "{name}"
+        );
+        missing.insert(name, HeaderValue::from_static(""));
+        assert!(
+            file_metadata_from_headers(&missing, "README.md").is_err(),
+            "empty {name}"
+        );
+        missing.append(name, HeaderValue::from_static(""));
+        assert!(
+            file_metadata_from_headers(&missing, "README.md").is_err(),
+            "duplicate empty {name}"
         );
     }
     for name in FILE_HEADERS
