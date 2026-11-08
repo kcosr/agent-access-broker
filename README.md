@@ -174,8 +174,10 @@ retained for offline refresh and replaced through the same review process.
 Choose **HTTP gateway** exposure to connect a native HTTP client through an
 operator-approved host binding instead. Gateway imports authorize whole HTTP
 operations, stream raw request and response bodies, and remain outside ordinary
-agent discovery and MCP tools. The portal separates upstream authentication from
-Broker ingress and makes the exposure immutable. See the
+agent discovery and MCP tools. Response declarations accept concrete media types
+and ranges such as `*/*` for variable downloads; the gateway preserves the upstream
+content type and bytes under its header and transfer limits. The portal separates
+upstream authentication from Broker ingress and makes the exposure immutable. See the
 [HTTP gateway setup guide](docs/http-gateway-setup.md), including a complete
 hand-authored OpenAPI example and its body-validation and route-guard limits.
 Commands can also declare file-download actions when the operator enables an

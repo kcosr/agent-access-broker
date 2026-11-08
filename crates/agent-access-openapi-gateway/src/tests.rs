@@ -409,6 +409,40 @@ async fn response_validator_uses_exact_class_default_and_never_returns_reserved_
 }
 
 #[tokio::test]
+async fn restored_response_media_ranges_do_not_filter_upstream_content_type() {
+    for media in [
+        json!(["*/*"]),
+        json!(["application/*", "application/octet-stream", "*/*"]),
+        json!(["text/*"]),
+    ] {
+        let mut operation = plan("GET", "/items", "list");
+        operation["responses"]["200"]["contentTypes"] = media;
+        let serialized = serde_json::to_vec(&operation).unwrap();
+        let restored = serde_json::from_slice(&serialized).unwrap();
+        let protocol = build(&input(restored)).unwrap();
+        let forwarded = classify(protocol.as_ref(), &Method::GET, "/items", &HeaderMap::new())
+            .unwrap()
+            .into_request()
+            .preflight(body(b""))
+            .await
+            .unwrap();
+        let mut upstream = HeaderMap::new();
+        upstream.insert(
+            "content-type",
+            HeaderValue::from_static("application/x-gzip"),
+        );
+        let selected = forwarded
+            .response
+            .validator
+            .as_ref()
+            .unwrap()
+            .validate(200, &upstream)
+            .unwrap();
+        assert_eq!(selected["content-type"], "application/x-gzip");
+    }
+}
+
+#[tokio::test]
 async fn response_validator_preserves_encoding_and_leaves_retry_after_to_host() {
     let mut operation = plan("GET", "/items", "list");
     operation["responses"] = json!({

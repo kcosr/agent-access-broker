@@ -187,6 +187,12 @@ guide document directly from `docs/http-gateway-setup.md` for import and native
 client requests. These tests do not contact a live vendor or prove application-
 specific client compatibility.
 
+Response-media regressions cover concrete and wildcard declarations in both
+dialects, preserved binary bytes and `Content-Type`, and a changed declaration's
+quarantine/reacceptance followed by configuration reload and Broker restart.
+Compiler and restored-plan tests keep request-body wildcards unsupported and
+preserve the historical V1 plan/hash fixtures.
+
 The same suite checks retained route guards, quarantine, binding reloads,
 unsupported verification, trusted identity/context, and audit/event/span privacy.
 Deterministic barriers exercise publication, personal credential replacement and

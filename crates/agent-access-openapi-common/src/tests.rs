@@ -523,6 +523,44 @@ fn body_profile_checks_presence_media_and_empty_semantics_without_json_validatio
 }
 
 #[test]
+fn restored_response_media_ranges_preserve_metadata_without_restricting_payload_types() {
+    let mut original = plan("/file");
+    original.responses.get_mut("200").unwrap().content_types =
+        vec!["*/*".into(), "text/*".into(), "text/plain".into()];
+    let bytes = serde_json::to_vec(&original).unwrap();
+    let restored: GatewayPlanV1 = serde_json::from_slice(&bytes).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
+
+    // A declared range is review metadata, not a runtime matching or negotiation rule.
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_static("application/x-gzip"),
+    );
+    assert_eq!(restored.response_headers(200, &headers).unwrap(), headers);
+
+    for media in ["*/json", "application/*+json", "Application/*", "*/*;q=1"] {
+        let mut invalid = original.clone();
+        invalid.responses.get_mut("200").unwrap().content_types = vec![media.into()];
+        assert!(invalid.validate().is_err());
+    }
+    let mut duplicate = original.clone();
+    duplicate.responses.get_mut("200").unwrap().content_types = vec!["*/*".into(); 2];
+    assert!(duplicate.validate().is_err());
+    for media in ["*/*", "application/*", "application/*+json"] {
+        let mut request = original.clone();
+        request.method = "POST".into();
+        request.source = json!({"method":"POST","path":"/file"});
+        request.request_body = Some(GatewayRequestBodyV1 {
+            required: true,
+            media_types: vec![media.into()],
+        });
+        assert!(request.validate().is_err());
+    }
+}
+
+#[test]
 fn restored_plan_rejects_unknown_fields_versions_and_credential_header_collisions() {
     let plan = plan("/file");
     let mut encoded = serde_json::to_value(&plan).unwrap();

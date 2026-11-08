@@ -178,6 +178,32 @@ as raw bytes. GET, HEAD and OPTIONS request bodies, multipart bodies and arbitra
 content encodings are unsupported. Response schemas are documentation, not runtime
 validators. These semantics differ from [Actions/tools imports](imported-openapi.md).
 
+### Response media declarations
+
+OpenAPI response `content` keys and Swagger `produces` entries accept concrete
+media types such as `application/x-gzip`, the range `*/*`, or a concrete type
+followed by `/*`, such as `application/*`. Concrete types and ranges may coexist.
+Each name or range must be lowercase, parameter-free and at most 128 bytes;
+each response may declare at most 32 distinct entries. Patterns such as `*/json`
+and `application/*+json` are unsupported. Request bodies follow the narrower
+profile above.
+
+For a download whose format varies, an OpenAPI response can declare:
+
+```json
+"200": {
+  "description": "Downloaded file",
+  "content": { "*/*": {} }
+}
+```
+
+Response media declarations and schemas are documentation for review. The gateway
+forwards the permitted upstream `Content-Type` and raw bytes under its header and
+transfer limits without matching, negotiating or validating the payload against
+those declarations. Changing a response media declaration follows normal refresh,
+quarantine and explicit acceptance. See the [stored-plan rollback requirement](imported-openapi.md#gateway-response-media-and-rollback)
+before downgrading a Broker that has accepted wildcard declarations.
+
 ## Import, review and grant access
 
 1. Open **Admin > Catalog > Import service**, select **OpenAPI / Swagger**, then

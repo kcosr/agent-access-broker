@@ -54,7 +54,7 @@ pub(super) fn request(
             if swagger.body.is_some() && !swagger.form.is_empty() {
                 return Err("Swagger body and form parameters cannot be combined".into());
             }
-            let media_types = media(document, operation, "consumes", true)?;
+            let media_types = media(document, operation, "consumes", true, profile::media_token)?;
             if media_types.iter().any(|v| !profile::supported_media(v)) {
                 return Err("gateway request body supports raw JSON, URL-encoded form and octet-stream only".into());
             }
@@ -169,9 +169,9 @@ pub(super) fn responses(
                         .filter(|v| v.len() <= 32)
                         .ok_or("response content must be a bounded object")?
                     {
-                        if !profile::media_token(name) {
+                        if !profile::response_media(name) {
                             return Err(
-                                "response media types must be concrete bounded names".into()
+                                "response media types must be bounded names or ranges".into()
                             );
                         }
                         definition
@@ -189,7 +189,13 @@ pub(super) fn responses(
                 if let Some(schema) = response.get("schema") {
                     dialect.documentation_schema(document, schema)?;
                 }
-                media(document, operation, "produces", false)?
+                media(
+                    document,
+                    operation,
+                    "produces",
+                    false,
+                    profile::response_media,
+                )?
             }
         };
         result.insert(
@@ -208,6 +214,7 @@ fn media(
     operation: &Value,
     key: &str,
     required: bool,
+    validate_media: fn(&str) -> bool,
 ) -> Result<Vec<String>, String> {
     let Some(value) = operation.get(key).or_else(|| document.get(key)) else {
         return if required {
@@ -224,8 +231,8 @@ fn media(
     for value in values {
         let value = value
             .as_str()
-            .filter(|v| profile::media_token(v))
-            .ok_or("Swagger media entry must be a concrete bounded name")?;
+            .filter(|v| validate_media(v))
+            .ok_or("Swagger media entry is invalid or unsupported")?;
         if result.iter().any(|v| v == value) {
             return Err("duplicate Swagger media declaration".into());
         }

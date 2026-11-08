@@ -24,6 +24,161 @@ fn compile(
     )
 }
 
+fn response_media_source(swagger: bool, media: &[&str]) -> Value {
+    let mut document = json!({"paths":{"/file":{"get":{"operationId":"download",
+        "responses":{"200":{"description":"File"}}}}}});
+    if swagger {
+        document["swagger"] = json!("2.0");
+        document["host"] = json!("api.example.test");
+        document["basePath"] = json!("/api");
+        document["schemes"] = json!(["https"]);
+        document["produces"] = json!(media);
+    } else {
+        document["openapi"] = json!("3.1.1");
+        document["servers"] = json!([{"url":"https://api.example.test/api"}]);
+        let content = media
+            .iter()
+            .map(|name| (name.to_string(), json!({})))
+            .collect::<serde_json::Map<_, _>>();
+        document["paths"]["/file"]["get"]["responses"]["200"]["content"] = json!(content);
+    }
+    document
+}
+
+#[test]
+fn response_media_ranges_and_concrete_types_can_coexist_in_both_dialects() {
+    let longest_range = format!("{}/*", "a".repeat(126));
+    for swagger in [false, true] {
+        for media in [
+            vec!["*/*"],
+            vec!["application/*"],
+            vec!["*/*", "text/*", "text/plain", "application/x-gzip"],
+            vec!["application/problem+json", longest_range.as_str()],
+        ] {
+            let result = compile(
+                &response_media_source(swagger, &media),
+                GatewayAuthenticationSelection::Anonymous,
+            )
+            .unwrap();
+            let plan = result.operations[0].plan.as_ref().unwrap();
+            let mut actual = plan.responses["200"].content_types.clone();
+            let mut expected = media
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>();
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected);
+            result.routes.validate_plan(plan).unwrap();
+        }
+    }
+}
+
+#[test]
+fn malformed_or_unbounded_response_media_ranges_are_unsupported_in_both_dialects() {
+    let oversized = format!("{}/*", "a".repeat(127));
+    for swagger in [false, true] {
+        for media in [
+            "*/json",
+            "application/*+json",
+            "application/**",
+            "Application/*",
+            "*/*;q=1",
+            "*",
+            "",
+            " /*",
+            "/*",
+            "x-gzip",
+            "text/*/extra",
+            "text/*\n",
+            "tęxt/*",
+            oversized.as_str(),
+        ] {
+            let result = compile(
+                &response_media_source(swagger, &[media]),
+                GatewayAuthenticationSelection::Anonymous,
+            )
+            .unwrap();
+            let operation = &result.operations[0];
+            assert!(
+                operation.plan.is_none(),
+                "swagger={swagger}, media={media:?}"
+            );
+            assert!(operation.unsupported_reason.is_some());
+        }
+    }
+}
+
+#[test]
+fn swagger_operation_produces_replaces_inherited_response_ranges() {
+    for (inherited, selected) in [
+        (vec!["*/*"], vec!["application/x-gzip"]),
+        (
+            vec!["application/octet-stream"],
+            vec!["*/*", "application/*"],
+        ),
+    ] {
+        let mut document = response_media_source(true, &inherited);
+        document["paths"]["/file"]["get"]["produces"] = json!(selected);
+        let result = compile(&document, GatewayAuthenticationSelection::Anonymous).unwrap();
+        assert_eq!(
+            result.operations[0].plan.as_ref().unwrap().responses["200"].content_types,
+            selected
+        );
+    }
+}
+
+#[test]
+fn response_ranges_do_not_enable_request_media_wildcards() {
+    for swagger in [false, true] {
+        for media in ["*/*", "application/*", "application/*+json"] {
+            let mut document = response_media_source(swagger, &["*/*"]);
+            let mut operation = document["paths"]["/file"]
+                .as_object_mut()
+                .unwrap()
+                .remove("get")
+                .unwrap();
+            if swagger {
+                document["consumes"] = json!([media]);
+                operation["parameters"] = json!([{"name":"body","in":"body",
+                    "required":true,"schema":{"type":"string"}}]);
+            } else {
+                operation["requestBody"] = json!({"required":true,"content":{
+                    media:{"schema":{"type":"string"}}
+                }});
+            }
+            document["paths"]["/file"]["post"] = operation;
+            let result = compile(&document, GatewayAuthenticationSelection::Anonymous).unwrap();
+            assert!(
+                result.operations[0].plan.is_none(),
+                "swagger={swagger}, media={media}"
+            );
+        }
+    }
+}
+
+#[test]
+fn response_media_count_and_duplicate_bounds_remain_enforced() {
+    let names = (0..33).map(|n| format!("type{n}/*")).collect::<Vec<_>>();
+    let media = names.iter().map(String::as_str).collect::<Vec<_>>();
+    for swagger in [false, true] {
+        for count in [32, 33] {
+            let result = compile(
+                &response_media_source(swagger, &media[..count]),
+                GatewayAuthenticationSelection::Anonymous,
+            )
+            .unwrap();
+            assert_eq!(result.operations[0].plan.is_some(), count == 32);
+        }
+    }
+    let result = compile(
+        &response_media_source(true, &["*/*", "*/*"]),
+        GatewayAuthenticationSelection::Anonymous,
+    )
+    .unwrap();
+    assert!(result.operations[0].plan.is_none());
+}
+
 #[test]
 fn openapi_anonymous_compilation_keeps_source_identity_and_complete_guard_universe() {
     let result = compile(&source(), GatewayAuthenticationSelection::Anonymous).unwrap();
