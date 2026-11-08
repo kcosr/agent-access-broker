@@ -60,6 +60,8 @@ pub struct GitlabContentConfig {
     pub max_commit_actions: u32,
     #[serde(default = "default_gitlab_file_max_bytes")]
     pub max_file_bytes: u64,
+    #[serde(default = "default_gitlab_inline_text_max_bytes")]
+    pub max_inline_text_bytes: u64,
     #[serde(default = "default_gitlab_raw_download_max_bytes")]
     pub max_raw_download_bytes: u64,
 }
@@ -70,6 +72,7 @@ impl Default for GitlabContentConfig {
             max_body_bytes: default_gitlab_body_max_bytes(),
             max_commit_actions: default_gitlab_max_commit_actions(),
             max_file_bytes: default_gitlab_file_max_bytes(),
+            max_inline_text_bytes: default_gitlab_inline_text_max_bytes(),
             max_raw_download_bytes: default_gitlab_raw_download_max_bytes(),
         }
     }
@@ -85,6 +88,10 @@ pub(crate) fn default_gitlab_max_commit_actions() -> u32 {
 
 pub(crate) fn default_gitlab_file_max_bytes() -> u64 {
     10 * 1024 * 1024
+}
+
+pub(crate) fn default_gitlab_inline_text_max_bytes() -> u64 {
+    1024 * 1024
 }
 
 pub(crate) fn default_gitlab_raw_download_max_bytes() -> u64 {
@@ -206,6 +213,21 @@ impl BackendConfig for GitlabProviderConfig {
                     "providers.gitlab.content.max_file_bytes must be less than or equal to limits.max_http_body_bytes"
                         .to_string(),
                 );
+        }
+        if self.content.max_inline_text_bytes == 0 {
+            errors.push(
+                "providers.gitlab.content.max_inline_text_bytes must be non-zero".to_string(),
+            );
+        } else if self
+            .content
+            .max_inline_text_bytes
+            .checked_mul(6)
+            .and_then(|size| size.checked_add(GITLAB_INLINE_FILE_JSON_OVERHEAD))
+            .is_none_or(|size| size > context.limits.max_upstream_response_bytes)
+        {
+            errors.push(
+                "providers.gitlab.content.max_inline_text_bytes must fit limits.max_upstream_response_bytes after six-fold JSON escaping plus 65536 bytes of metadata allowance".to_string(),
+            );
         }
         if self.content.max_raw_download_bytes == 0 {
             errors.push(

@@ -2209,27 +2209,35 @@ fn render_gitlab_file_view(
     out.push("\n")?;
     let size = optional_display(file, "size")?;
     let executable = optional_display(file, "executeFilemode")?;
+    let content_budget = optional_display(file, "contentBudgetBytes")?;
     code_fields(
         out,
         &[
             ("File name", optional_scalar(file, "fileName")?),
             ("File path", optional_scalar(file, "filePath")?),
             ("Size", size.as_deref()),
-            ("Encoding", optional_scalar(file, "encoding")?),
-            ("Content SHA-256", optional_scalar(file, "contentSha256")?),
+            (
+                "GitLab content SHA-256",
+                optional_scalar(file, "contentSha256")?,
+            ),
             ("Ref", optional_scalar(file, "ref")?),
             ("Blob ID", optional_scalar(file, "blobId")?),
             ("Commit ID", optional_scalar(file, "commitId")?),
             ("Last commit ID", optional_scalar(file, "lastCommitId")?),
+            (
+                "Content status",
+                Some(required_scalar(file, "contentStatus")?),
+            ),
+            ("Content budget bytes", content_budget.as_deref()),
         ],
     )?;
     fields(out, &[("Executable", executable.as_deref())])?;
-    if let Some(content) = optional_scalar(file, "contentBase64")? {
+    if let Some(content) = optional_scalar(file, "content")? {
         budget.charge_fenced_literal_work(content.len())?;
         let fence = fence_for(content, '`');
-        out.push("\n## Content (base64)\n\n")?;
+        out.push("\n## Content\n\n")?;
         out.push(&fence)?;
-        out.push("base64\n")?;
+        out.push("text\n")?;
         out.push(content)?;
         out.push("\n")?;
         out.push(&fence)?;
@@ -3092,8 +3100,8 @@ mod tests {
                 }]
             }}),
             WholeRenderer::File => json!({"file":{
-                "fileName":"README.md","filePath":"docs/README.md","size":4,"encoding":"base64",
-                "contentBase64":"YWJj```ZA==","contentSha256":"sha256","ref":"main","blobId":"blob",
+                "fileName":"README.md","filePath":"docs/README.md","size":11,
+                "contentStatus":"included","content":"abc```def\r\n","contentSha256":"sha256","ref":"main","blobId":"blob",
                 "commitId":"commit","lastCommitId":"last","executeFilemode":false
             }}),
             WholeRenderer::Commit => json!({"commit":{
@@ -3423,14 +3431,14 @@ mod tests {
                 "File name",
                 "File path",
                 "Size",
-                "Encoding",
-                "Content SHA-256",
+                "GitLab content SHA-256",
                 "Ref",
                 "Blob ID",
                 "Commit ID",
                 "Last commit ID",
                 "Executable",
-                "Content (base64)",
+                "Content status",
+                "Content",
             ],
             WholeRenderer::Commit | WholeRenderer::CommitList => &[
                 "Short ID",
@@ -3940,7 +3948,7 @@ mod tests {
         )
         .unwrap();
         let markdown = file["value"].as_str().unwrap();
-        assert!(markdown.contains("````base64\nYWJj```ZA==\n````"));
+        assert!(markdown.contains("````text\nabc```def\r\n\n````"));
 
         let mut commit = gitlab_whole_fixture(WholeRenderer::Commit);
         present_provider_result(
@@ -4029,13 +4037,45 @@ mod tests {
     }
 
     #[test]
+    fn gitlab_file_markdown_distinguishes_omitted_and_empty_content() {
+        for status in ["not_requested", "too_large", "unsupported_text", "included"] {
+            let mut result = json!({"file":{
+                "filePath":"README.md", "size":0, "contentStatus":status
+            }});
+            if status == "included" {
+                result["file"]["content"] = json!("");
+            } else if status == "too_large" {
+                result["file"]["contentBudgetBytes"] = json!(65536);
+            }
+            present_provider_result(
+                "file.view",
+                &mut result,
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+                4096,
+                16384,
+            )
+            .unwrap();
+            let markdown = result["value"].as_str().unwrap();
+            assert!(markdown.contains(status));
+            assert_eq!(markdown.contains("## Content\n"), status == "included");
+            assert_eq!(
+                markdown.contains("Content budget bytes"),
+                status == "too_large"
+            );
+            if status == "included" {
+                assert!(markdown.contains("```text\n\n```"));
+            }
+        }
+    }
+
+    #[test]
     fn gitlab_large_fenced_literals_use_chunked_presentation_work() {
         let literal = "a".repeat(MAX_PRESENTATION_WORK_UNITS + 1);
         let max_result_bytes = literal.len() as u64 + 8192;
         for (action, mut result) in [
             (
                 "file.view",
-                json!({"file":{"filePath":"large.bin","contentBase64":literal}}),
+                json!({"file":{"filePath":"large.txt","contentStatus":"included","content":literal}}),
             ),
             (
                 "commit.view",

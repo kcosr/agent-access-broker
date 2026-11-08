@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **GitLab file views return metadata by default and readable text on request.**
+  Replace `contentBase64`/`encoding` consumers with `includeContent: true` and
+  `file.content`, checking `contentStatus` for included or omitted content.
+  The typed CLI adds `--include-content` and `--max-content-bytes`; larger whole
+  files require an explicit budget within the new `max_inline_text_bytes`
+  ceiling. Upgrade the Broker and CLI together. See
+  [repository file reads](docs/providers-gitlab-rest.md#repository-file-reads).
+  ([#106](https://github.com/kcosr/agent-access-broker/pull/106))
+
 - **Gateway services are omitted from ordinary agent discovery.** HTTP service
   and action lists/describes, CLI discovery, and HTTP/stdio MCP discovery helpers
   no longer advertise Git gateways or their policy actions. Direct ordinary
@@ -450,6 +459,12 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- GitLab raw downloads use the execution credential and metadata from the same
+  response as their bytes. GitLab's potentially converted-content hash is no
+  longer treated as a raw-byte checksum; local receipts still report the
+  SHA-256 computed from the saved bytes.
+  ([#106](https://github.com/kcosr/agent-access-broker/pull/106))
 
 - Gateway request capacity and terminal audit now join upload, response and bounded
   unread-body disposal. Empty or fixed-length responses release their delivery

@@ -1310,6 +1310,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
         max_body_bytes,
         max_commit_actions,
         max_file_bytes,
+        max_inline_text_bytes,
         max_raw_download_bytes,
     } = content;
     Fields::default()
@@ -1353,6 +1354,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
                 .int("max_body_bytes", *max_body_bytes)
                 .int("max_commit_actions", *max_commit_actions)
                 .int("max_file_bytes", *max_file_bytes)
+                .int("max_inline_text_bytes", *max_inline_text_bytes)
                 .int("max_raw_download_bytes", *max_raw_download_bytes)
                 .value(),
         )

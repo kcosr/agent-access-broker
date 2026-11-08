@@ -90,7 +90,10 @@ fn parse_documented_input(
             )
             .map(|_| ())
         }
-        "file.view" | "file.raw.download" => parse_file_view_inputs(inputs).map(|_| ()),
+        "file.view" => {
+            parse_file_view_inputs(inputs, config.content.max_inline_text_bytes).map(|_| ())
+        }
+        "file.raw.download" => parse_file_locator_inputs(inputs).map(|_| ()),
         "branch.list" => parse_branch_list_inputs(inputs).map(|_| ()),
         "pipeline.list" => parse_pipeline_list_inputs(inputs).map(|_| ()),
         "job.trace.download" => parse_job_object_inputs(inputs).map(|_| ()),
@@ -126,6 +129,7 @@ fn documentation_examples_pass_real_parsers_with_configured_limits() {
     ] {
         let mut config = config();
         config.search.max_results = maximum;
+        config.content.max_inline_text_bytes = u64::from(maximum);
         config.web_base_url = base.into();
         config.attachments.max_bytes = u64::from(maximum);
         config.attachments.max_total_bytes = u64::from(maximum);
@@ -173,7 +177,7 @@ fn documentation_examples_pass_real_parsers_with_configured_limits() {
             }
         }
         assert_eq!(
-            parsed, 60,
+            parsed, 62,
             "every non-search example must exercise its parser"
         );
     }

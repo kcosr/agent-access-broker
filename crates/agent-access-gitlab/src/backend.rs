@@ -1,6 +1,9 @@
 //! The GitLab backend seam, its wire types, response parsing, pagination headers, and the HTTP implementation.
 use super::*;
 
+mod files;
+pub(crate) use files::GITLAB_FILE_METADATA_MAX_BYTES;
+
 #[async_trait]
 pub trait GitlabBackend: Send + Sync {
     async fn provisioning(
@@ -642,13 +645,21 @@ pub trait GitlabBackend: Send + Sync {
         credential: &GitlabCredential,
     ) -> Result<GitlabBackendResponse<GitlabFile>, GitlabBackendError>;
 
+    async fn file_metadata(
+        &self,
+        project_id: u64,
+        request: GitlabFileRequest,
+        credential: &GitlabCredential,
+    ) -> Result<GitlabBackendResponse<GitlabFileMetadata>, GitlabBackendError>;
+
     async fn raw_file(
         &self,
+        operation: &'static str,
         project_id: u64,
         request: GitlabFileRequest,
         byte_cap: u64,
         credential: &GitlabCredential,
-    ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError>;
+    ) -> Result<GitlabBackendResponse<GitlabRepositoryFile>, GitlabBackendError>;
 
     async fn create_file(
         &self,
@@ -2062,6 +2073,46 @@ pub struct GitlabProtectedBranchAccessLevel {
     pub user_id: Option<u64>,
     pub group_id: Option<u64>,
     pub deploy_key_id: Option<u64>,
+}
+
+/// Repository-file identity from the same GitLab response as its body, if any.
+/// GitLab's content hash may describe transcoded JSON content, not raw bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GitlabFileMetadata {
+    pub file_name: String,
+    pub file_path: String,
+    pub size: u64,
+    pub commit_id: String,
+    pub content_sha256: Option<String>,
+    pub ref_name: Option<String>,
+    pub blob_id: Option<String>,
+    pub last_commit_id: Option<String>,
+    pub execute_filemode: Option<bool>,
+}
+
+impl GitlabFileMetadata {
+    pub fn new(file_name: String, file_path: String, size: u64, commit_id: String) -> Self {
+        Self {
+            file_name,
+            file_path,
+            size,
+            commit_id,
+            content_sha256: None,
+            ref_name: None,
+            blob_id: None,
+            last_commit_id: None,
+            execute_filemode: None,
+        }
+    }
+}
+
+/// A raw repository response. An oversized declared file retains its metadata,
+/// but its unread body is dropped and `stream` is absent.
+pub struct GitlabRepositoryFile {
+    pub metadata: GitlabFileMetadata,
+    pub content_type: String,
+    pub stream: Option<ProviderResultStream>,
 }
 
 pub struct GitlabRawFile {
@@ -3872,19 +3923,25 @@ impl GitlabBackend for HttpGitlabBackend {
         Ok(response.map_json(gitlab_file_from_value)?)
     }
 
+    async fn file_metadata(
+        &self,
+        project_id: u64,
+        request: GitlabFileRequest,
+        credential: &GitlabCredential,
+    ) -> Result<GitlabBackendResponse<GitlabFileMetadata>, GitlabBackendError> {
+        self.head_repository_file(project_id, request, credential)
+            .await
+    }
+
     async fn raw_file(
         &self,
+        operation: &'static str,
         project_id: u64,
         request: GitlabFileRequest,
         byte_cap: u64,
         credential: &GitlabCredential,
-    ) -> Result<GitlabBackendResponse<GitlabRawFile>, GitlabBackendError> {
-        let mut url = self.endpoint(&format!(
-            "projects/{project_id}/repository/files/{}/raw",
-            encoded_path_segment(&request.path)
-        ))?;
-        url.query_pairs_mut().append_pair("ref", &request.ref_name);
-        self.get_raw("file.raw.download", url, byte_cap, false, credential)
+    ) -> Result<GitlabBackendResponse<GitlabRepositoryFile>, GitlabBackendError> {
+        self.get_repository_file(operation, project_id, request, byte_cap, credential)
             .await
     }
 

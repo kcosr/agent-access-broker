@@ -43,6 +43,11 @@ pub(super) fn apply(
             ) {
                 inputs["maxResults"] = json!(size.min(maximum));
             }
+            if action.action == "file.view"
+                && let Some(bytes) = inputs.get("maxContentBytes").and_then(Value::as_u64)
+            {
+                inputs["maxContentBytes"] = json!(bytes.min(config.content.max_inline_text_bytes));
+            }
             if action.action == "project.upload" {
                 let bytes = upload_example_bytes(config);
                 let metadata = &mut inputs["attachments"][0];
