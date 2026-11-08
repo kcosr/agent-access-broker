@@ -208,6 +208,63 @@ async fn openapi_gateway_binary_range_head_and_bodyless_replies_complete_once() 
 }
 
 #[tokio::test]
+async fn openapi_gateway_response_media_ranges_preserve_binary_downloads_and_content_type() {
+    for dialect in [Dialect::OpenApi31, Dialect::Swagger2] {
+        let upstream = Upstream::start().await;
+        let fixture = Fixture::start(&upstream, |_| {}).await;
+        let mut source = document(dialect, UpstreamAuth::Anonymous, &upstream.endpoint());
+        let archive = source["paths"]
+            .as_object_mut()
+            .unwrap()
+            .remove("/blob")
+            .unwrap();
+        source["paths"]["/archive"] = archive;
+        let operation = &mut source["paths"]["/archive"]["get"];
+        match dialect {
+            Dialect::OpenApi31 => {
+                operation["responses"]["default"]["content"] = json!({
+                    "*/*": {},
+                    "application/*": {},
+                    "application/octet-stream": {}
+                });
+            }
+            Dialect::Swagger2 => {
+                operation["produces"] = json!(["*/*", "application/*", "application/octet-stream"]);
+            }
+        }
+        let preview = fixture
+            .create_and_discover(DefinitionSource::Upload, UpstreamAuth::Anonymous, &source)
+            .await;
+        fixture.accept(&preview, &["download_blob"]).await;
+        fixture.enable().await;
+        fixture.grant(&["download_blob"]).await;
+
+        let response = fixture
+            .gateway(Method::GET, "/archive", "wildcard-binary-download")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/x-gzip");
+        assert_eq!(
+            response.headers()[CONTENT_LENGTH],
+            ENCODED_BLOB.len().to_string()
+        );
+        assert!(response.headers().get(CONTENT_ENCODING).is_none());
+        assert_eq!(response.bytes().await.unwrap().as_ref(), ENCODED_BLOB);
+        let terminal = fixture.terminal("wildcard-binary-download").await;
+        assert_eq!(terminal["decision"], "allow");
+        assert_eq!(terminal["providerAudit"]["gateway"]["phase"], "completed");
+        assert_eq!(
+            terminal["providerAudit"]["gateway"]["responseBytes"],
+            ENCODED_BLOB.len()
+        );
+        assert_eq!(upstream.api_requests().len(), 1);
+        fixture.stop().await;
+    }
+}
+
+#[tokio::test]
 async fn openapi_gateway_unknown_length_download_streams_before_upstream_completion() {
     let upstream = Upstream::start().await;
     let fixture = Fixture::ready(&upstream, UpstreamAuth::Anonymous, &["stream_blob"]).await;

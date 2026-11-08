@@ -115,6 +115,20 @@ pub(crate) fn media_token(media: &str) -> bool {
         && media == media.to_ascii_lowercase()
 }
 
+/// Response media declarations document payloads; they do not match or negotiate responses.
+pub(crate) fn response_media(media: &str) -> bool {
+    media_token(media)
+        || media == "*/*"
+        || (bounded(media, 128) && media.strip_suffix("/*").is_some_and(media_part))
+}
+
+fn media_part(part: &str) -> bool {
+    !part.is_empty()
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"!#$&^_.+-".contains(&b))
+}
+
 pub(crate) fn valid_status(status: &str, ranges: bool) -> bool {
     status == "default"
         || status.len() == 3
@@ -238,7 +252,7 @@ impl GatewayPlanV1 {
             if response
                 .content_types
                 .iter()
-                .any(|media| !media_token(media))
+                .any(|media| !response_media(media))
                 || response.content_types.iter().collect::<BTreeSet<_>>().len()
                     != response.content_types.len()
             {

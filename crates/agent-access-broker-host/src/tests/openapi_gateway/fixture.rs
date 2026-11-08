@@ -337,12 +337,12 @@ async fn upstream(
             .unwrap();
     }
     match head.uri.path() {
-        "/api/blob" | "/api/encoded" | "/api/artifacts/build-123" => {
+        "/api/blob" | "/api/encoded" | "/api/archive" | "/api/artifacts/build-123" => {
             let ranged = head
                 .headers
                 .get("range")
                 .is_some_and(|value| value == "bytes=2-5");
-            let bytes = if head.uri.path() == "/api/encoded" {
+            let bytes = if matches!(head.uri.path(), "/api/encoded" | "/api/archive") {
                 ENCODED_BLOB
             } else if ranged {
                 &BLOB[2..6]
@@ -355,7 +355,14 @@ async fn upstream(
                 } else {
                     StatusCode::OK
                 })
-                .header(CONTENT_TYPE, "application/octet-stream")
+                .header(
+                    CONTENT_TYPE,
+                    if head.uri.path() == "/api/archive" {
+                        "application/x-gzip"
+                    } else {
+                        "application/octet-stream"
+                    },
+                )
                 .header(CONTENT_LENGTH, bytes.len())
                 .header("X-Checksum", "synthetic-checksum")
                 .header("X-Api-Version", "1")
@@ -972,6 +979,34 @@ impl Fixture {
         })
         .await
         .expect("gateway queue reaches the expected size");
+    }
+    pub async fn restart(self) -> Self {
+        let Self {
+            seed,
+            broker,
+            client,
+            admin,
+            agent,
+            endpoint,
+            document_url,
+        } = self;
+        broker.stop().await;
+        let broker = TestBroker::start_with(
+            TestBroker::config_builder(&seed.config)
+                .gateway_listener()
+                .unwrap()
+                .shutdown_timeout(Duration::from_secs(5)),
+        )
+        .await;
+        Self {
+            seed,
+            broker,
+            client,
+            admin,
+            agent,
+            endpoint,
+            document_url,
+        }
     }
     pub async fn restart_without_gateway(self) -> Self {
         let Self {

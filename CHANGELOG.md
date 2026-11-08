@@ -163,6 +163,10 @@ All notable changes to this project are documented in this file.
   access with no execution bindings, or static Basic, bearer or header API-key
   bindings. Existing MCP and OpenAPI actions/tools imports still require execution
   credential bindings.
+  Gateway response declarations accept concrete media types and `*/*` or `type/*`
+  ranges as review metadata while preserving raw upstream bytes and content type.
+  Newly accepted wildcard plans require a compatible Broker; see
+  [gateway rollback requirements](docs/imported-openapi.md#gateway-response-media-and-rollback).
   Refresh retains literal route guards and quarantines changed or missing
   accepted operations. Import lists include safe `gatewayBindings` choices;
   gateway services report `scopedMcp: null` and expose no invoke or MCP tools.

@@ -1156,7 +1156,10 @@ use explicit anonymous or static upstream authentication; no personal-to-shared
 fallback, active verification probe or delegated OpenAPI OAuth. Preserve Git's
 independent verification and OAuth capabilities. Forward bounded raw bodies with
 no claim of field-schema enforcement. Host transport owns authorization, framing,
-bounded Retry-After, completion and permits. Recheck the original caller proof,
+bounded Retry-After, completion and permits. Response media declarations accept
+concrete names, `*/*` and `type/*` as review metadata; keep response validation
+separate from request-body admission and never infer response negotiation or
+payload matching from those declarations. Recheck the original caller proof,
 publication and selected personal material version after awaited preparation and
 audit work, immediately before sending; never resolve replacement credentials for
 a prepared request. Rewrap preserves material identity. Strip selected credential

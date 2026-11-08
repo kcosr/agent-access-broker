@@ -94,7 +94,9 @@ accepting `GET /items/{id}` while the document also declares `/items/admin` keep
 If the literal path was never declared, Broker cannot infer it. Review source
 completeness before accepting broad templates. Request/response bodies remain
 bounded raw HTTP; their schemas are documentation, while supported path, query
-and header parameters are validated. See the [authoring profile](http-gateway-setup.md#write-the-document)
+and header parameters are validated. Response media declarations accept concrete
+types and `*/*` or `type/*` ranges as review metadata; they do not select or restrict
+the returned payload. See the [authoring profile](http-gateway-setup.md#write-the-document)
 and [setup guide](http-gateway-setup.md).
 
 ## Operator setup

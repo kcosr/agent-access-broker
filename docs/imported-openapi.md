@@ -18,9 +18,21 @@ anonymous and static upstream authentication, document authoring, route guards,
 raw-body limits and native client use. The required `gatewayBindings` array in
 the [administrative import list](imported-services.md#openapi-http-gateway-imports)
 identifies reserved gateway choices; its `available` flag means eligible for new
-import creation, not current execution health. The rest of this page describes the
-**Actions/tools** profile. Both modes use the existing import review and
-quarantine lifecycle; their execution profiles are distinct.
+import creation, not current execution health. Both modes use the existing import
+review and quarantine lifecycle; their execution profiles are distinct.
+
+## Gateway response media and rollback
+
+HTTP gateway response declarations support concrete media types and the ranges
+`*/*` and `type/*` as [review metadata](http-gateway-setup.md#response-media-declarations).
+Newly accepted wildcard declarations require a compatible Broker. Older binaries
+cannot load those retained plans and leave the affected gateway service unavailable;
+disabling or quarantining an individual action does not remove its stored plan.
+Before rolling back, restore a compatible pre-wildcard backup using the
+[matched-backup procedure](operator-guide.md#upgrade-and-rollback). The wildcard
+support itself adds no database migration or new plan version.
+
+## Actions/tools profile
 
 The `openapi_http` adapter turns reviewed operations from a Swagger 2.0 or
 OpenAPI 3.1 JSON document into

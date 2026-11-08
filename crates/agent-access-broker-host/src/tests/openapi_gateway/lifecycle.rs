@@ -738,6 +738,89 @@ async fn openapi_gateway_changed_operation_is_quarantined_until_explicit_reaccep
 }
 
 #[tokio::test]
+async fn openapi_gateway_response_media_refresh_requires_review_and_survives_restart() {
+    let upstream = Upstream::start().await;
+    let fixture = Fixture::start(&upstream, |_| {}).await;
+    let mut source = document(
+        Dialect::OpenApi31,
+        UpstreamAuth::Anonymous,
+        &upstream.endpoint(),
+    );
+    source["paths"]["/blob"]["get"]["responses"]["default"]["content"] =
+        json!({"application/octet-stream": {}});
+    let preview = fixture
+        .create_and_discover(DefinitionSource::Upload, UpstreamAuth::Anonymous, &source)
+        .await;
+    fixture.accept(&preview, &["download_blob"]).await;
+    fixture.enable().await;
+    fixture.grant(&["download_blob"]).await;
+    let original = fixture.detail().await;
+
+    source["paths"]["/blob"]["get"]["responses"]["default"]["content"] = json!({"*/*": {}});
+    let preview = fixture.upload(&source).await;
+    let actions = preview["service"]["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0]["status"], "quarantined");
+    assert_eq!(
+        actions[0]["definition"],
+        original["service"]["actions"][0]["definition"]
+    );
+    let response = fixture
+        .gateway(Method::GET, "/blob", "wildcard-before-reacceptance")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "gateway_rule_not_found"
+    );
+    response.bytes().await.unwrap();
+    assert!(upstream.api_requests().is_empty());
+
+    fixture.accept(&preview, &["download_blob"]).await;
+    let accepted = fixture.detail().await;
+    assert_eq!(accepted["available"], true);
+    assert_eq!(accepted["service"]["actions"][0]["status"], "enabled");
+    assert_eq!(
+        accepted["service"]["actions"][0]["definition"]["annotations"]["openapiGateway"]["responses"]
+            ["default"]["contentTypes"],
+        json!(["*/*"])
+    );
+    assert_ne!(
+        accepted["service"]["actions"][0]["definitionHash"],
+        original["service"]["actions"][0]["definitionHash"]
+    );
+    fixture.broker.reload_config(&fixture.seed.config).await;
+    assert_eq!(
+        fixture.detail().await["service"]["actions"],
+        accepted["service"]["actions"]
+    );
+    let fixture = fixture.restart().await;
+    let restored = fixture.detail().await;
+    assert_eq!(restored["available"], true);
+    assert_eq!(restored["catalogRevision"], accepted["catalogRevision"]);
+    assert_eq!(
+        restored["service"]["actions"],
+        accepted["service"]["actions"]
+    );
+    let response = fixture
+        .gateway(Method::GET, "/blob", "wildcard-after-restart")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[CONTENT_TYPE], "application/octet-stream");
+    assert_eq!(response.bytes().await.unwrap().as_ref(), BLOB);
+    assert_eq!(upstream.api_requests().len(), 1);
+    assert_eq!(
+        fixture.terminal("wildcard-after-restart").await["providerAudit"]["gateway"]["phase"],
+        "completed"
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
 async fn openapi_gateway_binding_host_changes_and_removal_preserve_accepted_authority() {
     const NEXT_HOST: &str = "inventory-next.gateway.example.test";
     let upstream = Upstream::start().await;
