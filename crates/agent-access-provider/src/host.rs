@@ -565,3 +565,41 @@ pub fn authorize_host_request(
 pub fn token_as_basic(username: impl Into<String>) -> CredentialPlacement {
     CredentialPlacement::token_as_basic(username.into())
 }
+
+/// Host-only: lends a request head after removing credential and identity carriers.
+/// Protocol modules cannot construct or replace the host's sanitized head.
+pub fn gateway_request_head<'a>(
+    method: &'a reqwest::Method,
+    path_and_query: &'a str,
+    headers: &'a reqwest::header::HeaderMap,
+) -> crate::GatewayRequestHead<'a> {
+    crate::GatewayRequestHead::new(method, path_and_query, headers)
+}
+
+/// Host-only: constructs the bounded, replay-preserving body consumed by a protocol hook.
+/// Protocol modules retain the body supplied to preflight and cannot replace it.
+pub fn gateway_body(
+    stream: crate::GatewayBodyStream,
+    max_bytes: usize,
+    idle_timeout: Duration,
+) -> crate::GatewayBody {
+    crate::GatewayBody::new(stream, max_bytes, idle_timeout)
+}
+
+/// Host-only: takes back every inspected byte followed by the remaining inbound stream.
+/// Protocol modules inspect through `GatewayBody` and return that same body.
+pub fn gateway_body_stream(body: crate::GatewayBody) -> crate::GatewayBodyStream {
+    body.into_stream()
+}
+
+/// Whether bounded preflight reached EOF without failure and retains no data
+/// or trailer frames. Empty data frames do not count as retained frames.
+/// Only this state is eligible for a bodyless credential-recovery attempt.
+pub fn gateway_body_is_empty_complete(body: &crate::GatewayBody) -> bool {
+    body.is_empty_complete()
+}
+
+/// A terminal inspection failure that must be checked before dispatching a plan.
+pub fn gateway_body_failure(body: &crate::GatewayBody) -> Option<crate::GatewayBodyError> {
+    body.failure()
+}

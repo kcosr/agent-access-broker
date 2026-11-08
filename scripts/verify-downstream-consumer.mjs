@@ -26,6 +26,7 @@ export const SENTINEL_REV = "0".repeat(40);
 export const CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index";
 export const SDK_PACKAGE = "agent-access-provider";
 export const PROVIDER_PACKAGE = "agent-access-conformance";
+export const GATEWAY_PACKAGE = "downstream-example-gateway";
 export const ASSEMBLY_PACKAGE = "downstream-broker";
 const CLI_PACKAGE = "agent-access";
 const PROVIDER_CRATE_DIRECTORY = "crates/agent-access-conformance";
@@ -1390,7 +1391,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
 
     const candidateLock = parseLockfile(candidateLockText);
     const upstreamNames = new Set(candidateLock.packages.filter((entry) => entry.source === null).map((entry) => entry.name));
-    for (const name of [SDK_PACKAGE, PROVIDER_PACKAGE, CLI_PACKAGE, "agent-access-broker-host", "agent-access-cloudbees-ci"]) {
+    for (const name of [SDK_PACKAGE, PROVIDER_PACKAGE, CLI_PACKAGE, "agent-access-broker-host", "agent-access-cloudbees-ci", "agent-access-git-http"]) {
       if (!upstreamNames.has(name)) throw new Error(`The candidate workspace has no ${name} package`);
     }
     const seed = thirdPartyLockSeed(candidateLockText);
@@ -1404,7 +1405,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
         maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
       const examples = guideExamples({ providerGuide: show(PROVIDER_GUIDE), assemblyGuide: show(ASSEMBLY_GUIDE),
         fixtureFiles: new Map(ASSEMBLY_GUIDE_SHARED_FILES.map(({ path }) => [path, show(`${ASSEMBLY_TEMPLATE_DIRECTORY}/${path}`)])),
-        reservedNames: new Set([...upstreamNames, PROVIDER_PACKAGE, ASSEMBLY_PACKAGE]) });
+        reservedNames: new Set([...upstreamNames, PROVIDER_PACKAGE, GATEWAY_PACKAGE, ASSEMBLY_PACKAGE]) });
       guides = examples;
       for (const { crate, repository, directory } of examples.destinations) {
         for (const { path, text } of [{ path: "Cargo.toml", text: crate.manifest }, ...crate.files]) {
@@ -1529,7 +1530,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
       return files.length;
     };
     const upstreamSource = { canonical: CANONICAL_UPSTREAM_URL, url: upstreamSourceUrl, rev: commit, packages: upstreamNames };
-    const providerPackages = new Set([PROVIDER_PACKAGE, ...guides.providerCrates.map((crate) => crate.name)]);
+    const providerPackages = new Set([PROVIDER_PACKAGE, GATEWAY_PACKAGE, ...guides.providerCrates.map((crate) => crate.name)]);
     const mapping = { schemaVersion: 1, mode: source, candidate: { commit, committedAt: report.upstream.committedAt },
       sources: [], manifests: [] };
     let cli;
@@ -1663,7 +1664,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
     });
 
     await step("provider-tests", async () => {
-      await cargo("provider-test", paths.provider, ["test", "--locked", "--offline", "-p", PROVIDER_PACKAGE, ...targetDirectory(paths.provider)]);
+      await cargo("provider-test", paths.provider, ["test", "--locked", "--offline", "-p", PROVIDER_PACKAGE, "-p", GATEWAY_PACKAGE, ...targetDirectory(paths.provider)]);
     });
 
     await step("provider-boundaries", async (record) => {
@@ -1741,6 +1742,7 @@ export async function runDownstreamConsumer({ root = ROOT, commit, evidenceDir, 
         modules: [
           { crate: CLOUDBEES_PACKAGE, version: locked(CLOUDBEES_PACKAGE, upstreamLock), roles: [{ role: "native", id: "cloudbees_ci" }], revision: commit },
           { crate: PROVIDER_PACKAGE, version: locked(PROVIDER_PACKAGE, providerLock), roles: [{ role: "native", id: "conformance" }], revision: providerCommit },
+          { crate: "agent-access-git-http", version: locked("agent-access-git-http", upstreamLock), roles: [{ role: "gateway", id: "git_http" }], revision: commit },
         ],
       });
       writeFileSync(join(evidence, "expected-status.json"), `${JSON.stringify(expectedStatus, null, 2)}\n`);

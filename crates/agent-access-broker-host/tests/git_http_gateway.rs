@@ -35,6 +35,7 @@ const REPOSITORY: &str = "group/repo";
 /// flush-only probe POST before streaming the pack.
 const LARGE_PUSH_BYTES: usize = 2 * 1024 * 1024;
 const ORIGIN_BODY_MAX_BYTES: usize = 8 * 1024 * 1024;
+const INTERRUPTED_PUSH_ID: &str = "real-git-interrupted-receive-pack";
 
 // Proxy environment is a process-wide input to the real Broker runtime. Isolate
 // it in a child instead of mutating the environment of a multithreaded test.
@@ -105,11 +106,14 @@ async fn git_http_gateway_child() {
     git(&seed, &["push", upstream_repo.to_str().unwrap(), "main"]);
 
     let origin = GitOrigin::start(root);
-    let (config_path, token) = broker_config(root, origin.address);
-    // The configuration selects only the Git gateway, which needs no native
-    // provider module.
+    let (config_path, token, read_only_token) = broker_config(root, origin.address);
+    // A downstream assembly explicitly selects the Git gateway module and
+    // needs no native provider module.
     let broker = IsolatedBroker::new(
-        BrokerComposition::builder().build().unwrap(),
+        BrokerComposition::builder()
+            .gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)
+            .build()
+            .unwrap(),
         AssemblyIdentity::new("example-assembly", "9.8.7"),
     )
     .unwrap()
@@ -181,6 +185,108 @@ async fn git_http_gateway_child() {
         assert!(!pushed.iter().any(|request| request.probe), "{pushed:?}");
     }
 
+    // The extracted protocol must preserve native Git's shallow negotiation,
+    // including the later request that removes the shallow boundary.
+    let remote = format!("{base}/{REPOSITORY}.git");
+    let shallow = root.join("shallow");
+    let before = origin.requests();
+    git(
+        root,
+        &[
+            "-c",
+            &authorization,
+            "clone",
+            "--depth=1",
+            &remote,
+            "shallow",
+        ],
+    );
+    assert_eq!(
+        git_text(&shallow, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+    assert_eq!(git_text(&shallow, &["rev-list", "--count", "HEAD"]), "1");
+    assert_fetch_requests(&origin.requests()[before.len()..]);
+    let before = origin.requests();
+    git(
+        &shallow,
+        &["-c", &authorization, "fetch", "--unshallow", "origin"],
+    );
+    assert_eq!(
+        git_text(&shallow, &["rev-parse", "--is-shallow-repository"]),
+        "false"
+    );
+    assert_eq!(
+        git_text(&shallow, &["rev-list", "--count", "HEAD"]),
+        git_text(&seed, &["rev-list", "--count", "HEAD"])
+    );
+    assert_fetch_requests(&origin.requests()[before.len()..]);
+
+    // A read-only Broker token still fetches through the real server, but its
+    // push is denied at reference discovery, before any upstream request.
+    let read_only_authorization = format!(
+        "http.extraHeader=Authorization: Basic {}",
+        STANDARD.encode(format!("agent-access:{read_only_token}"))
+    );
+    let before = origin.requests();
+    git(
+        &shallow,
+        &["-c", &read_only_authorization, "fetch", "origin"],
+    );
+    assert!(!origin.requests()[before.len()..].is_empty());
+    let before = origin.requests();
+    let denied = git_output(
+        &shallow,
+        &[
+            "-c",
+            &read_only_authorization,
+            "push",
+            "origin",
+            "HEAD:refs/heads/read-only",
+        ],
+    );
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("403"));
+    assert_eq!(origin.requests().len(), before.len());
+
+    // The native client may discover refs, but forbidden ref updates never
+    // reach git-http-backend and cannot mutate the bare repository.
+    let preserved = git_text(&upstream_repo, &["rev-parse", "refs/heads/from-client-0"]);
+    for target in [
+        "HEAD:refs/heads/protected",
+        "HEAD:refs/tags/forbidden",
+        ":refs/heads/from-client-0",
+    ] {
+        let before = origin.requests();
+        let denied = git_output(&shallow, &["-c", &authorization, "push", "origin", target]);
+        assert!(!denied.status.success(), "{target}");
+        assert!(
+            String::from_utf8_lossy(&denied.stderr).contains("403"),
+            "{target}"
+        );
+        let requests = origin.requests();
+        assert!(
+            requests[before.len()..]
+                .iter()
+                .all(|request| request.method == "GET")
+        );
+    }
+    assert_eq!(
+        git_text(&upstream_repo, &["rev-parse", "refs/heads/from-client-0"]),
+        preserved
+    );
+    for reference in [
+        "refs/heads/protected",
+        "refs/tags/forbidden",
+        "refs/heads/read-only",
+    ] {
+        assert!(
+            !git_output(&upstream_repo, &["show-ref", "--verify", reference])
+                .status
+                .success()
+        );
+    }
+
     // With default settings, Git precedes a push larger than `http.postBuffer`
     // with a probe POST whose whole body is a flush packet, then streams the
     // pack. Both must reach the upstream with the Broker's credential.
@@ -221,6 +327,49 @@ async fn git_http_gateway_child() {
         posts[1].has_pack && posts[1].body_bytes > LARGE_PUSH_BYTES,
         "{posts:?}"
     );
+
+    // Apply a real receive-pack, then lose its upstream response. The outcome
+    // is uncertain to the client, so the gateway must never send the pack a
+    // second time. A later request also proves the single request permit was
+    // released after the failed transfer.
+    let interrupted = root.join("clone-1");
+    commit(&interrupted, "interrupted-push");
+    origin.interrupt_next_receive_pack_response();
+    let before = origin.requests();
+    let interrupted_header =
+        format!("http.extraHeader=X-Agent-Access-Request-Id: {INTERRUPTED_PUSH_ID}");
+    let branch = "refs/heads/interrupted-result";
+    let output = git_output(
+        &interrupted,
+        &[
+            "-c",
+            &authorization,
+            "-c",
+            &interrupted_header,
+            "push",
+            "origin",
+            &format!("HEAD:{branch}"),
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "the missing upstream response must not report success"
+    );
+    assert_eq!(
+        git_text(&upstream_repo, &["rev-parse", branch]),
+        git_text(&interrupted, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        origin.requests()[before.len()..]
+            .iter()
+            .filter(|request| {
+                request.method == "POST" && request.target.ends_with("/git-receive-pack")
+            })
+            .count(),
+        1,
+        "an uncertain receive-pack must never be replayed"
+    );
+    git(&interrupted, &["-c", &authorization, "ls-remote", "origin"]);
 
     // Both client URL forms must reach only the same canonical upstream repo.
     let requests = origin.requests();
@@ -283,6 +432,64 @@ async fn git_http_gateway_child() {
     let drained = broker.join().await.unwrap();
     assert_eq!(drained.unfinished_operations(), 0);
     assert_eq!(drained.audit_error(), None);
+    let records: Vec<serde_json::Value> = fs::read_to_string(root.join("audit.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect();
+    let mut discoveries = 0;
+    let mut counted_posts = 0;
+    let mut probes = 0;
+    for record in &records {
+        if record["providerAudit"]["gateway"]["phase"] != "started" {
+            continue;
+        }
+        match record["providerAudit"]["gateway"]["method"].as_str() {
+            Some("GET") => {
+                discoveries += 1;
+                assert!(
+                    record["providerAudit"].get("admission").is_none(),
+                    "reference discovery must retain its admission exemption: {record}"
+                );
+            }
+            Some("POST") => {
+                counted_posts += 1;
+                assert_eq!(record["providerAudit"]["admission"]["outcome"], "admitted");
+                if record["providerAudit"]["git"]["probe"] == true {
+                    probes += 1;
+                }
+            }
+            method => panic!("unexpected Git method in audit: {method:?}"),
+        }
+    }
+    assert!(discoveries > 0 && counted_posts > 0);
+    assert_eq!(
+        probes, 1,
+        "the large-push probe must enter counted admission"
+    );
+    let interrupted_audit: Vec<_> = records
+        .into_iter()
+        .filter(|record| {
+            record["agentRequestId"] == INTERRUPTED_PUSH_ID
+                && record["providerAudit"]["gateway"]["method"] == "POST"
+        })
+        .collect();
+    assert_eq!(interrupted_audit.len(), 2, "{interrupted_audit:?}");
+    assert!(interrupted_audit[0]["brokerRequestId"].as_str().is_some());
+    assert_eq!(
+        interrupted_audit[0]["brokerRequestId"],
+        interrupted_audit[1]["brokerRequestId"]
+    );
+    for phase in ["started", "failed"] {
+        assert_eq!(
+            interrupted_audit
+                .iter()
+                .filter(|record| { record["providerAudit"]["gateway"]["phase"] == phase })
+                .count(),
+            1,
+            "{interrupted_audit:?}"
+        );
+    }
 }
 
 fn assert_fetch_requests(requests: &[UpstreamRequest]) {
@@ -302,7 +509,7 @@ fn assert_fetch_requests(requests: &[UpstreamRequest]) {
     );
 }
 
-fn broker_config(root: &Path, origin: SocketAddr) -> (PathBuf, String) {
+fn broker_config(root: &Path, origin: SocketAddr) -> (PathBuf, String, String) {
     for (name, value) in [
         ("hash-key", URL_SAFE_NO_PAD.encode([17_u8; 32])),
         ("encryption-key", URL_SAFE_NO_PAD.encode([19_u8; 32])),
@@ -367,6 +574,7 @@ redirect_policy = "none"
 [gateways.git.git]
 allow_fetch = true
 allow_push = true
+deny_ref_patterns = ["refs/heads/protected"]
 [policy]
 authority = "toml"
 default_decision = "deny"
@@ -388,6 +596,11 @@ resources = {{ resource_ids = ["repo", "redirect"] }}
 credential_mode = "service"
 [limits]
 upload_spool_dir = {spool}
+max_concurrent_requests = 1
+max_concurrent_requests_per_principal = 1
+[audit]
+type = "jsonl"
+path = {audit}
 "#,
             store = quoted_path("managed.sqlite"),
             hash = reference("hash-key"),
@@ -395,6 +608,7 @@ upload_spool_dir = {spool}
             upstream = reference("upstream-token"),
             ca = quoted_path("test-ca.pem"),
             spool = quoted_path("spool"),
+            audit = quoted_path("audit.jsonl"),
         ),
     )
     .unwrap();
@@ -432,12 +646,14 @@ upload_spool_dir = {spool}
         ..Default::default()
     })
     .unwrap();
-    let token = store.issue_broker_token(&hasher, BrokerTokenIssueRequest {
-        principal_id: "git-tester".into(), name: "test token".into(), token_class: BrokerTokenClass::AgentInvoke,
-        scopes: json!({"allowedServices": ["git"], "readOnly":false,"allowedExecutionContexts": ["default"]}),
-        expires_at: None, created_by: "test".into(),
-    }).unwrap().token;
-    (path, token)
+    let issue = |read_only: bool| {
+        store.issue_broker_token(&hasher, BrokerTokenIssueRequest {
+            principal_id: "git-tester".into(), name: format!("test token read_only={read_only}"), token_class: BrokerTokenClass::AgentInvoke,
+            scopes: json!({"allowedServices": ["git"], "readOnly":read_only,"allowedExecutionContexts": ["default"]}),
+            expires_at: None, created_by: "test".into(),
+        }).unwrap().token
+    };
+    (path, issue(false), issue(true))
 }
 
 fn private_permissions(path: &Path) {
@@ -609,6 +825,7 @@ struct GitOrigin {
     stopped: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     requests: Arc<Mutex<Vec<UpstreamRequest>>>,
+    interrupt_receive_pack: Arc<AtomicBool>,
 }
 
 impl GitOrigin {
@@ -639,6 +856,8 @@ impl GitOrigin {
         let stop = stopped.clone();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = requests.clone();
+        let interrupt_receive_pack = Arc::new(AtomicBool::new(false));
+        let interrupt = interrupt_receive_pack.clone();
         let root = root.to_owned();
         let thread = thread::spawn(move || {
             while let Ok((stream, _)) = listener.accept() {
@@ -653,7 +872,7 @@ impl GitOrigin {
                     .unwrap();
                 let connection = rustls::ServerConnection::new(config.clone()).unwrap();
                 let mut tls = rustls::StreamOwned::new(connection, stream);
-                serve_git(&mut tls, &root, address, &captured);
+                serve_git(&mut tls, &root, address, &captured, &interrupt);
             }
         });
         Self {
@@ -661,10 +880,15 @@ impl GitOrigin {
             stopped,
             thread: Some(thread),
             requests,
+            interrupt_receive_pack,
         }
     }
     fn requests(&self) -> Vec<UpstreamRequest> {
         self.requests.lock().unwrap().clone()
+    }
+
+    fn interrupt_next_receive_pack_response(&self) {
+        self.interrupt_receive_pack.store(true, Ordering::Release);
     }
 }
 
@@ -686,6 +910,7 @@ fn serve_git(
     root: &Path,
     address: SocketAddr,
     captured: &Mutex<Vec<UpstreamRequest>>,
+    interrupt_receive_pack: &AtomicBool,
 ) {
     let mut reader = BufReader::new(&mut *tls);
     let line = read_line(&mut reader);
@@ -779,6 +1004,13 @@ fn serve_git(
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+        if method == "POST"
+            && path.ends_with("/git-receive-pack")
+            && body != b"0000"
+            && interrupt_receive_pack.swap(false, Ordering::AcqRel)
+        {
+            return;
+        }
         let boundary = output
             .stdout
             .windows(4)

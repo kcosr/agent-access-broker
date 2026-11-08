@@ -32,6 +32,7 @@ const baseRoles = {
   "agent-access-conformance": "reference",
   "agent-access-mcp-upstream": "adapter",
   "agent-access-content": "helper",
+  "agent-access-git-http": "gateway",
 };
 
 const baseEdges = {
@@ -45,6 +46,7 @@ const baseEdges = {
   "agent-access-conformance": [["agent-access-provider", null]],
   "agent-access-mcp-upstream": [["agent-access-provider", null], ["agent-access-core", null], ["agent-access-jira", "dev"]],
   "agent-access-content": [["agent-access-provider", null]],
+  "agent-access-git-http": [["agent-access-provider", null], ["agent-access-content", null]],
 };
 
 const withEdge = (from, edge) => ({ ...baseEdges, [from]: [...(baseEdges[from] ?? []), edge] });
@@ -53,7 +55,7 @@ test("an allowed workspace passes and reports the CLI's production core dependen
   const result = checkCrateBoundaries(metadata(baseRoles, baseEdges, { external: ["serde"] }));
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.notes, ["agent-access (cli) production closure includes agent-access-core (core) (allowed)"]);
-  assert.deepEqual(ROLES, ["sdk", "core", "host", "assembly", "cli", "native", "reference", "adapter", "helper"]);
+  assert.deepEqual(ROLES, ["sdk", "core", "host", "assembly", "cli", "native", "reference", "adapter", "helper", "gateway"]);
 });
 
 test("every workspace member must declare a known role", () => {
@@ -162,7 +164,7 @@ test("provider-side crates must not use host-only credential attachment or prese
     "agent-access-broker-host": [{ path: "crates/agent-access-broker-host/src/handlers/gateway.rs", text: "authorize_host_request(builder, &auth)\n" }],
   };
   const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => sources[pkg.name] ?? []);
-  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic", "gateway_upstream_authorization"]);
+  assert.deepEqual(HOST_ONLY_ITEMS, ["authorize_host_request", "token_as_basic", "gateway_upstream_authorization", "gateway_body", "gateway_body_stream", "gateway_request_head"]);
   assert.deepEqual(errors, [
     "agent-access-conformance (reference) must not use host-only authorize_host_request; found at crates/agent-access-conformance/tests/it.rs:1",
     "agent-access-conformance (reference) must not use host-only token_as_basic; found at crates/agent-access-conformance/tests/it.rs:2",
@@ -201,5 +203,39 @@ test("only workspace members with fenced roles are scanned", () => {
     read.push(pkg.name);
     return [];
   });
-  assert.deepEqual(read, ["agent-access-conformance", "agent-access-content", "agent-access-jira", "agent-access-mcp-upstream"]);
+  assert.deepEqual(read, ["agent-access-conformance", "agent-access-content", "agent-access-git-http", "agent-access-jira", "agent-access-mcp-upstream"]);
+});
+
+
+test("gateway dependencies reach only SDK and helpers for every edge kind", () => {
+  for (const [target, role] of Object.entries(baseRoles)) {
+    if (["sdk", "helper"].includes(role)) continue;
+    for (const kind of [null, "build", "dev"]) {
+      const result = checkCrateBoundaries(metadata(baseRoles, withEdge("agent-access-git-http", [target, kind])));
+      assert.ok(result.errors.some((error) => error.startsWith(`agent-access-git-http (gateway) must not depend on ${role} crates;`)), result.errors.join("\n"));
+    }
+  }
+  for (const source of ["agent-access-core", "agent-access-broker-host", "agent-access"]) {
+    const result = checkCrateBoundaries(metadata(baseRoles, withEdge(source, ["agent-access-git-http", null])));
+    assert.ok(result.errors.some((error) => error.startsWith(`${source} (${baseRoles[source]}) production closure must not include gateway crates;`)));
+  }
+  for (const kind of [null, "build", "dev"]) {
+    const result = checkCrateBoundaries(metadata(baseRoles, withEdge("agent-access-mcp-upstream", ["agent-access-git-http", kind])));
+    assert.ok(result.errors.some((error) => error.includes("(adapter) must not depend on gateway crates;")));
+  }
+});
+
+test("gateway sources cannot attach credentials or replace host-owned request bodies and heads", () => {
+  for (const item of HOST_ONLY_ITEMS) {
+    for (const source of [
+      `use agent_access_provider::host::${item};`,
+      `use agent_access_provider::host::{${item} as replaced};`,
+      `let value = agent_access_provider::host::${item}(input);`,
+    ]) {
+      const errors = hostOnlyUseViolations(metadata(baseRoles), (pkg) => pkg.name === "agent-access-git-http" ? [{ path: "src/lib.rs", text: source }] : []);
+      assert.equal(errors.length, 1, item);
+    }
+  }
+  const fixtures = hostOnlyUseViolations(metadata(baseRoles), (pkg) => pkg.name === "agent-access-git-http" ? [{ path: "src/tests.rs", text: "use agent_access_provider::test_support::{synthetic_gateway_body, synthetic_gateway_request_head, replay_gateway_body};" }] : []);
+  assert.deepEqual(fixtures, []);
 });

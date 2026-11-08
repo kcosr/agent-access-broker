@@ -6,8 +6,8 @@
 use super::*;
 use agent_access_core::{
     ConnectionConfig, ConnectionOAuthConfig, CreateResourceRequest, GatewayConfig,
-    GatewayGitConfig, GatewayUpstreamTokenAuth, ManagedPolicyGrantCreateRequest, OAuthBinding,
-    OutboundTlsConfig, OutboundTlsTrustMode,
+    GatewayUpstreamTokenAuth, ManagedPolicyGrantCreateRequest, OAuthBinding, OutboundTlsConfig,
+    OutboundTlsTrustMode,
 };
 use agent_access_provider::{
     OAuthClientAuth, OAuthRotation, OAuthScopeMode, OAuthTokenEncoding, ResourceSelector,
@@ -49,6 +49,7 @@ struct Seen {
     method: String,
     target: String,
     authorization: Option<String>,
+    body_bytes: usize,
 }
 
 /// Holds the next matching request until the test releases it.
@@ -84,6 +85,8 @@ struct GitlabState {
     accepted: BTreeSet<String>,
     /// Every Git request is refused, whatever it presents.
     refuse_git: bool,
+    /// Answer pack requests immediately after their headers.
+    early_pack_reply: bool,
     refresh: Refresh,
     requests: Vec<Seen>,
     hold_git: Option<Hold>,
@@ -222,7 +225,8 @@ fn serve(tls: Arc<rustls::ServerConfig>, stream: TcpStream, state: &Mutex<Gitlab
         return;
     };
     let mut stream = rustls::StreamOwned::new(connection, stream);
-    let Some(request) = read_request(&mut stream) else {
+    let early_pack_reply = state.lock().unwrap().early_pack_reply;
+    let Some(request) = read_request(&mut stream, early_pack_reply) else {
         return;
     };
     let (status, headers, body) = respond(state, request);
@@ -244,7 +248,7 @@ fn read_line(reader: &mut impl BufRead) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn read_request(stream: &mut impl Read) -> Option<Incoming> {
+fn read_request(stream: &mut impl Read, early_pack_reply: bool) -> Option<Incoming> {
     let mut reader = BufReader::new(stream);
     let line = read_line(&mut reader)?;
     let mut parts = line.split_whitespace();
@@ -257,6 +261,17 @@ fn read_request(stream: &mut impl Read) -> Option<Incoming> {
         }
         let (name, value) = line.split_once(':')?;
         headers.insert(name.to_ascii_lowercase(), value.trim().to_owned());
+    }
+    if early_pack_reply
+        && method == "POST"
+        && (target.ends_with("/git-upload-pack") || target.ends_with("/git-receive-pack"))
+    {
+        return Some(Incoming {
+            method,
+            target,
+            headers,
+            body: Vec::new(),
+        });
     }
     let mut body = Vec::new();
     if headers
@@ -314,6 +329,7 @@ fn respond(state: &Mutex<GitlabState>, request: Incoming) -> Reply {
             method: request.method.clone(),
             target: request.target.clone(),
             authorization: request.headers.get("authorization").cloned(),
+            body_bytes: request.body.len(),
         });
         match (request.method.as_str(), path.as_str()) {
             ("POST", "/oauth/token") if grant == Some("refresh_token") => state.hold_refresh.take(),
@@ -557,13 +573,10 @@ async fn gateway_fixture(gitlab: &FakeGitlab) -> OAuthFixture {
                     response_body_max_bytes: None,
                     streaming_idle_timeout_ms: None,
                     correlation_headers: true,
-                    git: Some(GatewayGitConfig {
-                        allow_fetch: true,
-                        allow_push: true,
-                        deny_ref_patterns: Vec::new(),
-                        deny_delete_refs: true,
-                        receive_pack_prefix_max_bytes: None,
-                    }),
+                    protocol_fields: toml::from_str(
+                        "[git]\nallow_fetch = true\nallow_push = true\ndeny_delete_refs = true",
+                    )
+                    .unwrap(),
                 },
             );
         },
@@ -1371,8 +1384,8 @@ impl GitClient {
     }
 }
 
-/// A real Git client clones through the gateway on alice's OAuth
-/// connection, signing in with a credential helper. When GitLab then
+/// A real Git client clones, fetches after OAuth recovery, and pushes through
+/// the gateway on alice's OAuth connection, signing in with a credential helper. When GitLab then
 /// rejects the access, Git shows the gateway's 403 message as `remote:`
 /// output and never asks the helper to erase the Broker token.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1391,6 +1404,7 @@ async fn real_git_clones_and_a_rejection_never_erases_the_broker_token() {
             "team/project.git",
         ],
     );
+    git_ok(&bare, &["config", "http.receivepack", "true"]);
     git_ok(
         root,
         &[
@@ -1455,6 +1469,70 @@ async fn real_git_clones_and_a_rejection_never_erases_the_broker_token() {
     }
     assert!(client.helper_operations().contains(&"get".to_owned()));
 
+    // A real fetch retries only bodyless discovery after rejected OAuth
+    // access, then uses the refreshed lease for protocol-v2 pack traffic.
+    std::fs::write(seed.join("file.txt"), "upstream fetch").unwrap();
+    git_ok(&seed, &["add", "file.txt"]);
+    git_ok(&seed, &["commit", "-m", "upstream fetch"]);
+    git_ok(&seed, &["push", bare.to_str().unwrap(), "main"]);
+    gitlab.revoke_access();
+    let before = gitlab.requests().len();
+    let output = client.run(&clone, &["fetch", "origin"]).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        git_ok(&clone, &["rev-parse", "origin/main"]),
+        git_ok(&seed, &["rev-parse", "HEAD"])
+    );
+    let fetched = gitlab.requests().split_off(before);
+    assert_eq!(
+        fetched
+            .iter()
+            .filter(|seen| seen.method == "POST" && seen.target == "/oauth/token")
+            .count(),
+        1
+    );
+    assert_eq!(
+        fetched
+            .iter()
+            .filter(|seen| format!("{} {}", seen.method, seen.target) == git_route(Git::Discovery))
+            .count(),
+        2
+    );
+    assert!(fetched.iter().any(|seen| {
+        format!("{} {}", seen.method, seen.target) == git_route(Git::UploadPack)
+            && seen.authorization.as_deref() == Some(basic("oauth2", "gitlab-access-2").as_str())
+    }));
+
+    std::fs::write(clone.join("file.txt"), "delegated push").unwrap();
+    git_ok(&clone, &["add", "file.txt"]);
+    git_ok(&clone, &["commit", "-m", "delegated push"]);
+    let branch = "refs/heads/delegated-client";
+    let before = gitlab.requests().len();
+    let output = client
+        .run(&clone, &["push", "origin", &format!("HEAD:{branch}")])
+        .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        git_ok(&bare, &["rev-parse", branch]),
+        git_ok(&clone, &["rev-parse", "HEAD"])
+    );
+    let pushed = gitlab.requests().split_off(before);
+    assert_eq!(
+        pushed.iter().filter(|seen| format!("{} {}", seen.method, seen.target) == git_route(Git::ReceivePack)).count(),
+        1
+    );
+    assert!(pushed.iter().all(|seen| {
+        seen.authorization.as_deref() == Some(basic("oauth2", "gitlab-access-2").as_str())
+    }));
+
     gitlab.state().refuse_git = true;
     let output = client.run(&clone, &["fetch", "origin"]).await;
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1471,4 +1549,95 @@ async fn real_git_clones_and_a_rejection_never_erases_the_broker_token() {
         "{stderr}"
     );
     assert!(stderr.contains("403"), "{stderr}");
+}
+
+/// A response can arrive before any upload bytes. It proves that the upstream
+/// received the request, so dropping its unfinished upload is still uncertain;
+/// the delegated 401 denial and original credential reason remain authoritative.
+#[tokio::test]
+async fn early_pack_responses_preserve_delegated_denials_and_incomplete_upload_evidence() {
+    for rejected in [false, true] {
+        let gitlab = FakeGitlab::start();
+        let fixture = gateway_fixture(&gitlab).await;
+        connect_gitlab(&fixture).await;
+        {
+            let mut state = gitlab.state();
+            state.early_pack_reply = true;
+            state.refuse_git = rejected;
+        }
+        let before = gitlab.requests().len();
+        let request_id = if rejected {
+            "early-pack-denied"
+        } else {
+            "early-pack-accepted"
+        };
+        let mut request = git_request(&fixture.agent_token, Git::UploadPack, request_id);
+        let (release, wait) = tokio::sync::oneshot::channel::<()>();
+        *request.body_mut() = Body::from_stream(futures_util::stream::once(async move {
+            let _ = wait.await;
+            Err::<axum::body::Bytes, _>(std::io::Error::other("synthetic unfinished upload"))
+        }));
+        let answer = tokio::time::timeout(
+            Duration::from_secs(5),
+            send_git(fixture.broker.gateway_app(), request),
+        )
+        .await
+        .unwrap();
+        if rejected {
+            answer.assert_reconnect(&format!(
+                "GitLab rejected the connected account's access and the Git request was not replayed; retry, and if it is rejected again, reconnect it {PORTAL}"
+            ));
+        } else {
+            assert_eq!(answer.status, StatusCode::OK, "{}", answer.body);
+            assert_eq!(answer.body, "0000");
+        }
+        assert_eq!(gitlab.routes_since(before), [git_route(Git::UploadPack)]);
+        let _ = release.send(());
+        let record = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(record) =
+                    read_audit_records(&fixture.audit_path)
+                        .into_iter()
+                        .find(|record| {
+                            record["agentRequestId"] == request_id
+                                && record["providerAudit"]["gateway"]["phase"] == "failed"
+                        })
+                {
+                    break record;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            record["decision"],
+            if rejected { "deny" } else { "error" },
+            "{record}"
+        );
+        if rejected {
+            assert_eq!(record["reasonCode"], "credential_invalid", "{record}");
+        }
+        // Git's established audit schema omits requestBytes. The real TLS
+        // fixture replied after the head without consuming any upload body.
+        assert_eq!(gitlab.requests().last().unwrap().body_bytes, 0);
+        assert!(
+            record["providerAudit"]["gateway"]
+                .get("requestBytes")
+                .is_none(),
+            "{record}"
+        );
+        assert!(
+            record["providerAudit"]["gateway"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("uncertain"),
+            "{record}"
+        );
+        fixture
+            .runtime
+            .shutdown_audit(Duration::from_secs(5))
+            .await
+            .unwrap();
+    }
 }

@@ -48,6 +48,7 @@ windows-sys.workspace = true
 zeroize = "1.9"
 
 [dev-dependencies]
+agent-access-git-http = { path = "../agent-access-git-http" }
 agent-access-cloudbees-ci = { path = "../agent-access-cloudbees-ci" }
 agent-access-confluence = { path = "../agent-access-confluence" }
 agent-access-fake = { path = "../agent-access-fake" }

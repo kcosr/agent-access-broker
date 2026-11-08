@@ -27,7 +27,9 @@ mod command_imports_config;
 mod config_error;
 pub mod connections;
 mod fs_permissions;
+mod gateway_config;
 mod gateway_token_auth;
+pub use gateway_config::GatewayConfig;
 mod import_names;
 pub mod imports;
 mod imports_config;
@@ -1222,68 +1224,6 @@ pub struct PolicyGrantConfig {
 }
 
 pub const POLICY_GRANT_MAX_SUBJECTS: usize = 256;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GatewayConfig {
-    #[serde(default)]
-    pub allow_forwarded_identity: bool,
-    pub kind: String,
-    pub display_name: String,
-    #[serde(default)]
-    pub broker_hosts: Vec<String>,
-    pub upstream_base_url: String,
-    #[serde(default)]
-    pub allowed_upstream_hosts: Vec<String>,
-    pub egress_proxy: Option<EgressProxyConfig>,
-    #[serde(default)]
-    pub auth_modes: Vec<String>,
-    #[serde(default = "default_basic_broker_token_username")]
-    pub basic_broker_token_username: String,
-    #[serde(default)]
-    pub credential_modes: Vec<String>,
-    /// How the gateway presents a token-kind upstream credential.
-    #[serde(default)]
-    pub upstream_token_auth: GatewayUpstreamTokenAuth,
-    #[serde(default = "default_gateway_redirect_policy")]
-    pub redirect_policy: String,
-    pub request_body_max_bytes: Option<u64>,
-    pub response_body_max_bytes: Option<u64>,
-    pub streaming_idle_timeout_ms: Option<u64>,
-    #[serde(default = "default_gateway_correlation_headers")]
-    pub correlation_headers: bool,
-    pub git: Option<GatewayGitConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GatewayGitConfig {
-    #[serde(default)]
-    pub allow_fetch: bool,
-    #[serde(default)]
-    pub allow_push: bool,
-    #[serde(default)]
-    pub deny_ref_patterns: Vec<String>,
-    #[serde(default = "default_deny_delete_refs")]
-    pub deny_delete_refs: bool,
-    pub receive_pack_prefix_max_bytes: Option<u64>,
-}
-
-fn default_basic_broker_token_username() -> String {
-    "agent-access".to_string()
-}
-
-fn default_gateway_redirect_policy() -> String {
-    "none".to_string()
-}
-
-fn default_gateway_correlation_headers() -> bool {
-    true
-}
-
-fn default_deny_delete_refs() -> bool {
-    true
-}
 
 /// `[limits]`. The table is required: `upload_spool_dir` has no default, and
 /// every other limit has the built-in default [`LimitsConfig::new`] applies.
@@ -3385,6 +3325,13 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
         .collect::<BTreeSet<_>>();
     let mut broker_hosts = BTreeMap::<String, String>::new();
     for (service, gateway) in &config.gateways {
+        let module = gateway.module_config(config.providers.registry());
+        let execution_required = module.as_ref().map_or(true, |module| {
+            module
+                .descriptor(&gateway.service_context(service))
+                .credentials
+                .execution_required
+        });
         if service == "broker" || !is_service_name(service) {
             errors.push(format!("gateways.{service} uses an invalid service name"));
         }
@@ -3442,7 +3389,7 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
             errors.push(format!("gateways.{service}.auth_modes must not be empty"));
         }
         for mode in &gateway.auth_modes {
-            if mode != "basic_broker_token" {
+            if mode != "basic_broker_token" && mode != "bearer_broker_token" {
                 errors.push(format!(
                     "gateways.{service}.auth_modes contains unsupported mode {mode}"
                 ));
@@ -3475,7 +3422,13 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
                 errors.push(format!(
                     "gateways.{service}.credential_modes contains unsupported mode {mode}"
                 ));
-            } else if !credential_mode_configured(&config.credentials, service, mode) {
+            } else if !execution_required && mode != "service" {
+                errors.push(format!(
+                    "gateways.{service} credential-free execution requires service mode"
+                ));
+            } else if execution_required
+                && !credential_mode_configured(&config.credentials, service, mode)
+            {
                 errors.push(format!(
                     "gateways.{service}.credential_modes includes {mode} but credentials.{mode}.{service} is not configured"
                 ));
@@ -3519,14 +3472,22 @@ fn validate_gateways(config: &BrokerConfig, errors: &mut Vec<String>) {
                 "gateways.{service}.response_body_max_bytes must not exceed limits.max_upstream_response_bytes"
             ));
         }
-        match gateway.kind.as_str() {
-            "git_http" => validate_git_http_gateway(service, gateway, errors),
-            "http_reverse" => errors.push(format!(
-                "gateways.{service}.kind http_reverse is not implemented in this slice"
-            )),
-            other => errors.push(format!(
-                "gateways.{service}.kind {other} is unsupported; expected git_http"
-            )),
+        match module {
+            Ok(module) => {
+                module.validate(&gateway.service_context(service), errors);
+                let descriptor = module.descriptor(&gateway.service_context(service));
+                if descriptor.service != *service
+                    || !matches!(&descriptor.surface, agent_access_provider::ServiceSurface::Gateway { kind, broker_hosts } if kind == &gateway.kind && broker_hosts == &gateway.broker_hosts)
+                {
+                    errors.push(format!(
+                        "gateways.{service} module returned an inconsistent descriptor"
+                    ));
+                }
+                if let Err(problems) = descriptor.validate() {
+                    errors.extend(problems);
+                }
+            }
+            Err(message) => errors.push(format!("gateways.{service}: {message}")),
         }
     }
 }
@@ -3551,36 +3512,6 @@ fn validate_gateway_upstream_base_url(service: &str, value: &str, errors: &mut V
         Err(_) => errors.push(format!(
             "gateways.{service}.upstream_base_url must be a valid URL"
         )),
-    }
-}
-
-fn validate_git_http_gateway(service: &str, gateway: &GatewayConfig, errors: &mut Vec<String>) {
-    let Some(git) = &gateway.git else {
-        errors.push(format!("gateways.{service}.git is required for git_http"));
-        return;
-    };
-    if !git.allow_fetch && !git.allow_push {
-        errors.push(format!(
-            "gateways.{service}.git must enable allow_fetch or allow_push"
-        ));
-    }
-    if git.receive_pack_prefix_max_bytes == Some(0) {
-        errors.push(format!(
-            "gateways.{service}.git.receive_pack_prefix_max_bytes must be non-zero"
-        ));
-    }
-    let mut patterns = BTreeSet::new();
-    for pattern in &git.deny_ref_patterns {
-        if !patterns.insert(pattern.clone()) {
-            errors.push(format!(
-                "gateways.{service}.git.deny_ref_patterns contains duplicate pattern {pattern}"
-            ));
-        }
-        if !is_git_ref_pattern(pattern) {
-            errors.push(format!(
-                "gateways.{service}.git.deny_ref_patterns contains invalid pattern {pattern}"
-            ));
-        }
     }
 }
 
@@ -3619,26 +3550,6 @@ pub fn normalize_gateway_broker_host(value: &str) -> Result<String, &'static str
         return Err("must be a valid lower-case DNS host");
     }
     Ok(host)
-}
-
-fn is_git_ref_pattern(value: &str) -> bool {
-    let value = value.strip_suffix("/**").unwrap_or(value);
-    if value.is_empty()
-        || !value.starts_with("refs/")
-        || value.contains('\\')
-        || value.contains("//")
-        || value.contains("..")
-        || value.contains('*')
-        || value.chars().any(char::is_control)
-    {
-        return false;
-    }
-    for segment in value.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." {
-            return false;
-        }
-    }
-    true
 }
 
 fn validate_policy(
@@ -4493,7 +4404,8 @@ pub(crate) fn configured_service_descriptors(
     // the provider's descriptor so the error is the only effect.
     for (service, gateway) in &config.gateways {
         if !services.contains_key(service)
-            && let Some(descriptor) = runtime::gateway_service_descriptor(service, gateway)
+            && let Some(descriptor) =
+                runtime::gateway_service_descriptor(service, gateway, config.providers.registry())
         {
             services.insert(service.clone(), Arc::new(descriptor));
         }

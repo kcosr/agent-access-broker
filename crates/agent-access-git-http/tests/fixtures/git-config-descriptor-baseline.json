@@ -1,0 +1,997 @@
+{
+  "baselineCommit": "1bbaa55822025dfc96e683785d93f5ba224d95d3",
+  "baselineConfigSha256": "eb62767440d23fe870031c690992ec0a1da361f130cce55aa9cefa331ae435cc",
+  "baselineFactorySha256": "c015c99e69d4757933056d66e498a51b233cc9515b3a0e2edfcf57942387799e",
+  "cases": [
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "service"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.fetch",
+              "credentialModes": [
+                "service"
+              ],
+              "description": "Fetch from a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": true,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": null,
+          "executionRequired": true,
+          "profiles": [],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"service\"]\n\n[git]\nallow_fetch = true\nallow_push = false\n",
+      "name": "fetch_service",
+      "service": "fixture_git",
+      "verificationSupported": true
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "per_user"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.fetch",
+              "credentialModes": [
+                "per_user"
+              ],
+              "description": "Fetch from a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": true,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": "Lets agents fetch Git repositories as your account.",
+          "executionRequired": true,
+          "profiles": [
+            {
+              "kind": "basic_api_token",
+              "label": null,
+              "name": "git-basic-api-token",
+              "routeBound": false
+            },
+            {
+              "kind": "bearer_token",
+              "label": null,
+              "name": "git-bearer-token",
+              "routeBound": false
+            }
+          ],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"per_user\"]\n\n[git]\nallow_fetch = true\nallow_push = false\n",
+      "name": "fetch_personal",
+      "service": "fixture_git",
+      "verificationSupported": true
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.fetch",
+              "credentialModes": [
+                "service",
+                "per_user"
+              ],
+              "description": "Fetch from a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": true,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": "Lets agents fetch Git repositories as your account.",
+          "executionRequired": true,
+          "profiles": [
+            {
+              "kind": "basic_api_token",
+              "label": null,
+              "name": "git-basic-api-token",
+              "routeBound": false
+            },
+            {
+              "kind": "bearer_token",
+              "label": null,
+              "name": "git-bearer-token",
+              "routeBound": false
+            }
+          ],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"service\", \"per_user\"]\n\n[git]\nallow_fetch = true\nallow_push = false\n",
+      "name": "fetch_mixed",
+      "service": "fixture_git",
+      "verificationSupported": true
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "service"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.push",
+              "credentialModes": [
+                "service"
+              ],
+              "description": "Push to a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": false,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": null,
+          "executionRequired": true,
+          "profiles": [],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"service\"]\n\n[git]\nallow_fetch = false\nallow_push = true\n",
+      "name": "push_service",
+      "service": "fixture_git",
+      "verificationSupported": false
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "per_user"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.push",
+              "credentialModes": [
+                "per_user"
+              ],
+              "description": "Push to a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": false,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": "Lets agents fetch and push Git repositories as your account.",
+          "executionRequired": true,
+          "profiles": [
+            {
+              "kind": "basic_api_token",
+              "label": null,
+              "name": "git-basic-api-token",
+              "routeBound": false
+            },
+            {
+              "kind": "bearer_token",
+              "label": null,
+              "name": "git-bearer-token",
+              "routeBound": false
+            }
+          ],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"per_user\"]\n\n[git]\nallow_fetch = false\nallow_push = true\n",
+      "name": "push_personal",
+      "service": "fixture_git",
+      "verificationSupported": false
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.push",
+              "credentialModes": [
+                "service",
+                "per_user"
+              ],
+              "description": "Push to a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": false,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": "Lets agents fetch and push Git repositories as your account.",
+          "executionRequired": true,
+          "profiles": [
+            {
+              "kind": "basic_api_token",
+              "label": null,
+              "name": "git-basic-api-token",
+              "routeBound": false
+            },
+            {
+              "kind": "bearer_token",
+              "label": null,
+              "name": "git-bearer-token",
+              "routeBound": false
+            }
+          ],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"service\", \"per_user\"]\n\n[git]\nallow_fetch = false\nallow_push = true\n",
+      "name": "push_mixed",
+      "service": "fixture_git",
+      "verificationSupported": false
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "service"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.fetch",
+              "credentialModes": [
+                "service"
+              ],
+              "description": "Fetch from a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": true,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            },
+            {
+              "action": "repo.push",
+              "credentialModes": [
+                "service"
+              ],
+              "description": "Push to a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": false,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": null,
+          "executionRequired": true,
+          "profiles": [],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"service\"]\n\n[git]\nallow_fetch = true\nallow_push = true\n",
+      "name": "both_service",
+      "service": "fixture_git",
+      "verificationSupported": true
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": false,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "agent-access",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": true,
+        "credentialModes": [
+          "per_user"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": null,
+        "responseBodyMaxBytes": null,
+        "streamingIdleTimeoutMs": null,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "bearer"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.fetch",
+              "credentialModes": [
+                "per_user"
+              ],
+              "description": "Fetch from a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": true,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            },
+            {
+              "action": "repo.push",
+              "credentialModes": [
+                "per_user"
+              ],
+              "description": "Push to a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": false,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": "Lets agents fetch and push Git repositories as your account.",
+          "executionRequired": true,
+          "profiles": [
+            {
+              "kind": "basic_api_token",
+              "label": null,
+              "name": "git-basic-api-token",
+              "routeBound": false
+            },
+            {
+              "kind": "bearer_token",
+              "label": null,
+              "name": "git-bearer-token",
+              "routeBound": false
+            }
+          ],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"per_user\"]\n\n[git]\nallow_fetch = true\nallow_push = true\n",
+      "name": "both_personal",
+      "service": "fixture_git",
+      "verificationSupported": true
+    },
+    {
+      "common": {
+        "allowForwardedIdentity": true,
+        "allowedUpstreamHosts": [
+          "https://upstream.example.test/base/**"
+        ],
+        "authModes": [
+          "basic_broker_token"
+        ],
+        "basicBrokerTokenUsername": "gateway-user",
+        "brokerHosts": [
+          "git.example.test"
+        ],
+        "correlationHeaders": false,
+        "credentialModes": [
+          "service",
+          "per_user"
+        ],
+        "displayName": "Fixture Git",
+        "hasEgressProxy": false,
+        "kind": "git_http",
+        "redirectPolicy": "none",
+        "requestBodyMaxBytes": 8192,
+        "responseBodyMaxBytes": 16384,
+        "streamingIdleTimeoutMs": 4000,
+        "upstreamBaseUrl": "https://upstream.example.test/base/",
+        "upstreamTokenAuth": {
+          "scheme": "basic",
+          "username": "oauth2"
+        }
+      },
+      "descriptor": {
+        "capabilities": {
+          "actions": [
+            {
+              "action": "repo.fetch",
+              "credentialModes": [
+                "service",
+                "per_user"
+              ],
+              "description": "Fetch from a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": true,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            },
+            {
+              "action": "repo.push",
+              "credentialModes": [
+                "service",
+                "per_user"
+              ],
+              "description": "Push to a Git repository through the broker gateway",
+              "inputSchema": {
+                "additionalProperties": false,
+                "type": "object"
+              },
+              "lookupRequired": false,
+              "readOnly": false,
+              "requiredScopeTypes": [
+                "repository"
+              ]
+            }
+          ],
+          "brokerHosts": [
+            "git.example.test"
+          ],
+          "credentialVerificationInputs": [
+            "repository"
+          ],
+          "displayName": "Fixture Git",
+          "gatewayKind": "git_http",
+          "resourceScopes": {
+            "repository": {
+              "resourceType": "git_repository",
+              "selectors": [
+                "exact",
+                "namespace",
+                "all"
+              ]
+            }
+          },
+          "scopeTypes": [
+            "repository"
+          ],
+          "service": "fixture_git",
+          "surface": "gateway"
+        },
+        "credentials": {
+          "delegated": "Lets agents fetch and push Git repositories as your account.",
+          "executionRequired": true,
+          "profiles": [
+            {
+              "kind": "basic_api_token",
+              "label": null,
+              "name": "git-basic-api-token",
+              "routeBound": false
+            },
+            {
+              "kind": "bearer_token",
+              "label": null,
+              "name": "git-bearer-token",
+              "routeBound": false
+            }
+          ],
+          "serviceKinds": [],
+          "verificationInputs": [
+            "repository"
+          ]
+        },
+        "presentationBodyLimit": null,
+        "upstreamAuthority": {
+          "instancePath": "/base",
+          "origin": "https://upstream.example.test",
+          "tenant": null,
+          "tenantGateway": null
+        }
+      },
+      "gatewayToml": "kind = \"git_http\"\ndisplay_name = \"Fixture Git\"\nbroker_hosts = [\"git.example.test\"]\nupstream_base_url = \"https://upstream.example.test/base/\"\nallowed_upstream_hosts = [\"https://upstream.example.test/base/**\"]\nauth_modes = [\"basic_broker_token\"]\ncredential_modes = [\"service\", \"per_user\"]\nallow_forwarded_identity = true\nbasic_broker_token_username = \"gateway-user\"\nupstream_token_auth = { scheme = \"basic\", username = \"oauth2\" }\nrequest_body_max_bytes = 8192\nresponse_body_max_bytes = 16384\nstreaming_idle_timeout_ms = 4000\ncorrelation_headers = false\n\n[git]\nallow_fetch = true\nallow_push = true\ndeny_ref_patterns = [\"refs/heads/protected\", \"refs/tags/**\"]\ndeny_delete_refs = false\nreceive_pack_prefix_max_bytes = 4096\n",
+      "name": "both_mixed",
+      "service": "fixture_git",
+      "verificationSupported": true
+    }
+  ],
+  "note": "Frozen baseline factory and public config defaults. Added verification-supported metadata is asserted separately; ordinary agent discovery exclusion does not change internal policy descriptors."
+}

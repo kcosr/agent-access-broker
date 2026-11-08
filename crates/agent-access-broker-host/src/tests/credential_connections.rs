@@ -5,7 +5,7 @@
 //! audit scope of connection records, and connection IDs that look like
 //! collection routes.
 use super::*;
-use agent_access_core::{BrokerTokenClass, PrincipalRole};
+use agent_access_core::{BrokerTokenClass, IdentityContext, PrincipalRole};
 use agent_access_provider::{
     CorrelationContext, ExecutionCredential, ProviderCredentialVerification,
 };
@@ -103,6 +103,10 @@ struct Fixture {
 /// service account `robot` on Jira, and the administrator on Jira; bob and
 /// the service account `idle` hold none.
 async fn fixture(jira: &str) -> Fixture {
+    fixture_with_push_only_gateway(jira, false).await
+}
+
+async fn fixture_with_push_only_gateway(jira: &str, push_only: bool) -> Fixture {
     let hash_key_path = temp_path("credential-connections-hash-key");
     let store_path = temp_path("credential-connections-store.sqlite");
     let audit_path = temp_path("credential-connections.audit.jsonl");
@@ -180,6 +184,33 @@ async fn fixture(jira: &str) -> Fixture {
         grant("user:admin", "jira", "issue.view", jira_project()),
     ];
 
+    if push_only {
+        let mut gateway = config.gateways["gitlab_git"].clone();
+        gateway.broker_hosts = vec!["push.example.test".into()];
+        gateway.protocol_fields.get_mut("git").unwrap()["allow_fetch"] =
+            toml::Value::Boolean(false);
+        gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] = toml::Value::Boolean(true);
+        config.gateways.insert("aaa_push_only".into(), gateway);
+        super::use_token_connection(
+            &mut config,
+            "gitlab",
+            "gitlab-access-token",
+            &["gitlab", "gitlab_git", "aaa_push_only"],
+        );
+        config.policy.grants.push(grant(
+            "user:alice",
+            "aaa_push_only",
+            "repo.push",
+            repository(),
+        ));
+        config.policy.grants.push(grant(
+            "user:push_only",
+            "aaa_push_only",
+            "repo.push",
+            repository(),
+        ));
+    }
+
     let store = agent_access_core::ManagedStore::open(
         &managed_store_config,
         &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
@@ -194,7 +225,10 @@ async fn fixture(jira: &str) -> Fixture {
         ("auditor", "user"),
         ("robot", "service_account"),
         ("idle", "service_account"),
-    ] {
+    ]
+    .into_iter()
+    .chain(push_only.then_some(("push_only", "user")))
+    {
         store
             .create_principal(
                 agent_access_core::PrincipalWriteRequest {
@@ -555,9 +589,9 @@ async fn first_provisioning_lists_entitled_consumers_from_an_empty_store() {
     assert_eq!(
         gitlab["consumers"],
         json!([
-            {"service": "gitlab", "displayName": "GitLab", "credentialVerificationInputs": []},
+            {"service": "gitlab", "displayName": "GitLab", "credentialVerificationInputs": [],"credentialVerificationSupported":true},
             {"service": "gitlab_git", "displayName": "GitLab Git",
-                "credentialVerificationInputs": ["repository"]}
+                "credentialVerificationInputs": ["repository"],"credentialVerificationSupported":true}
         ])
     );
     assert_eq!(gitlab["otherConsumers"], 0);
@@ -645,7 +679,7 @@ async fn hidden_consumers_never_name_a_shared_connection() {
     assert_eq!(
         gitlab["consumers"],
         json!([{"service": "gitlab_git", "displayName": "GitLab Git",
-            "credentialVerificationInputs": ["repository"]}])
+            "credentialVerificationInputs": ["repository"],"credentialVerificationSupported":true}])
     );
     assert_eq!(gitlab["otherConsumers"], 1);
     let schema = fixture
@@ -1488,4 +1522,73 @@ async fn classless_identities_without_a_managed_principal_fail_closed() {
         assert_eq!(denied["ok"], false, "{method} {uri}: {denied}");
     }
     assert!(fixture.store.list_credentials(None).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn automatic_verification_skips_ineligible_git_consumers_on_shared_connection() {
+    let fixture = fixture_with_push_only_gateway("jira", true).await;
+    let runtime = &fixture._broker.runtime();
+    let identity = IdentityContext {
+        principal: "alice".into(),
+        principal_kind: Some(agent_access_core::PrincipalKind::User),
+        principal_subject: None,
+        groups: vec![],
+        policy_groups: vec![],
+        authenticated: true,
+        source: None,
+        caller_id: None,
+    };
+    let select = crate::handlers::management::credentials::tests::selected_probes;
+    assert_eq!(
+        select(
+            runtime,
+            "gitlab",
+            &identity,
+            json!({"repository":"acme/portal"})
+        )
+        .unwrap(),
+        ["gitlab_git"]
+    );
+    assert_eq!(
+        select(runtime, "gitlab", &identity, json!({})).unwrap(),
+        ["gitlab"]
+    );
+    // An explicit request keeps its usual denial at the execution preflight.
+    assert_eq!(
+        select(
+            runtime,
+            "gitlab",
+            &identity,
+            json!({"service":"aaa_push_only", "repository":"acme/portal"})
+        )
+        .unwrap(),
+        ["aaa_push_only"]
+    );
+    let error = runtime
+        .preflight_execution_credential_verification(
+            "aaa_push_only",
+            &identity,
+            agent_access_core::CredentialVerificationInput {
+                repository: Some("acme/portal".into()),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+    let only_push = IdentityContext {
+        principal: "push_only".into(),
+        ..identity
+    };
+    let error = select(
+        runtime,
+        "gitlab",
+        &only_push,
+        json!({"repository":"acme/portal"}),
+    )
+    .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+    assert!(
+        error
+            .message
+            .contains("no eligible credential verification consumer")
+    );
 }

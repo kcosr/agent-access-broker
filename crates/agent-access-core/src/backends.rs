@@ -27,6 +27,7 @@ pub struct BackendRegistry {
     resource_types: ResourceTypeRegistry,
     oauth_dialects: Vec<&'static OAuthDialectRegistration>,
     imported_adapters: Vec<ImportedAdapterRegistration>,
+    gateways: Vec<&'static agent_access_provider::GatewayRegistration>,
 }
 
 impl BackendRegistry {
@@ -71,6 +72,7 @@ impl BackendRegistry {
                 resource_types,
                 oauth_dialects: Vec::new(),
                 imported_adapters: Vec::new(),
+                gateways: Vec::new(),
             })
         } else {
             Err(errors)
@@ -113,6 +115,110 @@ impl BackendRegistry {
     pub fn imported_adapter(&self, kind: &str) -> Option<&'static dyn ImportedAdapter> {
         self.imported_adapter_registration(kind)
             .map(ImportedAdapterRegistration::adapter)
+    }
+
+    /// Select reviewed gateway implementations without linking them into core.
+    pub fn with_gateways(
+        mut self,
+        gateways: impl IntoIterator<Item = &'static agent_access_provider::GatewayRegistration>,
+    ) -> Result<Self, Vec<String>> {
+        let mut errors = Vec::new();
+        for registration in gateways {
+            let kind = registration.kind();
+            if !is_service_name(kind) || kind == "broker" {
+                errors.push(format!("gateway kind {kind} is invalid or reserved"));
+            } else if self.gateway(kind).is_some() {
+                errors.push(format!("gateway kind {kind} is registered more than once"));
+            } else {
+                self.gateways.push(registration);
+            }
+        }
+        let mut reasons = BTreeMap::new();
+        for native in &self.registrations {
+            for reason in native.domain_reasons() {
+                reasons.insert(reason.code(), native.kind());
+            }
+        }
+        for registration in &self.gateways {
+            let kind = registration.kind();
+            let prefix = agent_access_provider::domain_reason_prefix(kind);
+            let mut names = std::collections::BTreeSet::new();
+            if registration.request_kinds().is_empty() {
+                errors.push(format!("gateway kind {kind} declares no request kinds"));
+            }
+            for request in registration.request_kinds() {
+                if !is_service_name(request.name()) || !names.insert(request.name()) {
+                    errors.push(format!(
+                        "gateway kind {kind} has an invalid or duplicate request kind"
+                    ));
+                }
+            }
+            if !is_service_name(registration.audit_key())
+                || matches!(
+                    registration.audit_key(),
+                    "method" | "upstreamOrigin" | "upstreamPath" | "bytesSent" | "egressProxy"
+                )
+            {
+                errors.push(format!(
+                    "gateway kind {kind} has an invalid or reserved audit key"
+                ));
+            }
+            for reason in registration.domain_reasons() {
+                let code = reason.code();
+                if prefix.starts_with("broker_")
+                    || !code.starts_with(&prefix)
+                    || code.len() <= prefix.len()
+                    || agent_access_provider::ReasonCode::all()
+                        .iter()
+                        .any(|standard| standard.as_str() == code)
+                {
+                    errors.push(format!(
+                        "gateway kind {kind} declares an invalid or reserved domain reason {code}"
+                    ));
+                }
+                if let Some(owner) = reasons.insert(code, kind) {
+                    errors.push(format!(
+                        "domain reason {code} is declared by both {owner} and {kind}"
+                    ));
+                }
+            }
+        }
+        let types = std::iter::once(HOST_RESOURCE_TYPE)
+            .chain(
+                self.registrations
+                    .iter()
+                    .flat_map(|r| r.resource_types().iter().copied()),
+            )
+            .chain(
+                self.gateways
+                    .iter()
+                    .flat_map(|r| r.resource_types().iter().copied()),
+            );
+        match ResourceTypeRegistry::new(types) {
+            Ok(types) => self.resource_types = types,
+            Err(problems) => errors.extend(problems),
+        }
+        if errors.is_empty() {
+            Ok(self)
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn gateway(
+        &self,
+        kind: &str,
+    ) -> Option<&'static agent_access_provider::GatewayRegistration> {
+        self.gateways
+            .iter()
+            .copied()
+            .find(|registration| registration.kind() == kind)
+    }
+
+    pub fn gateway_registrations(
+        &self,
+    ) -> impl Iterator<Item = &'static agent_access_provider::GatewayRegistration> + '_ {
+        self.gateways.iter().copied()
     }
 
     /// Selected import kinds, in selection order.
@@ -236,6 +342,16 @@ impl BackendRegistry {
                     .any(|descriptor| descriptor.id() == resource_type)
             })
             .map(|registration| registration.kind())
+            .or_else(|| {
+                self.gateway_registrations()
+                    .find(|registration| {
+                        registration
+                            .resource_types()
+                            .iter()
+                            .any(|descriptor| descriptor.id() == resource_type)
+                    })
+                    .map(|registration| registration.kind())
+            })
     }
 
     pub fn resource_types(&self) -> &ResourceTypeRegistry {
@@ -486,6 +602,110 @@ mod tests {
         "Not A Name",
         STUB_OAUTH_DIALECT.dialect(),
     );
+
+    fn gateway_config(
+        _: toml::Value,
+    ) -> Result<Arc<dyn agent_access_provider::GatewayConfig>, String> {
+        Err("not used in registration validation".into())
+    }
+    static GATEWAY_REASON: agent_access_provider::ProviderReasonDefinition =
+        agent_access_provider::ProviderReasonDefinition::deny(
+            "fixture_http_missing",
+            agent_access_provider::ProviderFailureStatus::NotFound,
+        );
+    static VALID_GATEWAY: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "fixture_http",
+            gateway_config,
+        )
+        .with_domain_reasons(&[&GATEWAY_REASON]);
+    static DUPLICATE_REQUEST: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "duplicate_request",
+            gateway_config,
+        )
+        .with_request_kinds(&[
+            agent_access_provider::GatewayRequestKind::counted("request"),
+            agent_access_provider::GatewayRequestKind::counted("request"),
+        ]);
+    static FOREIGN_REASON: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "other",
+            gateway_config,
+        )
+        .with_domain_reasons(&[&GATEWAY_REASON]);
+    static RESERVED_KIND: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "broker",
+            gateway_config,
+        );
+    static RESERVED_AUDIT: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "bad_audit",
+            gateway_config,
+        )
+        .with_audit_key("method");
+    static DUPLICATE_RESOURCE: agent_access_provider::GatewayRegistration =
+        agent_access_provider::GatewayRegistration::new(
+            agent_access_provider::module_metadata!(),
+            "bad_resource",
+            gateway_config,
+        )
+        .with_resource_types(&[&GIT_REPOSITORY_RESOURCE]);
+
+    #[test]
+    fn gateway_registration_checks_identity_accounting_reasons_and_resource_ownership() {
+        let registry = BackendRegistry::empty()
+            .with_gateways([&VALID_GATEWAY])
+            .unwrap();
+        assert!(registry.gateway("fixture_http").is_some());
+        assert_eq!(
+            registry.gateway("fixture_http").unwrap().counted("request"),
+            Some(true)
+        );
+        assert_eq!(
+            registry
+                .gateway("fixture_http")
+                .unwrap()
+                .counted("unregistered"),
+            None
+        );
+        assert!(
+            registry
+                .with_gateways([&VALID_GATEWAY])
+                .unwrap_err()
+                .iter()
+                .any(|error| error.contains("registered more than once"))
+        );
+        for (registration, message) in [
+            (&DUPLICATE_REQUEST, "invalid or duplicate request kind"),
+            (&FOREIGN_REASON, "invalid or reserved domain reason"),
+            (&RESERVED_KIND, "invalid or reserved"),
+            (&RESERVED_AUDIT, "invalid or reserved audit key"),
+            (&DUPLICATE_RESOURCE, "git_repository"),
+        ] {
+            let errors = BackendRegistry::empty()
+                .with_gateways([registration])
+                .unwrap_err();
+            assert!(
+                errors.iter().any(|error| error.contains(message)),
+                "{errors:?}"
+            );
+        }
+        let errors = BackendRegistry::empty()
+            .with_gateways([&VALID_GATEWAY, &FOREIGN_REASON])
+            .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("declared by both"))
+        );
+    }
 
     #[test]
     fn an_empty_registry_has_no_fixture_dialect_service_or_resource_type() {

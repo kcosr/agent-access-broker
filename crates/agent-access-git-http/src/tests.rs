@@ -1,0 +1,459 @@
+use super::*;
+use agent_access_provider::{
+    GatewayHookPhase, GatewayProbeStatus, GatewayServiceContext, test_support,
+};
+use bytes::Bytes;
+use futures_util::StreamExt;
+use http::{HeaderValue, Method, header::CONTENT_TYPE};
+
+fn protocol() -> Arc<dyn GatewayProtocol> {
+    let context = GatewayServiceContext::new("review_git", "Review Git", "https://git.example/api")
+        .with_broker_hosts(vec!["git.gateway.example".into()])
+        .with_credential_modes(vec!["service".into(), "per_user".into()])
+        .with_auth_modes(vec!["basic_broker_token".into()]);
+    GIT_HTTP_GATEWAY
+        .parse_config(toml::from_str("[git]\nallow_fetch = true\nallow_push = true").unwrap())
+        .unwrap()
+        .build(&context)
+        .unwrap()
+}
+
+fn push_prefix() -> Vec<u8> {
+    let command = "1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 refs/heads/topic\0report-status";
+    let mut result = format!("{:04x}{command}", command.len() + 4).into_bytes();
+    result.extend(b"0000");
+    result
+}
+
+fn classify_push(protocol: &dyn GatewayProtocol) -> GatewayClassification {
+    let headers = HeaderMap::from_iter([(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-git-receive-pack-request"),
+    )]);
+    protocol
+        .classify(test_support::synthetic_gateway_request_head(
+            &Method::POST,
+            "/team/project.git/git-receive-pack",
+            &headers,
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn inspected_and_overread_bytes_are_forwarded_once_in_original_order() {
+    let protocol = protocol();
+    // Retain the baseline Git 2.43 packet and a second declaration without a
+    // newline, followed by a command crossing the SDK inspection boundary.
+    let mut prefix = b"0035shallow e56b9448bcf5add52ac4f1944cb0c20d1bf75056\n".to_vec();
+    let shallow = "shallow 2222222222222222222222222222222222222222";
+    prefix.extend(format!("{:04x}{shallow}", shallow.len() + 4).bytes());
+    prefix.extend(push_prefix());
+    let mut overread = prefix[13..].to_vec();
+    overread.extend(b"PACK-OVERREAD");
+    let frames = vec![
+        Ok(GatewayBodyFrame::Data(Bytes::copy_from_slice(
+            &prefix[..13],
+        ))),
+        Ok(GatewayBodyFrame::Data(Bytes::from(overread))),
+        Ok(GatewayBodyFrame::Data(Bytes::from_static(
+            b"PACK-REMAINING",
+        ))),
+    ];
+    let classified = classify_push(protocol.as_ref());
+    assert_eq!(classified.action(), "repo.push");
+    assert_eq!(classified.scopes()["repository"], ["team/project"]);
+    assert_eq!(
+        GIT_HTTP_GATEWAY.counted(classified.request_kind()),
+        Some(true)
+    );
+    let plan = classified
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(frames, 4096))
+        .await
+        .unwrap();
+    assert_eq!(plan.relative_target, "/team/project.git/git-receive-pack");
+    assert_eq!(plan.replay, GatewayReplayProfile::Never);
+    assert_eq!(
+        plan.audit.as_ref().unwrap()["updates"][0]["ref"],
+        "refs/heads/topic"
+    );
+    let mut replay = test_support::replay_gateway_body(plan.body);
+    let mut actual = Vec::new();
+    while let Some(frame) = replay.next().await {
+        if let GatewayBodyFrame::Data(bytes) = frame.unwrap() {
+            actual.extend(bytes);
+        }
+    }
+    let mut expected = prefix;
+    expected.extend(b"PACK-OVERREADPACK-REMAINING");
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn large_pack_frame_after_a_small_prefix_budget_is_replayed_without_truncation() {
+    let context = GatewayServiceContext::new("git", "Git", "https://git.example");
+    let protocol = GIT_HTTP_GATEWAY
+        .parse_config(
+            toml::from_str("[git]\nallow_push = true\nreceive_pack_prefix_max_bytes = 128")
+                .unwrap(),
+        )
+        .unwrap()
+        .build(&context)
+        .unwrap();
+    let mut expected = push_prefix();
+    expected.extend(b"PACK");
+    expected.extend(vec![b'x'; 2048]);
+    let plan = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::copy_from_slice(
+                &expected,
+            )))],
+            4096,
+        ))
+        .await
+        .unwrap();
+    let mut body = test_support::replay_gateway_body(plan.body);
+    let mut actual = Vec::new();
+    while let Some(frame) = body.next().await {
+        if let GatewayBodyFrame::Data(bytes) = frame.unwrap() {
+            actual.extend(bytes);
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn exact_flush_probe_is_counted_and_trailers_do_not_make_it_valid() {
+    let protocol = protocol();
+    let frames = vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"0000")))];
+    let plan = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(frames.clone(), 4096))
+        .await
+        .unwrap();
+    assert_eq!(plan.audit.unwrap()["probe"], true);
+    assert_eq!(plan.replay, GatewayReplayProfile::Never);
+    let mut frames = frames;
+    frames.push(Ok(GatewayBodyFrame::Trailers));
+    let error = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(frames, 4096))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GitPktLineMalformed);
+    assert_eq!(
+        error.message,
+        "gateway git receive-pack command list is empty"
+    );
+}
+
+#[tokio::test]
+async fn body_error_kind_and_parsed_audit_survive_the_sdk_port() {
+    let protocol = protocol();
+    let mut prefix = push_prefix();
+    prefix.truncate(prefix.len() - 4);
+    for (failure, reason, message) in [
+        (
+            GatewayBodyError::TooLarge,
+            ReasonCode::GatewayRequestCapExceeded,
+            "gateway request body exceeds configured cap",
+        ),
+        (
+            GatewayBodyError::Timeout,
+            ReasonCode::GatewayRequestBodyDenied,
+            "gateway request body read timed out",
+        ),
+        (
+            GatewayBodyError::IdleTimeout,
+            ReasonCode::GatewayRequestBodyDenied,
+            "gateway git receive-pack request body read timed out",
+        ),
+        (
+            GatewayBodyError::Read,
+            ReasonCode::GitPktLineMalformed,
+            "gateway git receive-pack request body read failed",
+        ),
+    ] {
+        let frames = vec![
+            Ok(GatewayBodyFrame::Data(Bytes::copy_from_slice(&prefix))),
+            Err(failure),
+        ];
+        let error = classify_push(protocol.as_ref())
+            .into_request()
+            .preflight(test_support::synthetic_gateway_body(frames, 4096))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), reason);
+        assert_eq!(error.message, message);
+        GIT_HTTP_GATEWAY
+            .check_failure(GatewayHookPhase::Preflight, &error)
+            .expect("the host accepts the preserved Git preflight failure");
+        assert_eq!(
+            error.audit.unwrap()["git"]["updates"][0]["ref"],
+            "refs/heads/topic"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prefix_limit_and_content_type_denials_pass_the_host_failure_contract() {
+    let context = GatewayServiceContext::new("git", "Git", "https://git.example");
+    let protocol = GIT_HTTP_GATEWAY
+        .parse_config(
+            toml::from_str("[git]\nallow_push = true\nreceive_pack_prefix_max_bytes = 4").unwrap(),
+        )
+        .unwrap()
+        .build(&context)
+        .unwrap();
+    let error = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::from(push_prefix())))],
+            4096,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GitPrefixCapExceeded);
+    GIT_HTTP_GATEWAY
+        .check_failure(GatewayHookPhase::Preflight, &error)
+        .expect("Git prefix caps retain their HTTP 413 reason through host validation");
+
+    let error = protocol
+        .classify(test_support::synthetic_gateway_request_head(
+            &Method::POST,
+            "/team/project.git/git-receive-pack",
+            &HeaderMap::from_iter([(CONTENT_TYPE, HeaderValue::from_static("application/json"))]),
+        ))
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GatewayContentTypeDenied);
+    GIT_HTTP_GATEWAY
+        .check_failure(GatewayHookPhase::Classification, &error)
+        .expect("unsupported Git media types remain a protocol classification denial");
+}
+
+#[tokio::test]
+async fn sdk_inspection_cap_refuses_overread_before_forwarding_and_keeps_prior_ref_audit() {
+    let protocol = protocol();
+    let mut command = push_prefix();
+    command.truncate(command.len() - 4);
+    let cap = command.len() + 5;
+    let frames = vec![
+        Ok(GatewayBodyFrame::Data(Bytes::from(command))),
+        Ok(GatewayBodyFrame::Data(Bytes::from_static(
+            b"0000PACK-OVER-CAP",
+        ))),
+    ];
+    let error = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(frames, cap))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::GatewayRequestCapExceeded);
+    assert_eq!(
+        error.audit.unwrap()["git"]["updates"][0]["ref"],
+        "refs/heads/topic"
+    );
+}
+
+#[tokio::test]
+async fn discovery_is_bodyless_exempt_and_the_only_oauth_recovery_profile() {
+    let protocol = protocol();
+    for service in ["git-upload-pack", "git-receive-pack"] {
+        let path = format!("/team/project/info/refs?service={service}");
+        let classified = protocol
+            .classify(test_support::synthetic_gateway_request_head(
+                &Method::GET,
+                &path,
+                &HeaderMap::new(),
+            ))
+            .unwrap();
+        assert_eq!(
+            GIT_HTTP_GATEWAY.counted(classified.request_kind()),
+            Some(false)
+        );
+        let plan = classified
+            .into_request()
+            .preflight(test_support::synthetic_gateway_body(Vec::new(), 4096))
+            .await
+            .unwrap();
+        assert_eq!(
+            plan.replay,
+            GatewayReplayProfile::BodylessCredentialRecovery
+        );
+        let classified = protocol
+            .classify(test_support::synthetic_gateway_request_head(
+                &Method::GET,
+                &path,
+                &HeaderMap::new(),
+            ))
+            .unwrap();
+        let error = classified
+            .into_request()
+            .preflight(test_support::synthetic_gateway_body(
+                vec![Ok(GatewayBodyFrame::Data(Bytes::from_static(b"x")))],
+                4096,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
+    }
+}
+
+#[tokio::test]
+async fn discovery_rejects_unannounced_trailers_as_a_client_body_denial() {
+    let protocol = protocol();
+    for service in ["git-upload-pack", "git-receive-pack"] {
+        let path = format!("/team/project/info/refs?service={service}");
+        for frames in [
+            vec![Ok(GatewayBodyFrame::Trailers)],
+            vec![
+                Ok(GatewayBodyFrame::Data(Bytes::new())),
+                Ok(GatewayBodyFrame::Trailers),
+            ],
+        ] {
+            // No Trailer header: the protocol must inspect actual frames before
+            // it can declare the request eligible for bodyless recovery.
+            let classified = protocol
+                .classify(test_support::synthetic_gateway_request_head(
+                    &Method::GET,
+                    &path,
+                    &HeaderMap::new(),
+                ))
+                .unwrap();
+            let error = classified
+                .into_request()
+                .preflight(test_support::synthetic_gateway_body(frames, 4096))
+                .await
+                .unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::GatewayRequestBodyDenied);
+            assert_eq!(error.decision(), agent_access_provider::Decision::Deny);
+            assert_eq!(error.reason_code().http_status(), 400);
+            GIT_HTTP_GATEWAY
+                .check_failure(GatewayHookPhase::Preflight, &error)
+                .expect("unexpected discovery trailers remain a protocol denial");
+        }
+    }
+}
+
+#[tokio::test]
+async fn response_metadata_preserves_only_the_first_upstream_content_type() {
+    let protocol = protocol();
+    let plan = classify_push(protocol.as_ref())
+        .into_request()
+        .preflight(test_support::synthetic_gateway_body(
+            vec![Ok(GatewayBodyFrame::Data(Bytes::from(push_prefix())))],
+            4096,
+        ))
+        .await
+        .unwrap();
+    assert!(plan.response.bounded_retry_after);
+    let validator = plan.response.validator.as_ref().unwrap();
+    let first = HeaderValue::from_static("application/x-git-receive-pack-result");
+    let mut upstream = HeaderMap::new();
+    upstream.append(CONTENT_TYPE, first.clone());
+    upstream.append(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+    upstream.insert(
+        http::header::SET_COOKIE,
+        HeaderValue::from_static("session=fixture"),
+    );
+    upstream.insert(http::header::RETRY_AFTER, HeaderValue::from_static("30"));
+    for status in [200, 429] {
+        let selected = validator.validate(status, &upstream).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected.get_all(CONTENT_TYPE).iter().count(), 1);
+        assert_eq!(selected[CONTENT_TYPE], first);
+        assert!(!selected.contains_key(http::header::SET_COOKIE));
+        assert!(!selected.contains_key(http::header::RETRY_AFTER));
+    }
+    upstream.remove(CONTENT_TYPE);
+    assert!(validator.validate(200, &upstream).unwrap().is_empty());
+}
+
+#[test]
+fn verification_eligibility_matches_the_available_read_probe() {
+    let context = GatewayServiceContext::new("git", "Git", "https://git.example")
+        .with_credential_modes(vec!["per_user".into()]);
+    for (fetch, push) in [(true, false), (true, true), (false, true)] {
+        let config = GIT_HTTP_GATEWAY
+            .parse_config(
+                toml::from_str(&format!(
+                    "[git]\nallow_fetch = {fetch}\nallow_push = {push}"
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+        let descriptor = config.descriptor(&context);
+        assert_eq!(descriptor.credentials.verification_inputs, ["repository"]);
+        assert_eq!(descriptor.credentials.verification_supported, fetch);
+        let protocol = config.build(&context).unwrap();
+        assert_eq!(
+            protocol
+                .verification(Some("team/project"))
+                .unwrap()
+                .is_some(),
+            descriptor.credentials.verification_supported
+        );
+    }
+}
+
+#[test]
+fn credential_probe_declares_fetch_authority_and_validates_the_git_advertisement() {
+    let protocol = protocol();
+    let probe = protocol
+        .verification(Some(" team/project.git "))
+        .unwrap()
+        .unwrap();
+    let request = probe.request();
+    assert_eq!(request.action, "repo.fetch");
+    assert_eq!(request.normalized_input, "team/project");
+    assert_eq!(request.scopes["repository"], ["team/project"]);
+    assert_eq!(
+        request.relative_target,
+        "/team/project.git/info/refs?service=git-upload-pack"
+    );
+    assert_eq!(request.max_response_bytes, 1024);
+    assert_eq!(
+        request.audit,
+        Some(
+            serde_json::json!({"operation": "upload-pack-discovery", "repository": "team/project"})
+        )
+    );
+    let headers = HeaderMap::from_iter([(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-git-upload-pack-advertisement"),
+    )]);
+    assert_eq!(
+        probe
+            .validate_response(200, &headers, b"001", false)
+            .unwrap(),
+        GatewayProbeStatus::NeedMore
+    );
+    assert_eq!(
+        probe
+            .validate_response(200, &headers, b"001e# service=git-upload-pack\n", false)
+            .unwrap(),
+        GatewayProbeStatus::Valid
+    );
+    assert_eq!(
+        probe
+            .validate_response(200, &headers, b"001", true)
+            .unwrap_err()
+            .reason_code(),
+        ReasonCode::UpstreamProtocolFailed
+    );
+    for (status, reason) in [
+        (401, ReasonCode::UpstreamUnauthorized),
+        (403, ReasonCode::UpstreamForbidden),
+        (404, ReasonCode::ScopeUnresolved),
+        (500, ReasonCode::UpstreamFailed),
+    ] {
+        assert_eq!(
+            probe
+                .validate_response(status, &HeaderMap::new(), b"", false)
+                .unwrap_err()
+                .reason_code(),
+            reason
+        );
+    }
+}

@@ -1155,7 +1155,7 @@ async fn imported_service_metadata_follows_the_reviewed_definition() {
     assert_eq!(
         targets[0]["consumers"],
         json!([{"service": "observability", "displayName": "Imported observations",
-            "credentialVerificationInputs": []}])
+            "credentialVerificationInputs": [],"credentialVerificationSupported":true}])
     );
 
     // An administrator's reviewed classification and name replace the old ones.

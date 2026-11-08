@@ -51,6 +51,7 @@ pub(crate) enum ModuleRoleKind {
     Native,
     Oauth,
     Import,
+    Gateway,
 }
 
 impl ModuleRoleKind {
@@ -59,6 +60,7 @@ impl ModuleRoleKind {
             Self::Native => "native",
             Self::Oauth => "oauth",
             Self::Import => "import",
+            Self::Gateway => "gateway",
         }
     }
 }

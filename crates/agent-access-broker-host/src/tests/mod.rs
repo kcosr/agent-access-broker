@@ -1,7 +1,8 @@
 use crate::broker_build_status;
 use crate::handlers::data::RAW_RESULT_MIME;
 use crate::handlers::gateway::{
-    GatewayForwardLimits, GatewayResponseStreamInput, gateway_response_body_stream,
+    GatewayAuditDetails, GatewayForwardLimits, GatewayResponseStreamInput,
+    gateway_response_body_stream,
 };
 use crate::ingress::guards::IngressGuards;
 use crate::ingress::source::TrustedProxy;
@@ -2533,7 +2534,14 @@ async fn gateway_response_stream_completes_terminal_audit_with_byte_count() {
             response_body_max_bytes: 1024,
             idle_timeout: Duration::from_secs(1),
         },
-        git_audit: None,
+        protocol_audit: GatewayAuditDetails {
+            kind: "git_http".into(),
+            key: "git".into(),
+            facts: None,
+            path: "/sip/service.git/info/refs".into(),
+            request_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        },
+        expected_body_bytes: None,
         body: Box::pin(stream::iter([
             Ok::<Bytes, reqwest::Error>(Bytes::from_static(b"abc")),
             Ok::<Bytes, reqwest::Error>(Bytes::from_static(b"def")),
@@ -2677,7 +2685,14 @@ async fn gateway_response_stream_drop_records_partial_cancel_audit() {
             response_body_max_bytes: 1024,
             idle_timeout: Duration::from_secs(1),
         },
-        git_audit: None,
+        protocol_audit: GatewayAuditDetails {
+            kind: "git_http".into(),
+            key: "git".into(),
+            facts: None,
+            path: "/sip/service.git/info/refs".into(),
+            request_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        },
+        expected_body_bytes: None,
         body: Box::pin(stream::iter([
             Ok::<Bytes, reqwest::Error>(Bytes::from_static(b"abc")),
             Ok::<Bytes, reqwest::Error>(Bytes::from_static(b"def")),
@@ -17925,7 +17940,8 @@ where
         },
     );
     let mut gateway = test_git_gateway_config();
-    gateway.git.as_mut().unwrap().allow_push = allow_push;
+    gateway.protocol_fields.get_mut("git").unwrap()["allow_push"] =
+        toml::Value::Boolean(allow_push);
     config.gateways.insert("gitlab_git".to_string(), gateway);
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["user:gateway-user".to_string()],
@@ -18015,13 +18031,16 @@ fn test_git_gateway_config() -> agent_access_core::GatewayConfig {
         response_body_max_bytes: Some(1024 * 1024),
         streaming_idle_timeout_ms: Some(30_000),
         correlation_headers: true,
-        git: Some(agent_access_core::GatewayGitConfig {
-            allow_fetch: true,
-            allow_push: false,
-            deny_ref_patterns: vec![],
-            deny_delete_refs: true,
-            receive_pack_prefix_max_bytes: Some(65_536),
-        }),
+        protocol_fields: toml::from_str(
+            r#"[git]
+allow_fetch = true
+allow_push = false
+deny_ref_patterns = []
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+        )
+        .unwrap(),
     }
 }
 

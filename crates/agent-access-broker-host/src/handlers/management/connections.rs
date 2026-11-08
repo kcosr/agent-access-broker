@@ -26,6 +26,7 @@ pub(super) struct ConnectionConsumer {
     /// Inputs verifying through this consumer needs besides the credential,
     /// such as `repository` for a Git gateway. Empty when it needs none.
     pub(super) credential_verification_inputs: Vec<String>,
+    pub(super) credential_verification_supported: bool,
 }
 
 /// One token profile a connection accepts from the principal, with the
@@ -143,6 +144,7 @@ pub(super) fn consumer_view(
                 service: service.clone(),
                 display_name: descriptor.display_name.clone(),
                 credential_verification_inputs: descriptor.credential_verification_inputs(),
+                credential_verification_supported: descriptor.credentials.verification_supported,
             })
         })
         .collect::<Vec<_>>();

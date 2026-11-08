@@ -6,6 +6,18 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Gateway modules require explicit assembly selection.** Downstream assemblies
+  using Git must link `agent-access-git-http` and select `GIT_HTTP_GATEWAY` with
+  `BrokerComposition::builder().gateway(...)`. The standard assembly includes it.
+  Keep upstream crate revisions aligned and regenerate the lockfile. Existing Git
+  TOML, action IDs, resources and credentials keep their shapes; no stored-policy
+  migration is required. Gateway configuration/protocol hooks now belong to the
+  public SDK and module inventory has a `gateway` role. Connection consumer
+  responses require `credentialVerificationSupported`; upgrade Broker, CLI and
+  portal together. See [assembly selection](docs/downstream-assembly.md#selecting-modules)
+  and [gateway authoring](docs/provider-sdk.md#gateway-protocols).
+  ([#103](https://github.com/kcosr/agent-access-broker/pull/103))
+
 - **Gateway services are omitted from ordinary agent discovery.** HTTP service
   and action lists/describes, CLI discovery, and HTTP/stdio MCP discovery helpers
   no longer advertise Git gateways or their policy actions. Direct ordinary
@@ -401,6 +413,25 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- Gateway request capacity and terminal audit now join upload, response and bounded
+  unread-body disposal. Empty or fixed-length responses release their delivery
+  owner at the framing boundary; early upstream success followed by upload failure
+  remains one failed transfer with the observed upstream status. Responses with
+  both `Transfer-Encoding` and `Content-Length` now fail with
+  `upstream_protocol_failed` before credential recovery or body delivery.
+  Response lengths, including HEAD and 304, are validated and canonicalized;
+  declared request lengths above the cap are refused before upstream dispatch.
+  Streamed body read and byte-cap failures after dispatch return HTTP 502 with
+  an error audit and an explicit partial or uncertain upstream outcome.
+  Transport timeouts retain HTTP 504. Known connection failures preserve
+  non-processing evidence; unfinished uploads preserve existing denial/error
+  reasons. Early request-size refusals retain Git receive-pack audit facts.
+  Response fields nominated by `Connection` are removed from every header profile.
+  Validator-free response profiles also reject repeated selected headers with
+  `upstream_protocol_failed` before body delivery; Git's validator preserves its first
+  `Content-Type` value.
+  ([#103](https://github.com/kcosr/agent-access-broker/pull/103))
 
 - Jira Markdown writes no longer combine inline code with incompatible bold,
   italic, or strikethrough marks. Code text, safe links, and surrounding text

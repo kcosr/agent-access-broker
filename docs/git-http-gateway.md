@@ -43,6 +43,17 @@ normal Git commands against a remote URL whose host matches one of the gateway's
 `broker_hosts`, and the broker classifies the Git smart HTTP request into the
 same service/action/scope policy model used by providers.
 
+The shipped Broker assembly selects the linked `agent-access-git-http` module.
+A custom assembly selects it with
+`BrokerCompositionBuilder::gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)`;
+see [downstream assembly](downstream-assembly.md). Configuring `kind = "git_http"`
+without that registration fails configuration validation. Each service uses the
+strict `[gateways.<name>]` common settings and nested `[gateways.<name>.git]`
+protocol settings. The module classifies Git requests and validates their
+protocol data; the host owns caller identity, policy, credentials, transport,
+limits and audit completion. The shared `git_repository` resource type also
+serves GitLab REST and remains available independently of the Git module.
+
 ## Access surfaces and examples
 
 Git HTTP gateways are used through ordinary Git smart HTTP clients. An
@@ -154,10 +165,9 @@ The gateway registers these policy actions when enabled in `[gateways.<name>.git
 Git clients authenticate with HTTP Basic auth. The username must equal
 `basic_broker_token_username` (default `agent-access`), and the password must be
 a broker `agent_invoke` token. That broker token identifies the caller and is
-checked before any upstream credential is selected. Discovery through the
-public listener is context-specific too, so use the public trusted entrypoint
-for the same execution context when checking whether `repo.fetch` or
-`repo.push` is visible.
+checked before any upstream credential is selected. Explicit access inspection
+through the public listener is context-specific too, so use the public trusted
+entrypoint for the same execution context when checking repository access.
 
 Every gateway response, including denials and upstream failures, carries
 `Cache-Control: private, no-store` and `Pragma: no-cache`. The broker discards
@@ -278,6 +288,9 @@ upload-pack body. The configured request-body cap applies to the transmitted
 compressed bytes, and any upstream decoded-size limits remain the upstream
 server's responsibility.
 
+After protocol inspection, pack POSTs discard trailing HTTP metadata without
+changing or replaying their data bytes. Trailer fields never reach the upstream.
+
 Discovery GET requests and receive-pack POSTs reject `Content-Encoding` after
 the gateway request is authenticated and action-scoped, but before credentials
 are resolved. Receive-pack compression is not supported because push bodies must
@@ -304,7 +317,9 @@ any Atlassian profile (`atlassian-api-token`, `atlassian-scoped-api-token`,
 and verification refuse such a token before anything is sent. The self-service credential verifier checks
 stored tokens; it requires a repository that the principal can fetch and uses
 `streaming_idle_timeout_ms` for stalled upstream discovery headers or body
-reads.
+reads. A gateway with `allow_fetch = false` has no eligible credential-verification
+probe. Token storage and OAuth connection setup remain available according to
+the connection configuration.
 
 The gateway presents a `basic_api_token` credential (a service credential, or a
 basic-kind profile such as `git-basic-api-token`) as HTTP Basic with its own
@@ -390,6 +405,13 @@ continued progress does not extend it. Both uploads and downloads remain bounded
 by `streaming_idle_timeout_ms` for stalled request uploads, upstream response
 header waits, and response body streaming, plus byte caps, rate limits, and
 concurrency limits. Downloads have no total transfer deadline.
+Declared request lengths above the cap are refused before upstream dispatch.
+An unfinished upload after dispatch records a partial or uncertain upstream
+outcome. An existing upstream denial or error retains its decision and reason;
+an otherwise successful transfer becomes an error. When response headers are
+still pending, streamed body read and byte-cap failures return HTTP 502;
+transport timeouts retain HTTP 504. Confirmed connection failures before any
+byte handoff do not imply uncertain execution. The broker never retries a pack POST.
 
 `git-upload-pack` and `git-receive-pack` POSTs are service invocations: each
 POST is counted once against the caller's per-principal limit for the gateway's
@@ -455,8 +477,13 @@ a queued POST infeasible and remove it with 429 before its unchanged deadline.
 Credentialed gateway forwarding is audit-gated with
 `providerAudit.gateway.phase = "started"` before upstream credentials are sent,
 followed by a terminal audit record containing upstream status, duration, and
-response byte metadata. Classifier denials before a gateway action is known use
-the synthetic non-grantable action `gateway.classify`.
+response byte metadata. Request capacity remains held until response delivery
+and request upload, including any bounded disposal, have finished. An upstream
+that completes a 2xx response early can still leave an unfinished upload: if that
+upload later fails, the terminal transfer audit is failed and preserves the
+received `upstreamStatus`. The gateway does not replay the request after this
+failure. Classifier denials before a gateway action is known use the synthetic
+non-grantable action `gateway.classify`.
 
 ## OAuth connections
 

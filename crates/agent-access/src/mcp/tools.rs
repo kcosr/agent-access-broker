@@ -693,6 +693,11 @@ mod tests {
         });
         catalog
     }
+    fn capabilities_fixture(service: &agent_access_core::ApiServiceSpec) -> Value {
+        let mut value = serde_json::to_value(service).unwrap();
+        value["credentialVerificationSupported"] = json!(true);
+        value
+    }
     fn settings(server: &MockServer) -> crate::ResolvedCliSettings {
         crate::ResolvedCliSettings {
             url: server.uri(),
@@ -823,6 +828,7 @@ mod tests {
         let server = MockServer::start().await;
         let detail = json!({
             "service":"jira-team", "displayName":"Example service", "surface":"invoke",
+            "credentialVerificationSupported":true,
             "scopeTypes":[], "actions":[action()], "scopedMcpReady":true,
             "availability":{"state":"available","requirements":[],"message":"Locally available"},
             "limits":{
@@ -871,6 +877,7 @@ mod tests {
         let server = MockServer::start().await;
         let detail = json!({
             "service":"jira-team", "displayName":"Example service", "surface":"invoke",
+            "credentialVerificationSupported":true,
             "scopeTypes":[], "actions":[action()], "scopedMcpReady":true, "limits":{},
             "availability":{"state":"available","requirements":[],"message":"Locally available"}
         });
@@ -1469,7 +1476,15 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/v1/services"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!(value.services)))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    value
+                        .services
+                        .iter()
+                        .map(capabilities_fixture)
+                        .collect::<Vec<_>>(),
+                ),
+            )
             .expect(1)
             .mount(&server)
             .await;
@@ -1551,7 +1566,9 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/v1/services/jira-team"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(&fresh.services[0]))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(capabilities_fixture(&fresh.services[0])),
+            )
             .expect(1)
             .mount(&server)
             .await;

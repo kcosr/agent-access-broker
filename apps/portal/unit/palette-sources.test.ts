@@ -20,7 +20,7 @@ const credential: ConnectionCredential = {
   metadata: { confidential: "DO_NOT_INDEX_THIS" }, status: "active", createdAt: "", createdBy: "", updatedAt: "", updatedBy: "", verificationStatus: "upstream_verified", lastVerificationErrorCode: "DO_NOT_INDEX_ERROR"
 };
 const connection: CredentialConnection = {
-  connection: "tracker", displayName: "Issue Tracker", method: "token", consumers: [{ service: "jira", displayName: "Issue Tracker", credentialVerificationInputs: [] }],
+  connection: "tracker", displayName: "Issue Tracker", method: "token", consumers: [{ service: "jira", displayName: "Issue Tracker", credentialVerificationSupported: true, credentialVerificationInputs: [] }],
   otherConsumers: 0, tokenProfiles: [{ profile: "standard", label: null, credentialKind: "token", inputSchema: { connection: "tracker", profile: "standard", credentialKind: "token", fields: [] } }], registration: null, remoteRevocation: null, credential
 };
 function fixture(session = admin): PaletteEntities {

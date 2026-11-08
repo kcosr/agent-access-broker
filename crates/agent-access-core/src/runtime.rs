@@ -30,6 +30,7 @@ pub use command_authority::{
 mod command_dispatch;
 mod discovery;
 mod gateway_access;
+mod gateway_verification;
 mod import_control;
 #[cfg(test)]
 mod inherited_network_tests;
@@ -808,6 +809,7 @@ impl Drop for GatewayTerminalAuditGuard {
         self.state.cancel(
             "canceled",
             "gateway forwarding was canceled before completion",
+            false,
         );
     }
 }
@@ -1771,6 +1773,8 @@ pub struct BrokerRuntime {
     config: Arc<BrokerConfig>,
     execution_context_registry: crate::ConfiguredExecutionContexts,
     providers: Arc<BTreeMap<String, Arc<dyn Provider>>>,
+    gateways: Arc<BTreeMap<String, Arc<dyn agent_access_provider::GatewayProtocol>>>,
+    gateway_configs: Arc<BTreeMap<String, GatewayConfig>>,
     /// The command hooks of available command imports, keyed by service.
     /// Each is the same object as the service's entry in `providers`.
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
@@ -1944,7 +1948,50 @@ impl PreparedInvocation {
     }
 }
 
+/// An independent request-body owner retained by gateway transport or disposal.
+/// A terminal gateway audit waits until every retained owner has finished.
+/// Dropping an unfinished owner records an incomplete upload, never success.
+pub struct GatewayRequestBodyAudit {
+    state: Option<Arc<GatewayTerminalAuditState>>,
+}
+
+impl GatewayRequestBodyAudit {
+    /// Finish this owner. Transport supplies its final byte count; disposal
+    /// supplies `None` because discarded bytes were not forwarded upstream.
+    pub fn complete(mut self, request_bytes: Option<u64>) {
+        if let Some(state) = self.state.take() {
+            state.finish_request_body(request_bytes, None);
+        }
+    }
+
+    /// Finish a failed transport owner with a bounded host reason.
+    pub fn fail(mut self, reason: ReasonCode, request_bytes: Option<u64>) {
+        if let Some(state) = self.state.take() {
+            state.finish_request_body(request_bytes, Some(reason));
+        }
+    }
+}
+
+impl Drop for GatewayRequestBodyAudit {
+    fn drop(&mut self) {
+        if let Some(state) = self.state.take() {
+            state.finish_request_body(None, Some(ReasonCode::UpstreamProtocolFailed));
+        }
+    }
+}
+
 impl PreparedGatewayOperation {
+    /// Retain a body owner after the required started record and before dispatch.
+    /// The host keeps separate owners for upstream upload and unread disposal.
+    pub fn retain_gateway_request_body(&self) -> Option<GatewayRequestBodyAudit> {
+        let state = &self.terminal_audit.as_ref()?.state;
+        state
+            .retain_request_body()
+            .then(|| GatewayRequestBodyAudit {
+                state: Some(Arc::clone(state)),
+            })
+    }
+
     fn take_gateway_audit_append_mode(&mut self) -> AuditAppendMode {
         match self.terminal_audit.take() {
             Some(terminal) => AuditAppendMode::GatewayTerminal(terminal),
@@ -2379,7 +2426,32 @@ impl BrokerRuntime {
             &trusted_callers,
             &identity_sources,
         )?;
+        let gateways = config
+            .gateways
+            .iter()
+            .map(|(service, gateway)| {
+                let module =
+                    gateway
+                        .module_config(config.providers.registry())
+                        .map_err(|message| {
+                            RuntimeError::Config(ConfigError::Invalid {
+                                errors: vec![format!("gateways.{service}: {message}")],
+                            })
+                        })?;
+                let protocol =
+                    module
+                        .build(&gateway.service_context(service))
+                        .map_err(|error| {
+                            RuntimeError::Config(ConfigError::Invalid {
+                                errors: error.diagnostics().to_vec(),
+                            })
+                        })?;
+                Ok((service.clone(), protocol))
+            })
+            .collect::<Result<BTreeMap<_, _>, RuntimeError>>()?;
         let mut runtime = Self {
+            gateways: Arc::new(gateways),
+            gateway_configs: Arc::new(config.gateways.clone()),
             identity_sources: Arc::new(identity_sources),
             audit,
             effective_credentials: Arc::new(config.credentials.clone()),
@@ -3724,6 +3796,28 @@ impl BrokerRuntime {
     }
 
     /// The validated descriptor for a configured provider or gateway service.
+    pub fn gateway_protocol(
+        &self,
+        service: &str,
+    ) -> Option<Arc<dyn agent_access_provider::GatewayProtocol>> {
+        self.gateways.get(service).cloned()
+    }
+    pub fn gateway_config(&self, service: &str) -> Option<&GatewayConfig> {
+        self.gateway_configs.get(service)
+    }
+    pub fn gateway_configs(&self) -> &BTreeMap<String, GatewayConfig> {
+        &self.gateway_configs
+    }
+    pub fn gateway_registration(
+        &self,
+        service: &str,
+    ) -> Option<&'static agent_access_provider::GatewayRegistration> {
+        self.config
+            .providers
+            .registry()
+            .gateway(&self.gateway_config(service)?.kind)
+    }
+
     pub fn service_descriptor(&self, service: &str) -> Option<Arc<ServiceDescriptor>> {
         self.services.get(service).cloned()
     }
@@ -4493,7 +4587,7 @@ impl BrokerRuntime {
             )
             .await;
         }
-        if let Some(gateway) = self.config.gateways.get(service) {
+        if let Some(gateway) = self.gateway_config(service) {
             return self
                 .verify_gateway_execution_credential(
                     service,
@@ -4509,238 +4603,6 @@ impl BrokerRuntime {
             ReasonCode::ServiceActionDenied,
             "service is not supported",
         ))
-    }
-
-    pub fn preflight_execution_credential_verification(
-        &self,
-        service: &str,
-        identity: &IdentityContext,
-        input: CredentialVerificationInput,
-    ) -> Result<CredentialVerificationInput, ProviderError> {
-        if self.providers.contains_key(service) {
-            if !input.is_empty() {
-                return Err(ProviderError::deny(
-                    ReasonCode::InputInvalid,
-                    "credential verification input is not supported for service",
-                ));
-            }
-            return Ok(input);
-        }
-        let Some(gateway) = self.config.gateways.get(service) else {
-            return Err(ProviderError::deny(
-                ReasonCode::ServiceActionDenied,
-                "service is not supported",
-            ));
-        };
-        if gateway.kind != "git_http" {
-            return Err(ProviderError::deny(
-                ReasonCode::ServiceActionDenied,
-                "gateway credential verification is not supported",
-            ));
-        }
-        self.preflight_git_http_gateway_credential_verification(service, gateway, identity, input)
-    }
-
-    async fn verify_gateway_execution_credential(
-        &self,
-        service: &str,
-        gateway: &GatewayConfig,
-        credential: &ExecutionCredential,
-        identity: &IdentityContext,
-        input: CredentialVerificationInput,
-        correlation: CorrelationContext,
-    ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
-        if gateway.kind != "git_http" {
-            return Err(ProviderError::deny(
-                ReasonCode::ServiceActionDenied,
-                "gateway credential verification is not supported",
-            ));
-        }
-        self.verify_git_http_gateway_credential(
-            service,
-            gateway,
-            credential,
-            identity,
-            input,
-            correlation,
-        )
-        .await
-        .map(Some)
-    }
-
-    fn preflight_git_http_gateway_credential_verification(
-        &self,
-        service: &str,
-        gateway: &GatewayConfig,
-        identity: &IdentityContext,
-        input: CredentialVerificationInput,
-    ) -> Result<CredentialVerificationInput, ProviderError> {
-        if !gateway.git.as_ref().is_some_and(|git| git.allow_fetch) {
-            return Err(ProviderError::deny(
-                ReasonCode::ServiceActionDenied,
-                "git gateway fetch is not enabled",
-            ));
-        }
-        let repository = normalize_git_verification_repository(input.repository.as_deref())?;
-        let resource_scopes =
-            ResourceScopes::from([("repository".to_string(), vec![repository.clone()])]);
-        let policy_snapshot = self.policy_snapshot();
-        let has_per_user_policy = self
-            .policy_candidates_for_action_across_contexts(
-                &policy_snapshot,
-                identity,
-                service,
-                "repo.fetch",
-            )
-            .into_iter()
-            .any(|candidate| {
-                candidate.credential_mode == "per_user"
-                    && candidate_authorizes_scopes(&candidate, &resource_scopes)
-            });
-        if !has_per_user_policy {
-            return Err(ProviderError::deny(
-                ReasonCode::ServiceActionDenied,
-                "git credential verification requires a per_user repo.fetch policy",
-            ));
-        }
-        Ok(CredentialVerificationInput {
-            repository: Some(repository),
-        })
-    }
-
-    async fn verify_git_http_gateway_credential(
-        &self,
-        service: &str,
-        gateway: &GatewayConfig,
-        credential: &ExecutionCredential,
-        _identity: &IdentityContext,
-        input: CredentialVerificationInput,
-        correlation: CorrelationContext,
-    ) -> Result<ProviderCredentialVerification, ProviderError> {
-        let repository = input.repository.as_deref().ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::InputInvalid,
-                "git credential verification requires repository",
-            )
-        })?;
-        self.check_gateway_presentable(credential)?;
-
-        let upstream_url = git_discovery_verification_url(gateway, repository)?;
-        if !agent_access_provider::url_allowed_by_patterns(
-            &upstream_url,
-            &gateway.allowed_upstream_hosts,
-        ) {
-            return Err(ProviderError::error(
-                ReasonCode::GatewayUpstreamDenied,
-                "gateway upstream URL is not allowed",
-            ));
-        }
-        let (client, egress_proxy_audit) =
-            self.gateway_http_client(service, gateway).map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::GatewayUpstreamDenied,
-                    "gateway upstream client is unavailable",
-                )
-            })?;
-        let mut builder = client
-            .get(upstream_url.clone())
-            .header(reqwest::header::ACCEPT, "*/*")
-            .header(
-                reqwest::header::USER_AGENT,
-                "agent-access-broker/git-credential-verify",
-            );
-        if gateway.correlation_headers {
-            builder = builder
-                .header(REQUEST_ID_HEADER, correlation.agent_request_id.clone())
-                .header(
-                    BROKER_REQUEST_ID_HEADER,
-                    correlation.broker_request_id.clone(),
-                );
-        }
-        builder = agent_access_provider::host::authorize_host_request(
-            builder,
-            &gateway_upstream_authorization(&gateway.upstream_token_auth, credential)?,
-        );
-        let started = Instant::now();
-        let verification_timeout = Duration::from_millis(
-            gateway
-                .streaming_idle_timeout_ms
-                .unwrap_or(self.config.limits.streaming_idle_timeout_ms),
-        );
-        let response = match timeout(verification_timeout, builder.send()).await {
-            Ok(result) => result.map_err(|error| {
-                git_verify_reqwest_error_to_provider_error(
-                    error,
-                    &upstream_url,
-                    repository,
-                    egress_proxy_audit.clone(),
-                )
-                .with_upstream(None, Some(elapsed_millis(started)))
-            })?,
-            Err(_) => {
-                return Err(git_verify_timeout_error_to_provider_error(
-                    &upstream_url,
-                    repository,
-                    egress_proxy_audit,
-                )
-                .with_upstream(None, Some(elapsed_millis(started))));
-            }
-        };
-        let upstream_status = response.status().as_u16();
-        let audit = git_verification_audit(
-            &upstream_url,
-            repository,
-            egress_proxy_audit,
-            upstream_status,
-        );
-        if response.status().is_success() {
-            let valid = match timeout(
-                verification_timeout,
-                git_upload_pack_discovery_response_is_valid(response, verification_timeout),
-            )
-            .await
-            {
-                Ok(result) => result.map_err(|error| {
-                    error
-                        .with_upstream(Some(upstream_status), Some(elapsed_millis(started)))
-                        .with_audit(audit.clone())
-                })?,
-                Err(_) => {
-                    return Err(ProviderError::error(
-                        ReasonCode::UpstreamTimeout,
-                        "git upstream discovery response timed out",
-                    )
-                    .with_upstream(Some(upstream_status), Some(elapsed_millis(started)))
-                    .with_audit(audit));
-                }
-            };
-            let duration_ms = elapsed_millis(started);
-            if !valid {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "git upstream did not return upload-pack discovery",
-                )
-                .with_upstream(Some(upstream_status), Some(duration_ms))
-                .with_audit(audit));
-            }
-            return Ok(ProviderCredentialVerification::new(
-                upstream_status,
-                duration_ms,
-                audit,
-            ));
-        }
-        let duration_ms = elapsed_millis(started);
-        let error = if upstream_status == 429 {
-            upstream_rate_limited(
-                service,
-                UpstreamRetryAfter::from_headers(response.headers()),
-            )
-        } else {
-            git_verify_status_error(upstream_status)
-        };
-        Err(error
-            .with_upstream(Some(upstream_status), Some(duration_ms))
-            .with_audit(audit))
     }
 
     pub async fn invoke(
@@ -5794,6 +5656,9 @@ impl BrokerRuntime {
         &self,
         service: &str,
     ) -> &'static [&'static ProviderReasonDefinition] {
+        if let Some(registration) = self.gateway_registration(service) {
+            return registration.domain_reasons();
+        }
         self.config
             .providers
             .registry()
@@ -6834,6 +6699,7 @@ impl BrokerRuntime {
             }
         }
 
+        let gateway_terminal = matches!(&append_mode, AuditAppendMode::GatewayTerminal(_));
         match append_mode {
             AuditAppendMode::Normal
             | AuditAppendMode::StreamStart(_)
@@ -6877,12 +6743,16 @@ impl BrokerRuntime {
                 terminal.finish_record(audit_record.clone());
             }
         }
-        let duration_ms = elapsed_millis(started);
-        record_span_from_audit(&audit_record, status);
-        if stream_needs_terminal_audit {
-            emit_invoke_stream_started(&audit_record, status, duration_ms);
-        } else {
-            emit_invoke_completed(&audit_record, status, duration_ms, internal_diagnostic_code);
+        // Gateway completion joins response, upload and unread-disposal owners.
+        // Its state emits terminal telemetry only when that join is complete.
+        if !gateway_terminal {
+            let duration_ms = elapsed_millis(started);
+            record_span_from_audit(&audit_record, status);
+            if stream_needs_terminal_audit {
+                emit_invoke_stream_started(&audit_record, status, duration_ms);
+            } else {
+                emit_invoke_completed(&audit_record, status, duration_ms, internal_diagnostic_code);
+            }
         }
 
         let stream = stream.map(|stream| {
@@ -6908,277 +6778,6 @@ impl BrokerRuntime {
             stream,
         }
     }
-}
-
-fn git_discovery_verification_url(
-    gateway: &GatewayConfig,
-    repository: &str,
-) -> Result<Url, ProviderError> {
-    let mut url = Url::parse(&gateway.upstream_base_url).map_err(|_| {
-        ProviderError::error(
-            ReasonCode::GatewayUpstreamDenied,
-            "gateway upstream base URL is invalid",
-        )
-    })?;
-    let mut path_segments = url
-        .path_segments()
-        .map(|segments| {
-            segments
-                .filter(|segment| !segment.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let mut repository_segments = repository
-        .split('/')
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if let Some(last) = repository_segments.last_mut()
-        && !last.ends_with(".git")
-    {
-        last.push_str(".git");
-    }
-    path_segments.extend(repository_segments);
-    path_segments.push("info".to_string());
-    path_segments.push("refs".to_string());
-    url.set_path("");
-    {
-        let mut segments = url.path_segments_mut().map_err(|_| {
-            ProviderError::error(
-                ReasonCode::GatewayUpstreamDenied,
-                "gateway upstream base URL cannot be a base",
-            )
-        })?;
-        segments.extend(path_segments.iter().map(String::as_str));
-    }
-    url.set_query(Some("service=git-upload-pack"));
-    Ok(url)
-}
-
-fn normalize_git_verification_repository(
-    repository: Option<&str>,
-) -> Result<String, ProviderError> {
-    let repository = repository
-        .map(str::trim)
-        .filter(|repository| !repository.is_empty())
-        .ok_or_else(|| {
-            ProviderError::deny(
-                ReasonCode::InputInvalid,
-                "git credential verification requires repository",
-            )
-        })?;
-    if !agent_access_provider::is_repository_selector_path(repository) {
-        return Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "git credential verification repository is invalid",
-        ));
-    }
-    let mut segments = repository
-        .split('/')
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if segments[..segments.len().saturating_sub(1)]
-        .iter()
-        .any(|segment| segment.ends_with(".git"))
-    {
-        return Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "git credential verification repository is invalid",
-        ));
-    }
-    if let Some(last) = segments.last_mut()
-        && let Some(stripped) = last.strip_suffix(".git")
-    {
-        *last = stripped.to_string();
-    }
-    let repository = segments.join("/");
-    if !agent_access_provider::is_repository_selector_path(&repository) {
-        return Err(ProviderError::deny(
-            ReasonCode::InputInvalid,
-            "git credential verification repository is invalid",
-        ));
-    }
-    Ok(repository)
-}
-
-fn git_verify_reqwest_error_to_provider_error(
-    error: reqwest::Error,
-    upstream_url: &Url,
-    repository: &str,
-    egress_proxy: Value,
-) -> ProviderError {
-    let reason_code = if error.is_timeout() {
-        ReasonCode::UpstreamTimeout
-    } else if error.is_connect() {
-        ReasonCode::UpstreamConnectionFailed
-    } else {
-        ReasonCode::UpstreamFailed
-    };
-    let mut audit = git_verification_audit_without_status(upstream_url, egress_proxy);
-    audit["git"] = json!({
-        "operation": "upload-pack-discovery",
-        "repository": repository,
-    });
-    ProviderError::error(reason_code, "git upstream credential verification failed")
-        .with_audit(audit)
-}
-
-fn git_verify_timeout_error_to_provider_error(
-    upstream_url: &Url,
-    repository: &str,
-    egress_proxy: Value,
-) -> ProviderError {
-    let mut audit = git_verification_audit_without_status(upstream_url, egress_proxy);
-    audit["git"] = json!({
-        "operation": "upload-pack-discovery",
-        "repository": repository,
-    });
-    ProviderError::error(
-        ReasonCode::UpstreamTimeout,
-        "git upstream credential verification timed out",
-    )
-    .with_audit(audit)
-}
-
-fn git_verify_status_error(status: u16) -> ProviderError {
-    match status {
-        401 => ProviderError::error(
-            ReasonCode::UpstreamUnauthorized,
-            "git upstream rejected the selected credential",
-        ),
-        403 => ProviderError::error(
-            ReasonCode::UpstreamForbidden,
-            "git upstream forbids the selected credential",
-        ),
-        404 => ProviderError::deny(
-            ReasonCode::ScopeUnresolved,
-            "git repository was not found or unavailable",
-        ),
-        _ => ProviderError::error(
-            ReasonCode::UpstreamFailed,
-            "git upstream credential verification failed",
-        ),
-    }
-}
-
-const GIT_UPLOAD_PACK_ADVERTISEMENT_PREFIX_MAX_BYTES: usize = 1024;
-
-async fn git_upload_pack_discovery_response_is_valid(
-    mut response: reqwest::Response,
-    read_timeout: Duration,
-) -> Result<bool, ProviderError> {
-    if !git_upload_pack_discovery_content_type_is_valid(response.headers()) {
-        return Ok(false);
-    }
-    let mut prefix = Vec::new();
-    while prefix.len() < GIT_UPLOAD_PACK_ADVERTISEMENT_PREFIX_MAX_BYTES {
-        let chunk = match timeout(read_timeout, response.chunk()).await {
-            Ok(result) => result.map_err(|_| {
-                ProviderError::error(
-                    ReasonCode::UpstreamProtocolFailed,
-                    "git upstream discovery response could not be read",
-                )
-            })?,
-            Err(_) => {
-                return Err(ProviderError::error(
-                    ReasonCode::UpstreamTimeout,
-                    "git upstream discovery response timed out",
-                ));
-            }
-        };
-        let Some(chunk) = chunk else {
-            return Ok(false);
-        };
-        if chunk.is_empty() {
-            return Ok(false);
-        }
-        let remaining = GIT_UPLOAD_PACK_ADVERTISEMENT_PREFIX_MAX_BYTES - prefix.len();
-        prefix.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-        match git_upload_pack_advertisement_prefix(&prefix) {
-            GitAdvertisementPrefix::Valid => return Ok(true),
-            GitAdvertisementPrefix::Invalid => return Ok(false),
-            GitAdvertisementPrefix::NeedMore => {}
-        }
-    }
-    Ok(false)
-}
-
-fn git_upload_pack_discovery_content_type_is_valid(headers: &reqwest::header::HeaderMap) -> bool {
-    headers
-        .get_all(reqwest::header::CONTENT_TYPE)
-        .iter()
-        .any(|value| {
-            value
-                .to_str()
-                .ok()
-                .and_then(|value| value.split(';').next())
-                .map(str::trim)
-                .is_some_and(|value| {
-                    value.eq_ignore_ascii_case("application/x-git-upload-pack-advertisement")
-                })
-        })
-}
-
-enum GitAdvertisementPrefix {
-    NeedMore,
-    Valid,
-    Invalid,
-}
-
-fn git_upload_pack_advertisement_prefix(prefix: &[u8]) -> GitAdvertisementPrefix {
-    if prefix.len() < 4 {
-        return GitAdvertisementPrefix::NeedMore;
-    }
-    let Ok(length_hex) = std::str::from_utf8(&prefix[..4]) else {
-        return GitAdvertisementPrefix::Invalid;
-    };
-    let Ok(length) = usize::from_str_radix(length_hex, 16) else {
-        return GitAdvertisementPrefix::Invalid;
-    };
-    if length < 4 {
-        return GitAdvertisementPrefix::Invalid;
-    }
-    if length > GIT_UPLOAD_PACK_ADVERTISEMENT_PREFIX_MAX_BYTES {
-        return GitAdvertisementPrefix::Invalid;
-    }
-    if prefix.len() < length {
-        return GitAdvertisementPrefix::NeedMore;
-    }
-    let payload = &prefix[4..length];
-    if payload == b"# service=git-upload-pack\n" {
-        GitAdvertisementPrefix::Valid
-    } else {
-        GitAdvertisementPrefix::Invalid
-    }
-}
-
-fn git_verification_audit(
-    upstream_url: &Url,
-    repository: &str,
-    egress_proxy: Value,
-    upstream_status: u16,
-) -> Value {
-    let mut audit = git_verification_audit_without_status(upstream_url, egress_proxy);
-    audit["gateway"]["upstreamStatus"] = json!(upstream_status);
-    audit["git"] = json!({
-        "operation": "upload-pack-discovery",
-        "repository": repository,
-    });
-    audit
-}
-
-fn git_verification_audit_without_status(upstream_url: &Url, egress_proxy: Value) -> Value {
-    json!({
-        "gateway": {
-            "kind": "git_http",
-            "operation": "credential.verify",
-            "method": "GET",
-            "upstreamOrigin": upstream_url.origin().ascii_serialization(),
-            "upstreamPath": upstream_url.path(),
-            "egressProxy": egress_proxy,
-            "responseBytes": 0,
-        },
-    })
 }
 
 /// Every provider-backed service enters the runtime through this one path, so
@@ -7266,7 +6865,9 @@ fn build_service_descriptors(
         services.insert(service.clone(), Arc::new(provider.descriptor.clone()));
     }
     for (service, gateway) in &config.gateways {
-        if let Some(descriptor) = gateway_service_descriptor(service, gateway) {
+        if let Some(descriptor) =
+            gateway_service_descriptor(service, gateway, config.providers.registry())
+        {
             services.insert(service.clone(), Arc::new(descriptor));
         }
     }
@@ -7284,84 +6885,12 @@ fn build_service_descriptors(
 pub(crate) fn gateway_service_descriptor(
     service: &str,
     gateway: &GatewayConfig,
+    registry: &crate::BackendRegistry,
 ) -> Option<ServiceDescriptor> {
-    if gateway.kind != "git_http" {
-        return None;
-    }
-    let git_action = |action: &str, description: &str| {
-        ActionDescriptor::new(
-            action,
-            description,
-            json!({
-                "type": "object",
-                "additionalProperties": false
-            }),
-        )
-        .scope("repository")
-        .credential_modes(gateway.credential_modes.iter().cloned())
-    };
-    let mut actions = Vec::new();
-    if gateway.git.as_ref().is_some_and(|git| git.allow_fetch) {
-        actions.push(
-            git_action(
-                "repo.fetch",
-                "Fetch from a Git repository through the broker gateway",
-            )
-            .read_only(),
-        );
-    }
-    if gateway.git.as_ref().is_some_and(|git| git.allow_push) {
-        actions.push(git_action(
-            "repo.push",
-            "Push to a Git repository through the broker gateway",
-        ));
-    }
-    let per_user = gateway
-        .credential_modes
-        .iter()
-        .any(|mode| mode == "per_user");
-    // Verifying a Git credential reads one repository's refs. A personal
-    // credential connection may also select OAuth, whose access the gateway
-    // presents like a token.
-    let credentials = if per_user {
-        CredentialDescriptor::default()
-            .verification_input("repository")
-            .profile("git-basic-api-token", "basic_api_token")
-            .profile("git-bearer-token", "bearer_token")
-            .delegated(if gateway.git.as_ref().is_some_and(|git| git.allow_push) {
-                "Lets agents fetch and push Git repositories as your account."
-            } else {
-                "Lets agents fetch Git repositories as your account."
-            })
-    } else {
-        CredentialDescriptor::default().verification_input("repository")
-    };
-    Some(
-        ServiceDescriptor::new(service, gateway.display_name.clone())
-            .with_surface(ServiceSurface::Gateway {
-                kind: gateway.kind.clone(),
-                broker_hosts: gateway.broker_hosts.clone(),
-            })
-            .with_resource_scopes(BTreeMap::from([(
-                "repository".to_string(),
-                ResourceScopeCapabilities::new(
-                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
-                    vec![
-                        "exact".to_string(),
-                        "namespace".to_string(),
-                        "all".to_string(),
-                    ],
-                ),
-            )]))
-            .with_actions(actions)
-            .with_credentials(credentials),
-    )
-    .map(
-        |descriptor| match UpstreamAuthority::from_base_url(&gateway.upstream_base_url) {
-            Ok(authority) => descriptor.with_upstream_authority(authority),
-            Err(_) => descriptor,
-        },
-    )
+    gateway
+        .module_config(registry)
+        .ok()
+        .map(|module| module.descriptor(&gateway.service_context(service)))
 }
 
 fn toml_identity_groups(config: &BrokerConfig, principal: &str) -> (Vec<String>, Vec<String>) {
@@ -9169,6 +8698,7 @@ impl AuditRuntimeRegistry {
                     terminal.cancel(
                         "canceled",
                         "gateway forwarding was canceled during broker shutdown",
+                        true,
                     )
                 })
                 .count()
@@ -10290,6 +9820,10 @@ struct GatewayTerminalAuditState {
 struct GatewayTerminalAuditInner {
     permit: Option<TerminalAuditPermit>,
     base_record: AuditRecord,
+    pending_record: Option<AuditRecord>,
+    request_owners: usize,
+    request_bytes: Option<u64>,
+    request_failure: Option<ReasonCode>,
     started: Instant,
     finished: bool,
 }
@@ -10300,18 +9834,108 @@ impl GatewayTerminalAuditState {
             inner: Mutex::new(GatewayTerminalAuditInner {
                 permit: Some(permit),
                 base_record,
+                pending_record: None,
+                request_owners: 0,
+                request_bytes: None,
+                request_failure: None,
                 started: Instant::now(),
                 finished: false,
             }),
         }
     }
 
-    fn finish_record(&self, record: AuditRecord) -> bool {
+    fn retain_request_body(&self) -> bool {
         let mut inner = self.inner.lock().unwrap();
-        if inner.finished {
+        if inner.finished || inner.pending_record.is_some() {
             return false;
         }
+        inner.request_owners += 1;
+        true
+    }
+
+    fn finish_request_body(&self, request_bytes: Option<u64>, failure: Option<ReasonCode>) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.finished {
+            return;
+        }
+        inner.request_owners = inner.request_owners.saturating_sub(1);
+        if let Some(bytes) = request_bytes {
+            inner.request_bytes = Some(bytes);
+        }
+        if inner.request_failure.is_none() {
+            inner.request_failure = failure;
+        }
+        Self::finish_ready(&mut inner);
+    }
+
+    fn finish_record(&self, record: AuditRecord) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.finished || inner.pending_record.is_some() {
+            return false;
+        }
+        inner.pending_record = Some(record);
+        Self::finish_ready(&mut inner)
+    }
+
+    fn finish_ready(inner: &mut GatewayTerminalAuditInner) -> bool {
+        if inner.finished || inner.request_owners != 0 {
+            return false;
+        }
+        let Some(mut record) = inner.pending_record.take() else {
+            return false;
+        };
         inner.finished = true;
+        record.timestamp = Utc::now().to_rfc3339();
+        // Preserve the Git audit schema, which has no requestBytes field.
+        if let Some(gateway) = record
+            .provider_audit
+            .as_mut()
+            .and_then(|audit| audit.get_mut("gateway"))
+            .and_then(Value::as_object_mut)
+            && gateway.contains_key("requestBytes")
+            && let Some(bytes) = inner.request_bytes
+        {
+            gateway.insert("requestBytes".to_owned(), json!(bytes));
+        }
+        if let Some(reason) = inner.request_failure {
+            let prior_phase = record
+                .provider_audit
+                .as_ref()
+                .and_then(|audit| {
+                    audit
+                        .get("gateway")
+                        .and_then(|gateway| gateway.get("phase"))
+                        .or_else(|| audit.get("gatewayPhase"))
+                })
+                .and_then(Value::as_str)
+                .unwrap_or("failed");
+            let phase = if matches!(prior_phase, "canceled" | "forced_shutdown") {
+                prior_phase.to_owned()
+            } else {
+                "failed".to_owned()
+            };
+            if record.decision == Decision::Allow {
+                record.reason_code = Some(reason.into());
+                record.decision = Decision::Error;
+            }
+            record.provider_audit = gateway_terminal_audit_value(
+                record.provider_audit.take(), &phase,
+                Some("gateway request upload did not complete; upstream execution may be partial or uncertain".to_owned()),
+            );
+        }
+        let phase = record
+            .provider_audit
+            .as_ref()
+            .and_then(|audit| {
+                audit
+                    .get("gateway")
+                    .and_then(|gateway| gateway.get("phase"))
+                    .or_else(|| audit.get("gatewayPhase"))
+            })
+            .and_then(Value::as_str)
+            .unwrap_or("failed");
+        let duration_ms = elapsed_millis(inner.started);
+        emit_gateway_terminal(&record, phase, duration_ms);
         if let Some(permit) = inner.permit.take() {
             permit.send(record);
         }
@@ -10328,14 +9952,16 @@ impl GatewayTerminalAuditState {
             preserve_admission_audit(Some(audit), inner.base_record.provider_audit.as_ref());
     }
 
-    fn cancel(&self, phase: &str, message: &str) -> bool {
+    fn cancel(&self, phase: &str, message: &str, forced: bool) -> bool {
         let mut inner = self.inner.lock().unwrap();
-        if inner.finished {
+        if inner.finished || (!forced && inner.pending_record.is_some()) {
             return false;
         }
-        inner.finished = true;
         let duration_ms = elapsed_millis(inner.started);
-        let mut record = inner.base_record.clone();
+        let mut record = inner
+            .pending_record
+            .take()
+            .unwrap_or_else(|| inner.base_record.clone());
         record.timestamp = Utc::now().to_rfc3339();
         record.decision = Decision::Error;
         record.reason_code = None;
@@ -10345,11 +9971,11 @@ impl GatewayTerminalAuditState {
             phase,
             Some(message.to_string()),
         );
-        emit_gateway_terminal(&record, phase, duration_ms);
-        if let Some(permit) = inner.permit.take() {
-            permit.send(record);
+        inner.pending_record = Some(record);
+        if forced {
+            inner.request_owners = 0;
         }
-        true
+        Self::finish_ready(&mut inner)
     }
 }
 

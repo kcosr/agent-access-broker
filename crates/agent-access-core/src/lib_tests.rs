@@ -30,7 +30,9 @@ pub(crate) fn test_backend_registry() -> std::sync::Arc<BackendRegistry> {
         ])
         .expect("core backends register consistently")
         .with_oauth_dialects([&STUB_OAUTH_DIALECT])
-        .expect("core OAuth dialects register consistently"),
+        .expect("core OAuth dialects register consistently")
+        .with_gateways([&agent_access_git_http::GIT_HTTP_GATEWAY])
+        .expect("core gateway modules register consistently"),
     )
 }
 
@@ -5236,12 +5238,9 @@ upload_spool_dir = "upload-spool"
 "#;
     let config: BrokerConfig = parse_test_config(raw).unwrap();
     validate_broker_config(&config).unwrap();
-    assert!(
-        config.gateways["gitlab_git"]
-            .git
-            .as_ref()
-            .unwrap()
-            .deny_delete_refs
+    assert_eq!(
+        config.gateways["gitlab_git"].protocol_fields["git"]["allow_push"].as_bool(),
+        Some(true)
     );
     assert_eq!(
         config.policy.grants[0].resources.resource_group_ids,
@@ -5292,7 +5291,7 @@ fn git_http_gateway_rejects_invalid_gateway_and_selector_shapes() {
     let errors = validation_errors(validate_broker_config(&with_gateway(gateway)));
     assert_contains(&errors, "must be an exact DNS host");
     let mut gateway = git_http_gateway_config();
-    gateway.git = None;
+    gateway.protocol_fields.remove("git");
     let errors = validation_errors(validate_broker_config(&with_gateway(gateway)));
     assert_contains(&errors, "gateways.gitlab_git.git is required");
 
@@ -5416,7 +5415,8 @@ fn git_http_gateway_rejects_invalid_gateway_options() {
     );
 
     let mut gateway = git_http_gateway_config();
-    gateway.git.as_mut().unwrap().receive_pack_prefix_max_bytes = Some(0);
+    gateway.protocol_fields.get_mut("git").unwrap()["receive_pack_prefix_max_bytes"] =
+        toml::Value::Integer(0);
     let errors = validation_errors(validate_broker_config(&config_with_gateway(gateway)));
     assert_contains(&errors, "receive_pack_prefix_max_bytes must be non-zero");
 }
@@ -6725,13 +6725,16 @@ fn git_http_gateway_config() -> GatewayConfig {
         response_body_max_bytes: None,
         streaming_idle_timeout_ms: None,
         correlation_headers: true,
-        git: Some(GatewayGitConfig {
-            allow_fetch: true,
-            allow_push: true,
-            deny_ref_patterns: vec!["refs/heads/main".to_string()],
-            deny_delete_refs: true,
-            receive_pack_prefix_max_bytes: Some(64 * 1024),
-        }),
+        protocol_fields: toml::from_str(
+            r#"[git]
+allow_fetch = true
+allow_push = true
+deny_ref_patterns = ["refs/heads/main"]
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+        )
+        .unwrap(),
     }
 }
 
@@ -7666,4 +7669,59 @@ fn trusted_user_header_is_reserved_and_username_grammar_is_exact() {
             "must not use reserved header x-agent-access-user",
         );
     }
+}
+
+#[test]
+fn git_public_configuration_matches_the_frozen_common_contract() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../agent-access-git-http/tests/fixtures/git-config-descriptor-baseline.json"
+    ))
+    .unwrap();
+    let registry = test_backend_registry();
+    for case in fixture["cases"].as_array().unwrap() {
+        let gateway: GatewayConfig = toml::from_str(case["gatewayToml"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            git_baseline_common_projection(&gateway),
+            case["common"],
+            "{}",
+            case["name"]
+        );
+        assert_eq!(
+            gateway
+                .protocol_fields
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["git"]
+        );
+        let module = gateway.module_config(&registry).unwrap();
+        let mut errors = Vec::new();
+        module.validate(
+            &gateway.service_context(case["service"].as_str().unwrap()),
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "{}: {errors:?}", case["name"]);
+    }
+}
+
+fn git_baseline_common_projection(config: &GatewayConfig) -> serde_json::Value {
+    let token_auth = match &config.upstream_token_auth {
+        GatewayUpstreamTokenAuth::Bearer {} => serde_json::json!({"scheme": "bearer"}),
+        GatewayUpstreamTokenAuth::Basic { username } => {
+            serde_json::json!({"scheme": "basic", "username": username})
+        }
+    };
+    serde_json::json!({
+        "allowForwardedIdentity": config.allow_forwarded_identity,
+        "kind": config.kind, "displayName": config.display_name,
+        "brokerHosts": config.broker_hosts, "upstreamBaseUrl": config.upstream_base_url,
+        "allowedUpstreamHosts": config.allowed_upstream_hosts,
+        "hasEgressProxy": config.egress_proxy.is_some(), "authModes": config.auth_modes,
+        "basicBrokerTokenUsername": config.basic_broker_token_username,
+        "credentialModes": config.credential_modes, "upstreamTokenAuth": token_auth,
+        "redirectPolicy": config.redirect_policy, "requestBodyMaxBytes": config.request_body_max_bytes,
+        "responseBodyMaxBytes": config.response_body_max_bytes,
+        "streamingIdleTimeoutMs": config.streaming_idle_timeout_ms,
+        "correlationHeaders": config.correlation_headers,
+    })
 }

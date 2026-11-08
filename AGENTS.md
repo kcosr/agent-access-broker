@@ -372,17 +372,19 @@ node scripts/check-changelog.mjs
 ```
 
 Every workspace crate declares `[package.metadata.agent-access] role` (`sdk`,
-`core`, `host`, `assembly`, `cli`, `native`, `reference`, `adapter`, or
-`helper`); declare one when adding a crate. The boundary check rejects an
+`core`, `host`, `assembly`, `cli`, `native`, `reference`, `adapter`,
+`helper`, or `gateway`); declare one when adding a crate. The boundary check rejects an
 undeclared role and dependency edges that cross the roles, such as any
-production path from core or the host to a backend or import adapter, and any
+production path from core or the host to a backend, import adapter or gateway, and any
 use of the host-only items (the SDK's `host::authorize_host_request` and
-`host::token_as_basic`, and core's `gateway_upstream_authorization`) in native,
-adapter, reference or helper sources. See `docs/testing.md` for the rules.
+`host::token_as_basic`, `host::gateway_body`, `host::gateway_body_stream`,
+`host::gateway_request_head`, and core's `gateway_upstream_authorization`) in native,
+adapter, reference, helper or gateway sources. Gateway dependencies of every
+kind may reach only SDK and helper crates; adapters cannot link gateways. See `docs/testing.md` for the rules.
 
 `api/` holds the checked-in supported public API inventory: the SDK and host
 with and without `test-support`, the assembly library, the reviewed selection
-entry points of linked native and adapter crates (`SELECTION_ENTRY_POINTS` in
+entry points of linked native, adapter and gateway crates (`SELECTION_ENTRY_POINTS` in
 `scripts/public-api.mjs`), and the types their signatures expose. The public API
 check fails when the candidate's API differs. For an intended change, run
 `node scripts/public-api.mjs update`, review the diff against the rules in
@@ -460,6 +462,22 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 
 ## Layout
 
+- `crates/agent-access-git-http`: the linked Git gateway protocol. It owns strict
+  nested Git configuration, descriptors, smart HTTP paths, packet/ref/capability
+  validation and credential-verification advertisement checks. The assembly
+  explicitly selects `GIT_HTTP_GATEWAY`; core/host production code must not
+  depend on the implementation. Keep the durable shared `git_repository` type
+  registered by core. Preserve Git configuration and transport parity when
+  changing the generic gateway path.
+- Gateway SDK hooks classify sanitized heads into final action/scopes, inspect
+  bounded body prefixes and return relative forwarding plans. Host/core own
+  identity, policy, credential material, clients, admission, byte/deadline limits,
+  dispatch checks, disposal and audit completion. Keep gateway instances in the
+  protocol map, independent of ordinary provider invocation. Check local failures
+  against phase and registration ownership. Never infer safe replay from a
+  method, timeout, reset or replayable body; preserve only the declared bodyless
+  Git OAuth exception and transport evidence of non-processing.
+
 - Native provider `src/action-documentation.json` files hold service recipes;
   their private `src/documentation.rs` hooks add effective configuration and
   preserve existing structured documentation. Provider tests validate published
@@ -485,7 +503,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   its authorized path. Only the host's raw-client paths (Git gateway, Git verification) use
   the host-only `host::authorize_host_request` and the host-only
   `host::token_as_basic` placement, which presents a token as HTTP Basic; the
-  boundary check rejects both in native, adapter, reference and helper crates.
+  boundary check rejects both in native, adapter, reference, helper and gateway crates.
   Credential equality exists only with `test-support`, in constant time. `lib.rs`
   lists every supported export explicitly, one path per item; never add a
   wildcard re-export. Presentation items are reachable only through

@@ -3137,10 +3137,11 @@ fn connection_consumers_schema() -> Value {
         "description": "Consuming services the caller (or, on administrator routes, the principal) holds a per_user grant on, in service ID order.",
         "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["service", "displayName", "credentialVerificationInputs"],
+            "required": ["service", "displayName", "credentialVerificationInputs", "credentialVerificationSupported"],
             "properties": {
                 "service": {"type": "string"},
                 "displayName": {"type": "string"},
+                "credentialVerificationSupported": {"type":"boolean", "description":"Whether this service supports active credential verification, independently of required verification inputs."},
                 "credentialVerificationInputs": {
                     "type": "array", "items": {"type": "string"},
                     "description": "Inputs verifying through this service needs besides the credential, such as repository for a Git gateway."

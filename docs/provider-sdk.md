@@ -23,6 +23,7 @@ keys are in [the configuration reference](configuration.md). The
 ## Contents
 
 - [Supported surface](#supported-surface)
+- [Gateway protocols](#gateway-protocols)
 - [Trust model](#trust-model)
 - [Registration and configuration](#registration-and-configuration)
 - [Descriptors and scope resolution](#descriptors-and-scope-resolution)
@@ -2634,3 +2635,116 @@ its credential like any other provider; see
 base_url = "https://notes.example.com"
 allowed_upstream_hosts = ["https://notes.example.com/**"]
 ```
+
+
+## Gateway protocols
+
+A gateway module implements a native HTTP protocol through the same SDK. Its
+crate role is `gateway`, and every workspace dependency, including tests and build
+scripts, must be SDK or helper code. An assembly selects its static
+`GatewayRegistration` with `.gateway(&REGISTRATION)`. The host and core do not
+link protocol implementations in production. The shipped Git registration is
+`agent_access_git_http::GIT_HTTP_GATEWAY`.
+
+A registration supplies a strict configuration parser, optional resource types
+and domain reasons, and a fixed request-kind accounting table. The default request
+kind counts every request. An explicitly registered exemption is suitable only for
+reviewed protocol discovery, such as Git reference advertisements; a module cannot
+choose an arbitrary quota key. `GatewayConfig` validates offline, constructs a
+`ServiceDescriptor` with a `ServiceSurface::Gateway`, and builds one
+`GatewayProtocol` per configured service. `GatewayServiceContext` carries that
+service ID separately from its module kind. Reject every unknown protocol field.
+The host retains common destination, host, authentication and limit fields.
+
+`GatewayProtocol::classify` receives the method, target and sanitized protocol
+headers. Broker authorization, cookies and trusted identity assertions are absent.
+Headers nominated by `Connection` are removed with the fixed hop-by-hop fields.
+It returns a declared action, final `ResourceScopes`, a registered request-kind name
+and an owned `GatewayRequest`. An unscoped action requires empty scopes; a scoped
+action requires every declared scope dimension. Body-derived resources and
+preauthorization upstream lookup are unsupported. The host performs identity and
+admission checks, then calls `GatewayRequest::preflight` with `GatewayBody`.
+An explicit request length over the configured cap is refused before preflight
+or upstream work, with policy-denial precedence preserved. Classification may
+supply `with_head_audit` facts for these head-only refusals: an object of at most
+16 KiB, placed under the registration's audit key. These facts must contain only
+bounded protocol metadata and cannot set host lifecycle fields. They require no
+body inspection and are omitted from the classification's Debug output.
+Preflight cannot change the classified action or scopes. Policy denial takes
+precedence over a preflight failure.
+
+Use `GatewayBody::next_frame()` only for bounded protocol inspection. The host
+retains each inspected nonempty frame, including over-read bytes, and forwards
+those frames once before the unread remainder. EOF remains complete; a failed
+inspection cannot be swallowed to forward a partial body. Empty-frame inspection
+is bounded independently of bytes. A `GatewayForwardPlan` preserves the original
+method and contains a relative target, ordinary headers, bounded audit facts and
+a response profile. The host rejects absolute or escaping destinations, reserved
+headers, invalid outcomes and inconsistent plans before acquiring credentials or
+contacting upstream.
+
+Only the host uses `host::gateway_body`, `host::gateway_body_stream` and
+`host::gateway_request_head`; the crate-boundary check fences them from gateway
+modules. Tests use `test_support::synthetic_gateway_body`,
+`synthetic_gateway_request_head` and `replay_gateway_body`. Forward plans reject
+HTTP trailers by default. A protocol that ignores trailing metadata may select
+`discard_request_trailers()`, as Git pack POSTs do; the host discards only trailer
+frames, preserves data order and limits, and never forwards trailer fields.
+
+`GatewayResponseProfile` selects shared headers plus the first matching exact
+status rule, status class, or default rule. A custom header validator may only
+remove upstream values; it cannot rewrite or invent them. The host removes
+response fields nominated by `Connection`, including fields selected by a
+validator, after checking the validator's output. Content-Length is
+host-owned and can be preserved explicitly for raw bytes. Decompression and
+redirect following are disabled. The host validates every Content-Length value,
+including on HEAD and 304 responses, before completion. Repeated values and
+comma lists must contain the same decimal length, which is emitted canonically.
+Invalid or conflicting lengths fail with `upstream_protocol_failed`.
+Useful upstream HTTP statuses and bodies remain
+separate from local `ProviderError` outcomes. Local errors must satisfy the gateway
+phase contract and declared domain-reason ownership. Host authentication, policy
+and accounting reasons cannot be fabricated by a module.
+
+The host owns credentials and may dispatch credential-free descriptors only with
+explicit service-mode policy. Modules never receive credential material or an
+authorized HTTP client. Optional `GatewayVerificationProbe` builds a bounded
+read-only probe and validates its response prefix. The descriptor's explicit
+verification capability controls eligibility; an empty required-input list does
+not mean unsupported verification. Git's repository input and advertisement
+validation remain supported.
+
+`GatewayReplayProfile::Never` is the default. Bodyless credential recovery is
+restricted to completely inspected empty bodies without trailers. Permission for
+confirmed-unprocessed recovery does not itself cause retries: the host also needs
+request-specific non-processing evidence and complete retained bytes. Timeouts,
+connection resets, replayable bodies and methods alone never establish that
+proof. The current transport disables reqwest policy retries and explicitly pins
+HTTP/1, including in downstream assemblies that enable HTTP/2 elsewhere. Safe
+pooled-connection replacement before writing remains within the original deadline. Git alone opts into its existing single
+bodyless OAuth recovery; pack uploads are never replayed.
+
+Keep audit facts bounded and free of bodies, credentials and arbitrary parameter
+values. Supply a safe path template as the audit target where concrete paths may
+contain secrets. Host progress, byte counts and terminal outcomes cannot be
+replaced by protocol facts. The host retains request permits until response and
+unread-request owners finish, including disconnect and early-response paths.
+The terminal audit also waits for upload, response and bounded unread-body disposal.
+An early successful upstream response cannot establish successful completion of
+an unfinished upload; a later upload failure produces one failed terminal record
+with the observed upstream status and partial or uncertain execution outcome.
+After dispatch, streamed body read and byte-cap failures are errors with HTTP
+502 when response headers have not been sent. Transport timeouts retain HTTP
+504. The terminal audit retains transferred byte counts and states that
+upstream execution may be partial or uncertain. An existing denial or error
+keeps its decision and reason while receiving this additional upload evidence.
+A confirmed connection failure before any byte handoff records no uncertainty;
+an early upstream response or cancellation without a send result does not supply
+that proof, even if the body has not yet been polled. Git retains its established
+audit shape; generated gateway records include request byte counts.
+
+The independent fixture at
+[`tests/downstream-consumer/provider-repo/crates/example-gateway`](../tests/downstream-consumer/provider-repo/crates/example-gateway/src/lib.rs)
+implements a protocol using only the SDK. Test support constructs sanitized heads
+and bounded bodies without introducing a dependency on core or host. SDK unit,
+host contract and real Git tests are described in [testing](testing.md).

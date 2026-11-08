@@ -12,6 +12,7 @@ members = [
   "crates/agent-access-core",
   "crates/agent-access-fake",
   "crates/agent-access-gitlab",
+  "crates/agent-access-git-http",
   "crates/agent-access-gmail",
   "crates/agent-access-jira",
   "crates/agent-access-provider",

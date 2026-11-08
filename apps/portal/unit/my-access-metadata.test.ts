@@ -36,7 +36,7 @@ const options: AgentTokenOptions = {
   mcp: null
 };
 
-const consumer = (service: string, displayName: string, credentialVerificationInputs: string[]): ConnectionConsumer => ({ service, displayName, credentialVerificationInputs });
+const consumer = (service: string, displayName: string, credentialVerificationInputs: string[]): ConnectionConsumer => ({ service, displayName, credentialVerificationSupported: true, credentialVerificationInputs });
 
 const connection = (id: string, consumers: ConnectionConsumer[], otherConsumers = 0): CredentialConnection => ({
   connection: id,

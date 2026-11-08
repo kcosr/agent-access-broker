@@ -822,6 +822,170 @@ async fn git_post_grant_auth_budget_rejection_keeps_anonymous_admission_audit() 
     git_revocation_during_rate_wait(true).await;
 }
 
+async fn git_queue_count(fixture: &GatewayRouterFixture, expected: u64) {
+    let state = fixture._broker.state();
+    let snapshot = state.current();
+    let limiter = &state.shared_invocations;
+    let epoch = limiter
+        .runtime_epoch(|| Arc::ptr_eq(&state.current(), &snapshot))
+        .unwrap();
+    let max_wait = snapshot
+        .runtime
+        .configured_invocation_limits()
+        .max_wait("gitlab_git");
+    let resolver: crate::ingress::invocation_limits::InvocationLimitResolver =
+        Arc::new(move || {
+            let runtime = snapshot.runtime.clone();
+            Box::pin(async move {
+                runtime
+                    .effective_invocation_limit("gateway-user", "gitlab_git")
+                    .await
+                    .map(|effective| effective.limit())
+            })
+        });
+    tokio::time::timeout(WAIT_BOUND, async {
+        loop {
+            let observed = limiter
+                .observe(
+                    epoch,
+                    "gateway-user",
+                    "gitlab_git",
+                    max_wait,
+                    resolver.clone(),
+                )
+                .await
+                .unwrap();
+            if observed.invocations.queued_requests == expected {
+                assert_eq!(observed.invocations.counted_requests, 1);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("Git admission queue reaches the expected size");
+}
+
+#[tokio::test]
+async fn git_queued_pack_drop_and_reload_preserve_history_and_leave_bodies_unread() {
+    let fixture = test_gateway_router_with_config(false, &["repo.fetch"], |config| {
+        // Reload admission checks every configured credential, including the
+        // generic fixture's otherwise unused native service.
+        config.credentials.service.insert(
+            "fake".into(),
+            config.credentials.service["gitlab_git"].clone(),
+        );
+        config.limits.request_body_timeout_ms = 60_000;
+        config
+            .limits
+            .invocations
+            .services
+            .insert("gitlab_git".into(), waiting_limit(1, "30s", "60s"));
+    })
+    .await;
+    let basic = format!(
+        "Basic {}",
+        BASE64.encode(format!("agent-access:{}", fixture.agent_token))
+    );
+    let pack = |request_id: &'static str, body: Body| {
+        let (app, basic) = (fixture.app.clone(), basic.clone());
+        async move {
+            gateway_request(GatewayRequestSpec {
+                app,
+                method: Method::POST,
+                uri: "/sip/service.git/git-upload-pack".parse().unwrap(),
+                host: Some("git.example.test"),
+                request_id: Some(request_id),
+                authorization: Some(&basic),
+                headers: &[(
+                    CONTENT_TYPE.as_str(),
+                    "application/x-git-upload-pack-request",
+                )],
+                body,
+            })
+            .await
+        }
+    };
+    let seed = pack("git-cancel-seed", Body::from("0000")).await;
+    assert_eq!(
+        seed.headers()[REASON_CODE_HEADER],
+        "gateway_upstream_denied"
+    );
+    drop(seed);
+    let state = fixture._broker.state();
+    let history = state.shared_invocations.state_for_test();
+    let (body, dropped_polls) = counted_body("git-cancel-dropped");
+    let dropped = tokio::spawn(pack("git-cancel-dropped", body));
+    git_queue_count(&fixture, 1).await;
+
+    // Reference discovery has no invocation admission even while a pack waits.
+    let discovery = gateway_get(
+        fixture.app.clone(),
+        "/sip/service.git/info/refs?service=git-upload-pack",
+        "git.example.test",
+        "git-cancel-discovery",
+        Some(&basic),
+    )
+    .await;
+    assert_eq!(
+        discovery.headers()[REASON_CODE_HEADER],
+        "gateway_upstream_denied"
+    );
+    drop(discovery);
+    git_queue_count(&fixture, 1).await;
+    assert_eq!(state.shared_invocations.state_for_test(), history);
+
+    dropped.abort();
+    assert!(dropped.await.unwrap_err().is_cancelled());
+    git_queue_count(&fixture, 0).await;
+    assert_eq!(dropped_polls.load(Ordering::SeqCst), 0);
+    let (body, reloaded_polls) = counted_body("git-cancel-reloaded");
+    let reloaded = tokio::spawn(pack("git-cancel-reloaded", body));
+    git_queue_count(&fixture, 1).await;
+    let mut config = state.current().runtime.config().clone();
+    config.limits.max_concurrent_requests += 1;
+    fixture._broker.reload_config(&config).await;
+    let response = tokio::time::timeout(WAIT_BOUND, reloaded)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.headers()[REASON_CODE_HEADER],
+        "operation_cancelled"
+    );
+    drop(response);
+    git_queue_count(&fixture, 0).await;
+    assert_eq!(reloaded_polls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.shared_invocations.state_for_test(), history);
+
+    // Drain the cancellation owners before asserting one terminal record each.
+    state
+        .current()
+        .runtime
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    for request_id in ["git-cancel-dropped", "git-cancel-reloaded"] {
+        let records =
+            require_audit_request(&fixture.audit_path, request_id, "gitlab_git", "repo.fetch");
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0]["reasonCode"], "operation_cancelled");
+        assert_eq!(records[0]["providerAudit"]["admission"]["waited"], true);
+        assert!(
+            records[0]["providerAudit"].get("gateway").is_none(),
+            "queued pack was dispatched"
+        );
+    }
+    let discovery = require_audit_request(
+        &fixture.audit_path,
+        "git-cancel-discovery",
+        "gitlab_git",
+        "repo.fetch",
+    );
+    assert_eq!(discovery.len(), 1);
+    assert!(discovery[0]["providerAudit"].get("admission").is_none());
+}
+
 async fn disconnected_http1_body_wait(expect_continue: bool) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let body_budget = Duration::from_secs(3);

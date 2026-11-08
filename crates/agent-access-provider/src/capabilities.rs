@@ -20,6 +20,8 @@ pub struct ServiceCapabilities {
     /// Inputs credential verification needs besides the credential.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_verification_inputs: Vec<String>,
+    /// Active verification capability, independent of its required inputs.
+    pub credential_verification_supported: bool,
     pub scope_types: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub resource_scopes: BTreeMap<String, ResourceScopeCapabilities>,

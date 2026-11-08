@@ -24,6 +24,22 @@ managed-store database, encryption, and audit database details are in
 [provider SDK guide](provider-sdk.md), and building another distribution from
 the host by the [downstream assembly guide](downstream-assembly.md).
 
+## Gateway protocol ownership
+
+The provider SDK defines linked gateway registrations and bounded request plans.
+Core builds a separate protocol map from selected registrations and validates each
+service descriptor, destination, credential capability and policy boundary. A module
+classifies a sanitized request head into a declared action and final resource scopes,
+then inspects a bounded body prefix before returning a relative forwarding plan.
+The host preserves inspected bytes and owns transport, TLS/proxy selection,
+credential presentation, admission, unread-body disposal and terminal audit.
+
+`agent-access-git-http` implements Git paths, packet parsing, ref restrictions and
+credential-verification advertisements. Core and host have no production dependency
+on that module; the standard assembly selects it. Protocol modules never dispatch
+through the ordinary provider invocation map. See the
+[gateway contract](provider-sdk.md#gateway-protocols).
+
 ## MCP connection views
 
 Aggregate MCP and service-specific connections share one bounded registry for

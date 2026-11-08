@@ -6,6 +6,7 @@ use agent_access_broker_host::{
 };
 use agent_access_cloudbees_ci::CLOUDBEES_CI_BACKEND;
 use agent_access_conformance::CONFORMANCE_BACKEND;
+use agent_access_git_http::GIT_HTTP_GATEWAY;
 
 /// The modules this distribution links. Conformance is a development
 /// provider: it can be configured only when the deployment enables
@@ -14,6 +15,7 @@ pub fn composition() -> Result<BrokerComposition, CompositionError> {
     BrokerComposition::builder()
         .native(&CLOUDBEES_CI_BACKEND)
         .native(&CONFORMANCE_BACKEND)
+        .gateway(&GIT_HTTP_GATEWAY)
         .build()
 }
 
@@ -27,7 +29,12 @@ const PROVIDER: SourceRevision =
 
 /// One entry per registered module package, keyed by its crate name and
 /// version. Upstream packages share one release version.
-static MODULES: [ModuleProvenance; 2] = [
+static MODULES: [ModuleProvenance; 3] = [
+    ModuleProvenance::new(
+        "agent-access-git-http",
+        env!("DOWNSTREAM_BROKER_UPSTREAM_VERSION"),
+        UPSTREAM,
+    ),
     ModuleProvenance::new(
         "agent-access-cloudbees-ci",
         env!("DOWNSTREAM_BROKER_UPSTREAM_VERSION"),
@@ -80,6 +87,10 @@ mod tests {
             composition.native_kinds().collect::<Vec<_>>(),
             ["cloudbees_ci", "conformance"]
         );
+        assert_eq!(
+            composition.gateway_kinds().collect::<Vec<_>>(),
+            ["git_http"]
+        );
     }
 
     #[test]
@@ -125,6 +136,12 @@ mod tests {
                     "version": env!("DOWNSTREAM_BROKER_PROVIDER_VERSION"),
                     "roles": [{"role": "native", "id": "conformance"}],
                     "source": provider
+                },
+                {
+                    "crate": "agent-access-git-http",
+                    "version": env!("DOWNSTREAM_BROKER_UPSTREAM_VERSION"),
+                    "roles": [{"role": "gateway", "id": "git_http"}],
+                    "source": upstream
                 }
             ])
         );

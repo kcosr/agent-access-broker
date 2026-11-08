@@ -191,7 +191,7 @@ test("every linked native or adapter needs reviewed root entry points, and no ot
   const { "x-native": _native, ...withoutNative } = fixtureEntryPoints;
   assert.throws(() => inventorySurfaces(fixtureMetadata(), withoutNative), /x-native \(native\) is linked by the assembly but has no reviewed selection entry points/);
   assert.throws(() => inventorySurfaces(fixtureMetadata(), { ...fixtureEntryPoints, "x-extra": ["x_extra::EXTRA"] }),
-    /x-extra has selection entry points but is not a native or adapter crate linked by the assembly/);
+    /x-extra has selection entry points but is not a native, adapter or gateway crate linked by the assembly/);
   assert.throws(() => inventorySurfaces(fixtureMetadata(), { ...fixtureEntryPoints, "x-reference": ["x_reference::R"] }), /x-reference/);
   for (const entry of ["x_native::module::NATIVE", "x_adapter::NATIVE", "x_native::"]) {
     assert.throws(() => inventorySurfaces(fixtureMetadata(), { ...fixtureEntryPoints, "x-native": [entry] }), /must name a root export of x_native/);

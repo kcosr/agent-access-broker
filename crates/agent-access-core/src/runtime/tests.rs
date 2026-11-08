@@ -400,6 +400,8 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         runtime.config_generation.unwrap_or(0),
     )));
     BrokerRuntime {
+        gateways: Arc::clone(&runtime.gateways),
+        gateway_configs: Arc::new(config.gateways.clone()),
         effective_credentials: Arc::new(config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
         imported_credential_contracts: runtime.imported_credential_contracts.clone(),
@@ -6664,6 +6666,155 @@ async fn started_gateway_operation_drop_appends_canceled_terminal_audit() {
 }
 
 #[tokio::test]
+async fn gateway_terminal_audit_joins_response_upload_and_disposal() {
+    for (name, upload_first, failure, forced, decision) in [
+        ("upload-first", true, false, false, Decision::Allow),
+        ("response-first", false, false, false, Decision::Allow),
+        ("late-failure", false, true, false, Decision::Allow),
+        ("failure-first", true, true, false, Decision::Allow),
+        ("denial-after-dispatch", false, true, false, Decision::Deny),
+        ("error-after-dispatch", false, true, false, Decision::Error),
+        ("shutdown", false, false, true, Decision::Allow),
+    ] {
+        let audit_path = temp_path(&format!("gateway-joined-{name}.jsonl"));
+        let (sink, registry) =
+            test_audit_runtime_parts(Some(jsonl_audit_config(audit_path.display().to_string())));
+        let mut started = test_audit_record();
+        started.provider_audit = Some(json!({
+            "gateway": { "phase": "started", "responseBytes": 0, "requestBytes": 0 },
+            "admission": { "waited": true, "waitedMilliseconds": 17, "outcome": "admitted" },
+        }));
+        sink.append_required(started.clone()).await.unwrap();
+        let terminal = GatewayTerminalAuditGuard::new(
+            started.clone(),
+            sink.reserve_terminal().await.unwrap(),
+            registry.clone(),
+        );
+        let retain = || {
+            assert!(terminal.state.retain_request_body());
+            GatewayRequestBodyAudit {
+                state: Some(terminal.state.clone()),
+            }
+        };
+        let mut upload = Some(retain());
+        let disposal = retain();
+        let finish_upload = |upload: GatewayRequestBodyAudit| {
+            if failure {
+                upload.fail(ReasonCode::GatewayRequestBodyDenied, Some(23));
+            } else {
+                upload.complete(Some(23));
+            }
+        };
+        if upload_first {
+            finish_upload(upload.take().unwrap());
+        }
+        let mut completed = started;
+        completed.decision = decision.clone();
+        if decision != Decision::Allow {
+            completed.reason_code = Some(ReasonCode::CredentialInvalid.into());
+        }
+        completed.upstream_status = Some(200);
+        completed.provider_audit.as_mut().unwrap()["gateway"] = json!({
+            "phase": "completed", "responseBytes": 4, "requestBytes": 7,
+        });
+        terminal.finish_record(completed);
+        drop(terminal);
+        sink.writer.as_ref().unwrap().probe_storage().await.unwrap();
+        assert_eq!(
+            audit_records(&audit_path).len(),
+            1,
+            "{name}: body owners remain"
+        );
+        if forced {
+            assert_eq!(registry.cancel_terminal_audits(), 1);
+            assert_eq!(registry.cancel_terminal_audits(), 0);
+        }
+        if let Some(upload) = upload {
+            finish_upload(upload);
+        }
+        if !forced {
+            sink.writer.as_ref().unwrap().probe_storage().await.unwrap();
+            assert_eq!(
+                audit_records(&audit_path).len(),
+                1,
+                "{name}: disposal remains"
+            );
+        }
+        disposal.complete(None);
+        sink.shutdown_and_drain(Duration::from_secs(1))
+            .await
+            .unwrap();
+        let records = audit_records(&audit_path);
+        assert_eq!(records.len(), 2, "{name}: one started and one terminal");
+        let record = &records[1];
+        assert_eq!(record["upstreamStatus"], 200);
+        assert_eq!(record["providerAudit"]["gateway"]["responseBytes"], 4);
+        assert_eq!(
+            record["providerAudit"]["admission"]["waitedMilliseconds"],
+            17
+        );
+        if forced {
+            assert_eq!(record["providerAudit"]["gateway"]["phase"], "canceled");
+        } else {
+            assert_eq!(record["providerAudit"]["gateway"]["requestBytes"], 23);
+            assert_eq!(
+                record["providerAudit"]["gateway"]["phase"],
+                if failure { "failed" } else { "completed" }
+            );
+            assert_eq!(
+                record["decision"],
+                if decision == Decision::Deny {
+                    "deny"
+                } else if failure {
+                    "error"
+                } else {
+                    "allow"
+                }
+            );
+            if failure {
+                assert_eq!(
+                    record["reasonCode"],
+                    if decision == Decision::Allow {
+                        "gateway_request_body_denied"
+                    } else {
+                        "credential_invalid"
+                    }
+                );
+                assert!(
+                    record["providerAudit"]["gateway"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("partial or uncertain")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn retained_invoke_descriptor_without_provider_is_unavailable_for_verification() {
+    let mut runtime = BrokerRuntime::new(base_fake_config()).unwrap();
+    // A disabled or unlinked invoke import retains its descriptor while its
+    // executable provider is absent. Exercise that published runtime shape.
+    let descriptor = ServiceDescriptor::new("retained_import", "Retained import")
+        .with_credentials(agent_access_provider::CredentialDescriptor::default());
+    assert!(descriptor.credentials.verification_supported);
+    Arc::make_mut(&mut runtime.services).insert("retained_import".into(), Arc::new(descriptor));
+    assert!(!runtime.providers.contains_key("retained_import"));
+    assert!(runtime.gateway_config("retained_import").is_none());
+    let error = runtime
+        .preflight_execution_credential_verification(
+            "retained_import",
+            &IdentityContext::anonymous(),
+            CredentialVerificationInput::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.decision(), Decision::Deny);
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+    assert_eq!(error.message, "service is not supported");
+}
+
+#[tokio::test]
 async fn gateway_operation_requires_classified_required_scopes_before_credentials() {
     let identity_token_path = write_temp_secret("agent-one-token");
     let missing_token_path = temp_path("missing-git-token");
@@ -8086,6 +8237,8 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         0,
     )));
     let invalid_runtime = BrokerRuntime {
+        gateways: runtime.gateways.clone(),
+        gateway_configs: runtime.gateway_configs.clone(),
         effective_credentials: Arc::new(invalid_config.credentials.clone()),
         imported_catalog: runtime.imported_catalog.clone(),
         imported_credential_contracts: runtime.imported_credential_contracts.clone(),
@@ -8271,13 +8424,16 @@ fn runtime_preflights_gateway_proxy_secrets() {
             response_body_max_bytes: None,
             streaming_idle_timeout_ms: None,
             correlation_headers: true,
-            git: Some(crate::GatewayGitConfig {
-                allow_fetch: true,
-                allow_push: false,
-                deny_ref_patterns: vec![],
-                deny_delete_refs: true,
-                receive_pack_prefix_max_bytes: Some(64 * 1024),
-            }),
+            protocol_fields: toml::from_str(
+                r#"[git]
+allow_fetch = true
+allow_push = false
+deny_ref_patterns = []
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+            )
+            .unwrap(),
         },
     );
 
@@ -8445,13 +8601,16 @@ fn runtime_rejects_provider_service_that_shadows_a_gateway() {
             response_body_max_bytes: None,
             streaming_idle_timeout_ms: None,
             correlation_headers: true,
-            git: Some(crate::GatewayGitConfig {
-                allow_fetch: true,
-                allow_push: false,
-                deny_ref_patterns: vec![],
-                deny_delete_refs: true,
-                receive_pack_prefix_max_bytes: Some(64 * 1024),
-            }),
+            protocol_fields: toml::from_str(
+                r#"[git]
+allow_fetch = true
+allow_push = false
+deny_ref_patterns = []
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+            )
+            .unwrap(),
         },
     );
 
@@ -8787,13 +8946,16 @@ fn git_gateway_config() -> crate::GatewayConfig {
         response_body_max_bytes: Some(1024 * 1024),
         streaming_idle_timeout_ms: Some(30_000),
         correlation_headers: true,
-        git: Some(crate::GatewayGitConfig {
-            allow_fetch: true,
-            allow_push: true,
-            deny_ref_patterns: vec!["refs/heads/main".to_string()],
-            deny_delete_refs: true,
-            receive_pack_prefix_max_bytes: Some(65_536),
-        }),
+        protocol_fields: toml::from_str(
+            r#"[git]
+allow_fetch = true
+allow_push = true
+deny_ref_patterns = ["refs/heads/main"]
+deny_delete_refs = true
+receive_pack_prefix_max_bytes = 65536
+"#,
+        )
+        .unwrap(),
     }
 }
 

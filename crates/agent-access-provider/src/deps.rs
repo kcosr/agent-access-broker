@@ -96,6 +96,7 @@ pub mod tokio {
 /// `toml` 0.9: the deserializer and error a backend configuration parser
 /// ([`BackendConfigParser`](crate::BackendConfigParser)) takes and returns.
 pub mod toml {
+    pub use ::toml::Value;
     pub mod de {
         pub use ::toml::de::{Error, ValueDeserializer};
     }

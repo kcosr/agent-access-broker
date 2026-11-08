@@ -176,7 +176,7 @@ impl HostNetwork {
         Ok(TransportClient::new(client, selection.route()))
     }
 
-    /// A Git gateway's client: the gateway's ordinary route, a connect
+    /// A gateway's client: the gateway's ordinary route, a connect
     /// timeout only, and no automatic redirects.
     pub(crate) fn gateway_client(
         &self,
@@ -187,6 +187,12 @@ impl HostNetwork {
         let selection = self.egress.resolve(label, upstream_base, gateway_proxy)?;
         let client = self
             .client(&selection, ClientProfile::Upload)?
+            .retry(reqwest::retry::never())
+            .http1_only()
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
             .build()
             .map_err(|error| HostConfigError::invalid(format!("gateway HTTP client: {error}")))?;
         Ok((client, selection.route()))
@@ -708,5 +714,73 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn gateway_client_replaces_a_closed_idle_http1_connection_before_the_next_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn head(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+            let mut value = Vec::new();
+            while !value.ends_with(b"\r\n\r\n") {
+                value.push(stream.read_u8().await.unwrap());
+                assert!(value.len() < 16 * 1024);
+            }
+            value
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let (client, _) = network(&[], None)
+            .gateway_client("gateway fixture", &url, None)
+            .unwrap();
+        let (close, close_requested) = tokio::sync::oneshot::channel();
+        let (closed, close_observed) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut first, _) = listener.accept().await.unwrap();
+            assert!(head(&mut first).await.starts_with(b"GET /one HTTP/1.1"));
+            first
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            close_requested.await.unwrap();
+            first.shutdown().await.unwrap();
+            drop(first);
+            closed.send(()).unwrap();
+            let (mut second, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert!(head(&mut second).await.starts_with(b"GET /two HTTP/1.1"));
+            second
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndata")
+                .await
+                .unwrap();
+        });
+        assert_eq!(
+            client
+                .get(url.join("/one").unwrap())
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+        close.send(()).unwrap();
+        close_observed.await.unwrap();
+        assert_eq!(
+            client
+                .get(url.join("/two").unwrap())
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            b"data".as_slice()
+        );
+        server.await.unwrap();
     }
 }

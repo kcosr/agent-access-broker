@@ -533,7 +533,8 @@ async fn push_gateway(configure: impl FnOnce(&mut BrokerConfig)) -> GatewayRoute
     test_gateway_router_with_config(true, &["repo.fetch", "repo.push"], |config| {
         let gateway = config.gateways.get_mut("gitlab_git").unwrap();
         gateway.request_body_max_bytes = Some(64 * 1024 * 1024);
-        gateway.git.as_mut().unwrap().deny_ref_patterns = vec!["refs/heads/protected".into()];
+        gateway.protocol_fields.get_mut("git").unwrap()["deny_ref_patterns"] =
+            toml::Value::Array(vec![toml::Value::String("refs/heads/protected".into())]);
         configure(config);
     })
     .await
@@ -756,6 +757,12 @@ enum EarlyAnswer {
     /// Sends 200 response headers at once, reads the whole chunked pack, then
     /// sends its report and ends the response.
     AcceptThenRead,
+    /// Completes a zero-length or fixed-length 200 response at once, then
+    /// continues reading the whole chunked pack.
+    AcceptCompleteThenRead { with_report: bool },
+    /// Reads at least [`EARLY_READ`] body bytes, completes an empty 200
+    /// response, and then stops reading until told to close the connection.
+    AcceptCompleteThenStall,
 }
 
 const EARLY_REPORT: &[u8] = b"unpack ok\n";
@@ -819,13 +826,22 @@ impl EarlyOrigin {
                     break end + 4;
                 }
             };
-            if let EarlyAnswer::AcceptThenRead = answer {
-                tls.write_all(
-                    b"HTTP/1.1 200 OK\r\n\
-                      content-type: application/x-git-receive-pack-result\r\n\
-                      transfer-encoding: chunked\r\n\r\n",
-                )
-                .unwrap();
+            if matches!(
+                answer,
+                EarlyAnswer::AcceptThenRead | EarlyAnswer::AcceptCompleteThenRead { .. }
+            ) {
+                if let EarlyAnswer::AcceptCompleteThenRead { with_report } = answer {
+                    let report = if with_report { EARLY_REPORT } else { b"" };
+                    write!(tls, "HTTP/1.1 200 OK\r\ncontent-type: application/x-git-receive-pack-result\r\ncontent-length: {}\r\n\r\n", report.len()).unwrap();
+                    tls.write_all(report).unwrap();
+                } else {
+                    tls.write_all(
+                        b"HTTP/1.1 200 OK\r\n\
+                          content-type: application/x-git-receive-pack-result\r\n\
+                          transfer-encoding: chunked\r\n\r\n",
+                    )
+                    .unwrap();
+                }
                 tls.flush().unwrap();
                 let mut pack = std::io::BufReader::new(Read::chain(
                     std::io::Cursor::new(received.split_off(head)),
@@ -833,20 +849,33 @@ impl EarlyOrigin {
                 ));
                 loop {
                     let mut size = String::new();
-                    pack.read_line(&mut size).unwrap();
+                    let line = pack.read_line(&mut size);
+                    if matches!(answer, EarlyAnswer::AcceptCompleteThenRead { .. })
+                        && (line.is_err() || matches!(line, Ok(0)))
+                    {
+                        break;
+                    }
+                    line.unwrap();
                     let size = usize::from_str_radix(size.trim_end(), 16).unwrap();
                     let mut chunk = vec![0_u8; size + 2];
-                    pack.read_exact(&mut chunk).unwrap();
+                    let read = pack.read_exact(&mut chunk);
+                    if matches!(answer, EarlyAnswer::AcceptCompleteThenRead { .. }) && read.is_err()
+                    {
+                        break;
+                    }
+                    read.unwrap();
                     if size == 0 {
                         break;
                     }
                     counter.fetch_add(size, Ordering::SeqCst);
                 }
                 drop(pack);
-                write!(tls, "{:x}\r\n", EARLY_REPORT.len()).unwrap();
-                tls.write_all(EARLY_REPORT).unwrap();
-                tls.write_all(b"\r\n0\r\n\r\n").unwrap();
-                tls.flush().unwrap();
+                if matches!(answer, EarlyAnswer::AcceptThenRead) {
+                    write!(tls, "{:x}\r\n", EARLY_REPORT.len()).unwrap();
+                    tls.write_all(EARLY_REPORT).unwrap();
+                    tls.write_all(b"\r\n0\r\n\r\n").unwrap();
+                    tls.flush().unwrap();
+                }
                 end.store(true, Ordering::SeqCst);
                 let _ = closing.recv_timeout(STEP);
                 return;
@@ -857,6 +886,12 @@ impl EarlyOrigin {
                 received.extend_from_slice(&buffer[..read]);
             }
             counter.store(received.len() - head, Ordering::SeqCst);
+            if matches!(answer, EarlyAnswer::AcceptCompleteThenStall) {
+                tls.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/x-git-receive-pack-result\r\ncontent-length: 0\r\n\r\n").unwrap();
+                tls.flush().unwrap();
+                let _ = closing.recv_timeout(STEP);
+                return;
+            }
             let answer_body = b"upstream refused the pack\n";
             write!(
                 tls,
@@ -904,6 +939,13 @@ impl EarlyOrigin {
 
 /// A gateway that may push `sip/service` to `origin`.
 async fn early_origin_gateway(origin: &EarlyOrigin) -> GatewayRouterFixture {
+    early_origin_gateway_with_body_timeout(origin, None).await
+}
+
+async fn early_origin_gateway_with_body_timeout(
+    origin: &EarlyOrigin,
+    timeout_ms: Option<u64>,
+) -> GatewayRouterFixture {
     let base_url = origin.base_url.clone();
     push_gateway(|config| {
         let gateway = config.gateways.get_mut("gitlab_git").unwrap();
@@ -916,6 +958,9 @@ async fn early_origin_gateway(origin: &EarlyOrigin) -> GatewayRouterFixture {
                     .join("../agent-access-core/tests/fixtures/outbound-tls/ca-a.pem"),
             ),
         };
+        if let Some(timeout_ms) = timeout_ms {
+            config.limits.request_body_timeout_ms = timeout_ms;
+        }
     })
     .await
 }
@@ -981,6 +1026,7 @@ async fn a_push_answered_early_upstream_is_read_to_its_end_once_the_upstream_let
     );
     wait_until(|| guards.global_in_flight_requests() == 0).await;
     assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+    assert_abandoned_upload_audit(&fixture, 413, ReasonCode::UpstreamProtocolFailed).await;
 }
 
 /// The pace of a client resuming its upload: one chunk every tenth of a
@@ -1110,6 +1156,153 @@ async fn a_push_accepted_early_upstream_is_forwarded_whole_past_the_lingering_de
     origin.close();
     wait_until(|| guards.global_in_flight_requests() == 0).await;
     assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+}
+
+/// Completing response delivery does not complete an upstream-held upload.
+/// Both empty and fixed-length replies retain request capacity while the client
+/// has not finished sending. A subsequent client abandonment has bounded cleanup
+/// and one failed terminal audit even though the earlier upstream status was 200.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_successful_push_responses_retain_capacity_until_abandoned_upload_ends() {
+    for with_report in [false, true] {
+        let mut origin = EarlyOrigin::start(EarlyAnswer::AcceptCompleteThenRead { with_report });
+        let fixture = early_origin_gateway_with_body_timeout(&origin, Some(2_000)).await;
+        let guards = fixture._broker.state().shared_ingress.clone();
+        let address = fixture._broker.running().gateway_addr().unwrap();
+        let authorization = gateway_basic(&fixture.agent_token);
+        let pack_bytes = 1024 * 1024;
+        let first_bytes = 2 * RESUMED_CHUNK;
+        let request = push_request_bytes("refs/heads/feature", &authorization, pack_bytes);
+        let body_bytes = request.len()
+            - request
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .unwrap()
+            - 4;
+        let split = request.len() - pack_bytes + first_bytes;
+        let (mut reader, mut writer) = connect_to(address).await;
+        writer.write_all(&request[..split]).await.unwrap();
+        let (status, _, report) =
+            tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+                .await
+                .unwrap()
+                .expect("the early successful response is fully delivered");
+        assert_eq!(status, 200);
+        assert_eq!(report, if with_report { EARLY_REPORT } else { b"" });
+        assert!(!origin.ended(), "the rest of the upload has not been sent");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let retained = (
+            guards.global_in_flight_requests(),
+            guards.principal_in_flight_requests("gateway-user"),
+        );
+
+        writer.shutdown().await.unwrap();
+        drop(writer);
+        drop(reader);
+        wait_until(|| guards.global_in_flight_requests() == 0).await;
+        assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+        wait_until(|| origin.ended()).await;
+        assert!(origin.read() < body_bytes, "the client abandoned the pack");
+        origin.close();
+        assert_eq!(
+            retained,
+            (1, 1),
+            "completed response with_report={with_report} must retain upload capacity"
+        );
+        assert_abandoned_upload_audit(&fixture, 200, ReasonCode::GatewayRequestBodyDenied).await;
+    }
+}
+
+async fn assert_abandoned_upload_audit(
+    fixture: &GatewayRouterFixture,
+    status: u16,
+    reason: ReasonCode,
+) {
+    fixture
+        ._broker
+        .runtime()
+        .shutdown_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let records: Vec<_> = read_audit_records(&fixture.audit_path)
+        .into_iter()
+        .filter(|record| record["service"] == "gitlab_git" && record["action"] == "repo.push")
+        .collect();
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0]["providerAudit"]["gateway"]["phase"], "started");
+    assert_eq!(records[1]["providerAudit"]["gateway"]["phase"], "failed");
+    assert_eq!(records[1]["upstreamStatus"], status);
+    assert_eq!(records[1]["reasonCode"], reason.as_str());
+    assert_eq!(records[1]["decision"], "error");
+}
+
+/// If an upstream drops an unfinished upload after completing a successful
+/// response, the retained upload owner hands the body to bounded disposal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn completed_successful_push_keeps_capacity_through_abandoned_upload_disposal() {
+    let mut origin = EarlyOrigin::start(EarlyAnswer::AcceptCompleteThenStall);
+    let fixture = early_origin_gateway(&origin).await;
+    let guards = fixture._broker.state().shared_ingress.clone();
+    let address = fixture._broker.running().gateway_addr().unwrap();
+    let authorization = gateway_basic(&fixture.agent_token);
+    let pack_bytes = 4 * 1024 * 1024;
+    let first_bytes = 256 * 1024;
+    let request = push_request_bytes("refs/heads/feature", &authorization, pack_bytes);
+    let split = request.len() - pack_bytes + first_bytes;
+    let (mut reader, mut writer) = connect_to(address).await;
+    writer.write_all(&request[..split]).await.unwrap();
+    let (status, _, report) = tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("the empty successful response is fully delivered");
+    assert_eq!(status, 200);
+    assert!(report.is_empty());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let while_held = (
+        guards.global_in_flight_requests(),
+        guards.principal_in_flight_requests("gateway-user"),
+    );
+    origin.close();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let while_discarding = (
+        guards.global_in_flight_requests(),
+        guards.principal_in_flight_requests("gateway-user"),
+    );
+    tokio::time::timeout(STEP, writer.write_all(&request[split..]))
+        .await
+        .unwrap()
+        .expect("the Broker disposes of the abandoned upload");
+    writer
+        .write_all(
+            format!(
+                "GET /sip/service.git/info/refs?service=git-upload-pack HTTP/1.1\r\n\
+                 host: {GIT_HOST}\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let (next, reason, _) = tokio::time::timeout(STEP, read_response_with_reason(&mut reader))
+        .await
+        .unwrap()
+        .expect("bounded disposal leaves the connection usable");
+    assert_eq!(
+        (next, reason.as_deref()),
+        (401, Some("gateway_auth_required"))
+    );
+    wait_until(|| guards.global_in_flight_requests() == 0).await;
+    assert_eq!(guards.principal_in_flight_requests("gateway-user"), 0);
+    assert_eq!(
+        while_held,
+        (1, 1),
+        "the upstream-held upload retains capacity"
+    );
+    assert_eq!(
+        while_discarding,
+        (1, 1),
+        "the unfinished body retains capacity through disposal"
+    );
+    assert_abandoned_upload_audit(&fixture, 200, ReasonCode::UpstreamProtocolFailed).await;
 }
 
 /// Starts a push to an origin that refuses it early and keeps reading, and
