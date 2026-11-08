@@ -1483,6 +1483,15 @@ requires restoring the matching pre-upgrade database, configuration, keys,
 binary and portal together; do not remove the table or edit migration history.
 See [gateway route persistence](database.md#imported-service-records).
 
+Accepted HTTP gateway response declarations containing `*/*` or `type/*` require
+a Broker with [response media range support](http-gateway-setup.md#response-media-declarations),
+without another database migration. Older binaries cannot load any retained
+wildcard plan and leave the containing gateway service, including its other
+actions, unavailable. Disabling or quarantining an individual action does not
+remove its stored plan. Before downgrading, restore a compatible pre-wildcard
+managed-state backup with matching configuration, keys and binaries using the
+matched-backup procedure above.
+
 Migrations `033_agent_token_issuance` and `034_agent_token_issuance_contexts`
 require explicit context permission for new personal issuance; follow the
 [issuance upgrade and recovery procedures](#agent-token-issuance-upgrade).
