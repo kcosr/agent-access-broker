@@ -359,12 +359,12 @@
   <header>
     <p class="eyebrow">Agent Access Broker · System Architecture</p>
     <h1>Agent Access Broker</h1>
-    <p class="lede">How agent requests leave a managed environment, are bound to a verified user and execution context, and are authorized and executed against company systems without the agent ever holding an upstream credential.</p>
+    <p class="lede">How agent requests are bound to a verified user and execution context, authorized, and executed against company systems while keeping upstream execution credentials in the broker.</p>
     <dl class="meta">
       <div><dt>Scope</dt><dd>Identity, policy, credentials, execution</dd></div>
       <div><dt>Upstreams</dt><dd>Built-in providers · MCP · OpenAPI</dd></div>
       <div><dt>Audience</dt><dd>Engineering, security, platform owners</dd></div>
-      <div><dt>Revision</dt><dd>Draft · 2026-09-27</dd></div>
+      <div><dt>Revision</dt><dd>Reviewed · 2026-11-08</dd></div>
     </dl>
     <nav class="toc" aria-label="Contents">
       <div>
@@ -419,7 +419,7 @@
     <div class="sec-body split">
       <div>
         <p>Coding agent workflows benefit from access to company systems so they can gather relevant context, carry out related tasks and use feedback to improve their work. This supports more automation across the workflow, closes the loop between changes and their validation, and reduces manual coordination between tools.</p>
-        <p>The Agent Access Broker provides controlled access for these workflows. Giving an agent a personal access token places a long-lived credential in the workload. The broker keeps backend credentials outside the workload and provides a common place to authorize and audit agent requests, with controls over which actions are allowed from each execution environment.</p>
+        <p>The Agent Access Broker keeps upstream execution credentials outside the workload and provides a common place to authorize and audit agent requests, with controls over which actions are allowed from each execution environment.</p>
         <p>An agent calls the Agent Access Broker with a typed action, such as <code>jira.issue.view</code> or <code>gitlab.merge_request.create</code>. The broker identifies the user and execution context, checks company policy, and performs authorized actions using a stored backend credential. It returns the result to the agent without exposing the credential.</p>
         <div class="callout">
           <b>Policy enforcement.</b> The broker controls which resources agents may access, from which environments, and with which actions. Upstream systems independently enforce the permissions of the credential used for each request. A request must satisfy both sets of controls. <a href="#decision">Section 10</a> describes how they combine.
@@ -429,7 +429,7 @@
         <div class="label">Request authorization</div>
         <ol>
           <li><span class="q">Caller identity</span><a class="ref" href="#managed">§05–06</a><span class="a">A <b>principal</b>: the user behind the agent, established by the platform or by a broker token.</span></li>
-          <li><span class="q">Execution environment</span><a class="ref" href="#contexts">§04</a><span class="a">An <b>execution context</b> such as <code>internal</code> or <code>external</code>, set by trusted infrastructure.</span></li>
+          <li><span class="q">Execution environment</span><a class="ref" href="#contexts">§04</a><span class="a">An <b>execution context</b> such as <code>internal</code> or <code>external</code>, set by trusted infrastructure or Broker configuration.</span></li>
           <li><span class="q">Requested operation</span><a class="ref" href="#surfaces">§03</a><span class="a">A typed <b>action</b> on an upstream <b>resource</b>: a repository, project, space or job.</span></li>
           <li><span class="q">Access policy</span><a class="ref" href="#grants">§08–09</a><span class="a">A <b>grant</b> must cover the principal, action, resource and context.</span></li>
           <li><span class="q">Backend credential</span><a class="ref" href="#custody">§07</a><span class="a">A stored <b>credential</b>: the user's own, or a configured service account.</span></li>
@@ -625,7 +625,7 @@
     <div class="sec-head">
       <div class="num">03</div>
       <h2>How agents connect</h2>
-      <p>Agents discover and invoke typed actions through Broker interfaces and use Git through its gateway.</p>
+      <p>Agents invoke typed actions through Broker interfaces; native HTTP clients use protocol gateways.</p>
     </div>
     <div class="sec-body">
       <p>Each broker provider exposes a defined set of actions, such as view, search, create, update and trigger, with input and output schemas owned by the broker. An agent discovers which services, resources and actions are available to it, then invokes an action by name. Typed action interfaces share the same catalog, identity checks and policy checks.</p>
@@ -655,10 +655,10 @@
             <td>Remote MCP clients such as Cursor; no local filesystem access</td>
           </tr>
           <tr>
-            <td>Git gateway</td>
+            <td>HTTP gateways</td>
             <td>Dedicated broker listener</td>
-            <td><span class="tag">git smart-HTTP</span></td>
-            <td>Clone, fetch and push as <code>repo.fetch</code> / <code>repo.push</code>, with push-ref rules</td>
+            <td><span class="tag">raw HTTP</span></td>
+            <td>Git fetch/push with ref rules; reviewed OpenAPI operations for ordinary HTTP clients</td>
           </tr>
         </tbody>
       </table>
@@ -670,12 +670,12 @@
           <li><b>Attachment formats.</b> Authorized Jira and Confluence downloads allow all media types by default, with optional allow/deny patterns independent of exact upload lists. Byte limits and attachment membership checks still apply. Media rules filter declarations without inspecting file contents; see <a href="configuration.md#jira-and-confluence-attachment-media-policy">attachment media policy</a>.</li>
         </ul>
         <ul class="list">
-          <li><b>Authentication.</b> All four interfaces use platform-attached identity in managed environments and an <code>agent_invoke</code> token for unmanaged clients.</li>
+          <li><b>Authentication.</b> The illustrated invocation paths use an <code>agent_invoke</code> token or an explicitly enabled trusted identity path. Gateway authentication is configured separately.</li>
           <li><b>Git credentials.</b> Unmanaged clients use a Git credential helper to supply the broker token. Managed clients use platform-attached identity. The broker supplies the GitLab credential for upstream requests.</li>
         </ul>
       </div>
       <h3 id="imports">Imported services</h3>
-      <p>Base administrators can connect an upstream MCP HTTP server, import an OpenAPI document, or import a local command the operator approved, and review its operations as ordinary broker actions. This is a general integration model: agents use the same CLI, HTTP API and MCP interfaces, and calls receive the same identity, context, grant, credential, rate-limit and audit checks as built-in actions.</p>
+      <p>Base administrators can import MCP HTTP tools, OpenAPI documents or operator-approved local commands. Reviewed operations become broker actions or, for an approved OpenAPI gateway, native HTTP routes. Calls receive Broker identity, context, grant, credential, rate-limit and audit checks.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="import-flow-title">
           <title id="import-flow-title">Import lifecycle: operator permits destinations, administrator discovers and reviews tools, then grants authorize agent calls</title>
@@ -716,7 +716,7 @@
           <h4>Review and refresh</h4>
           <ul class="list">
             <li><b>Action names.</b> Suggested identifiers can be edited before acceptance. Accepted identifiers stay fixed because agent calls and grants reference them. Retiring an action does not transfer its grants to a replacement.</li>
-            <li><b>Labels and descriptions.</b> Optional labels default to the MCP tool title or OpenAPI summary/operation ID; administrators can edit or clear them during review. Labels appear only in the management UI. Agents receive the description and input schema. When an OpenAPI description is absent, discovery uses the upstream summary, operation ID, or HTTP method and path. Editing a label does not change that description.</li>
+            <li><b>Labels and descriptions.</b> Administrators can edit management-only labels. Agents receive the upstream description and accepted input schema; changing a label does not change those instructions.</li>
             <li><b>Effects.</b> New and changed tools start write-capable until reviewed. Upstream read-only hints are suggestions. The flag helps select grant actions and limits read-only identity paths to reads; it does not restrict the upstream operation or automatically change existing grants. Reclassifying a granted action requires confirmation.</li>
             <li><b>Manual refresh.</b> New tools remain unselected. A complete refresh quarantines missing, unsupported or behaviorally changed tools. Acceptance of changes affecting existing grants requires confirmation; failed discovery publishes no partial catalog.</li>
           </ul>
@@ -727,11 +727,12 @@
         <tbody>
           <tr><td>MCP HTTP</td><td>Connect to an MCP URL and list tools. Discovery can use a shared execution token, a separate token, or the administrator's personal credential.</td><td>Shared or personal static tokens using Bearer or a configured header; personal OAuth through an approved registration.</td></tr>
           <tr><td>OpenAPI / Swagger HTTP</td><td>Fetch an OpenAPI 3.1 or Swagger 2.0 JSON document from an approved URL, or upload a file retained for offline refresh and reviewed replacement. Both use shared JSON and scalar form request handling. The API base URL is approved separately; only a private document URL needs a discovery credential.</td><td>Shared or personal static credentials with a selected HTTP Basic, Bearer or header API-key scheme. An OAuth declaration in the document does not configure OAuth.</td></tr>
+          <tr><td>OpenAPI HTTP gateway</td><td>Review operations from the same document formats for an operator-reserved gateway host and upstream destination. Native clients receive raw HTTP responses.</td><td>Anonymous upstream or shared/personal static credentials; no upstream OAuth. Broker ingress still requires authentication.</td></tr>
           <tr><td>Local command</td><td>Run an executable the operator approved by name in TOML with <code>describe</code>, which prints a manifest of actions and resource types. Each call runs it once with one JSON request on stdin.</td><td>Shared or personal static tokens or username-and-token credentials, passed only on stdin, or none for a command that needs no credential.</td></tr>
         </tbody>
       </table>
       <div class="callout warm"><b>Whole-action access.</b> MCP and OpenAPI describe operation arguments, but provide no standard mapping to the broker's resource catalog. Those imports therefore grant whole actions, subject to upstream permissions. A local command may declare resource types: the broker checks actions that name their resources in typed inputs before the command starts, and passes the caller's grants to the command for the rest, which it must enforce itself. To enforce project, space or repository limits within the broker otherwise, implement a provider in code instead of importing.</div>
-      <p>The broker does not host upstream MCP stdio servers; a local command import runs one trusted process per call. Commands can declare single-file downloads when the operator enables a byte cap; the CLI and local stdio MCP save verified bytes and return metadata receipts. HTTP MCP exposes download detail but excludes executable download tools. The current OpenAPI / Swagger profile supports bounded JSON responses with JSON and scalar form requests; file transfers are outside that profile. No import adapter automatically replays a failed write. See <a href="imported-services.md">import administration</a>, <a href="imported-openapi.md">OpenAPI support</a>, <a href="command-imports.md">command imports</a> and <a href="#backend-oauth">OAuth connections</a>.</p>
+      <p>The broker does not host upstream MCP stdio servers. Approved commands run as the Broker user without a sandbox and must be trusted with its state and keys. Commands can declare bounded single-file downloads for the CLI and local stdio MCP; HTTP MCP excludes executable download tools. OpenAPI action imports support bounded JSON responses; generated HTTP gateways instead authorize whole operations and forward bounded raw bodies, without body-field or response-schema enforcement. Neither derives resource scopes from path parameters. No import adapter automatically replays a failed write. See <a href="imported-services.md">imports</a>, <a href="imported-openapi.md">OpenAPI actions</a>, <a href="http-gateway-setup.md">HTTP gateways</a> and <a href="command-imports.md#trust-model">command trust</a>.</p>
     </div>
   </section>
 
@@ -780,7 +781,7 @@
       </table>
 
       <div class="callout">
-        <b>Environment controls.</b> Controls outside the broker determine which repositories are provisioned into an environment and which HTTP egress destinations, such as model providers, the proxy permits for its context. The broker's context checks apply to API access alongside these controls.
+        <b>Deployment boundary.</b> Containment requires blocking direct agent access to protected upstreams and protecting the Broker host, keys and trusted code. Context labels do not isolate workloads, detect prompt injection or prevent disclosure through permitted operations. Provisioning, model-provider egress and content screening require separate controls. See the <a href="security-model.md#agent-egress-boundary">security model</a>.
       </div>
     </div>
   </section>
@@ -883,11 +884,11 @@
         </div></div>
         <div class="note"><div class="badge">B</div><div>
           <h4>Proxy authentication</h4>
-          <p>Broker accepts context and fingerprint only with an authorized private caller credential. The selected ingress must strip untrusted assertions before injecting verified values. Broker validates assertions and rejects unauthenticated copies. The canonical identity header is <code>X-AW-Identity-Token-SHA256</code>; it does not require a particular ingress product. An explicit Broker token remains authoritative, including when invalid.</p>
+          <p>Broker accepts context and fingerprint only with an authorized private caller credential. Ingress must replace untrusted assertions. Username attesters must control the asserted username as well as the caller secret; hiding the secret alone does not prevent impersonation. The fingerprint header is <code>X-AW-Identity-Token-SHA256</code>. An explicit Broker token remains authoritative over a fingerprint, including when invalid.</p>
         </div></div>
         <div class="note"><div class="badge">C</div><div>
           <h4>Managed identity permissions</h4>
-          <p>Managed fingerprints support the existing discovery, invocation, MCP and Git surfaces. Trusted usernames are limited to HTTP MCP. Both apply current human permissions and grant no self-service or administration. A read-only path lists and runs only actions classified as reads, within those permissions, and cannot push with Git. MCP pins identity through final admission; identity changes reject old sessions but do not cancel operations already admitted.</p>
+          <p>Managed fingerprints support discovery, invocation, MCP and explicitly enabled Git gateways. Trusted usernames are limited to HTTP MCP. Both apply current human permissions and grant no self-service or administration. A read-only path lists and runs only actions classified as reads, within those permissions, and cannot push with Git. MCP pins identity through final admission; identity changes reject old sessions but do not cancel operations already admitted.</p>
         </div></div>
       </div>
     </div>
@@ -914,7 +915,7 @@
             <text class="d-title" x="24" y="54">Portal</text>
             <text class="d-small" x="24" y="76">Microsoft Entra ID (OIDC)</text>
             <text class="d-small" x="24" y="92">browser session</text>
-            <text class="d-small" x="24" y="108">self-service only</text>
+            <text class="d-small" x="24" y="108">management session</text>
           </g>
           <path class="d-edge" d="M202 88 H228" marker-end="url(#arrow4)"/>
           <g>
@@ -1034,8 +1035,8 @@
           <text class="d-label" x="20" y="202">PER REQUEST</text>
           <rect class="d-node" x="20" y="212" width="190" height="76" rx="6"/>
           <text class="d-title" x="34" y="234">Policy passed</text>
-          <text class="d-small" x="34" y="254">one grant covers the</text>
-          <text class="d-small" x="34" y="270">request and names a mode</text>
+          <text class="d-small" x="34" y="254">grant selection fixes</text>
+          <text class="d-small" x="34" y="270">the credential mode</text>
           <path class="d-edge" d="M210 250 H248" marker-end="url(#arrow5)"/>
 
           <rect class="d-node" x="250" y="212" width="190" height="76" rx="6"/>
@@ -1047,7 +1048,7 @@
           <rect class="d-stage" x="480" y="212" width="200" height="76" rx="6"/>
           <text class="d-title" x="494" y="234">Decrypt in memory</text>
           <text class="d-small" x="494" y="254">redacted from logs</text>
-          <text class="d-small" x="494" y="270">never returned to caller</text>
+          <text class="d-small" x="494" y="270">execution secret stays here</text>
           <path class="d-edge" d="M795 198 V236 H682" marker-end="url(#arrow5)"/>
 
           <path class="d-edge" d="M680 270 H888" marker-end="url(#arrow5)"/>
@@ -1067,7 +1068,7 @@
             <li><b>User provisioning.</b> A user record is created on first sign-in only when a group claim maps to a managed group. Group evidence from Microsoft expires after eight hours unless refreshed by a new sign-in or, when membership renewal is enabled, renewed on demand from the refresh token stored at the last sign-in while the person or their agents use the broker.</li>
             <li><b>Local onboarding groups.</b> Administrators can automatically add newly created Microsoft users to selected active groups. This requires the same mapped-group admission and creates persistent local memberships, which survive Microsoft evidence expiry. Existing accounts are not backfilled or re-added on later sign-ins.</li>
             <li><b>Account roles.</b> Each account has one role: user, auditor, service policy manager, or admin. Auditors can inspect administrative metadata without changing it or revealing secrets. Roles and direct service assignments cannot be assigned through Microsoft group membership. A separate self-service flag controls personal management and My access; invocation grants remain independent.</li>
-            <li><b>Browser session permissions.</b> Browser sessions authorize self-service operations, with CSRF and same-origin checks. They cannot authorize agent invocation.</li>
+            <li><b>Browser session permissions.</b> Browser sessions authorize permitted self-service and role-based management, with CSRF and same-origin checks. They cannot authorize agent invocation.</li>
           </ul>
         </div>
         <div>
@@ -1076,13 +1077,14 @@
           <ul class="list">
             <li><b>Token permissions.</b> Users can limit a token to specific projects or read-only access. Agent requests must be allowed by both the token's permissions and the broker's grants.</li>
             <li><b>Personal credentials.</b> The broker selects the invoking user's token or OAuth connection for the configured service binding.</li>
+            <li><b>Deliberate issuance.</b> Authorized GitLab token creation and rotation return a new token as sensitive output. This is separate from the Broker-held execution credential; see <a href="gitlab-bot-provisioning.md">token provisioning</a>.</li>
             <li><b>Shared credentials.</b> Built-in providers use their configured credential source. Imported shared tokens are stored encrypted in the managed database and administered through Imports. The broker still authorizes and audits the invoking user; the upstream sees the shared credential's identity.</li>
             <li><b>Credential storage.</b> Credentials are encrypted and bound to their owner, service, profile and key ID. Changes to the encrypted data or these bindings cause validation to fail.</li>
           </ul>
         </div>
       </div>
       <h3 id="backend-oauth">Connecting an upstream account with OAuth</h3>
-      <p>Personal OAuth setup requires enabled self-service, a credential connection with OAuth and an active <code>per_user</code> action grant on a service that uses it, for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal. Ending a GitLab connection, by disconnect, reconnect or disabling its owner, also revokes its tokens in GitLab, and the connection reports whether that succeeded.</p>
+      <p>Personal OAuth setup requires enabled self-service, a credential connection with OAuth and an active <code>per_user</code> action grant on a service that uses it, for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal. Disconnecting a GitLab connection, replacing its consent or disabling its owner fences access locally and attempts upstream token revocation; its status reports pending or unsuccessful revocation.</p>
       <p>Authentication adapters implement the provider's OAuth behavior. The generic <code>mcp_oauth</code> adapter supports compatible MCP servers without new provider code. It requires an operator-approved client registration, the exact MCP endpoint/resource and a permission profile. Profiles use explicit scopes by default, or operator-selected <code>server_default</code> permissions with configured scopes absent. Importing tools alone does not establish a connection. Unusual provider flows still need a compiled adapter.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="oauth-flow-title">
@@ -1096,7 +1098,7 @@
           <rect class="d-node" x="270" y="18" width="220" height="80" rx="6"/>
           <text class="d-title" x="284" y="42">User consents upstream</text>
           <text class="d-small" x="284" y="64">Browser authorization flow</text>
-          <text class="d-small" x="284" y="82">PKCE binds the code exchange</text>
+          <text class="d-small" x="284" y="82">State and code-exchange checks</text>
           <path class="d-edge" d="M490 58 H538" marker-end="url(#oauth-arrow)"/>
           <rect class="d-stage" x="540" y="18" width="220" height="80" rx="6"/>
           <text class="d-title" x="554" y="42">Broker receives callback</text>
@@ -1128,7 +1130,7 @@
           </ul>
         </div>
       </div>
-      <p>OAuth is implemented for Gmail, for GitLab REST and GitLab Git gateways sharing one GitLab OAuth connection, and for compatible imported MCP services. OpenAPI and Swagger imports support static Basic, Bearer and header API-key credentials; OAuth security schemes are not supported. See <a href="oauth.md">delegated connections</a>, <a href="oauth.md#gitlab">GitLab OAuth setup</a> and <a href="imported-oauth.md">MCP OAuth configuration</a>.</p>
+      <p>Supported OAuth adapters cover Google, GitLab, Atlassian and compatible MCP servers. Provider assurances differ: Atlassian PKCE enforcement is unverified. OpenAPI imports do not support OAuth. See <a href="oauth.md">delegated connections</a> and <a href="imported-oauth.md">MCP OAuth configuration</a>.</p>
     </div>
   </section>
 
@@ -1141,7 +1143,7 @@
     </div>
     <div class="sec-body">
       <p>For resource-scoped providers, administrators register upstream resources in a catalog and give each one the execution contexts it may appear in. Grants then select from that catalog. Access is never inferred from upstream visibility alone. A resource must be covered by an enabled catalog entry eligible for the current context and by a grant.</p>
-      <p>Imported services use action/context grants without resource selections. Their upstream credentials supply any repository or data restrictions; the importer does not derive those restrictions from tool inputs.</p>
+      <p>MCP and OpenAPI imports grant whole actions/operations without resource selections. Commands may declare resource types with Broker or command enforcement, as described in <a href="#imports">§03a</a>.</p>
 
       <table>
         <thead><tr><th>Resource type</th><th>Governs</th><th>Selectors</th></tr></thead>
@@ -1152,7 +1154,7 @@
           <tr><td>cloudbees_ci_job</td><td>CloudBees CI jobs, builds and logs</td><td><span class="tag">exact</span> <span class="tag">namespace</span> <span class="tag">all</span></td></tr>
         </tbody>
       </table>
-      <p style="font-size:13px;color:var(--ink-3);margin-top:10px">Namespace and all selectors also cover upstream objects created later. <b>Resource groups</b> bundle entries with explicit inclusions and exclusions, without nesting. Resource types can opt out of exclusions; their entries remain available for inclusion.</p>
+      <p style="font-size:13px;color:var(--ink-3);margin-top:10px">Namespace and all selectors also cover upstream objects created later. <b>Resource groups</b> bundle entries with inclusions and exclusions, without nesting. Exclusions constrain their grant/token boundary, not other grants. Resource types can opt out of exclusions.</p>
 
       <div class="split" style="margin-top:28px">
         <div class="record">
@@ -1251,20 +1253,20 @@
   <section id="decision" class="wide">
     <div class="sec-head">
       <div><div class="num">10</div><h2>How a request is decided</h2></div>
-      <p>The controls from the previous sections combine into one decision, evaluated in a fixed order for every request.</p>
+      <p>The controls from the previous sections combine into each authorization decision.</p>
     </div>
     <div class="sec-body">
       <div class="split">
         <div>
-          <p>A request must satisfy each applicable control. Context eligibility determines which resources are available in the execution environment. A grant must authorize the caller's action on those resources, and any token restrictions must also permit it. The upstream system then enforces the permissions of the credential the broker presents. Broker authorization cannot override those upstream permissions.</p>
+          <p>A request must satisfy each applicable control: context eligibility, grants, any identity-path read-only ceiling and token restrictions, and the upstream permissions of the selected execution credential. Broker authorization cannot override upstream permissions.</p>
           <div class="formula">
             Effective access for a single request
-            <span class="eq">context eligibility<span class="op">∩</span>grant<span class="op">∩</span>token restrictions<span class="op">∩</span>upstream permissions</span>
+            <span class="eq">context eligibility<span class="op">∩</span>grant<span class="op">∩</span>identity/token limits<span class="op">∩</span>upstream permissions</span>
           </div>
           <dl class="layers">
             <dt>Context eligibility</dt><dd>Global admin, per resource (<a href="#grants">§08</a>)</dd>
             <dt>Grant</dt><dd>Admin or delegated service manager (<a href="#governance">§09</a>)</dd>
-            <dt>Token restrictions</dt><dd>User, optional, per token (<a href="#unmanaged">§06</a>)</dd>
+            <dt>Identity/token limits</dt><dd>Path read-only setting; issued tokens also require contexts and a read-only setting, with optional narrower restrictions (<a href="#unmanaged">§06</a>)</dd>
             <dt>Upstream permissions</dt><dd>What the presented credential allows (<a href="#custody">§07</a>)</dd>
           </dl>
         </div>
@@ -1286,8 +1288,8 @@
             <text class="d-sub" x="44" y="100">admin or service manager</text>
 
             <rect class="v-l3" x="48" y="114" width="240" height="146" rx="8"/>
-            <text class="d-label" x="64" y="136">TOKEN RESTRICTIONS</text>
-            <text class="d-sub" x="64" y="152">user · optional</text>
+            <text class="d-label" x="64" y="136">IDENTITY / TOKEN LIMITS</text>
+            <text class="d-sub" x="64" y="152">read-only, contexts, caveats</text>
 
             <g clip-path="url(#clip-token)">
               <rect class="v-eff" x="176" y="168" width="296" height="126" rx="12"/>
@@ -1302,12 +1304,12 @@
             <text class="v-eff-title" x="232" y="210" text-anchor="middle">Effective</text>
             <text class="v-eff-title" x="232" y="226" text-anchor="middle">access</text>
           </svg>
-          <figcaption><b>Figure 5.</b> Effective access is the intersection of context eligibility, grant permissions, token restrictions and upstream permissions.</figcaption>
+          <figcaption><b>Figure 5.</b> Effective access intersects context eligibility, grants, identity/token limits and upstream permissions.</figcaption>
         </figure>
       </div>
 
       <h3 style="margin-top:44px">Evaluation order</h3>
-      <p>Every invocation uses the same ordered checks. If a required check fails, the broker rejects the request. Authorization must complete before the requested action executes upstream; any preliminary lookup is limited as described below.</p>
+      <p>If a required check fails, the broker rejects the request. Authorization must complete before the requested action executes upstream; any preliminary lookup is limited as described below.</p>
       <figure>
         <svg viewBox="0 0 1040 230" role="img" aria-labelledby="f6t">
           <title id="f6t">Eight-stage request evaluation pipeline grouped into admit, authorize and execute</title>
@@ -1355,11 +1357,11 @@
           <g>
             <rect class="d-stage" x="396" y="44" width="118" height="104" rx="6"/>
             <text class="d-mono" x="408" y="64">4</text>
-            <text class="d-title" x="408" y="82">Token limits</text>
-            <text class="d-small" x="408" y="102">invoke class;</text>
-            <text class="d-small" x="408" y="117">service, action,</text>
+            <text class="d-title" x="408" y="82">Path / token</text>
+            <text class="d-small" x="408" y="102">invoke, read-only;</text>
+            <text class="d-small" x="408" y="117">token service, action,</text>
             <text class="d-small" x="408" y="132">context caveats</text>
-            <text class="d-deny" x="408" y="172">× outside token</text>
+            <text class="d-deny" x="408" y="172">× path/token denied</text>
           </g>
           <path class="d-edge-soft" d="M514 96 H524" marker-end="url(#arrow6)"/>
           <g>
@@ -1375,8 +1377,8 @@
             <rect class="d-stage" x="656" y="44" width="118" height="104" rx="6"/>
             <text class="d-mono" x="668" y="64">6</text>
             <text class="d-title" x="668" y="82">Grant</text>
-            <text class="d-small" x="668" y="102">one grant covers</text>
-            <text class="d-small" x="668" y="117">every target</text>
+            <text class="d-small" x="668" y="102">grant covers targets;</text>
+            <text class="d-small" x="668" y="117">search: winning band</text>
             <text class="d-deny" x="668" y="172">× no grant</text>
           </g>
           <path class="d-edge-soft" d="M774 96 H784" marker-end="url(#arrow6)"/>
@@ -1398,9 +1400,9 @@
             <text class="d-deny" x="928" y="172">× audit unavailable</text>
           </g>
           <path class="d-edge-soft" d="M6 196 H1034" style="stroke-dasharray:2 4"/>
-          <text class="d-small" x="6" y="220">Every outcome, allowed or denied, produces one audit record. The policy snapshot is pinned at stage 4 and used through execution.</text>
+          <text class="d-small" x="6" y="220">With audit configured, outcomes are recorded; streams and credentialed gateways also record their start. Decisions use a pinned policy snapshot.</text>
         </svg>
-        <figcaption><b>Figure 6.</b> Evaluation order for <code>POST /v1/invoke/{service}/{action}</code>. MCP tools and the Git gateway run the same stages.</figcaption>
+        <figcaption><b>Figure 6.</b> Conceptual evaluation of <code>POST /v1/invoke/{service}/{action}</code>. MCP tools and gateways share these controls, with protocol-specific sequencing. Policy edits govern subsequent requests; already prepared work may finish, subject to dispatch revalidation.</figcaption>
       </figure>
 
       <div class="notes">
@@ -1414,7 +1416,7 @@
         </div></div>
         <div class="note"><div class="badge">G</div><div>
           <h4>Git authorization</h4>
-          <p>Clone and push map to <code>repo.fetch</code> and <code>repo.push</code> on the repository's catalog entry. Pushes are also checked against ref rules: no deletions, no tags, and configured deny patterns.</p>
+          <p>Clone and push map to <code>repo.fetch</code> and <code>repo.push</code>. Pushes deny tag updates; deletion denial defaults on, with configured ref deny patterns also enforced. Git authorizes the requested path: after repository moves, update remotes and remove or exclude old paths that GitLab may still resolve. See <a href="git-http-gateway.md#moved-or-renamed-repositories">Git path authorization</a>.</p>
         </div></div>
       </div>
     </div>
@@ -1446,21 +1448,21 @@
           <li><b>Limit values.</b> Configuration sets personal defaults and optional shared service caps. Both allowances are charged together; a personal override cannot bypass a shared cap. The portal displays TOML-owned shared caps read-only. Administrators can override one principal's limit for a service in the portal, CLI or admin API, and users see their own limits on their Account page. Changing tokens or machines does not reset a principal's allowance; principals behind one proxy address are counted separately.</li>
           <li><b>Waiting and discovery.</b> Optional <code>max_wait</code> holds requests in personal FIFO order, taking turns among eligible callers within existing request capacity; the default is immediate refusal. New contention can make a queued request infeasible before its unchanged deadline. Service describe reports personal and shared policy, the caller's pending count and joint admission estimates without reserving capacity. Its separate bounded capacity remains available when invocation slots fill. Client timeouts can leave requests queued or executing; reconcile a mutation before resubmitting it.</li>
           <li><b>Rejections.</b> A rate-limited request is not executed. The broker returns <code>429 rate_limited</code> with <code>Retry-After</code>, the limit and an estimated retry time after accepted waiters, so agents wait without duplicating pending calls; the CLI exits with code 7. Throttling by an upstream service is reported separately as <code>upstream_rate_limited</code> with the upstream's wait, except after a write has already been applied, which is reported as an unverified write that must not be retried.</li>
-          <li><b>Login protection.</b> Failed local passwords lock a user out from one source address (IPv6 grouped by /64) for the lockout period without affecting other addresses. Beyond 256 failing addresses for one user, further addresses share a single counter.</li>
-          <li><b>Counter scope.</b> Counters are maintained per broker instance and are not shared across replicas. Invocation limits use rolling windows; authentication limits use fixed 60-second windows. Restart, a window change or re-enabling a shared cap starts a fresh allowance. Count-only changes and ordinary reloads retain usage. Numeric availability and rate refusals can reveal shared contention; requests later denied by policy still count.</li>
+          <li><b>Login protection.</b> Failed local passwords normally lock out one user/source pair (IPv6 grouped by /64). Beyond 256 tracked failing sources for a user, additional sources share a counter and lockout.</li>
+          <li><b>Counter scope.</b> One process owns each managed-store/audit/spool state set; counters are process-local. Invocation limits use rolling windows; authentication limits use fixed 60-second windows. Restart, a window change or re-enabling a shared cap starts a fresh allowance. Count-only changes and ordinary reloads retain usage. Numeric availability and rate refusals can reveal shared contention; requests later denied by policy still count.</li>
         </ul>
       </div>
       <div>
         <h3 style="margin-top:0">Audit</h3>
         <ul class="list">
-          <li><b>Audit fields.</b> Each outcome record includes a unique record ID (<code>auditId</code>), the node ID of the broker that wrote it (<code>nodeId</code>), the principal, groups, optional trusted caller ID (<code>callerId</code>), service, action, resolved resources, execution context, matched grant, credential mode, decision and upstream status. Caller ID names the attesting service and never contains credentials. Rate-limit rejections also record the limit and retry time.</li>
-          <li><b>Audit storage.</b> Operators choose a standalone SQLite audit database, which can be searched, or size-rotated JSONL files for log shippers. Both keep records for the configured retention period.</li>
-          <li><b>Audit availability.</b> Mandatory audit admission fails before execution or store changes when its record cannot be written. Password changes, authenticated logout, and resource or resource-group mutations persist a preflight first. If their supplemental completion record fails after commit, the response preserves the completed change and normal cookie handling, while the broker reports the audit fault through readiness and a correlated service-log event. The managed and audit stores commit separately, so a process crash can leave only preflight evidence.</li>
-          <li><b>Streaming and Git records.</b> Streams and Git transfers write a start record before any credential is sent and a final record at completion.</li>
+          <li><b>Audit fields.</b> Records identify the event (<code>auditId</code>), Broker node (<code>nodeId</code>), principal, groups, service, action, resources and decision. Execution context, matched grant, credential mode and upstream status appear when available. Optional <code>callerId</code> names the attesting service without credentials. Rate-limit rejections also record the limit and retry time.</li>
+          <li><b>Audit storage.</b> When configured, audit uses searchable SQLite or rotated JSONL with retention. Default <code>write</code> durability is not host-crash durable; choose a sync mode when required. Records are not tamper-evident against a host administrator; protect and export them accordingly.</li>
+          <li><b>Audit availability.</b> Readiness checks and required preflights fail closed before dispatch or mutation. Supervised JSON invocations reserve terminal capacity before dispatch, but final audit failure can follow an upstream change: reconcile before retrying. Password changes, logout and resource/group mutations preserve committed success if supplemental audit fails, reporting the fault through readiness and logs. Separate managed/audit commits can leave only preflight evidence after a crash.</li>
+          <li><b>Streaming and gateway records.</b> Downloads record their start before response delivery; provider work may already have occurred. Credentialed gateways record their start before sending upstream credentials. Both record a terminal outcome.</li>
           <li><b>Viewing audit.</b> With SQLite storage, administrators and auditors see every record, service managers see records for their directly assigned services, and users with self-service enabled see their own activity, in the portal and the CLI. Agent tokens cannot read audit records.</li>
           <li><b>Resource history.</b> Completed resource and group changes record safe names, before/after state, and included/excluded membership changes. The portal preserves those historical labels and lets authorized catalog readers open current objects. An allowed preflight represents an attempt, not proof of completion.</li>
           <li><b>Management reads.</b> Successful read-only management calls, such as portal page loads and audit queries, write no audit record, so they keep working when audit writes fail. Their denials and failures, all changes, secret reveals, policy exports and credential verification are audited.</li>
-          <li><b>Secret redaction.</b> Audit output excludes secrets and credential material.</li>
+          <li><b>Sensitive audit data.</b> Credential material is excluded, but opted-in queries and titles retain supplied text, bounded to 1 KiB per value. They may contain confidential data and are visible to every reader of the record.</li>
         </ul>
       </div>
     </div>
@@ -1482,7 +1484,7 @@
         <dt>Execution context</dt><dd>An authorization label (<code>internal</code>, <code>external</code>, <code>workstation</code>) asserted by an authenticated trusted caller or fixed by Broker configuration. Header-free direct clients use the configured default.</dd>
         <dt>Principal</dt><dd>A broker user or service account. Every identity path resolves to one.</dd>
         <dt>Action</dt><dd>A typed, named operation a provider exposes, such as <code>jira.issue.view</code>. Imported action schemas are reviewed and stored in the broker catalog.</dd>
-        <dt>Imported service</dt><dd>A database-managed MCP or OpenAPI integration whose reviewed operations become broker actions, subject to operator configuration and ordinary action/context grants.</dd>
+        <dt>Imported service</dt><dd>A database-managed MCP, OpenAPI or command integration whose reviewed operations become broker actions or HTTP gateway operations, subject to operator gates and grants.</dd>
         <dt>Managed identity</dt><dd>An explicit namespace/username binding or registered fingerprint resolves to an active human with unpaused identity access. Invocation-only; usernames are HTTP MCP only.</dd>
         <dt>agent_invoke token</dt><dd>A broker token issued by or for a user for agent use outside managed environments. Scoped by context and optionally by service and resource.</dd>
         <dt>Resource / resource group</dt><dd>A catalog entry for an upstream repository, project, space or job, with its eligible contexts. Groups bundle entries with inclusions and exclusions.</dd>
@@ -1492,12 +1494,12 @@
         <dt>OAuth connection</dt><dd>A user's consent for the broker to access an upstream service through an approved authentication adapter. Separate from browser sign-in and broker agent tokens.</dd>
         <dt>Service policy manager</dt><dd>An account with the service policy manager role, directly assigned to manage grants for one or more services. Groups cannot hold these assignments.</dd>
         <dt>Lookup credential</dt><dd>A read-only credential used only to resolve a target's scope before authorization.</dd>
-        <dt>Policy snapshot</dt><dd>The version of policy pinned for a request, so that concurrent edits cannot change a decision midway.</dd>
+        <dt>Policy snapshot</dt><dd>The policy version used consistently for a decision. Later policy edits do not generally cancel prepared work; specific identity and dispatch fences are revalidated.</dd>
       </dl>
     </div>
   </section>
 
-  <footer>Agent Access Broker · System overview · Updated 2026-09-30. Describes implemented behaviour at the level of the reviewed source; deployment-specific values (contexts, limits, listeners) are configuration.</footer>
+  <footer>Agent Access Broker · System overview · Reviewed 2026-11-08. Deployment-specific contexts, limits and listeners are configuration. See the <a href="security-model.md">security model</a> for detailed guarantees and limitations.</footer>
 
 </div>
 </body>
