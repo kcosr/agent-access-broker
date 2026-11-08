@@ -359,12 +359,12 @@
   <header>
     <p class="eyebrow">Agent Access Broker · System Architecture</p>
     <h1>Agent Access Broker</h1>
-    <p class="lede">How agent requests leave a managed environment, are bound to a verified user and execution context, and are authorized and executed against company systems without the agent ever holding an upstream credential.</p>
+    <p class="lede">How agent requests are bound to a verified user and execution context, authorized, and executed against company systems while keeping upstream execution credentials in the broker.</p>
     <dl class="meta">
       <div><dt>Scope</dt><dd>Identity, policy, credentials, execution</dd></div>
       <div><dt>Upstreams</dt><dd>Built-in providers · MCP · OpenAPI</dd></div>
       <div><dt>Audience</dt><dd>Engineering, security, platform owners</dd></div>
-      <div><dt>Revision</dt><dd>Draft · 2026-09-27</dd></div>
+      <div><dt>Revision</dt><dd>Reviewed · 2026-11-08</dd></div>
     </dl>
     <nav class="toc" aria-label="Contents">
       <div>
@@ -418,18 +418,17 @@
     </div>
     <div class="sec-body split">
       <div>
-        <p>Coding agent workflows benefit from access to company systems so they can gather relevant context, carry out related tasks and use feedback to improve their work. This supports more automation across the workflow, closes the loop between changes and their validation, and reduces manual coordination between tools.</p>
-        <p>The Agent Access Broker provides controlled access for these workflows. Giving an agent a personal access token places a long-lived credential in the workload. The broker keeps backend credentials outside the workload and provides a common place to authorize and audit agent requests, with controls over which actions are allowed from each execution environment.</p>
-        <p>An agent calls the Agent Access Broker with a typed action, such as <code>jira.issue.view</code> or <code>gitlab.merge_request.create</code>. The broker identifies the user and execution context, checks company policy, and performs authorized actions using a stored backend credential. It returns the result to the agent without exposing the credential.</p>
+        <p>The Agent Access Broker keeps upstream execution credentials outside the workload and provides a common place to authorize and audit agent requests, with controls over which actions are allowed from each execution environment.</p>
+        <p>An agent calls a typed action, such as <code>jira.issue.view</code> or <code>gitlab.merge_request.view</code>. The Broker identifies the user and execution context, checks policy, and calls the upstream using a stored credential.</p>
         <div class="callout">
-          <b>Policy enforcement.</b> The broker controls which resources agents may access, from which environments, and with which actions. Upstream systems independently enforce the permissions of the credential used for each request. A request must satisfy both sets of controls. <a href="#decision">Section 10</a> describes how they combine.
+          <b>Policy enforcement.</b> Broker policy and upstream permissions both apply. A request must satisfy both sets of controls. <a href="#decision">Section 10</a> shows how they combine.
         </div>
       </div>
       <div class="questions">
         <div class="label">Request authorization</div>
         <ol>
           <li><span class="q">Caller identity</span><a class="ref" href="#managed">§05–06</a><span class="a">A <b>principal</b>: the user behind the agent, established by the platform or by a broker token.</span></li>
-          <li><span class="q">Execution environment</span><a class="ref" href="#contexts">§04</a><span class="a">An <b>execution context</b> such as <code>internal</code> or <code>external</code>, set by trusted infrastructure.</span></li>
+          <li><span class="q">Execution environment</span><a class="ref" href="#contexts">§04</a><span class="a">An <b>execution context</b> such as <code>internal</code> or <code>external</code>, set by trusted infrastructure or Broker configuration.</span></li>
           <li><span class="q">Requested operation</span><a class="ref" href="#surfaces">§03</a><span class="a">A typed <b>action</b> on an upstream <b>resource</b>: a repository, project, space or job.</span></li>
           <li><span class="q">Access policy</span><a class="ref" href="#grants">§08–09</a><span class="a">A <b>grant</b> must cover the principal, action, resource and context.</span></li>
           <li><span class="q">Backend credential</span><a class="ref" href="#custody">§07</a><span class="a">A stored <b>credential</b>: the user's own, or a configured service account.</span></li>
@@ -445,7 +444,7 @@
       <p>The Broker authorizes actions and holds credentials; optional trusted ingress can attest identity and context.</p>
     </div>
     <div class="sec-body">
-      <p>The <b>Access Broker</b> can operate independently with ordinary Broker-token and browser authentication. The optional deployment shown below adds a <b>managed environment</b> and <b>trusted ingress</b> that verifies identity and attests platform-assigned execution context. An egress policy proxy can also govern traffic to other services; those network controls are configured outside the Broker. For brokered requests, the <b>Access Broker</b> makes the action-level access decision and holds the credentials, while the <b>upstream systems</b> do the actual work. People use the broker's <b>portal</b> separately to sign in, register credentials and manage policy.</p>
+      <p>The <b>Access Broker</b> supports direct clients and an optional <b>managed environment</b> with <b>trusted ingress</b> for identity and execution context. An egress policy proxy can also govern traffic to other services; those network controls are configured outside the Broker. The diagram separates the managed request path, Broker authorization and upstream execution.</p>
       <figure style="margin-top:24px">
         <svg viewBox="0 0 1080 470" role="img" aria-labelledby="f2t">
           <title id="f2t">Optional identity-aware proxy with egress policy, routing to other services or the Access Broker and its upstream systems</title>
@@ -458,13 +457,12 @@
           <!-- Managed environment -->
           <rect class="d-boundary" x="16" y="20" width="236" height="232" rx="10"/>
           <text class="d-label d-label-warm" x="32" y="42">MANAGED ENVIRONMENT</text>
-          <text class="d-sub" x="32" y="58">container or VM · platform-owned</text>
+          <text class="d-sub" x="32" y="58">company-managed app or runtime</text>
 
           <rect class="d-node" x="32" y="70" width="204" height="86" rx="6"/>
           <text class="d-title" x="46" y="92">Agent workload</text>
-          <text class="d-mono" x="46" y="112">agent-access CLI</text>
-          <text class="d-mono" x="46" y="128">stdio MCP · HTTP MCP</text>
-          <text class="d-mono" x="46" y="144">git</text>
+          <text class="d-mono" x="46" y="116">CLI · MCP</text>
+          <text class="d-mono" x="46" y="136">Git · HTTP gateway</text>
 
           <path class="d-edge" d="M134 156 V176" marker-end="url(#arrow)"/>
 
@@ -473,13 +471,13 @@
           <text class="d-sub" x="46" y="217">binds the request to identity</text>
           <text class="d-sub" x="46" y="232">and trusted execution context</text>
 
-          <!-- Unmanaged client -->
-          <text class="d-label" x="32" y="290">UNMANAGED CLIENT</text>
-          <rect class="d-node" x="32" y="300" width="204" height="78" rx="6"/>
-          <text class="d-title" x="46" y="322">Unmanaged client</text>
-          <text class="d-sub" x="46" y="338">outside the managed environment</text>
-          <text class="d-mono" x="46" y="354">agent_invoke token</text>
-          <text class="d-sub" x="46" y="370">self-issued in the portal</text>
+          <!-- Unmanaged environment -->
+          <text class="d-label" x="32" y="290">UNMANAGED ENVIRONMENT</text>
+          <rect class="d-node" x="32" y="300" width="204" height="104" rx="6"/>
+          <text class="d-title" x="46" y="322">Client</text>
+          <text class="d-mono" x="46" y="344">CLI · MCP</text>
+          <text class="d-mono" x="46" y="364">Git · HTTP gateway</text>
+          <text class="d-sub" x="46" y="386">agent_invoke token</text>
 
           <!-- Other services reached through core egress policy -->
           <rect class="d-node" x="316" y="20" width="214" height="62" rx="6"/>
@@ -592,29 +590,29 @@
           <span><i class="sw sw-broker"></i>Enforcement point</span>
           <span><i class="sw sw-edge"></i>Request path</span>
         </div>
-        <figcaption><b>Figure 1.</b> An optional managed deployment with identity-aware ingress and egress controls. Direct clients can also reach the Broker using ordinary authentication and its configured default context. Numbered markers refer to the notes below.</figcaption>
+        <figcaption><b>Figure 1.</b> Example identity paths. Both environments support the same interfaces and can use Broker tokens.</figcaption>
       </figure>
 
       <div class="notes">
         <div class="note"><div class="badge">1</div><div>
           <h4>Platform-declared identity</h4>
-          <p>In this deployment, trusted platform infrastructure associates a request with the user's identity bearer and an approved execution context. The transport and identity-verification mechanism belong to that infrastructure. Keep identity secrets and caller credentials outside workloads; agents cannot select the Broker's trusted context.</p>
+          <p>The dashed boundary shows company-controlled software that supplies verified identity and execution context. This may be an application, container or VM.</p>
         </div></div>
         <div class="note"><div class="badge">2</div><div>
           <h4>Identity forwarding</h4>
-          <p>For broker-bound requests, identity-aware ingress must verify the bearer and replace untrusted assertion headers. It forwards the approved context, a SHA-256 fingerprint registered in Broker's user inventory, and its private caller credential. The raw identity bearer is not forwarded to the Broker. A basic reverse proxy does not supply this identity-verification capability automatically.</p>
+          <p>Ingress verifies the user's identity and forwards its registered fingerprint and approved context with a private caller credential. The raw identity bearer stays outside Broker.</p>
         </div></div>
         <div class="note"><div class="badge">3</div><div>
           <h4>Unmanaged clients</h4>
-          <p>Tools outside a managed environment present a self-issued <code>agent_invoke</code> token. Direct clients use the configured Broker default context. A configured trusted caller may instead supply an approved assertion or use Broker-fixed context.</p>
+          <p>Tools outside a managed environment present an <code>agent_invoke</code> token that the user or an administrator issues through the Broker portal. Direct clients use the configured Broker default context.</p>
         </div></div>
         <div class="note"><div class="badge">4</div><div>
           <h4>Brokered execution</h4>
-          <p>After authorization, the broker decrypts the user's credential (or a configured service credential) in memory and calls the upstream system. It returns the normalized result to the agent.</p>
+          <p>The Broker uses the selected personal or shared credential to execute the authorized request and return its result.</p>
         </div></div>
         <div class="note"><div class="badge">5</div><div>
           <h4>Portal</h4>
-          <p>People reach the portal from the browser and sign in using configured local-password or Microsoft Entra ID authentication. Users register backend credentials and issue tokens; administrators curate resources, contexts and grants.</p>
+          <p>Users sign in, connect upstream accounts and issue tokens. Administrators manage identities, resources and grants.</p>
         </div></div>
       </div>
     </div>
@@ -625,12 +623,11 @@
     <div class="sec-head">
       <div class="num">03</div>
       <h2>How agents connect</h2>
-      <p>Agents discover and invoke typed actions through Broker interfaces and use Git through its gateway.</p>
+      <p>Agents invoke typed actions through Broker interfaces; native HTTP clients use protocol gateways.</p>
     </div>
     <div class="sec-body">
-      <p>Each broker provider exposes a defined set of actions, such as view, search, create, update and trigger, with input and output schemas owned by the broker. An agent discovers which services, resources and actions are available to it, then invokes an action by name. Typed action interfaces share the same catalog, identity checks and policy checks.</p>
-      <p>Discovery also checks local execution and lookup credentials. Missing or unusable credentials hide affected actions, schemas and resources, including native MCP tools. An authorized service retains an availability status and setup requirements. Discovery does not contact upstream or refresh OAuth; refresh the tool list or reconnect after credentials change. Management and setup remain available.</p>
-      <p>Ordinary service/action discovery omits gateways, including Git. Native clients receive the gateway address and authentication setup from an administrator. Gateway policy identities remain available in credential setup, grants, token restrictions and audit; callers can explicitly inspect resource access for a known gateway service.</p>
+      <p>Agents use CLI or MCP to discover and call actions such as view, search, create and update. Both interfaces use the same action catalog and authorization rules. Discovery reflects the caller's permissions and available credentials; the Broker authorizes every call.</p>
+      <p>Native Git and HTTP clients use gateways with administrator-provided connection settings. Gateway operations are not exposed as CLI or MCP actions.</p>
       <table style="margin-top:20px">
         <thead>
           <tr><th>Interface</th><th>Runs as</th><th>Payloads</th><th>Typical use</th></tr>
@@ -640,42 +637,30 @@
             <td>agent-access CLI</td>
             <td>Binary in the workload or on a workstation</td>
             <td><span class="tag">JSON</span> <span class="tag">files</span></td>
-            <td>Typed per-provider commands, generic <code>invoke</code>, discovery and self-service</td>
+            <td>Discover and call actions; manage personal credentials and tokens</td>
           </tr>
           <tr>
             <td>stdio MCP</td>
-            <td>Subprocess of the agent host, <code>agent-access mcp serve</code>, optionally <code>--service &lt;id&gt;</code></td>
+            <td>Local subprocess beside the agent</td>
             <td><span class="tag">JSON</span> <span class="tag">files</span></td>
-            <td>MCP agents that need to work with file references for uploads and downloads; one tool per permitted action</td>
+            <td>Local MCP tools with file uploads and downloads</td>
           </tr>
           <tr>
             <td>HTTP MCP</td>
-            <td><code>/mcp</code> or <code>/mcp/&lt;service&gt;</code> on the broker's public listener</td>
+            <td>Broker's public listener</td>
             <td><span class="tag accent">JSON only</span></td>
-            <td>Remote MCP clients such as Cursor; no local filesystem access</td>
+            <td>Remote MCP tools</td>
           </tr>
           <tr>
-            <td>Git gateway</td>
+            <td>HTTP gateways</td>
             <td>Dedicated broker listener</td>
-            <td><span class="tag">git smart-HTTP</span></td>
-            <td>Clone, fetch and push as <code>repo.fetch</code> / <code>repo.push</code>, with push-ref rules</td>
+            <td><span class="tag">raw HTTP</span></td>
+            <td>Git fetch/push with ref rules; reviewed OpenAPI operations for ordinary HTTP clients</td>
           </tr>
         </tbody>
       </table>
-      <div class="cols2" style="margin-top:24px">
-        <ul class="list">
-          <li><b>Discovery.</b> The broker filters invoke-service, resource and action listings by the caller's identity, context and policy. Each invocation is authorized separately.</li>
-          <li><b>Service connections.</b> Select one service per client connection to expose raw provider names without a broker prefix. Current grants, backend credentials, rate limits and audit still apply. A connection view does not narrow the token itself.</li>
-          <li><b>MCP transports.</b> The stdio server runs beside the agent and supports JSON input and output, file references for uploads and downloads, and saving read or write responses locally. A local save failure is reported separately from confirmed operation success, without replaying the operation. The HTTP endpoint serves remote clients and supports JSON input and output only.</li>
-          <li><b>Attachment formats.</b> Authorized Jira and Confluence downloads allow all media types by default, with optional allow/deny patterns independent of exact upload lists. Byte limits and attachment membership checks still apply. Media rules filter declarations without inspecting file contents; see <a href="configuration.md#jira-and-confluence-attachment-media-policy">attachment media policy</a>.</li>
-        </ul>
-        <ul class="list">
-          <li><b>Authentication.</b> All four interfaces use platform-attached identity in managed environments and an <code>agent_invoke</code> token for unmanaged clients.</li>
-          <li><b>Git credentials.</b> Unmanaged clients use a Git credential helper to supply the broker token. Managed clients use platform-attached identity. The broker supplies the GitLab credential for upstream requests.</li>
-        </ul>
-      </div>
       <h3 id="imports">Imported services</h3>
-      <p>Base administrators can connect an upstream MCP HTTP server, import an OpenAPI document, or import a local command the operator approved, and review its operations as ordinary broker actions. This is a general integration model: agents use the same CLI, HTTP API and MCP interfaces, and calls receive the same identity, context, grant, credential, rate-limit and audit checks as built-in actions.</p>
+      <p>Administrators can import MCP HTTP tools, OpenAPI documents or operator-approved local commands. Reviewed operations are exposed as Broker actions or HTTP gateway routes under Broker authorization.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="import-flow-title">
           <title id="import-flow-title">Import lifecycle: operator permits destinations, administrator discovers and reviews tools, then grants authorize agent calls</title>
@@ -683,7 +668,7 @@
           <rect class="d-node" x="0" y="18" width="220" height="80" rx="6"/>
           <text class="d-title" x="14" y="42">Operator permits</text>
           <text class="d-small" x="14" y="64">Import kinds and destinations</text>
-          <text class="d-small" x="14" y="82">TOML remains the outer gate</text>
+          <text class="d-small" x="14" y="82">Operator sets boundaries</text>
           <path class="d-edge" d="M220 58 H268" marker-end="url(#import-arrow)"/>
           <rect class="d-node" x="270" y="18" width="220" height="80" rx="6"/>
           <text class="d-title" x="284" y="42">Administrator discovers</text>
@@ -704,34 +689,31 @@
       </figure>
       <div class="cols2" style="margin-top:24px">
         <div>
-          <h4>Configuration and ownership</h4>
+          <h4>Configuration</h4>
           <ul class="list">
-            <li><b>Operator gates.</b> TOML enables imports, selects allowed kinds, exact destinations and approved local commands, and can disable individual imported services. Removing permission stops discovery and execution while retaining definitions and grants.</li>
-            <li><b>Database catalog.</b> Service definitions, accepted actions and encrypted shared tokens are database-managed. Startup loads the accepted catalog locally without contacting the upstream.</li>
-            <li><b>Administrator roles.</b> Base administrators manage import definitions, review and shared tokens. They can assign service managers to the imported service to manage its grants. That role does not grant import-administration or credential-management rights.</li>
-            <li><b>Credential choices.</b> A service enables shared tokens, personal tokens or a supported personal OAuth connection. Grants select a permitted ownership mode. A missing personal credential never falls back to a shared credential.</li>
+            <li><b>Operator gates.</b> Operators approve import kinds, destinations and local commands.</li>
+            <li><b>Administrator review.</b> Administrators select which operations become available and manage their credentials. Grants determine who may use them.</li>
           </ul>
         </div>
         <div>
           <h4>Review and refresh</h4>
           <ul class="list">
-            <li><b>Action names.</b> Suggested identifiers can be edited before acceptance. Accepted identifiers stay fixed because agent calls and grants reference them. Retiring an action does not transfer its grants to a replacement.</li>
-            <li><b>Labels and descriptions.</b> Optional labels default to the MCP tool title or OpenAPI summary/operation ID; administrators can edit or clear them during review. Labels appear only in the management UI. Agents receive the description and input schema. When an OpenAPI description is absent, discovery uses the upstream summary, operation ID, or HTTP method and path. Editing a label does not change that description.</li>
-            <li><b>Effects.</b> New and changed tools start write-capable until reviewed. Upstream read-only hints are suggestions. The flag helps select grant actions and limits read-only identity paths to reads; it does not restrict the upstream operation or automatically change existing grants. Reclassifying a granted action requires confirmation.</li>
-            <li><b>Manual refresh.</b> New tools remain unselected. A complete refresh quarantines missing, unsupported or behaviorally changed tools. Acceptance of changes affecting existing grants requires confirmation; failed discovery publishes no partial catalog.</li>
+            <li><b>Effects.</b> Administrators review read-only classifications; upstream hints do not establish them.</li>
+            <li><b>Upstream changes.</b> New operations require acceptance. Refresh quarantines behaviorally changed or missing operations until reviewed.</li>
           </ul>
         </div>
       </div>
       <table style="margin-top:24px">
-        <thead><tr><th>Import kind</th><th>Discovery</th><th>Supported authentication</th></tr></thead>
+        <thead><tr><th>Import kind</th><th>Source</th><th>Exposed as</th></tr></thead>
         <tbody>
-          <tr><td>MCP HTTP</td><td>Connect to an MCP URL and list tools. Discovery can use a shared execution token, a separate token, or the administrator's personal credential.</td><td>Shared or personal static tokens using Bearer or a configured header; personal OAuth through an approved registration.</td></tr>
-          <tr><td>OpenAPI / Swagger HTTP</td><td>Fetch an OpenAPI 3.1 or Swagger 2.0 JSON document from an approved URL, or upload a file retained for offline refresh and reviewed replacement. Both use shared JSON and scalar form request handling. The API base URL is approved separately; only a private document URL needs a discovery credential.</td><td>Shared or personal static credentials with a selected HTTP Basic, Bearer or header API-key scheme. An OAuth declaration in the document does not configure OAuth.</td></tr>
-          <tr><td>Local command</td><td>Run an executable the operator approved by name in TOML with <code>describe</code>, which prints a manifest of actions and resource types. Each call runs it once with one JSON request on stdin.</td><td>Shared or personal static tokens or username-and-token credentials, passed only on stdin, or none for a command that needs no credential.</td></tr>
+          <tr><td>MCP HTTP</td><td>Upstream MCP server's tool catalog</td><td>Broker actions</td></tr>
+          <tr><td>OpenAPI actions</td><td>OpenAPI or Swagger document</td><td>Broker actions</td></tr>
+          <tr><td>OpenAPI HTTP gateway</td><td>OpenAPI or Swagger document</td><td>Routes for native HTTP clients</td></tr>
+          <tr><td>Local command</td><td>Manifest from an approved executable</td><td>Broker actions</td></tr>
         </tbody>
       </table>
-      <div class="callout warm"><b>Whole-action access.</b> MCP and OpenAPI describe operation arguments, but provide no standard mapping to the broker's resource catalog. Those imports therefore grant whole actions, subject to upstream permissions. A local command may declare resource types: the broker checks actions that name their resources in typed inputs before the command starts, and passes the caller's grants to the command for the rest, which it must enforce itself. To enforce project, space or repository limits within the broker otherwise, implement a provider in code instead of importing.</div>
-      <p>The broker does not host upstream MCP stdio servers; a local command import runs one trusted process per call. Commands can declare single-file downloads when the operator enables a byte cap; the CLI and local stdio MCP save verified bytes and return metadata receipts. HTTP MCP exposes download detail but excludes executable download tools. The current OpenAPI / Swagger profile supports bounded JSON responses with JSON and scalar form requests; file transfers are outside that profile. No import adapter automatically replays a failed write. See <a href="imported-services.md">import administration</a>, <a href="imported-openapi.md">OpenAPI support</a>, <a href="command-imports.md">command imports</a> and <a href="#backend-oauth">OAuth connections</a>.</p>
+      <div class="callout warm"><b>Access boundaries.</b> MCP and OpenAPI imports grant whole operations; upstream permissions supply their data restrictions. Commands may declare resource scopes enforced by the Broker or by the command itself. Generated HTTP gateways forward bounded raw bodies without body-field or response-schema validation.</div>
+      <p>Approved commands run as the Broker user without a sandbox and must be trusted with its state and keys. See <a href="imported-services.md">import administration</a>, <a href="http-gateway-setup.md">HTTP gateways</a> and <a href="command-imports.md#trust-model">command trust</a> for details.</p>
     </div>
   </section>
 
@@ -745,13 +727,13 @@
       <p>The execution context determines which resources are eligible for access from an environment.</p>
     </div>
     <div class="sec-body">
-      <p>Every request carries exactly one <em>execution context</em>, a short label for the environment the agent is running in. The context is never chosen by the agent or the client. An asserted trusted caller supplies a context from its approved set. For a fixed caller, Broker supplies its configured context and rejects a context header. Header-free direct clients use Broker's configured default or fail when context is required; omitting the execution-context section retains the built-in <code>default</code>. Context names and their deployment meanings are operator-defined.</p>
+      <p>An <em>execution context</em> identifies the environment or application making a request. Trusted infrastructure or Broker configuration supplies it; the agent cannot select it. Administrators define context names and what access each permits.</p>
 
       <table>
         <thead><tr><th>Context</th><th>Assigned by</th><th>Environment</th><th>Intended exposure</th></tr></thead>
         <tbody>
-          <tr><td><span class="tag accent">internal</span></td><td>Platform, per managed environment</td><td>Managed container or VM restricted to company-hosted models</td><td>May receive resources cleared only for internal use</td></tr>
-          <tr><td><span class="tag accent">external</span></td><td>Platform, per managed environment</td><td>Managed container or VM that uses external model providers</td><td>Only resources cleared for sharing with external providers</td></tr>
+          <tr><td><span class="tag accent">internal</span></td><td>Company-managed app or runtime</td><td>Uses company-hosted models</td><td>May receive resources cleared only for internal use</td></tr>
+          <tr><td><span class="tag accent">external</span></td><td>Company-managed app or runtime</td><td>Uses external model providers</td><td>Only resources cleared for sharing with external providers</td></tr>
           <tr><td><span class="tag accent">workstation</span></td><td>Broker direct default or configured trusted caller</td><td>User-configured tools such as Cursor or a local CLI</td><td>Only resources explicitly made eligible for workstation use</td></tr>
         </tbody>
       </table>
@@ -780,7 +762,7 @@
       </table>
 
       <div class="callout">
-        <b>Environment controls.</b> Controls outside the broker determine which repositories are provisioned into an environment and which HTTP egress destinations, such as model providers, the proxy permits for its context. The broker's context checks apply to API access alongside these controls.
+        <b>Deployment boundary.</b> Containment requires blocking direct access to protected upstreams and protecting the Broker host and keys. Context labels do not isolate workloads or prevent misuse of allowed operations. Network and content controls remain separate; see the <a href="security-model.md#agent-egress-boundary">security model</a>.
       </div>
     </div>
   </section>
@@ -873,21 +855,21 @@
           <span><i class="sw sw-return"></i>Response</span>
           <span><i class="sw sw-boundary"></i>Managed environment</span>
         </div>
-        <figcaption><b>Figure 2.</b> Fingerprint identity request sequence for a managed workload. The platform holds the identity secret outside the workload, and the broker holds the upstream credential. HTTP MCP also supports exact username bindings through a protected caller credential and user header.</figcaption>
+        <figcaption><b>Figure 2.</b> Managed identity request sequence. The platform holds the identity secret; the Broker holds the upstream execution credential.</figcaption>
       </figure>
 
       <div class="notes">
         <div class="note"><div class="badge">A</div><div>
           <h4>Identity provisioning</h4>
-          <p>For fingerprint identity, the platform holds a per-user bearer outside the workload and Broker registers it against the human's principal. Administrators can generate, import or remove inventory. HTTP MCP can instead use an explicit namespace/username binding with no inventory. One Identity access pause gates both methods while leaving issued Broker tokens and browser sign-in available. The identity token and each binding can also be disabled or made read-only on their own.</p>
+          <p>Broker maps registered fingerprints or, on HTTP MCP, bound usernames to human accounts. Administrators can pause managed identity access or restrict an identity path to reads.</p>
         </div></div>
         <div class="note"><div class="badge">B</div><div>
           <h4>Proxy authentication</h4>
-          <p>Broker accepts context and fingerprint only with an authorized private caller credential. The selected ingress must strip untrusted assertions before injecting verified values. Broker validates assertions and rejects unauthenticated copies. The canonical identity header is <code>X-AW-Identity-Token-SHA256</code>; it does not require a particular ingress product. An explicit Broker token remains authoritative, including when invalid.</p>
+          <p>Only authenticated trusted callers may assert identity or context. They must control the asserted values and replace untrusted headers.</p>
         </div></div>
         <div class="note"><div class="badge">C</div><div>
           <h4>Managed identity permissions</h4>
-          <p>Managed fingerprints support the existing discovery, invocation, MCP and Git surfaces. Trusted usernames are limited to HTTP MCP. Both apply current human permissions and grant no self-service or administration. A read-only path lists and runs only actions classified as reads, within those permissions, and cannot push with Git. MCP pins identity through final admission; identity changes reject old sessions but do not cancel operations already admitted.</p>
+          <p>Managed identity uses the person's current invocation permissions. It grants no self-service or administration rights. Read-only paths limit invocation to actions classified as reads.</p>
         </div></div>
       </div>
     </div>
@@ -912,9 +894,8 @@
             <rect class="d-node" x="10" y="30" width="192" height="116" rx="6"/>
             <text class="d-label" x="24" y="20">1 · SIGN IN</text>
             <text class="d-title" x="24" y="54">Portal</text>
-            <text class="d-small" x="24" y="76">Microsoft Entra ID (OIDC)</text>
-            <text class="d-small" x="24" y="92">browser session</text>
-            <text class="d-small" x="24" y="108">self-service only</text>
+            <text class="d-small" x="24" y="76">Local or Microsoft sign-in</text>
+            <text class="d-small" x="24" y="96">management session</text>
           </g>
           <path class="d-edge" d="M202 88 H228" marker-end="url(#arrow4)"/>
           <g>
@@ -954,28 +935,28 @@
             <text class="d-small" x="904" y="108">by token and grant</text>
           </g>
         </svg>
-        <figcaption><b>Figure 3.</b> This example ingress attests <code>workstation</code>, so a token restricted to <code>internal</code> is rejected. Direct clients can omit step 4 and use Broker's configured default. Context availability is controlled by deployment configuration and policy.</figcaption>
+        <figcaption><b>Figure 3.</b> A token restricted to <code>internal</code> cannot authorize a <code>workstation</code> request. Direct clients use the Broker's configured default context.</figcaption>
       </figure>
 
       <div class="cols2" style="margin-top:28px">
         <div>
           <h3>Token classes</h3>
           <table>
-            <thead><tr><th>Class</th><th>Prefix</th><th>Purpose</th></tr></thead>
+            <thead><tr><th>Class</th><th>Purpose</th></tr></thead>
             <tbody>
-              <tr><td>agent_invoke</td><td><code>aab_ai_</code></td><td>Discovery, invocation, MCP and Git. Issued to agents and tools.</td></tr>
-              <tr><td>user_manage</td><td><code>aab_um_</code></td><td>Self-service: credentials and tokens. Backs portal sessions.</td></tr>
-              <tr><td>admin</td><td><code>aab_ad_</code></td><td>Administration; human admins can read/write, auditors can read. Role changes revoke these tokens.</td></tr>
+              <tr><td>agent_invoke</td><td>Agent discovery and invocation, including gateways</td></tr>
+              <tr><td>user_manage</td><td>Personal credentials and tokens; backs portal sessions</td></tr>
+              <tr><td>admin</td><td>Administration within the account's current role</td></tr>
             </tbody>
           </table>
         </div>
         <div>
           <h3>Token properties</h3>
           <ul class="list">
-            <li><b>Access restrictions.</b> Personal issuance requires permission in every selected context. Any selected Read-only context requires a read-only token. Token restrictions limit access within the user's grants.</li>
-            <li><b>Expiration and revocation.</b> Self-issued tokens expire, with a 30-day maximum by default. Tokens can be paused, resumed or revoked at any time. Revocation blocks new admissions; already prepared operations may finish; uploads have a bounded receive deadline.</li>
-            <li><b>Token storage.</b> The broker stores a keyed hash of each token. The raw token value is displayed once when issued.</li>
-            <li><b>Policy updates.</b> Changes to grants and resources apply to existing tokens on the next request. A token's own restrictions are fixed when it is issued. Changing issuance permission affects only new tokens.</li>
+            <li><b>Access restrictions.</b> Users need permission to issue tokens. Tokens can restrict contexts, services, resources and writes within the user's grants.</li>
+            <li><b>Lifecycle.</b> User-issued tokens expire and can be paused or revoked. Revocation blocks new requests; prepared operations may finish.</li>
+            <li><b>Storage.</b> Broker stores a keyed hash; the raw token is shown once.</li>
+            <li><b>Policy updates.</b> Existing tokens remain subject to current grants. Their own restrictions are fixed at issuance.</li>
           </ul>
         </div>
       </div>
@@ -1034,8 +1015,8 @@
           <text class="d-label" x="20" y="202">PER REQUEST</text>
           <rect class="d-node" x="20" y="212" width="190" height="76" rx="6"/>
           <text class="d-title" x="34" y="234">Policy passed</text>
-          <text class="d-small" x="34" y="254">one grant covers the</text>
-          <text class="d-small" x="34" y="270">request and names a mode</text>
+          <text class="d-small" x="34" y="254">grant selection fixes</text>
+          <text class="d-small" x="34" y="270">the credential mode</text>
           <path class="d-edge" d="M210 250 H248" marker-end="url(#arrow5)"/>
 
           <rect class="d-node" x="250" y="212" width="190" height="76" rx="6"/>
@@ -1047,7 +1028,7 @@
           <rect class="d-stage" x="480" y="212" width="200" height="76" rx="6"/>
           <text class="d-title" x="494" y="234">Decrypt in memory</text>
           <text class="d-small" x="494" y="254">redacted from logs</text>
-          <text class="d-small" x="494" y="270">never returned to caller</text>
+          <text class="d-small" x="494" y="270">execution secret stays here</text>
           <path class="d-edge" d="M795 198 V236 H682" marker-end="url(#arrow5)"/>
 
           <path class="d-edge" d="M680 270 H888" marker-end="url(#arrow5)"/>
@@ -1055,35 +1036,30 @@
           <text class="d-title" x="904" y="256">Upstream call</text>
           <text class="d-small" x="904" y="274">configured auth</text>
         </svg>
-        <figcaption><b>Figure 4.</b> Managed credentials and OAuth connections are encrypted in the database. Authorized calls use credentials in memory; OAuth access tokens can be refreshed before dispatch. Encryption keys live outside the database.</figcaption>
+        <figcaption><b>Figure 4.</b> Credentials are encrypted in the database and decrypted for authorized use. Encryption keys are stored separately.</figcaption>
       </figure>
 
       <div class="cols2" style="margin-top:28px">
         <div>
-          <h3>Microsoft Entra sign-in</h3>
+          <h3>Portal sign-in</h3>
           <ul class="list">
-            <li><b>Sign-in protocol.</b> The portal uses a single-tenant OIDC authorization code flow with PKCE and nonce. Accounts are identified by tenant and object ID rather than email.</li>
-            <li><b>Independent login methods.</b> Microsoft linking preserves an existing local password. Administrators explicitly enable local password sign-in; reset only changes an active local password. Microsoft-only accounts have no Broker password to manage.</li>
-            <li><b>User provisioning.</b> A user record is created on first sign-in only when a group claim maps to a managed group. Group evidence from Microsoft expires after eight hours unless refreshed by a new sign-in or, when membership renewal is enabled, renewed on demand from the refresh token stored at the last sign-in while the person or their agents use the broker.</li>
-            <li><b>Local onboarding groups.</b> Administrators can automatically add newly created Microsoft users to selected active groups. This requires the same mapped-group admission and creates persistent local memberships, which survive Microsoft evidence expiry. Existing accounts are not backfilled or re-added on later sign-ins.</li>
-            <li><b>Account roles.</b> Each account has one role: user, auditor, service policy manager, or admin. Auditors can inspect administrative metadata without changing it or revealing secrets. Roles and direct service assignments cannot be assigned through Microsoft group membership. A separate self-service flag controls personal management and My access; invocation grants remain independent.</li>
-            <li><b>Browser session permissions.</b> Browser sessions authorize self-service operations, with CSRF and same-origin checks. They cannot authorize agent invocation.</li>
+            <li><b>Authentication.</b> The portal supports local accounts and Microsoft Entra ID sign-in through OIDC.</li>
+            <li><b>Group membership.</b> Microsoft groups can map to Broker groups. Their membership evidence must remain current; renewal can be enabled.</li>
+            <li><b>Permissions.</b> Account roles control administration; a separate setting enables personal self-service. Browser sessions cannot authorize agent invocation.</li>
           </ul>
         </div>
         <div>
           <h3>Backend credentials</h3>
-          <p>Users can paste a supported upstream token or connect an account through OAuth. Gmail has a Google OAuth adapter; GitLab REST and GitLab Git gateways share one GitLab OAuth connection per instance; Jira and Confluence use an Atlassian adapter through the Atlassian gateway; imported MCP services can use the standard MCP OAuth adapter described below. Browser sign-in with Microsoft does not itself provide an upstream API credential.</p>
+          <p>Users register an upstream token or connect an account through OAuth. These credentials are separate from browser sign-in.</p>
           <ul class="list">
-            <li><b>Token permissions.</b> Users can limit a token to specific projects or read-only access. Agent requests must be allowed by both the token's permissions and the broker's grants.</li>
-            <li><b>Personal credentials.</b> The broker selects the invoking user's token or OAuth connection for the configured service binding.</li>
-            <li><b>Shared credentials.</b> Built-in providers use their configured credential source. Imported shared tokens are stored encrypted in the managed database and administered through Imports. The broker still authorizes and audits the invoking user; the upstream sees the shared credential's identity.</li>
-            <li><b>Credential storage.</b> Credentials are encrypted and bound to their owner, service, profile and key ID. Changes to the encrypted data or these bindings cause validation to fail.</li>
+            <li><b>Personal execution.</b> The upstream sees the invoking user's credential and permissions.</li>
+            <li><b>Shared execution.</b> The upstream sees the shared account. Broker still authorizes and audits the invoking user.</li>
+            <li><b>Deliberate issuance.</b> Authorized GitLab <a href="gitlab-bot-provisioning.md">token provisioning</a> returns newly issued credentials, separately from Broker-held execution credentials.</li>
           </ul>
         </div>
       </div>
       <h3 id="backend-oauth">Connecting an upstream account with OAuth</h3>
-      <p>Personal OAuth setup requires enabled self-service, a credential connection with OAuth and an active <code>per_user</code> action grant on a service that uses it, for the user or their current groups. Setup can precede usable resources or execution contexts; each invocation still needs its own authorization. Owners can inspect and disconnect an existing bound connection after grant removal. Ending a GitLab connection, by disconnect, reconnect or disabling its owner, also revokes its tokens in GitLab, and the connection reports whether that succeeded.</p>
-      <p>Authentication adapters implement the provider's OAuth behavior. The generic <code>mcp_oauth</code> adapter supports compatible MCP servers without new provider code. It requires an operator-approved client registration, the exact MCP endpoint/resource and a permission profile. Profiles use explicit scopes by default, or operator-selected <code>server_default</code> permissions with configured scopes absent. Importing tools alone does not establish a connection. Unusual provider flows still need a compiled adapter.</p>
+      <p>Users consent to an operator-approved upstream connection. Broker stores the resulting tokens and uses them for authorized personal execution. OAuth consent grants upstream access; Broker policy still governs each invocation.</p>
       <figure class="figure-block">
         <svg viewBox="0 0 1040 118" role="img" aria-labelledby="oauth-flow-title">
           <title id="oauth-flow-title">OAuth flow: a signed-in user connects an approved service, consents upstream, and the broker stores and uses the connection</title>
@@ -1096,7 +1072,7 @@
           <rect class="d-node" x="270" y="18" width="220" height="80" rx="6"/>
           <text class="d-title" x="284" y="42">User consents upstream</text>
           <text class="d-small" x="284" y="64">Browser authorization flow</text>
-          <text class="d-small" x="284" y="82">PKCE binds the code exchange</text>
+          <text class="d-small" x="284" y="82">State and code-exchange checks</text>
           <path class="d-edge" d="M490 58 H538" marker-end="url(#oauth-arrow)"/>
           <rect class="d-stage" x="540" y="18" width="220" height="80" rx="6"/>
           <text class="d-title" x="554" y="42">Broker receives callback</text>
@@ -1110,25 +1086,7 @@
         </svg>
         <figcaption><b>OAuth connection flow.</b> The agent keeps using its broker identity. Upstream access and refresh tokens remain with the broker.</figcaption>
       </figure>
-      <div class="cols2" style="margin-top:24px">
-        <div>
-          <h4>Setup and discovery</h4>
-          <ul class="list">
-            <li><b>Operator registration.</b> Register the broker with the upstream authorization server and configure the client, callback, approved metadata endpoints, OAuth resource URL (the MCP endpoint) and permission profiles in TOML. Automatic client registration is not implemented.</li>
-            <li><b>Import binding.</b> A base administrator selects Personal credentials, OAuth, and the approved registration/profile for that exact MCP endpoint. Shared OAuth and client-credentials grants are not supported.</li>
-            <li><b>Connection owner.</b> Users connect their own accounts in Credentials. An administrator selected for personal discovery can connect from the draft before tools or grants exist. A separate supported static discovery token is another option.</li>
-          </ul>
-        </div>
-        <div>
-          <h4>Use and lifecycle</h4>
-          <ul class="list">
-            <li><b>Refresh and reconnect.</b> The broker refreshes an expiring token when a refresh token is available. Access-only connections require reconnecting after expiry. An uncertain refresh also requires reconnecting.</li>
-            <li><b>Exact binding.</b> Consent, callbacks and token use are checked against the approved issuer, MCP endpoint URL, connection and current service configuration. Credentials are never silently switched to another account or a shared token.</li>
-            <li><b>Identity and failures.</b> Standard MCP OAuth may not identify the upstream account. The UI reports that limitation and requires confirmation when replacing it. An upstream 401 does not replay the tool call.</li>
-          </ul>
-        </div>
-      </div>
-      <p>OAuth is implemented for Gmail, for GitLab REST and GitLab Git gateways sharing one GitLab OAuth connection, and for compatible imported MCP services. OpenAPI and Swagger imports support static Basic, Bearer and header API-key credentials; OAuth security schemes are not supported. See <a href="oauth.md">delegated connections</a>, <a href="oauth.md#gitlab">GitLab OAuth setup</a> and <a href="imported-oauth.md">MCP OAuth configuration</a>.</p>
+      <p>OAuth is supported for Google, GitLab, Atlassian and compatible MCP servers. Broker handles token refresh where supported. Provider requirements and lifecycle details are in <a href="oauth.md">delegated connections</a> and <a href="imported-oauth.md">MCP OAuth</a>.</p>
     </div>
   </section>
 
@@ -1140,8 +1098,7 @@
       <p>The resource catalog defines eligible targets. Grants authorize users and groups to perform actions on those targets.</p>
     </div>
     <div class="sec-body">
-      <p>For resource-scoped providers, administrators register upstream resources in a catalog and give each one the execution contexts it may appear in. Grants then select from that catalog. Access is never inferred from upstream visibility alone. A resource must be covered by an enabled catalog entry eligible for the current context and by a grant.</p>
-      <p>Imported services use action/context grants without resource selections. Their upstream credentials supply any repository or data restrictions; the importer does not derive those restrictions from tool inputs.</p>
+      <p>For resource-scoped providers, administrators register eligible resources and contexts in a catalog. Grants select from that catalog to authorize access. Upstream visibility alone is insufficient.</p>
 
       <table>
         <thead><tr><th>Resource type</th><th>Governs</th><th>Selectors</th></tr></thead>
@@ -1152,16 +1109,16 @@
           <tr><td>cloudbees_ci_job</td><td>CloudBees CI jobs, builds and logs</td><td><span class="tag">exact</span> <span class="tag">namespace</span> <span class="tag">all</span></td></tr>
         </tbody>
       </table>
-      <p style="font-size:13px;color:var(--ink-3);margin-top:10px">Namespace and all selectors also cover upstream objects created later. <b>Resource groups</b> bundle entries with explicit inclusions and exclusions, without nesting. Resource types can opt out of exclusions; their entries remain available for inclusion.</p>
+      <p style="font-size:13px;color:var(--ink-3);margin-top:10px">Namespace and all selectors cover future objects too. <b>Resource groups</b> bundle entries with inclusions and exclusions. Exclusions constrain their grant/token boundary, not other grants.</p>
 
       <div class="split" style="margin-top:28px">
         <div class="record">
           <div class="rh">Grant fields</div>
           <dl>
             <dt>subjects</dt><dd>Users and/or managed groups</dd>
-            <dt>service</dt><dd>Exactly one, e.g. <code>jira</code>, <code>gitlab</code>, <code>gitlab_git</code>, <code>cloudbees_ci</code></dd>
-            <dt>actions</dt><dd>Typed operations, e.g. <code>issue.view</code>, <code>merge_request.create</code>, <code>repo.push</code></dd>
-            <dt>resources</dt><dd>Catalog entries and/or groups for resource-scoped actions; none for MCP and OpenAPI imports</dd>
+            <dt>service</dt><dd>One upstream service</dd>
+            <dt>actions</dt><dd>Permitted operations</dd>
+            <dt>resources</dt><dd>Catalog entries or groups, where supported</dd>
             <dt>contexts</dt><dd>Where the grant applies, e.g. <code>internal</code></dd>
             <dt>credential_mode</dt><dd><code>per_user</code> or <code>service</code></dd>
             <dt>priority</dt><dd>Orders overlapping grants</dd>
@@ -1169,10 +1126,9 @@
         </div>
         <div>
           <ul class="list" style="margin-top:0">
-            <li><b>Grant coverage.</b> For ordinary resource-scoped actions, a single grant must cover every target in a request. Native searches combine the winning grant band's clauses, narrowed by the token's resource boundary.</li>
-            <li><b>Grant selection.</b> Direct user grants take precedence over group grants. Priority determines selection within that category. If the highest-ranked grants are ambiguous, the request is denied.</li>
-            <li><b>Search scope.</b> Jira and Confluence constrain JQL/CQL queries upstream and check each returned item. GitLab discovery and content search confirm current repository ownership with the selected execution credential and discard unauthorized candidates before results, audit, or continuations.</li>
-            <li><b>Grant and resource status.</b> Grants and resources can be enabled or disabled but do not expire. Time-based access restrictions come from token expiration and the validity period of group evidence.</li>
+            <li><b>Coverage.</b> Ordinary resource-scoped operations require one grant to cover all targets. Native searches can combine equally ranked selected grants, within token restrictions.</li>
+            <li><b>Selection.</b> Direct user grants take precedence over group grants, then priority applies. Ambiguous selections are denied.</li>
+            <li><b>Search.</b> Native providers constrain queries or filter results to authorized resources.</li>
           </ul>
         </div>
       </div>
@@ -1191,12 +1147,11 @@
         <div class="tier t1">
           <span class="label">Tier 1</span>
           <h4>Global administrator</h4>
-          <p class="scope">Company-wide · admin role held in the broker database</p>
+          <p class="scope">Company-wide</p>
           <span class="label">Manages</span>
           <ul class="can">
-            <li>Resource catalog and groups</li>
-            <li>Context eligibility per resource</li>
-            <li>Import definitions, tool review and shared credentials within operator gates</li>
+            <li>Resources, groups and context eligibility</li>
+            <li>Imports and shared credentials within operator gates</li>
             <li>Service-manager assignments</li>
             <li>Identities, roles, all grants</li>
           </ul>
@@ -1204,7 +1159,7 @@
         <div class="tier t2">
           <span class="label">Tier 2</span>
           <h4>Service policy manager</h4>
-          <p class="scope">Delegated · directly assigned services · an account</p>
+          <p class="scope">Directly assigned services</p>
           <span class="label">Manages</span>
           <ul class="can">
             <li>All grants for directly assigned services</li>
@@ -1212,10 +1167,8 @@
           </ul>
           <span class="label">Cannot</span>
           <ul class="cannot">
-            <li>Create or change resources or their contexts</li>
-            <li>Appoint managers or move grants across services</li>
-            <li>View credentials or administer identities and tokens</li>
-            <li>Import services or accept changed upstream tools</li>
+            <li>Change the resource catalog or import definitions</li>
+            <li>Administer identities, credentials, tokens or manager assignments</li>
           </ul>
         </div>
         <div class="tier">
@@ -1225,23 +1178,20 @@
           <span class="label">Manages</span>
           <ul class="can">
             <li>Their backend credentials</li>
-            <li>Their agent tokens and immutable restrictions, including Read-only</li>
+            <li>Their agent tokens and restrictions</li>
           </ul>
           <span class="label">Cannot</span>
           <ul class="cannot">
             <li>Widen access beyond their grants</li>
-            <li>Issue an agent token without permission in every selected context and an effective grant</li>
+            <li>Issue tokens without issuance permission and an effective grant</li>
           </ul>
         </div>
       </div>
 
-      <div class="cols2" style="margin-top:24px">
-        <p style="margin:0">Service managers, such as Confluence administrators, manage grants for their service. Global administrators maintain the resource catalog and each resource's eligible contexts. A delegated manager can select resources from that catalog but cannot add resources or change their context eligibility.</p>
-        <div class="callout" style="margin-top:0">
-          <b>Delegation scope.</b> Service managers can grant access to themselves and others, including use of a service credential. These grants remain subject to the global catalog and context eligibility. A manager must have an applicable grant to invoke an action; the management role alone does not authorize invocation.
-        </div>
+      <div class="callout">
+        <b>Delegation scope.</b> Service managers can grant access to themselves and others, including shared execution, within the global resource catalog. Management roles alone do not authorize invocation.
       </div>
-      <p style="font-size:13px;color:var(--ink-3);margin-top:16px">Assignments are direct to accounts with the service policy manager role, never to groups. The current role and assignments are re-evaluated on every management request. Auditors may inspect global administrative metadata and safe previews without changing state or revealing secrets. Self-service is a separate account setting.</p>
+      <p style="font-size:13px;color:var(--ink-3);margin-top:16px">Auditors have read-only administrative access without secret reveals. Service-manager assignments are direct to accounts. Personal self-service is enabled separately.</p>
     </div>
   </section>
 
@@ -1251,20 +1201,20 @@
   <section id="decision" class="wide">
     <div class="sec-head">
       <div><div class="num">10</div><h2>How a request is decided</h2></div>
-      <p>The controls from the previous sections combine into one decision, evaluated in a fixed order for every request.</p>
+      <p>The controls from the previous sections combine into each authorization decision.</p>
     </div>
     <div class="sec-body">
       <div class="split">
         <div>
-          <p>A request must satisfy each applicable control. Context eligibility determines which resources are available in the execution environment. A grant must authorize the caller's action on those resources, and any token restrictions must also permit it. The upstream system then enforces the permissions of the credential the broker presents. Broker authorization cannot override those upstream permissions.</p>
+          <p>A request must satisfy context eligibility, grants, identity/token limits and the selected credential's upstream permissions.</p>
           <div class="formula">
             Effective access for a single request
-            <span class="eq">context eligibility<span class="op">∩</span>grant<span class="op">∩</span>token restrictions<span class="op">∩</span>upstream permissions</span>
+            <span class="eq">context eligibility<span class="op">∩</span>grant<span class="op">∩</span>identity/token limits<span class="op">∩</span>upstream permissions</span>
           </div>
           <dl class="layers">
             <dt>Context eligibility</dt><dd>Global admin, per resource (<a href="#grants">§08</a>)</dd>
             <dt>Grant</dt><dd>Admin or delegated service manager (<a href="#governance">§09</a>)</dd>
-            <dt>Token restrictions</dt><dd>User, optional, per token (<a href="#unmanaged">§06</a>)</dd>
+            <dt>Identity/token limits</dt><dd>Read-only settings and token scopes (<a href="#unmanaged">§06</a>)</dd>
             <dt>Upstream permissions</dt><dd>What the presented credential allows (<a href="#custody">§07</a>)</dd>
           </dl>
         </div>
@@ -1286,8 +1236,8 @@
             <text class="d-sub" x="44" y="100">admin or service manager</text>
 
             <rect class="v-l3" x="48" y="114" width="240" height="146" rx="8"/>
-            <text class="d-label" x="64" y="136">TOKEN RESTRICTIONS</text>
-            <text class="d-sub" x="64" y="152">user · optional</text>
+            <text class="d-label" x="64" y="136">IDENTITY / TOKEN LIMITS</text>
+            <text class="d-sub" x="64" y="152">read-only, contexts, caveats</text>
 
             <g clip-path="url(#clip-token)">
               <rect class="v-eff" x="176" y="168" width="296" height="126" rx="12"/>
@@ -1302,12 +1252,12 @@
             <text class="v-eff-title" x="232" y="210" text-anchor="middle">Effective</text>
             <text class="v-eff-title" x="232" y="226" text-anchor="middle">access</text>
           </svg>
-          <figcaption><b>Figure 5.</b> Effective access is the intersection of context eligibility, grant permissions, token restrictions and upstream permissions.</figcaption>
+          <figcaption><b>Figure 5.</b> Effective access intersects context eligibility, grants, identity/token limits and upstream permissions.</figcaption>
         </figure>
       </div>
 
       <h3 style="margin-top:44px">Evaluation order</h3>
-      <p>Every invocation uses the same ordered checks. If a required check fails, the broker rejects the request. Authorization must complete before the requested action executes upstream; any preliminary lookup is limited as described below.</p>
+      <p>Required checks must pass before the requested action executes upstream.</p>
       <figure>
         <svg viewBox="0 0 1040 230" role="img" aria-labelledby="f6t">
           <title id="f6t">Eight-stage request evaluation pipeline grouped into admit, authorize and execute</title>
@@ -1338,7 +1288,7 @@
             <rect class="d-stage" x="136" y="44" width="118" height="104" rx="6"/>
             <text class="d-mono" x="148" y="64">2</text>
             <text class="d-title" x="148" y="82">Identity</text>
-            <text class="d-small" x="148" y="102">proxy fingerprint</text>
+            <text class="d-small" x="148" y="102">trusted identity</text>
             <text class="d-small" x="148" y="117">or broker token</text>
             <text class="d-deny" x="148" y="172">× unknown, revoked</text>
           </g>
@@ -1355,11 +1305,11 @@
           <g>
             <rect class="d-stage" x="396" y="44" width="118" height="104" rx="6"/>
             <text class="d-mono" x="408" y="64">4</text>
-            <text class="d-title" x="408" y="82">Token limits</text>
-            <text class="d-small" x="408" y="102">invoke class;</text>
-            <text class="d-small" x="408" y="117">service, action,</text>
+            <text class="d-title" x="408" y="82">Path / token</text>
+            <text class="d-small" x="408" y="102">invoke, read-only;</text>
+            <text class="d-small" x="408" y="117">token service, action,</text>
             <text class="d-small" x="408" y="132">context caveats</text>
-            <text class="d-deny" x="408" y="172">× outside token</text>
+            <text class="d-deny" x="408" y="172">× path/token denied</text>
           </g>
           <path class="d-edge-soft" d="M514 96 H524" marker-end="url(#arrow6)"/>
           <g>
@@ -1375,8 +1325,8 @@
             <rect class="d-stage" x="656" y="44" width="118" height="104" rx="6"/>
             <text class="d-mono" x="668" y="64">6</text>
             <text class="d-title" x="668" y="82">Grant</text>
-            <text class="d-small" x="668" y="102">one grant covers</text>
-            <text class="d-small" x="668" y="117">every target</text>
+            <text class="d-small" x="668" y="102">grant covers targets;</text>
+            <text class="d-small" x="668" y="117">search: combined scope</text>
             <text class="d-deny" x="668" y="172">× no grant</text>
           </g>
           <path class="d-edge-soft" d="M774 96 H784" marker-end="url(#arrow6)"/>
@@ -1398,23 +1348,23 @@
             <text class="d-deny" x="928" y="172">× audit unavailable</text>
           </g>
           <path class="d-edge-soft" d="M6 196 H1034" style="stroke-dasharray:2 4"/>
-          <text class="d-small" x="6" y="220">Every outcome, allowed or denied, produces one audit record. The policy snapshot is pinned at stage 4 and used through execution.</text>
+          <text class="d-small" x="6" y="220">With audit configured, outcomes are recorded; streams and credentialed gateways also record their start. Decisions use a pinned policy snapshot.</text>
         </svg>
-        <figcaption><b>Figure 6.</b> Evaluation order for <code>POST /v1/invoke/{service}/{action}</code>. MCP tools and the Git gateway run the same stages.</figcaption>
+        <figcaption><b>Figure 6.</b> Common controls for actions and gateways; sequencing varies by protocol. Prepared operations may finish after later policy changes.</figcaption>
       </figure>
 
       <div class="notes">
         <div class="note"><div class="badge">5</div><div>
           <h4>Target resolution</h4>
-          <p>Some requests require an upstream lookup to identify the target resource, such as the project containing an issue. The broker uses a read-only lookup credential or the caller's own credential, and performs the lookup only when a grant could apply. Error responses do not disclose the resolved target.</p>
+          <p>Broker may look up a target's current resource, such as an issue's project, before authorization. A potentially applicable grant is required for the lookup.</p>
         </div></div>
         <div class="note"><div class="badge">6</div><div>
           <h4>Decision records</h4>
-          <p>The broker records the matched grant, its version and the policy generation with the request, identifying the policy used to authorize it.</p>
+          <p>Audit identifies the grants and policy version used for authorization.</p>
         </div></div>
         <div class="note"><div class="badge">G</div><div>
           <h4>Git authorization</h4>
-          <p>Clone and push map to <code>repo.fetch</code> and <code>repo.push</code> on the repository's catalog entry. Pushes are also checked against ref rules: no deletions, no tags, and configured deny patterns.</p>
+          <p>Fetch and push require repository access; pushes also follow ref rules. See <a href="git-http-gateway.md">Git authorization</a> for protocol restrictions and requested-path semantics.</p>
         </div></div>
       </div>
     </div>
@@ -1425,7 +1375,7 @@
     <div class="sec-head">
       <div class="num">11</div>
       <h2>Rate limits and audit</h2>
-      <p>Per-service invocation limits and concurrency caps control load. Audit records capture authorization decisions, execution outcomes, and the few request inputs each action opts in, such as its project, issue or query.</p>
+      <p>Rate and concurrency limits control load. Audit records capture who requested an operation, the authorization decision and its outcome.</p>
     </div>
     <div class="sec-body cols2">
       <div>
@@ -1433,35 +1383,28 @@
         <table>
           <thead><tr><th>Limit</th><th>Counted per</th></tr></thead>
           <tbody>
-            <tr><td>Personal invocation allowance</td><td>One principal on one service, across that principal's tokens, clients and source addresses</td></tr>
-            <tr><td>Optional shared service cap</td><td>All principals using one service ID in this Broker process</td></tr>
-            <tr><td>Login attempts</td><td>One user from one source address (local password sign-in and password change)</td></tr>
-            <tr><td>Authentication traffic</td><td>One source address: sign-in attempts and requests that fail authentication</td></tr>
-            <tr><td>Concurrency</td><td>Shared request slots held by one principal, including rate waiters</td></tr>
-            <tr><td>Concurrency</td><td>Shared request slots held across the broker instance, including rate waiters</td></tr>
+            <tr><td>Personal invocation allowance</td><td>One principal on one service, across tokens and clients</td></tr>
+            <tr><td>Optional shared service cap</td><td>All principals using a service</td></tr>
+            <tr><td>Authentication protection</td><td>User/source lockouts and per-source traffic limits</td></tr>
+            <tr><td>Concurrency</td><td>Per-principal and Broker-wide request slots</td></tr>
           </tbody>
         </table>
         <ul class="list" style="margin-top:16px">
-          <li><b>What counts.</b> Only requests that invoke a backend: <code>POST /v1/invoke</code>, MCP action tool calls and Git pack requests (a protocol v2 fetch or clone sends two or more). Discovery, specs, management and MCP protocol traffic are not counted, and each request counts once however many upstream calls it makes.</li>
-          <li><b>Limit values.</b> Configuration sets personal defaults and optional shared service caps. Both allowances are charged together; a personal override cannot bypass a shared cap. The portal displays TOML-owned shared caps read-only. Administrators can override one principal's limit for a service in the portal, CLI or admin API, and users see their own limits on their Account page. Changing tokens or machines does not reset a principal's allowance; principals behind one proxy address are counted separately.</li>
-          <li><b>Waiting and discovery.</b> Optional <code>max_wait</code> holds requests in personal FIFO order, taking turns among eligible callers within existing request capacity; the default is immediate refusal. New contention can make a queued request infeasible before its unchanged deadline. Service describe reports personal and shared policy, the caller's pending count and joint admission estimates without reserving capacity. Its separate bounded capacity remains available when invocation slots fill. Client timeouts can leave requests queued or executing; reconcile a mutation before resubmitting it.</li>
-          <li><b>Rejections.</b> A rate-limited request is not executed. The broker returns <code>429 rate_limited</code> with <code>Retry-After</code>, the limit and an estimated retry time after accepted waiters, so agents wait without duplicating pending calls; the CLI exits with code 7. Throttling by an upstream service is reported separately as <code>upstream_rate_limited</code> with the upstream's wait, except after a write has already been applied, which is reported as an unverified write that must not be retried.</li>
-          <li><b>Login protection.</b> Failed local passwords lock a user out from one source address (IPv6 grouped by /64) for the lockout period without affecting other addresses. Beyond 256 failing addresses for one user, further addresses share a single counter.</li>
-          <li><b>Counter scope.</b> Counters are maintained per broker instance and are not shared across replicas. Invocation limits use rolling windows; authentication limits use fixed 60-second windows. Restart, a window change or re-enabling a shared cap starts a fresh allowance. Count-only changes and ordinary reloads retain usage. Numeric availability and rate refusals can reveal shared contention; requests later denied by policy still count.</li>
+          <li><b>Invocation limits.</b> Personal and shared service caps apply together. Changing tokens or clients does not reset the principal's allowance.</li>
+          <li><b>Admission.</b> Excess requests wait within configured limits or are rejected before execution. Upstream throttling is reported separately.</li>
+          <li><b>Scope.</b> Counters are local to one Broker process, not distributed quotas. See <a href="configuration.md#service-invocation-limits">invocation limits</a> for configuration and queuing behavior.</li>
         </ul>
       </div>
       <div>
         <h3 style="margin-top:0">Audit</h3>
         <ul class="list">
-          <li><b>Audit fields.</b> Each outcome record includes a unique record ID (<code>auditId</code>), the node ID of the broker that wrote it (<code>nodeId</code>), the principal, groups, optional trusted caller ID (<code>callerId</code>), service, action, resolved resources, execution context, matched grant, credential mode, decision and upstream status. Caller ID names the attesting service and never contains credentials. Rate-limit rejections also record the limit and retry time.</li>
-          <li><b>Audit storage.</b> Operators choose a standalone SQLite audit database, which can be searched, or size-rotated JSONL files for log shippers. Both keep records for the configured retention period.</li>
-          <li><b>Audit availability.</b> Mandatory audit admission fails before execution or store changes when its record cannot be written. Password changes, authenticated logout, and resource or resource-group mutations persist a preflight first. If their supplemental completion record fails after commit, the response preserves the completed change and normal cookie handling, while the broker reports the audit fault through readiness and a correlated service-log event. The managed and audit stores commit separately, so a process crash can leave only preflight evidence.</li>
-          <li><b>Streaming and Git records.</b> Streams and Git transfers write a start record before any credential is sent and a final record at completion.</li>
-          <li><b>Viewing audit.</b> With SQLite storage, administrators and auditors see every record, service managers see records for their directly assigned services, and users with self-service enabled see their own activity, in the portal and the CLI. Agent tokens cannot read audit records.</li>
-          <li><b>Resource history.</b> Completed resource and group changes record safe names, before/after state, and included/excluded membership changes. The portal preserves those historical labels and lets authorized catalog readers open current objects. An allowed preflight represents an attempt, not proof of completion.</li>
-          <li><b>Management reads.</b> Successful read-only management calls, such as portal page loads and audit queries, write no audit record, so they keep working when audit writes fail. Their denials and failures, all changes, secret reveals, policy exports and credential verification are audited.</li>
-          <li><b>Secret redaction.</b> Audit output excludes secrets and credential material.</li>
+          <li><b>Records.</b> Invocation outcomes and management changes include identity, action and policy context. Streams and credentialed gateways also record their start. Routine successful management reads are not audited.</li>
+          <li><b>Storage.</b> Audit can use searchable SQLite or rotated JSONL. Retention and durability are configured; local records are not tamper-evident against host administrators.</li>
+          <li><b>Failures.</b> Audit readiness checks and required preflights fail closed. A final audit failure can occur after an upstream change; it does not make retrying safe.</li>
+          <li><b>Visibility.</b> Administrators and auditors see all records, service managers see their services, and self-service users see their own activity. Agent tokens cannot read audit.</li>
+          <li><b>Sensitive data.</b> Credentials are excluded, but selected query and title inputs may contain confidential text. Audit readers can see those values.</li>
         </ul>
+        <p>See <a href="operator-guide.md#query-audit-records">audit operations</a> for storage, search and failure handling.</p>
       </div>
     </div>
   </section>
@@ -1476,28 +1419,28 @@
     </div>
     <div class="sec-body">
       <dl class="glossary">
-        <dt>Identity attestation</dt><dd>A configured caller supplies an exact bound username on HTTP MCP or a verified registered fingerprint on supported invocation surfaces. Broker authenticates the caller, resolves the human, checks the shared identity-access gate and the path's own Enabled and Read-only settings, and applies current policy.</dd>
-        <dt>Trusted caller</dt><dd>A named infrastructure caller with its own credential, fixed or asserted context permissions, and optional managed-identity forwarding. Its credential does not authenticate the principal or add grants.</dd>
-        <dt>Trusted ingress</dt><dd>An optional infrastructure caller implementing Broker's credential and context contract, with identity forwarding only when explicitly permitted. Client-address forwarding is configured separately.</dd>
-        <dt>Execution context</dt><dd>An authorization label (<code>internal</code>, <code>external</code>, <code>workstation</code>) asserted by an authenticated trusted caller or fixed by Broker configuration. Header-free direct clients use the configured default.</dd>
-        <dt>Principal</dt><dd>A broker user or service account. Every identity path resolves to one.</dd>
-        <dt>Action</dt><dd>A typed, named operation a provider exposes, such as <code>jira.issue.view</code>. Imported action schemas are reviewed and stored in the broker catalog.</dd>
-        <dt>Imported service</dt><dd>A database-managed MCP or OpenAPI integration whose reviewed operations become broker actions, subject to operator configuration and ordinary action/context grants.</dd>
-        <dt>Managed identity</dt><dd>An explicit namespace/username binding or registered fingerprint resolves to an active human with unpaused identity access. Invocation-only; usernames are HTTP MCP only.</dd>
-        <dt>agent_invoke token</dt><dd>A broker token issued by or for a user for agent use outside managed environments. Scoped by context and optionally by service and resource.</dd>
-        <dt>Resource / resource group</dt><dd>A catalog entry for an upstream repository, project, space or job, with its eligible contexts. Groups bundle entries with inclusions and exclusions.</dd>
-        <dt>Grant</dt><dd>Policy allowing subjects to perform actions for one service in listed contexts, using a permitted credential mode and resource selections where the provider supports them.</dd>
-        <dt>Credential mode</dt><dd><code>per_user</code> uses the caller's credential for the service's credential connection: a stored token or, for people where configured, an OAuth connection. <code>service</code> uses a shared credential; imported shared tokens are encrypted in the database.</dd>
-        <dt>Credential connection</dt><dd>One per-principal credential that one or more services use, such as one GitLab token for GitLab REST and Git. The administrator configures its method; grants stay per service.</dd>
-        <dt>OAuth connection</dt><dd>A user's consent for the broker to access an upstream service through an approved authentication adapter. Separate from browser sign-in and broker agent tokens.</dd>
-        <dt>Service policy manager</dt><dd>An account with the service policy manager role, directly assigned to manage grants for one or more services. Groups cannot hold these assignments.</dd>
-        <dt>Lookup credential</dt><dd>A read-only credential used only to resolve a target's scope before authorization.</dd>
-        <dt>Policy snapshot</dt><dd>The version of policy pinned for a request, so that concurrent edits cannot change a decision midway.</dd>
+        <dt>Identity attestation</dt><dd>A trusted caller supplies verified identity information for Broker to resolve and authorize.</dd>
+        <dt>Trusted caller</dt><dd>Authenticated infrastructure permitted to assert context and, where enabled, identity.</dd>
+        <dt>Trusted ingress</dt><dd>A trusted caller that forwards requests to the Broker.</dd>
+        <dt>Execution context</dt><dd>An authorization label for an environment or application, such as <code>internal</code> or <code>workstation</code>.</dd>
+        <dt>Principal</dt><dd>A Broker user or service account.</dd>
+        <dt>Action</dt><dd>A named operation, such as <code>jira.issue.view</code>.</dd>
+        <dt>Imported service</dt><dd>A reviewed MCP, OpenAPI or command integration.</dd>
+        <dt>Managed identity</dt><dd>A trusted assertion mapped to a human account for invocation.</dd>
+        <dt>agent_invoke token</dt><dd>A user-issued Broker credential for agent discovery and invocation.</dd>
+        <dt>Resource / resource group</dt><dd>An eligible upstream target, or a collection of catalog entries.</dd>
+        <dt>Grant</dt><dd>Policy authorizing subjects, actions, contexts and supported resource scopes for one service.</dd>
+        <dt>Credential mode</dt><dd><code>per_user</code> selects the caller's upstream credential; <code>service</code> selects a shared credential.</dd>
+        <dt>Credential connection</dt><dd>An upstream credential binding that one or more services use.</dd>
+        <dt>OAuth connection</dt><dd>A user's consent for Broker access to an upstream service.</dd>
+        <dt>Service policy manager</dt><dd>An account delegated to manage grants for assigned services.</dd>
+        <dt>Lookup credential</dt><dd>A credential used to resolve a target's resource before authorization.</dd>
+        <dt>Policy snapshot</dt><dd>The policy version used consistently for an authorization decision.</dd>
       </dl>
     </div>
   </section>
 
-  <footer>Agent Access Broker · System overview · Updated 2026-09-30. Describes implemented behaviour at the level of the reviewed source; deployment-specific values (contexts, limits, listeners) are configuration.</footer>
+  <footer>Agent Access Broker · System overview · Reviewed 2026-11-08. Deployment-specific contexts, limits and listeners are configuration. See the <a href="security-model.md">security model</a> for detailed guarantees and limitations.</footer>
 
 </div>
 </body>
