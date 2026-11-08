@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
   files require an explicit budget within the new `max_inline_text_bytes`
   ceiling. Upgrade the Broker and CLI together. See
   [repository file reads](docs/providers-gitlab-rest.md#repository-file-reads).
+  ([#106](https://github.com/kcosr/agent-access-broker/pull/106))
 
 - **Gateway services are omitted from ordinary agent discovery.** HTTP service
   and action lists/describes, CLI discovery, and HTTP/stdio MCP discovery helpers
@@ -463,6 +464,7 @@ All notable changes to this project are documented in this file.
   response as their bytes. GitLab's potentially converted-content hash is no
   longer treated as a raw-byte checksum; local receipts still report the
   SHA-256 computed from the saved bytes.
+  ([#106](https://github.com/kcosr/agent-access-broker/pull/106))
 
 - Gateway request capacity and terminal audit now join upload, response and bounded
   unread-body disposal. Empty or fixed-length responses release their delivery
