@@ -129,12 +129,12 @@ impl GatewayConfig {
         Ok(url)
     }
 }
-fn default_basic_broker_token_username() -> String {
+pub(crate) fn default_basic_broker_token_username() -> String {
     "agent-access".into()
 }
-fn default_gateway_redirect_policy() -> String {
+pub(crate) fn default_gateway_redirect_policy() -> String {
     "none".into()
 }
-fn default_gateway_correlation_headers() -> bool {
+pub(crate) fn default_gateway_correlation_headers() -> bool {
     true
 }

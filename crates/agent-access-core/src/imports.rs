@@ -11,6 +11,7 @@ mod command_registry;
 mod command_request;
 mod credentials;
 mod definition;
+mod gateway;
 mod metadata;
 mod registration;
 mod schema;
@@ -32,6 +33,7 @@ pub(crate) use command_request::{
 };
 pub use credentials::*;
 pub use definition::*;
+pub use gateway::*;
 pub use metadata::*;
 pub use registration::{
     ImportOAuthCompanion, ImportedAdapterRegistration, imported_adapter_registration,

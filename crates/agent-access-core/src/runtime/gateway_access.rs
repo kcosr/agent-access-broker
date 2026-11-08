@@ -1,4 +1,11 @@
-//! The upstream credential a Git gateway request presents.
+//! The host-owned credential a gateway request presents.
+//!
+//! Imported gateways select an explicit anonymous or static execution binding.
+//! Static delivery uses that binding's Basic, Bearer or header placement, without
+//! Git token-profile rules. Each request retains its admitted publication fence;
+//! a personal token also retains its exact credential ID and material version.
+//! The host rechecks those proofs before dispatch and never resolves replacement
+//! material for an already prepared request.
 //!
 //! A static credential (a service credential, or the caller's stored token)
 //! is presented as `upstream_token_auth` configures. When the caller's
@@ -39,7 +46,33 @@ const PORTAL_RECONNECT: &str = "under My access > Credentials in the Agent Acces
 pub(super) enum GatewayAccess {
     None,
     Static(ExecutionCredential),
+    ImportedStatic {
+        credential: ExecutionCredential,
+        placement: agent_access_provider::CredentialPlacement,
+        personal_fence: Option<
+            Box<(
+                crate::ManagedStore,
+                crate::managed_store::CredentialMaterialFence,
+            )>,
+        >,
+    },
     Delegated(GatewayDelegatedAccess),
+}
+
+impl GatewayAccess {
+    async fn recheck_imported_material(&self) -> Result<(), ProviderError> {
+        if let Self::ImportedStatic {
+            personal_fence: Some(material),
+            ..
+        } = self
+        {
+            let (store, fence) = material.as_ref().clone();
+            super::managed_store_blocking(move || store.validate_credential_material_fence(&fence))
+                .await
+                .map_err(super::provider_error_from_managed_store)?;
+        }
+        Ok(())
+    }
 }
 
 /// The caller's OAuth lease for one gateway request.
@@ -71,7 +104,8 @@ impl GatewayUpstreamPresentation {
     /// the host answers through
     /// [`PreparedGatewayOperation::recover_upstream_presentation`] or
     /// [`PreparedGatewayOperation::reject_upstream_presentation`]. A static
-    /// credential's 401 passes through to the client unchanged.
+    /// Git credential's 401 passes through unchanged; other protocols may
+    /// request the host's upstream-authentication failure translation.
     pub fn is_delegated(&self) -> bool {
         self.delegated_version.is_some()
     }
@@ -99,6 +133,56 @@ impl BrokerRuntime {
         identity: &IdentityContext,
         correlation: &CorrelationContext,
     ) -> Result<GatewayAccess, ProviderError> {
+        if self.imported_catalog.service(service).is_some() {
+            use crate::imports::ImportedCredentialDelivery;
+            use agent_access_provider::CredentialPlacement;
+            let binding = self.imported_gateway_execution_binding(service, credential_mode)?;
+            let delivery = match binding {
+                super::GatewayExecutionBinding::Anonymous => return Ok(GatewayAccess::None),
+                super::GatewayExecutionBinding::Static(delivery) => delivery,
+            };
+            let placement = match delivery {
+                ImportedCredentialDelivery::Basic => CredentialPlacement::basic(),
+                ImportedCredentialDelivery::Bearer => CredentialPlacement::bearer(),
+                ImportedCredentialDelivery::RawHeader { name } => {
+                    CredentialPlacement::header(name.parse().map_err(|_| {
+                        ProviderError::deny(
+                            ReasonCode::CredentialInvalid,
+                            "credential placement is invalid",
+                        )
+                    })?)
+                }
+                _ => {
+                    return Err(ProviderError::deny(
+                        ReasonCode::CredentialInvalid,
+                        "credential placement is unsupported",
+                    ));
+                }
+            };
+            let (credential, personal_fence) = if credential_mode == "per_user" {
+                let (credential, fence) = self
+                    .resolve_gateway_connection_token(service, identity)
+                    .await?;
+                let store = self.managed_store.clone().ok_or_else(|| {
+                    ProviderError::error(
+                        ReasonCode::ManagedStoreUnavailable,
+                        "credential store is unavailable",
+                    )
+                })?;
+                (credential, Some(Box::new((store, fence))))
+            } else {
+                (
+                    self.resolve_imported_execution_credential(service, credential_mode, identity)
+                        .await?,
+                    None,
+                )
+            };
+            return Ok(GatewayAccess::ImportedStatic {
+                credential,
+                placement,
+                personal_fence,
+            });
+        }
         let descriptor = self
             .services
             .get(service)
@@ -202,6 +286,34 @@ impl BrokerRuntime {
 }
 
 impl PreparedGatewayOperation {
+    /// Host-only final check against the captured publication and personal
+    /// material proofs. This performs no locking or database work.
+    pub fn validate_imported_dispatch(&self) -> Result<(), ProviderError> {
+        if let Some(fence) = &self.imported_fence {
+            fence.validate()?;
+        }
+        if let GatewayAccess::ImportedStatic {
+            personal_fence: Some(material),
+            ..
+        } = &self.access
+        {
+            let (_, fence) = material.as_ref();
+            fence
+                .validate_current()
+                .map_err(super::provider_error_from_managed_store)?;
+        }
+        Ok(())
+    }
+
+    /// Host-only final metadata check for selected personal material, off the
+    /// async executor, before the final identity revalidation. After all awaits,
+    /// recheck the cheap dispatch and identity proofs immediately before sending.
+    /// Local material mutations retire the captured proof across later awaits;
+    /// no replacement credential is resolved.
+    pub async fn recheck_imported_material(&self) -> Result<(), ProviderError> {
+        self.access.recheck_imported_material().await
+    }
+
     /// Host-only: the authorization the request's next upstream attempt
     /// presents for `gateway`, the configuration the request is forwarded
     /// with. OAuth access is revalidated, renewing it when stale, and pinned
@@ -210,6 +322,7 @@ impl PreparedGatewayOperation {
         &self,
         gateway: &GatewayConfig,
     ) -> Result<GatewayUpstreamPresentation, ProviderError> {
+        self.validate_imported_dispatch()?;
         match &self.access {
             GatewayAccess::None => Ok(GatewayUpstreamPresentation {
                 authorization: None,
@@ -220,6 +333,19 @@ impl PreparedGatewayOperation {
                     &gateway.upstream_token_auth,
                     credential,
                 )?),
+                delegated_version: None,
+            }),
+            GatewayAccess::ImportedStatic {
+                credential,
+                placement,
+                ..
+            } => Ok(GatewayUpstreamPresentation {
+                authorization: Some(credential.authorization_as(placement).map_err(|_| {
+                    ProviderError::deny(
+                        ReasonCode::CredentialInvalid,
+                        "credential cannot be presented for the selected binding",
+                    )
+                })?),
                 delegated_version: None,
             }),
             GatewayAccess::Delegated(delegated) => delegated.present(gateway).await,
@@ -292,7 +418,7 @@ impl PreparedGatewayOperation {
         {
             let method = match self.access {
                 GatewayAccess::None => "none",
-                GatewayAccess::Static(_) => "token",
+                GatewayAccess::Static(_) | GatewayAccess::ImportedStatic { .. } => "token",
                 GatewayAccess::Delegated(_) => "oauth",
             };
             gateway.insert("credentialMethod".to_string(), json!(method));
@@ -382,6 +508,121 @@ fn gateway_lease_failure(connection: &str, error: ProviderError) -> ProviderErro
 mod tests {
     use super::*;
     use agent_access_provider::Decision;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn imported_material_recheck_keeps_tokio_timers_live_while_store_is_locked() {
+        use base64::Engine;
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let temp = tempfile::TempDir::new().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let registry = crate::ConfiguredExecutionContexts::from_config(None).unwrap();
+        let store = crate::ManagedStore::open(
+            &crate::ManagedStoreConfig {
+                kind: "sqlite".into(),
+                path: temp.path().join("store.sqlite").display().to_string(),
+                auto_migrate: true,
+                require_registered_principal_for_invocation: false,
+            },
+            &registry,
+            crate::ManagedStoreOpenMode::Startup,
+        )
+        .unwrap();
+        store
+            .create_principal(
+                crate::PrincipalWriteRequest {
+                    principal_id: "alice".into(),
+                    kind: "user".into(),
+                    display_name: None,
+                    email: None,
+                    external_subject: None,
+                    created_by: "admin".into(),
+                    role: crate::PrincipalRole::User,
+                    self_service_enabled: None,
+                    agent_token_issuance: crate::PrincipalAgentTokenIssuanceSetting::default(),
+                },
+                &registry,
+            )
+            .unwrap();
+        let key_path = temp.path().join("key");
+        std::fs::write(
+            &key_path,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7u8; 32]),
+        )
+        .unwrap();
+        let ring = crate::CredentialKeyRing::load(&crate::CredentialEncryptionConfig {
+            active_key: "key".into(),
+            keys: vec![crate::CredentialEncryptionKeyConfig {
+                id: "key".into(),
+                provider: "file".into(),
+                env: None,
+                path: Some(key_path.display().to_string()),
+            }],
+        })
+        .unwrap();
+        store
+            .upsert_user_credential(
+                &ring,
+                crate::CredentialWriteRequest {
+                    owner_principal_id: "alice".into(),
+                    service: "inventory".into(),
+                    name: "default".into(),
+                    profile: "token".into(),
+                    credential_kind: "bearer_token".into(),
+                    secret: json!({"token":"fixture"}),
+                    metadata: json!({}),
+                    actor: "admin".into(),
+                },
+                crate::CredentialManagementPurpose::Administrative,
+            )
+            .unwrap();
+        let (credential, fence) = store
+            .resolve_user_credential_with_material_fence(
+                &ring,
+                "alice",
+                "inventory",
+                "default",
+                &["token".into()],
+                None,
+            )
+            .unwrap();
+        let access = GatewayAccess::ImportedStatic {
+            credential,
+            placement: agent_access_provider::CredentialPlacement::bearer(),
+            personal_fence: Some(Box::new((store.clone(), fence.clone()))),
+        };
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let mut released_normally = false;
+            store.with_credential_test_connection_lock(|| {
+                locked.send(()).unwrap();
+                // Watchdog bounds a regression that mistakenly blocks the sole
+                // Tokio worker; it does not establish the expected test ordering.
+                released_normally = released.recv_timeout(Duration::from_secs(5)).is_ok();
+            });
+            released_normally
+        });
+        ready.await.unwrap();
+        fence.validate_current().unwrap();
+        let recheck = access.recheck_imported_material();
+        tokio::pin!(recheck);
+        tokio::select! {
+            biased;
+            result = &mut recheck => panic!("locked store check completed before its release: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+        }
+        release.send(()).unwrap();
+        recheck.await.unwrap();
+        assert!(
+            holder.join().unwrap(),
+            "store watchdog fired before Tokio's timer"
+        );
+    }
 
     #[test]
     fn only_reconnect_states_name_the_portal_reconnect() {

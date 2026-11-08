@@ -184,12 +184,23 @@ export type ImportOAuthRegistration = {
 /** The OAuth companion that authenticates one selected import kind, with the registrations it approves (possibly none). */
 export type ImportAuthentication = { importKind: string; dialectId: string; registrations: ImportOAuthRegistration[] };
 export type ImportSecurityScheme = { name: string; kind: "bearer" | "basic" | "raw_header"; header?: string };
+/** Operator-approved identity and ingress; availability describes creating a new import. */
+export type ImportGatewayBinding = {
+  service: string;
+  endpoint: string;
+  brokerHosts: string[];
+  authModes: string[];
+  allowForwardedIdentity: boolean;
+  available: boolean;
+  unavailableReason?: string | null;
+};
 export type ImportListResult = {
   catalogRevision: number;
   operatorEnabled: boolean;
   availableKinds: string[];
   /** Commands the operator approved under `[command_imports.<name>]`, by name only. */
   commandImports: Array<{ name: string }>;
+  gatewayBindings: ImportGatewayBinding[];
   importAuthentication: ImportAuthentication[];
   services: ImportedServiceRecord[];
 };
@@ -202,7 +213,8 @@ export type ImportRecordResult = {
   importAuthentication: ImportAuthentication[];
   available?: boolean;
   unavailableReason?: string | null;
-  scopedMcp: ImportScopedMcp;
+  /** Gateway imports do not expose a service-specific MCP connection. */
+  scopedMcp: ImportScopedMcp | null;
   service: ImportedServiceRecord;
   /** The accepted command manifest's version. */
   commandVersion?: string;

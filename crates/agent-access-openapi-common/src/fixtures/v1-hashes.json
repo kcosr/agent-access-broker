@@ -1,0 +1,14 @@
+{
+  "v1-anonymous-plan.json": {
+    "canonicalSha256": "100dcf2ef5e6a83fa673ade0667310e64b5484578313dbfb63052c2365d49ea0",
+    "wireSha256": "02f259ee88a0fcf9c28e377b337e11fda5be1df9210c761498f69960c38d5bf8"
+  },
+  "v1-retained-routes.json": {
+    "canonicalSha256": "61c6ce299da8ac074dc1482f0d2e11fc479d1a210879bf35a802757db3654596",
+    "wireSha256": "3ca1c26fd6a98ba2446c8a357ed87bbba4aa856b5f50dd2d5078f0c5abebec46"
+  },
+  "v1-static-plan.json": {
+    "canonicalSha256": "2d762f4f8f771f3727befb5b0e7d67091afe3307da5a3a1d5281e450a9cccd7f",
+    "wireSha256": "3e1cb55fcfdd4ec597afdd37979aa7691d37cc586620d796dc7ddf68f507d7b4"
+  }
+}

@@ -1,4 +1,36 @@
-import type { ImportActionDefinition, ImportBinding, ImportDelivery, ImportDiscovery, ImportSecurityScheme } from "../import-types";
+import type { ImportActionDefinition, ImportBinding, ImportDelivery, ImportDiscovery, ImportGatewayBinding, ImportSecurityScheme } from "../import-types";
+
+export const OPENAPI_GATEWAY_KIND = "openapi_gateway";
+export const OPENAPI_ACTIONS_KIND = "openapi_http";
+export type OpenApiExposure = typeof OPENAPI_ACTIONS_KIND | typeof OPENAPI_GATEWAY_KIND;
+
+export function isOpenApiImport(kind: string): kind is OpenApiExposure {
+  return kind === OPENAPI_ACTIONS_KIND || kind === OPENAPI_GATEWAY_KIND;
+}
+
+export function openApiExposureLabel(kind: OpenApiExposure): string {
+  return kind === OPENAPI_GATEWAY_KIND ? "HTTP gateway" : "Actions/tools";
+}
+
+export const GATEWAY_AUTHORITY_NOTICE = "Whole-action access: a grant permits every parameter value allowed by the operation and the selected upstream credential. Path parameters do not restrict access to individual resources.";
+export const GATEWAY_BODY_NOTICE = "Body schema not validated by gateway. The Broker checks body presence, media type and transfer limits; JSON and form fields are documentation only.";
+export const GATEWAY_TEMPLATE_NOTICE = "Include backend paths that take precedence over accepted templates, even when you do not accept those operations. The Broker retains source-derived denial guards; it cannot discover an undeclared backend route.";
+
+/** Broker ingress authentication is independent of the document's upstream scheme. */
+export function gatewayIngressLabel(binding: ImportGatewayBinding): string {
+  const labels = binding.authModes.map((mode) => mode === "bearer_broker_token" ? "Broker Bearer token" : mode === "basic_broker_token" ? "Broker Basic token" : mode);
+  if (binding.allowForwardedIdentity) labels.push("Approved trusted-ingress identity");
+  return labels.join("; ");
+}
+
+/** Preserve frozen settings exactly; anonymous execution never retains a static security scheme. */
+export function gatewayConnectionSettings(existing: Record<string, string> | undefined, mutable: boolean, draft: Parameters<typeof openApiConnectionSettings>[2], authentication: "anonymous" | "static"): Record<string, string> {
+  if (existing && !mutable) return existing;
+  const selected = authentication === "anonymous" ? { ...draft, securityScheme: "" } : draft;
+  const settings = openApiConnectionSettings(existing, mutable, selected);
+  const { securityScheme: _scheme, ...withoutScheme } = settings;
+  return { ...(authentication === "anonymous" ? withoutScheme : settings), executionAuthentication: authentication };
+}
 
 export type OpenApiDocumentSource = "url" | "upload";
 
@@ -38,11 +70,17 @@ export function openApiBindings(existing: ImportBinding[], shared: boolean, pers
 export type OpenApiOperation = {
   method: string;
   path: string;
+  /** Generated gateways forward raw HTTP; Actions/tools build typed requests. */
+  gateway?: true;
   security?: ImportSecurityScheme;
+  anonymous?: true;
   /** Undefined for unsupported placeholders whose body plan was never compiled. */
   requestMedia?: string | null;
   requestBodyRequired?: boolean;
   requiredBodyFields?: string[];
+  requestMediaTypes?: string[];
+  parameters?: Array<{ name: string; location: string; required: boolean; style: string; explode: boolean }>;
+  responseHeaders?: Array<{ status: string; names: string[] }>;
   noContentStatuses: string[];
 };
 
@@ -100,6 +138,8 @@ function bodySummary(definition: ImportActionDefinition, form: unknown): Pick<Op
 }
 
 export function openApiOperation(definition: ImportActionDefinition): OpenApiOperation | null {
+  const annotationsObject = schemaObject(definition.annotations);
+  if (annotationsObject && Object.hasOwn(annotationsObject, "openapiGateway")) return gatewayOperation(annotationsObject.openapiGateway);
   const annotations = definition.annotations as { openapi?: { method?: unknown; path?: unknown; security?: { scheme?: unknown; kind?: unknown; header?: unknown }; requestBody?: unknown; formBody?: unknown; responses?: Record<string, { contentType?: unknown; schema?: unknown }> } } | null;
   const plan = annotations?.openapi;
   if (typeof plan?.method !== "string" || typeof plan.path !== "string") return null;
@@ -110,6 +150,46 @@ export function openApiOperation(definition: ImportActionDefinition): OpenApiOpe
     ...(plan.requestBody === true ? bodySummary(definition, plan.formBody) : {}),
     noContentStatuses: Object.entries(plan.responses ?? {}).filter(([, response]) => response?.contentType === null && response.schema === null).map(([status]) => status),
     ...(security && typeof security.scheme === "string" && (security.kind === "bearer" || security.kind === "basic" || security.kind === "raw_header" && typeof security.header === "string") ? { security: { name: security.scheme, kind: security.kind, ...(typeof security.header === "string" ? { header: security.header } : {}) } } : {})
+  };
+}
+
+/** Read only the explicit gateway plan version, never interpret invoke-plan body rules as raw HTTP. */
+function gatewayOperation(value: unknown): OpenApiOperation | null {
+  const plan = schemaObject(value);
+  if (plan?.version !== 1 || typeof plan.method !== "string" || typeof plan.path !== "string") return null;
+  const security = schemaObject(plan.security);
+  const authentication = security?.kind;
+  const compiled = authentication === "anonymous" || authentication === "basic" || authentication === "bearer" || authentication === "raw_header";
+  const requestBody = schemaObject(plan.requestBody);
+  const mediaTypes = requestBody?.mediaTypes;
+  const body = requestBody && typeof requestBody.required === "boolean" && Array.isArray(mediaTypes) && mediaTypes.every((entry): entry is string => typeof entry === "string")
+    ? { requestBodyRequired: requestBody.required, requestMediaTypes: mediaTypes }
+    : compiled && !Object.hasOwn(plan, "requestBody") ? { requestMediaTypes: [] } : {};
+  const parameters = Array.isArray(plan.parameters) ? plan.parameters.flatMap((entry) => {
+    const parameter = schemaObject(entry);
+    return parameter && typeof parameter.name === "string" && typeof parameter.location === "string" && typeof parameter.required === "boolean" && typeof parameter.style === "string" && typeof parameter.explode === "boolean"
+      ? [{ name: parameter.name, location: parameter.location, required: parameter.required, style: parameter.style, explode: parameter.explode }]
+      : [];
+  }) : undefined;
+  const responses = schemaObject(plan.responses);
+  const responseHeaders = responses ? Object.entries(responses).flatMap(([status, entry]) => {
+    const response = schemaObject(entry);
+    if (!Array.isArray(response?.headers)) return [];
+    const names = response.headers.flatMap((header) => {
+      const item = schemaObject(header);
+      return typeof item?.name === "string" ? [item.name] : [];
+    });
+    return names.length ? [{ status, names }] : [];
+  }) : undefined;
+  return {
+    method: plan.method.toUpperCase(), path: plan.path, gateway: true,
+    ...body,
+    ...(parameters ? { parameters } : {}),
+    ...(responseHeaders ? { responseHeaders } : {}),
+    noContentStatuses: [],
+    ...(authentication === "anonymous" ? { anonymous: true } : {}),
+    ...(security && typeof security.scheme === "string" && (authentication === "bearer" || authentication === "basic" || authentication === "raw_header" && typeof security.header === "string")
+      ? { security: { name: security.scheme, kind: authentication, ...(typeof security.header === "string" ? { header: security.header } : {}) } } : {})
   };
 }
 

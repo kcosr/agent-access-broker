@@ -33,6 +33,7 @@ const counter = process.env.FAKE_BROKER_COUNTER;
 const attempt = fs.existsSync(counter) ? Number(fs.readFileSync(counter, "utf8")) + 1 : 1;
 fs.writeFileSync(counter, String(attempt));
 fs.writeFileSync("pid-" + attempt, String(process.pid));
+fs.writeFileSync("args-" + attempt, JSON.stringify(process.argv.slice(2)));
 const steps = process.env.FAKE_BROKER_PLAN.split(",");
 const step = steps[Math.min(attempt, steps.length) - 1];
 const [host, port] = process.argv[process.argv.indexOf("--listen") + 1].split(":");
@@ -84,9 +85,10 @@ interface Start {
   attempts?: number;
   timeoutMs?: number;
   readinessHeaders?(): Record<string, string>;
+  gatewayListener?: boolean;
 }
 
-async function start(plan: string, { attempts, timeoutMs = 10_000, readinessHeaders }: Start = {}) {
+async function start(plan: string, { attempts, timeoutMs = 10_000, readinessHeaders, gatewayListener }: Start = {}) {
   directory = await mkdtemp(path.join(os.tmpdir(), "aab-broker-process-"));
   const binary = path.join(directory, "stand-in-broker.cjs");
   await writeFile(binary, STAND_IN);
@@ -104,6 +106,7 @@ async function start(plan: string, { attempts, timeoutMs = 10_000, readinessHead
     cwd: directory,
     env: { ...process.env, FAKE_BROKER_PLAN: plan, FAKE_BROKER_COUNTER: path.join(directory, "starts") },
     readinessHeaders,
+    gatewayListener,
     timeoutMs,
     attempts
   }).then(
@@ -148,6 +151,19 @@ test.skipIf(!posix)("a first start that fails otherwise is not retried", async (
   const { error, starts } = await start("lock,in-use");
   expect(starts).toBe(1);
   expect(exited(error)).toContain("audit state lock is held");
+});
+
+test.skipIf(!posix)("gateway fixtures select distinct public and gateway ports on every startup attempt", async () => {
+  const { error, starts } = await start("in-use,lock", { gatewayListener: true });
+  expect(starts).toBe(2);
+  expect(exited(error)).toContain("audit state lock is held");
+  for (let attempt = 1; attempt <= starts; attempt++) {
+    const args: string[] = JSON.parse(await readFile(path.join(directory, `args-${attempt}`), "utf8"));
+    const publicAddress = args[args.indexOf("--listen") + 1];
+    const gatewayAddress = args[args.indexOf("--gateway-listen") + 1];
+    expect(gatewayAddress).toMatch(/^127\.0\.0\.1:\d+$/);
+    expect(gatewayAddress).not.toBe(publicAddress);
+  }
 });
 
 test.skipIf(!posix)("address-in-use retries stop after the attempts", async () => {

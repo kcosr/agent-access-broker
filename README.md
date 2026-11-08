@@ -171,6 +171,13 @@ OpenAPI/Swagger imports share JSON and scalar URL-encoded request handling,
 including Basic authentication, through ordinary CLI and MCP actions. Import the
 definition from an approved URL or upload a JSON file; uploaded documents are
 retained for offline refresh and replaced through the same review process.
+Choose **HTTP gateway** exposure to connect a native HTTP client through an
+operator-approved host binding instead. Gateway imports authorize whole HTTP
+operations, stream raw request and response bodies, and remain outside ordinary
+agent discovery and MCP tools. The portal separates upstream authentication from
+Broker ingress and makes the exposure immutable. See the
+[HTTP gateway setup guide](docs/http-gateway-setup.md), including a complete
+hand-authored OpenAPI example and its body-validation and route-guard limits.
 Commands can also declare file-download actions when the operator enables an
 explicit download byte cap. [`agent-access invoke --output`](docs/cli.md#save-action-results-to-a-file)
 saves native and imported downloads with size/hash verification, atomic local

@@ -1,8 +1,10 @@
 use crate::imports::{COMMAND_ENDPOINT_PREFIX, ImportEndpointForm, is_command_name};
 use crate::{BrokerConfig, CommandImportsConfig};
 use agent_access_provider::{is_service_name, url_allowed_by_patterns, validate_upstream_base_url};
-use serde::Deserialize;
-use std::collections::BTreeSet;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use url::Url;
 
 /// Operator authority over database-managed integrations.
@@ -17,6 +19,64 @@ pub struct ImportsConfig {
     pub allowed_endpoints: Vec<String>,
     #[serde(default)]
     pub disabled_services: Vec<String>,
+    #[serde(default)]
+    pub gateway_bindings: BTreeMap<String, ImportedGatewayBinding>,
+}
+
+/// Operator-reserved host and destination for one managed gateway identity.
+/// Protocol and execution authentication are selected by the accepted import.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedGatewayBinding {
+    pub endpoint: String,
+    pub broker_hosts: Vec<String>,
+    pub auth_modes: Vec<String>,
+    #[serde(default)]
+    pub allow_forwarded_identity: bool,
+    #[serde(default = "crate::gateway_config::default_basic_broker_token_username")]
+    pub basic_broker_token_username: String,
+    pub egress_proxy: Option<crate::EgressProxyConfig>,
+    #[serde(default = "crate::gateway_config::default_gateway_redirect_policy")]
+    pub redirect_policy: String,
+    pub request_body_max_bytes: Option<u64>,
+    pub response_body_max_bytes: Option<u64>,
+    pub streaming_idle_timeout_ms: Option<u64>,
+    #[serde(default = "crate::gateway_config::default_gateway_correlation_headers")]
+    pub correlation_headers: bool,
+}
+
+impl ImportedGatewayBinding {
+    /// Include private proxy references in the opaque fence hash, never in
+    /// administrative projections or diagnostics.
+    pub fn fingerprint(&self) -> String {
+        let proxy = self.egress_proxy.as_ref().map(|proxy| {
+            json!({
+                "url":proxy.url,"usernameRef":proxy.username_ref,"passwordRef":proxy.password_ref,
+            })
+        });
+        let value = json!({"endpoint":self.endpoint,"hosts":self.broker_hosts,
+            "authModes":self.auth_modes,"allowForwardedIdentity":self.allow_forwarded_identity,
+            "basicUsername":self.basic_broker_token_username,"proxy":proxy,
+            "redirectPolicy":self.redirect_policy,"requestMax":self.request_body_max_bytes,
+            "responseMax":self.response_body_max_bytes,"idleTimeout":self.streaming_idle_timeout_ms,
+            "correlation":self.correlation_headers});
+        format!("{:x}", Sha256::digest(value.to_string().as_bytes()))
+    }
+}
+
+/// Safe administrative options. Availability refers to new import creation;
+/// a retained identity remains visible but cannot be assigned again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedGatewayBindingView {
+    pub service: String,
+    pub endpoint: String,
+    pub broker_hosts: Vec<String>,
+    pub auth_modes: Vec<String>,
+    pub allow_forwarded_identity: bool,
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
 }
 
 impl ImportsConfig {
@@ -53,7 +113,7 @@ impl ImportsConfig {
 
 pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) {
     let imports = &config.imports;
-    if imports.enabled
+    if (imports.enabled || !imports.gateway_bindings.is_empty())
         && (config.identity.authority != "managed"
             || config.policy.authority != "managed"
             || config.managed_store.is_none()
@@ -78,7 +138,7 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
             .providers
             .registry()
             .imported_adapter(kind)
-            .is_none_or(|adapter| adapter.endpoint_form() == ImportEndpointForm::Http)
+            .is_some_and(|adapter| adapter.endpoint_form() == ImportEndpointForm::Http)
     });
     if imports.enabled
         && (imports.allowed_kinds.is_empty()
@@ -93,9 +153,9 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
         config.deployment.environment != "production" && config.deployment.enable_fake_service;
     for kind in &imports.allowed_kinds {
         let adapter = config.providers.registry().imported_adapter(kind);
-        if imports.enabled && adapter.is_none() {
+        if !is_service_name(kind) {
             errors.push(format!(
-                "imports.allowed_kinds contains an unlinked adapter kind {kind}"
+                "imports.allowed_kinds contains an invalid adapter kind {kind}"
             ));
         }
         if adapter.is_some_and(|adapter| adapter.development_only())
@@ -119,6 +179,214 @@ pub(crate) fn validate_imports(config: &BrokerConfig, errors: &mut Vec<String>) 
             errors.push("imports.disabled_services contains an invalid service ID".into());
         }
     }
+    validate_gateway_bindings(config, errors);
+}
+
+fn validate_gateway_bindings(config: &BrokerConfig, errors: &mut Vec<String>) {
+    let mut hosts = BTreeMap::<String, String>::new();
+    for (service, gateway) in &config.gateways {
+        for host in &gateway.broker_hosts {
+            if let Ok(host) = crate::normalize_gateway_broker_host(host) {
+                hosts.insert(host, service.clone());
+            }
+        }
+    }
+    let provider_services = crate::configured_provider_descriptors(config)
+        .into_iter()
+        .map(|descriptor| descriptor.service)
+        .collect::<BTreeSet<_>>();
+    for (service, binding) in &config.imports.gateway_bindings {
+        let label = format!("imports.gateway_bindings.{service}");
+        if service == "broker" || !is_service_name(service) {
+            errors.push(format!("{label} has an invalid service identity"));
+        }
+        if config.providers.registry().get(service).is_some()
+            || config.gateways.contains_key(service)
+            || provider_services.contains(service)
+            || config.credentials.connections.contains_key(service)
+            || config.credentials.service.contains_key(service)
+            || config.credentials.per_user.contains_key(service)
+            || config.credentials.lookup.contains_key(service)
+        {
+            errors.push(format!(
+                "{label} collides with a configured service or credential identity"
+            ));
+        }
+        if binding.broker_hosts.is_empty() {
+            errors.push(format!("{label}.broker_hosts must not be empty"));
+        }
+        for host in &binding.broker_hosts {
+            match crate::normalize_gateway_broker_host(host) {
+                Ok(host) => {
+                    if hosts.insert(host, service.clone()).is_some() {
+                        errors.push(format!(
+                            "{label}.broker_hosts contains a reserved or duplicate host"
+                        ));
+                    }
+                }
+                Err(_) => errors.push(format!("{label}.broker_hosts contains an invalid host")),
+            }
+        }
+        let endpoint = managed_gateway_endpoint(&binding.endpoint);
+        if endpoint.is_err() {
+            errors.push(format!(
+                "{label}.endpoint must be a fixed HTTP(S) API base URL"
+            ));
+        }
+        if let Ok(url) = endpoint {
+            if config.deployment.environment == "production" && url.scheme() != "https" {
+                errors.push(format!("{label}.endpoint must use HTTPS in production"));
+            }
+            if !url_allowed_by_patterns(&url, &config.imports.allowed_endpoints) {
+                errors.push(format!(
+                    "{label}.endpoint must also be approved by imports.allowed_endpoints"
+                ));
+            }
+        }
+        if binding.auth_modes.is_empty()
+            || binding.auth_modes.iter().collect::<BTreeSet<_>>().len() != binding.auth_modes.len()
+            || binding
+                .auth_modes
+                .iter()
+                .any(|mode| !matches!(mode.as_str(), "bearer_broker_token" | "basic_broker_token"))
+        {
+            errors.push(format!(
+                "{label}.auth_modes requires unique supported Broker authentication modes"
+            ));
+        }
+        if binding.basic_broker_token_username.is_empty()
+            || binding.basic_broker_token_username.contains(':')
+            || binding
+                .basic_broker_token_username
+                .chars()
+                .any(|c| !c.is_ascii() || c.is_whitespace() || c.is_control())
+        {
+            errors.push(format!("{label}.basic_broker_token_username is invalid"));
+        }
+        if binding.redirect_policy != "none" {
+            errors.push(format!("{label}.redirect_policy must be none"));
+        }
+        for (field, value, maximum) in [
+            (
+                "request_body_max_bytes",
+                binding.request_body_max_bytes,
+                Some(config.limits.max_http_body_bytes),
+            ),
+            (
+                "response_body_max_bytes",
+                binding.response_body_max_bytes,
+                Some(config.limits.max_upstream_response_bytes),
+            ),
+            (
+                "streaming_idle_timeout_ms",
+                binding.streaming_idle_timeout_ms,
+                None,
+            ),
+        ] {
+            if value
+                .is_some_and(|value| value == 0 || maximum.is_some_and(|maximum| value > maximum))
+            {
+                errors.push(format!(
+                    "{label}.{field} must be nonzero and within the host limit"
+                ));
+            }
+        }
+        agent_access_provider::validate_egress_proxy_config(
+            &format!("{label}.egress_proxy"),
+            binding.egress_proxy.as_ref(),
+            errors,
+        );
+    }
+}
+
+/// Validate managed binding paths before URL parsing can erase dot components.
+/// This is a host endpoint constraint; no protocol implementation is linked here.
+pub(crate) fn managed_gateway_endpoint(raw: &str) -> Result<url::Url, ()> {
+    fn valid_path(path: &str) -> bool {
+        if !path.starts_with('/')
+            || path.starts_with("//")
+            || path.len() > 4096
+            || path.contains(['?', '#', '\\'])
+            || path.chars().any(char::is_control)
+        {
+            return false;
+        }
+        let components = path[1..].split('/').collect::<Vec<_>>();
+        if components.len() > 128
+            || components[..components.len().saturating_sub(1)]
+                .iter()
+                .any(|part| part.is_empty())
+        {
+            return false;
+        }
+        components.iter().all(|part| {
+            let bytes = part.as_bytes();
+            let mut offset = 0;
+            while offset < bytes.len() {
+                if bytes[offset] == b'%' {
+                    if offset + 2 >= bytes.len()
+                        || !bytes[offset + 1].is_ascii_hexdigit()
+                        || !bytes[offset + 2].is_ascii_hexdigit()
+                    {
+                        return false;
+                    }
+                    offset += 3;
+                } else {
+                    offset += 1;
+                }
+            }
+            percent_encoding::percent_decode_str(part)
+                .decode_utf8()
+                .is_ok_and(|decoded| {
+                    !matches!(decoded.as_ref(), "." | "..")
+                        && !decoded.contains(['/', '\\', '%', ';'])
+                        && !decoded.chars().any(char::is_control)
+                })
+        })
+    }
+    if raw.chars().any(char::is_control) || raw.contains(['*', '\\']) {
+        return Err(());
+    }
+    let (_, authority) = raw.split_once("://").ok_or(())?;
+    if let Some((_, path)) = authority.split_once('/')
+        && !valid_path(&format!("/{path}"))
+    {
+        return Err(());
+    }
+    let crate::imports::ImportEndpoint::Http(url) =
+        crate::imports::parse_import_endpoint(raw).map_err(|_| ())?
+    else {
+        return Err(());
+    };
+    valid_path(url.path()).then_some(url).ok_or(())
+}
+
+pub(crate) fn validate_imported_gateway_bindings(
+    config: &BrokerConfig,
+    catalog: &crate::ImportedCatalog,
+) -> Result<(), String> {
+    for (service, binding) in &config.imports.gateway_bindings {
+        let Some(record) = catalog.service(service) else {
+            continue;
+        };
+        let gateway = config
+            .providers
+            .registry()
+            .imported_adapter(&record.definition.adapter_kind)
+            .map(|adapter| adapter.gateway_kind().is_some())
+            .unwrap_or(record.gateway_routes.is_some());
+        if !gateway {
+            return Err(format!(
+                "imports.gateway_bindings.{service} collides with a retained non-gateway import"
+            ));
+        }
+        if record.definition.endpoint != binding.endpoint {
+            return Err(format!(
+                "imports.gateway_bindings.{service} endpoint differs from its retained import"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -268,6 +536,7 @@ mod tests {
     fn command_destinations_need_an_approved_command_entry() {
         use ImportEndpointForm::{Command, Http};
         let config = ImportsConfig {
+            gateway_bindings: Default::default(),
             enabled: true,
             allowed_kinds: vec!["command".into(), "remote_import".into()],
             allowed_endpoints: vec!["https://tools.example/**".into(), "command:*".into()],
@@ -358,6 +627,7 @@ mod tests {
     #[test]
     fn operator_gate_requires_every_boundary() {
         let mut config = ImportsConfig {
+            gateway_bindings: Default::default(),
             enabled: true,
             allowed_kinds: vec!["mcp_http".into()],
             allowed_endpoints: vec!["https://tools.example/mcp".into()],
@@ -388,5 +658,303 @@ mod tests {
             "mcp_http",
             "https://tools.example/mcp"
         ));
+    }
+    fn binding(endpoint: &str, host: &str) -> ImportedGatewayBinding {
+        toml::from_str(&format!("endpoint = {endpoint:?}\nbroker_hosts = [{host:?}]\nauth_modes = [\"bearer_broker_token\"]\n")).unwrap()
+    }
+
+    #[test]
+    fn gateway_binding_validates_raw_components_before_url_normalization() {
+        let mut config = import_config("development", false);
+        config.imports.allowed_endpoints = vec!["https://api.example/**".into()];
+        for endpoint in [
+            "https://api.example",
+            "https://api.example/",
+            "https://api.example/api",
+            "https://api.example/api/",
+            "https://api.example/v1/items:lookup@owner+value=present",
+            "https://api.example/caf%C3%A9/%7Euser",
+        ] {
+            config.imports.gateway_bindings.insert(
+                "inventory".into(),
+                binding(endpoint, "inventory.gateway.example"),
+            );
+            let mut errors = Vec::new();
+            validate_gateway_bindings(&config, &mut errors);
+            assert!(errors.is_empty(), "{endpoint}: {errors:?}");
+        }
+        for endpoint in [
+            "https://api.example/api//".to_owned(),
+            "https://api.example//api".to_owned(),
+            "https://api.example/api//items".to_owned(),
+            "https://api.example/api/./items".to_owned(),
+            "https://api.example/api/../items".to_owned(),
+            "https://api.example/api/%2e/items".to_owned(),
+            "https://api.example/api/.%2E/items".to_owned(),
+            "https://api.example/api/%2fitems".to_owned(),
+            "https://api.example/api/%5citems".to_owned(),
+            "https://api.example/api/%252e".to_owned(),
+            "https://api.example/api/items;ignored".to_owned(),
+            "https://api.example/api/items%3Bignored".to_owned(),
+            "https://api.example/api/%0a".to_owned(),
+            "https://api.example/api/%ff".to_owned(),
+            "https://api.example/api/%2".to_owned(),
+            "https://api.example/api/%zz".to_owned(),
+            format!("https://api.example/{}", vec!["a"; 129].join("/")),
+        ] {
+            config.imports.gateway_bindings.insert(
+                "inventory".into(),
+                binding(&endpoint, "inventory.gateway.example"),
+            );
+            let mut errors = Vec::new();
+            validate_gateway_bindings(&config, &mut errors);
+            assert!(errors.iter().any(|error| {
+                error == "imports.gateway_bindings.inventory.endpoint must be a fixed HTTP(S) API base URL"
+            }), "{endpoint}: {errors:?}");
+            assert!(!errors.iter().any(|error| error.contains(&endpoint)));
+        }
+    }
+
+    #[test]
+    fn gateway_binding_reserves_canonical_hosts_and_requires_exact_allowed_destination() {
+        let mut config = import_config("development", false);
+        config.imports.allowed_endpoints = vec!["https://api.example/**".into()];
+        config.imports.gateway_bindings.insert(
+            "inventory".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        let errors = |config: &BrokerConfig| {
+            let mut errors = Vec::new();
+            validate_gateway_bindings(config, &mut errors);
+            errors
+        };
+        assert!(errors(&config).is_empty());
+        config.imports.gateway_bindings.insert(
+            "other".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("reserved or duplicate host"))
+        );
+        config.imports.gateway_bindings.remove("other");
+        let mut static_gateway =
+            crate::GatewayConfig::new("git_http", "Git", "https://git.example");
+        static_gateway.broker_hosts = vec!["inventory.gateway.example".into()];
+        config.gateways.insert("git".into(), static_gateway);
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("reserved or duplicate host"))
+        );
+        config.gateways.clear();
+        config
+            .imports
+            .gateway_bindings
+            .get_mut("inventory")
+            .unwrap()
+            .endpoint = "https://unapproved.example/api".into();
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("allowed_endpoints"))
+        );
+        config
+            .imports
+            .gateway_bindings
+            .get_mut("inventory")
+            .unwrap()
+            .endpoint = "https://api.example/**".into();
+        assert!(
+            errors(&config)
+                .iter()
+                .any(|error| error.contains("fixed HTTP(S)"))
+        );
+    }
+
+    #[test]
+    fn gateway_binding_rejects_identity_collisions_unsafe_ingress_and_oversized_caps() {
+        let mut config = import_config("production", false);
+        config.imports.allowed_endpoints = vec!["http://api.example/**".into()];
+        config.imports.gateway_bindings.insert(
+            "broker".into(),
+            binding("http://api.example/api", "api.gateway.example"),
+        );
+        let mut errors = Vec::new();
+        validate_gateway_bindings(&config, &mut errors);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("invalid service identity"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("HTTPS in production"))
+        );
+        let mut entry = config.imports.gateway_bindings.remove("broker").unwrap();
+        entry.auth_modes = vec!["anonymous".into()];
+        entry.redirect_policy = "same_origin".into();
+        entry.request_body_max_bytes = Some(config.limits.max_http_body_bytes + 1);
+        config
+            .imports
+            .gateway_bindings
+            .insert("inventory".into(), entry);
+        errors.clear();
+        validate_gateway_bindings(&config, &mut errors);
+        for expected in ["auth_modes", "redirect_policy", "request_body_max_bytes"] {
+            assert!(errors.iter().any(|error| error.contains(expected)));
+        }
+    }
+
+    #[test]
+    fn unavailable_adapter_kinds_keep_syntax_admission_and_no_execution_authority() {
+        assert!(import_errors("development", false, "unlinked_gateway").is_empty());
+        let mut config = import_config("development", false);
+        config.imports.enabled = true;
+        config.imports.allowed_kinds = vec!["unlinked_gateway".into()];
+        let mut errors = Vec::new();
+        validate_imports(&config, &mut errors);
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("allowed_endpoints"))
+        );
+        assert!(!import_errors("development", false, "BadAdapter").is_empty());
+    }
+    #[test]
+    fn gateway_binding_proxy_secrets_are_preflighted_even_without_an_import() {
+        let mut config = import_config("development", false);
+        let mut binding = binding("https://api.example/api", "inventory.gateway.example");
+        binding.egress_proxy = Some(crate::EgressProxyConfig {
+            url: "https://proxy.example:8443".into(),
+            username_ref: Some("env:AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_USER".into()),
+            password_ref: Some("env:AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_PASSWORD".into()),
+        });
+        config
+            .imports
+            .gateway_bindings
+            .insert("inventory".into(), binding);
+        let error = crate::runtime::preflight_configured_egress_proxies(&config).unwrap_err();
+        assert!(
+            matches!(error, crate::RuntimeError::MissingEnv { label, name }
+            if label == "imports.gateway_bindings.inventory.egress_proxy.username_ref"
+            && name == "AGENT_ACCESS_MISSING_IMPORTED_GATEWAY_PROXY_USER")
+        );
+    }
+
+    fn retained_import(
+        adapter_kind: &str,
+        status: crate::ImportedServiceStatus,
+        gateway: bool,
+    ) -> crate::ImportedServiceRecord {
+        crate::ImportedServiceRecord {
+            definition: ImportedServiceDefinition {
+                service: "inventory".into(),
+                display_name: "Inventory".into(),
+                adapter_kind: adapter_kind.into(),
+                endpoint: "https://api.example/api".into(),
+                connection_settings: BTreeMap::new(),
+                execution_bindings: vec![crate::imports::ImportedCredentialBinding::token(
+                    crate::imports::ImportedCredentialMode::Service,
+                    crate::imports::ImportedCredentialDelivery::Bearer,
+                )],
+                discovery: crate::imports::ImportedDiscoveryCredential::Anonymous,
+                transport_auth: false,
+                invocation_limit: None,
+            },
+            status,
+            version: 3,
+            actions: Vec::new(),
+            slot_versions: BTreeMap::new(),
+            accepted_metadata: None,
+            document: None,
+            gateway_routes: gateway.then(|| {
+                crate::imports::ImportedGatewayRouteRecord::next(
+                    None,
+                    crate::imports::ImportedGatewayRouteCandidate::new(
+                        json!({"version":1,"paths":{}}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+            }),
+            created_at: "2026-11-07T00:00:00Z".into(),
+            created_by: "admin".into(),
+            updated_at: "2026-11-07T00:00:00Z".into(),
+            updated_by: "admin".into(),
+        }
+    }
+
+    #[test]
+    fn gateway_binding_rejects_retained_non_gateway_imports_in_every_status() {
+        let mut config = import_config("development", false);
+        config.imports.gateway_bindings.insert(
+            "inventory".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        for status in [
+            crate::ImportedServiceStatus::Draft,
+            crate::ImportedServiceStatus::Disabled,
+            crate::ImportedServiceStatus::Enabled,
+            crate::ImportedServiceStatus::Retired,
+        ] {
+            for kind in ["remote_import", "unlinked_import"] {
+                let catalog = crate::ImportedCatalog {
+                    revision: 4,
+                    services: vec![retained_import(kind, status, false)],
+                };
+                assert_eq!(
+                    validate_imported_gateway_bindings(&config, &catalog).unwrap_err(),
+                    "imports.gateway_bindings.inventory collides with a retained non-gateway import"
+                );
+            }
+        }
+        // A known invoke adapter cannot become a gateway through an opaque
+        // route row: the linked adapter's capability remains authoritative.
+        let catalog = crate::ImportedCatalog {
+            revision: 4,
+            services: vec![retained_import(
+                "remote_import",
+                crate::ImportedServiceStatus::Retired,
+                true,
+            )],
+        };
+        assert!(validate_imported_gateway_bindings(&config, &catalog).is_err());
+    }
+
+    #[test]
+    fn retired_gateway_binding_keeps_its_exact_destination_without_a_linked_adapter() {
+        let mut config = import_config("development", false);
+        config.imports.gateway_bindings.insert(
+            "inventory".into(),
+            binding("https://api.example/api", "inventory.gateway.example"),
+        );
+        let catalog = crate::ImportedCatalog {
+            revision: 4,
+            services: vec![retained_import(
+                "unlinked_gateway",
+                crate::ImportedServiceStatus::Retired,
+                true,
+            )],
+        };
+        validate_imported_gateway_bindings(&config, &catalog).unwrap();
+        for endpoint in [
+            "https://api.example/another-api",
+            "https://other.example/api",
+            "https://api.example/api/",
+        ] {
+            config
+                .imports
+                .gateway_bindings
+                .get_mut("inventory")
+                .unwrap()
+                .endpoint = endpoint.into();
+            assert_eq!(
+                validate_imported_gateway_bindings(&config, &catalog).unwrap_err(),
+                "imports.gateway_bindings.inventory endpoint differs from its retained import"
+            );
+        }
     }
 }

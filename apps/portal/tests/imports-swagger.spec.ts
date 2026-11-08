@@ -196,7 +196,7 @@ test("Swagger Basic onboarding and form calls preserve separate discovery, share
   await setCredential(page, "discovery", discovery);
   await page.getByRole("button", { name: "Load definition", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "Review discovered operations" });
-  await expect(dialog.getByText("Source: Swagger 2.0", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Source: Swagger 2.0 · Actions/tools", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "Configure API authentication" }).click();
   dialog = page.getByRole("dialog", { name: "Edit imported service" });
   await dialog.getByLabel("API security scheme").selectOption("basicAuth");

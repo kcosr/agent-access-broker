@@ -62,7 +62,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `027_command_imports`, `028_oauth_revocations`,
 `029_identity_access_path_controls`, `030_group_auto_enrollment`,
 `031_oidc_membership_renewal`, `032_imported_source_documents`,
-`033_agent_token_issuance`, and `034_agent_token_issuance_contexts` in order. The
+`033_agent_token_issuance`, `034_agent_token_issuance_contexts`, and
+`035_imported_gateway_routes` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -967,6 +968,27 @@ and quarantine changes. The metadata is projected on the service record as
 optional `document`; bytes never enter that record. Rollback requires a
 pre-migration backup because an older binary refuses the newer ledger.
 
+Migration `035_imported_gateway_routes` adds `imported_gateway_routes`, keyed
+by service with a foreign key to `imported_services`. Each row contains a
+versioned JSON envelope, its lowercase SHA-256 content hash and a positive,
+monotonically increasing generation. The encoded envelope is bounded to 4 MiB.
+Existing accepted action plans and credential rows are unchanged. Automatic
+migration requires `managed_store.auto_migrate = true` at startup; reload and
+startup without migration admission refuse the pending migration.
+
+The route manifest is independent of expiring previews and uploaded source bytes.
+It retains historical path guards, including removed or unaccepted operations.
+Source replacement, preview/quarantine and route generation commit atomically.
+Core validates envelope syntax, version bounds, hashes and storage structure;
+the selected gateway builder validates protocol versions and route/plan
+coherence offline. Unknown protocol/envelope versions or a missing module make
+the retained service unavailable. Corrupt hashes or structural database/ledger
+failures reject store startup.
+
+An older binary refuses the unknown `035` migration ledger. Roll back using the
+matching pre-upgrade database backup, configuration, keys, binary and portal.
+Do not delete the route table or edit the ledger to attempt an in-place downgrade.
+
 ### Identity-token inventory
 
 `principal_identity_tokens` stores fingerprint identity inventory for managed
@@ -1302,6 +1324,17 @@ Source replacement and its preview/quarantine commit together under service and
 catalog revision checks. Failed preparation or publication rolls back the
 replacement. Empty-draft scheme/delivery edits retain uploaded bytes; changing
 the draft away from upload deletes the row in that same update transaction.
+
+`imported_gateway_routes` stores the complete current and historical routing
+universe of an HTTP gateway. Its generic envelope, content hash and generation
+are internal runtime state, omitted from ordinary service-record JSON and Debug
+output. Gateway accepted actions use the distinct versioned
+`annotations.openapiGateway` plan. Existing `annotations.openapi` bytes and hashes
+remain unchanged. A service keeps at most 4,096 path guards and a 4 MiB serialized
+manifest; exceeding either limit rejects refresh without evicting historical
+guards. Runtime publication ties the action versions/hashes and route generation
+to the current configuration-binding fingerprint. Superseded requests cannot
+resolve onto replacement action authority or endpoints.
 
 `accepted_metadata_json` holds the service-level metadata a command import's
 acceptance stored with its actions: manifest format, command version, the

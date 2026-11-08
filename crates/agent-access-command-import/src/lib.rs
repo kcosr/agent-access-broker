@@ -112,6 +112,9 @@ impl ImportedAdapter for CommandAdapter {
     fn kind(&self) -> &'static str {
         KIND
     }
+    fn supports_credential_free_execution(&self) -> bool {
+        true
+    }
     fn development_only(&self) -> bool {
         false
     }

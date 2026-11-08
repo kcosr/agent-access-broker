@@ -527,6 +527,10 @@ pub(super) fn validate_context_structure(conn: &Connection) -> Result<(), Manage
         conn,
         MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION,
     )?;
+    validate_context_rows(conn)
+}
+
+pub(super) fn validate_context_rows(conn: &Connection) -> Result<(), ManagedStoreError> {
     identity_access::check_identity_token_rows(conn)?;
     oidc_membership_renewal::check_rows(conn)?;
     imported_documents::check_rows(conn)?;

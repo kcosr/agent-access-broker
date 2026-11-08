@@ -714,6 +714,9 @@ only to retired values become stale and unusable.
 `agent-access-broker config validate` keeps its human stdout/stderr behavior and
 does not install the service subscriber.
 
+Request traces record standard HTTP methods by name and extension methods as
+`OTHER`, so caller-supplied method tokens do not enter diagnostics.
+
 The default service filter is:
 
 ```text
@@ -1468,6 +1471,18 @@ Uploaded documents are retained in the database and its backups; URL imports
 continue to fetch only for discovery or manual refresh. Rolling back across
 `032` requires the pre-migration backup, even if no document has been uploaded.
 See [uploaded documents](imported-openapi.md#uploading-and-replacing-a-document).
+
+Migration `035_imported_gateway_routes` adds durable routing generations for
+OpenAPI HTTP gateway imports without rewriting existing plans or credential
+rows. Back up the managed database before first startup with this binary;
+`auto_migrate = true` admits the additive migration. Upgrade the Broker, CLI and
+portal together for the explicit gateway and verification-capability contracts.
+Retained gateway routes are rebuilt offline; a missing adapter/module leaves its
+imports unavailable. Older binaries reject the newer migration ledger. Rollback
+requires restoring the matching pre-upgrade database, configuration, keys,
+binary and portal together; do not remove the table or edit migration history.
+See [gateway route persistence](database.md#imported-service-records).
+
 Migrations `033_agent_token_issuance` and `034_agent_token_issuance_contexts`
 require explicit context permission for new personal issuance; follow the
 [issuance upgrade and recovery procedures](#agent-token-issuance-upgrade).

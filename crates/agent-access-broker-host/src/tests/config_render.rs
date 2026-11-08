@@ -404,12 +404,52 @@ fn imports_value(imports: &ImportsConfig) -> Value {
         allowed_kinds,
         allowed_endpoints,
         disabled_services,
+        gateway_bindings,
     } = imports;
     Fields::default()
         .put("enabled", *enabled)
         .put("allowed_kinds", strings(allowed_kinds))
         .put("allowed_endpoints", strings(allowed_endpoints))
         .put("disabled_services", strings(disabled_services))
+        .put(
+            "gateway_bindings",
+            keyed(gateway_bindings, imported_gateway_value),
+        )
+        .value()
+}
+
+fn imported_gateway_value(binding: &agent_access_core::ImportedGatewayBinding) -> Value {
+    let agent_access_core::ImportedGatewayBinding {
+        endpoint,
+        broker_hosts,
+        auth_modes,
+        allow_forwarded_identity,
+        basic_broker_token_username,
+        egress_proxy,
+        redirect_policy,
+        request_body_max_bytes,
+        response_body_max_bytes,
+        streaming_idle_timeout_ms,
+        correlation_headers,
+    } = binding;
+    Fields::default()
+        .put("endpoint", endpoint.as_str())
+        .put("broker_hosts", strings(broker_hosts))
+        .put("auth_modes", strings(auth_modes))
+        .put("allow_forwarded_identity", *allow_forwarded_identity)
+        .put(
+            "basic_broker_token_username",
+            basic_broker_token_username.as_str(),
+        )
+        .opt(
+            "egress_proxy",
+            egress_proxy.as_ref().map(egress_proxy_value),
+        )
+        .put("redirect_policy", redirect_policy.as_str())
+        .opt_int("request_body_max_bytes", *request_body_max_bytes)
+        .opt_int("response_body_max_bytes", *response_body_max_bytes)
+        .opt_int("streaming_idle_timeout_ms", *streaming_idle_timeout_ms)
+        .put("correlation_headers", *correlation_headers)
         .value()
 }
 

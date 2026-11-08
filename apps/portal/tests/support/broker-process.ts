@@ -11,6 +11,7 @@ export interface StartedBroker {
   child: ChildProcessWithoutNullStreams;
   port: number;
   baseUrl: string;
+  gatewayBaseUrl?: string;
 }
 
 export interface BrokerStart {
@@ -24,6 +25,8 @@ export interface BrokerStart {
   /** Headers for each readiness request. */
   readinessHeaders?(): Record<string, string>;
   timeoutMs: number;
+  /** Start the dedicated gateway listener on a separate loopback port. */
+  gatewayListener?: boolean;
   /** Startups to try in all; only address-in-use failures are retried. */
   attempts?: number;
 }
@@ -87,13 +90,19 @@ export async function startBroker(options: BrokerStart): Promise<StartedBroker> 
 
 async function startOnce(options: BrokerStart, port: number, deadline: number): Promise<StartedBroker> {
   const baseUrl = `http://127.0.0.1:${port}`;
+  let gatewayPort: number | undefined;
+  if (options.gatewayListener) {
+    do { gatewayPort = await freeLoopbackPort(); } while (gatewayPort === port && Date.now() < deadline);
+    if (gatewayPort === port) throw new Error("Could not choose distinct Broker listener ports before the deadline");
+  }
+  const gatewayBaseUrl = gatewayPort === undefined ? undefined : `http://127.0.0.1:${gatewayPort}`;
   const config = await options.configure(port, baseUrl);
   const output: string[] = [];
   const record = (text: string) => {
     output.push(text);
     options.onOutput?.(text);
   };
-  const child = spawn(options.binary, ["--config", config, "serve", "--listen", `127.0.0.1:${port}`], {
+  const child = spawn(options.binary, ["--config", config, "serve", "--listen", `127.0.0.1:${port}`, ...(gatewayPort === undefined ? [] : ["--gateway-listen", `127.0.0.1:${gatewayPort}`])], {
     cwd: options.cwd,
     env: options.env ?? process.env
   });
@@ -127,7 +136,7 @@ async function startOnce(options: BrokerStart, port: number, deadline: number): 
           signal: AbortSignal.any([ended.signal, AbortSignal.timeout(remaining)])
         });
         await response.body?.cancel();
-        if (response.ok) return { child, port, baseUrl };
+        if (response.ok) return { child, port, baseUrl, gatewayBaseUrl };
       } catch {
         // Retry while the broker starts; the checks above end the wait.
       }

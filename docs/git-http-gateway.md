@@ -61,8 +61,9 @@ administrator supplies the gateway address and authentication setup. Gateways
 and their policy actions are omitted from ordinary service/action lists and
 describes over HTTP, CLI and MCP, and from invoke/send runtime specs. They remain
 available in credential and OAuth setup, grants, token restrictions and audit.
-The CLI can verify a credential and inspect resource access when the gateway
-service ID is already known:
+Git smart HTTP reference discovery (`GET .../info/refs`) remains available to
+authorized Git clients. The CLI can verify a credential and inspect resource
+access when the gateway service ID is already known:
 
 ```bash
 agent-access resource-access describe --service gitlab_git --action repo.fetch

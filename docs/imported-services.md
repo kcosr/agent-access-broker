@@ -1,7 +1,8 @@
 # Imported services
 
 Base administrators can connect a generic upstream MCP HTTP server, import an
-[OpenAPI document](imported-openapi.md), or import an operator-approved
+[OpenAPI document as actions/tools](imported-openapi.md), expose an
+[OpenAPI HTTP gateway](http-gateway-setup.md), or import an operator-approved
 [local command](command-imports.md), and review operations as broker actions.
 Each import is an independent service with a stable ID, its own credentials,
 invocation limit, and accepted action catalog. Nothing in the importer depends
@@ -9,7 +10,7 @@ on Grafana, Prometheus, or a particular vendor. This page describes the shared
 workflow and MCP imports; command imports add their own operator approval,
 process contract and resource types.
 
-MCP and OpenAPI imports grant whole actions. A grant still names subjects,
+MCP and both OpenAPI exposure modes grant whole actions. A grant still names subjects,
 execution contexts, actions, and a configured credential mode; their actions have
 no broker resource scopes. Use context-specific grants when the entire action is
 appropriate for that context. Command imports may also declare resource types,
@@ -26,6 +27,75 @@ hints. This describes action authority without claiming all-resource access.
 Command imports can declare scopes and explicit `listingOf` metadata for live
 enumeration; the Broker maps those declarations to accepted resource type IDs.
 Every listing remains independently granted and credential-filtered.
+
+## OpenAPI HTTP gateway imports
+
+Choose **HTTP gateway** to create kind `openapi_gateway`, using an unused
+[operator binding](configuration.md#imported-gateway-bindings). Exposure mode,
+service identity and API endpoint are fixed at creation. URL/upload sources,
+reviewed Read-only / Write-capable classification, acceptance, quarantine,
+credentials and grants use the existing import lifecycle. Gateway policy actions
+remain visible to administrators and in explicit access troubleshooting for a
+known service. They are absent from ordinary agent service/action discovery,
+executable MCP tools and `/v1/invoke`. Native clients use the configured gateway
+host and their Broker ingress credentials.
+
+The administrative import list always includes a `gatewayBindings` array of
+reserved identities, even when empty. Each entry reports its service, endpoint,
+Broker hosts, ingress modes, trusted-identity setting and creation availability.
+An already retained identity is unavailable for creating another import, even
+when its current service is enabled; disabled bindings and missing permitted
+gateway modules also make it unavailable. An unavailable entry includes a reason.
+These choices contain no proxy credentials or secret references. See the
+[HTTP API fields](http-api.md#imported-mcp-actions).
+
+The definition requires `connectionSettings.executionAuthentication`:
+
+- `anonymous` requires `executionBindings: []` and no `securityScheme`. Only
+  operations whose effective source security allows anonymous access can be
+  accepted. Grants use service mode; no fake credential or verification request
+  is needed.
+- `static` requires one or two existing service/per-user execution bindings with
+  the same Basic, Bearer or named-header delivery. `securityScheme` selects a
+  supported single source scheme before accepting operations. An unselected
+  static draft may discover schemes but cannot accept authenticated operations.
+  Missing personal credentials fail without shared-token or anonymous fallback.
+
+`definitionSource: "upload"` uses anonymous document discovery. URL sources use
+`definitionUrl` and anonymous discovery, or a separate discovery slot selected
+with `definitionAuthKind: "basic" | "bearer" | "raw_header"` and, for raw headers,
+`definitionAuthHeader`. Document authentication is independent of upstream API
+authentication. Transport authentication and delegated OpenAPI OAuth are
+unsupported. Empty drafts may revise these settings through the ordinary
+credential-clearing and personal-credential removal rules; accepted connection
+settings and delivery remain immutable.
+
+HTTP gateways have no active credential-verification probe. Credentials can be
+stored or replaced, but their consumers report required
+`credentialVerificationSupported: false`; empty verification inputs do not imply
+support. Git gateways keep their repository verification behavior. Gateway import
+responses report required `scopedMcp: null` and no scoped MCP preview warnings;
+invoke imports keep the existing readiness object and naming rules.
+
+Complete source discovery records all representable paths, including unaccepted
+and unsupported operations, in a durable route manifest. The most specific path
+is selected before the method or enabled action. Removed paths remain denial
+guards on refresh, and new operations never become enabled automatically. Adding
+a more-specific literal guard immediately denies that literal without disabling
+unchanged broader templates; other paths in those templates remain available. A
+source path that cannot be represented safely rejects the complete refresh.
+Failed upload, compilation or publication preserves the previous source,
+preview, accepted plans and routing generation. Startup rebuilds from accepted
+plans and stored routes without fetching a document.
+
+Route guards cover declared and historically retained paths only. For example,
+accepting `GET /items/{id}` while the document also declares `/items/admin` keeps
+`/items/admin` protected as a separate denial target until explicitly accepted.
+If the literal path was never declared, Broker cannot infer it. Review source
+completeness before accepting broad templates. Request/response bodies remain
+bounded raw HTTP; their schemas are documentation, while supported path, query
+and header parameters are validated. See the [authoring profile](http-gateway-setup.md#write-the-document)
+and [setup guide](http-gateway-setup.md).
 
 ## Operator setup
 
@@ -87,6 +157,10 @@ names, so disabling or retiring an import does not invalidate its TOML entry.
 
 ## Administrative workflow
 
+MCP actions/tools imports require one or two execution credential bindings,
+selecting service credentials, personal credentials, or both. These MCP imports
+do not support anonymous upstream execution.
+
 1. Open **Admin > Catalog** as a base administrator, choose **Import service**,
    and create a draft; the draft opens on the service's **Import** tab. Supply a service ID,
    display name, MCP endpoint, and execution credential bindings. The service ID,
@@ -113,7 +187,7 @@ names, so disabling or retiring an import does not invalidate its TOML entry.
    not authority. Unconfirmed actions are write-capable, so
    [read-only identity paths](#classification-and-read-only-identity-access)
    cannot use them.
-   Choose short canonical action IDs: the aggregate MCP name combines the service
+   For actions/tools imports, choose short canonical action IDs: the aggregate MCP name combines the service
    and action IDs with underscores and must fit 128 characters. Acceptance rejects
    new names that collide after punctuation replacement, match a fixed Broker
    helper, or exceed that limit. This check includes disabled and quarantined
@@ -139,7 +213,7 @@ an expandable preview, and duplicate label/description text is shown only once.
 Labels default to an upstream MCP title or OpenAPI summary/operation ID and can be
 edited or cleared by the administrator. When an OpenAPI description is absent,
 discovery uses the upstream summary, operation ID, or HTTP method and path.
-Editing a label does not change that description. Agents receive the description
+Editing a label does not change that description. Invoke consumers receive the description
 and input schema; the display label is management UI metadata. Labels
 and Read-only / Write-capable classifications can be revised through a fresh discovery
 review; changing classifications affecting existing grants requires
@@ -736,8 +810,10 @@ for naming limits, shared HTTP quotas and stdio whole-catalog limits.
 
 ## Service-specific MCP readiness
 
-Import detail and mutation responses include a derived `scopedMcp` object with
-`ready`, bounded `issues` (codes and canonical action IDs), and `truncated`.
+Import detail and mutation responses require `scopedMcp`. HTTP gateway imports
+return `null` and have no service-specific MCP connection. Actions/tools imports
+return a derived object with `ready`, bounded `issues` (codes and canonical action
+IDs), and `truncated`.
 It describes the current published definitions, including actions the current
 agent cannot see. Disabled, retired, and quarantined actions are excluded.
 The ordinary caller catalog exposes only `scopedMcpReady` on services and
@@ -745,7 +821,8 @@ The ordinary caller catalog exposes only `scopedMcpReady` on services and
 administrative data.
 
 Preview responses separately include `scopedMcpWarnings`, with `toolIndex`,
-`proposedAction`, and `codes`. These provisional warnings do not block accepting
+`proposedAction`, and `codes`; HTTP gateways return an empty array. These
+provisional warnings do not block accepting
 an otherwise supported aggregate action, and are outside the stored manifest
 and its hash. Editing canonical names can affect warnings for unnamed OpenAPI
 operations. Acceptance recomputes readiness from the final selection.

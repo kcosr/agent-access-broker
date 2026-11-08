@@ -133,6 +133,7 @@ pub(super) fn fixture() -> Fixture {
         }],
     });
     config.imports = ImportsConfig {
+        gateway_bindings: Default::default(),
         enabled: true,
         allowed_kinds: vec!["conformance_import".into()],
         allowed_endpoints: vec!["https://synthetic.invalid/mcp".into()],
@@ -889,6 +890,7 @@ fn publish_draft(
     definition: ImportedServiceDefinition,
 ) -> Result<BrokerRuntime, ManagedStoreError> {
     let record = agent_access_core::ImportedServiceRecord {
+        gateway_routes: None,
         definition: definition.clone(),
         status: ImportedServiceStatus::Draft,
         version: 1,
@@ -1036,6 +1038,7 @@ fn configured_connection_ids_collide_with_imports_on_startup_reload_and_write() 
     let mut definition = definition();
     definition.service = "tickets".into();
     let record = agent_access_core::ImportedServiceRecord {
+        gateway_routes: None,
         definition: definition.clone(),
         status: ImportedServiceStatus::Draft,
         version: 1,
@@ -1118,6 +1121,7 @@ fn import_identity_collisions_name_both_owners_on_startup_reload_and_write() {
     let mut definition = definition();
     definition.service = "jira".into();
     let record = agent_access_core::ImportedServiceRecord {
+        gateway_routes: None,
         definition: definition.clone(),
         status: ImportedServiceStatus::Draft,
         version: 1,

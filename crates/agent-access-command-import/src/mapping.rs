@@ -265,6 +265,7 @@ pub(crate) fn discovery(
     let service_metadata = proposed_metadata(&definition.service, manifest, accepted);
     service_metadata.validate()?;
     Ok(ImportedDiscovery {
+        gateway_routes: None,
         protocol_version: COMMAND_FORMAT.into(),
         metadata,
         tools,

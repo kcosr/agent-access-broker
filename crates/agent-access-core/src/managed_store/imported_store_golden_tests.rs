@@ -210,6 +210,7 @@ fn golden_actions() -> Vec<ImportedActionWrite> {
 fn golden_discovery() -> crate::imports::ImportedDiscovery {
     let actions = golden_actions();
     crate::imports::ImportedDiscovery {
+        gateway_routes: None,
         protocol_version: "openapi-3.1".into(),
         metadata: json!({"title":"Golden Inventory","version":"1"}),
         tools: vec![
@@ -259,6 +260,7 @@ fn imported_definitions_actions_and_previews_persist_frozen_json() {
     store
         .write_imported_preview(
             ImportedPreviewWriteRequest {
+                gateway_routes: None,
                 service: "golden-openapi".into(),
                 expected_version: record.version,
                 expected_catalog_revision: catalog.revision,
@@ -397,6 +399,16 @@ fn baseline_imported_rows_remain_readable() {
         );
     }
     let record = catalog.service("golden-openapi").unwrap();
+    for action in &record.actions {
+        let (_, _, definition, hash, _, _) = GOLDEN_ACTION_ROWS
+            .iter()
+            .find(|(id, ..)| *id == action.definition.action)
+            .unwrap();
+        let encoded = serde_json::to_string(&action.definition).unwrap();
+        assert_eq!(&encoded, definition);
+        assert_eq!(sha256_hex(encoded.as_bytes()), *hash);
+        assert_eq!(&action.definition_hash, hash);
+    }
     let actions = record
         .actions
         .iter()

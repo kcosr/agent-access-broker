@@ -1,5 +1,27 @@
 # OpenAPI and Swagger imports
 
+Choose an exposure when importing **OpenAPI / Swagger**:
+
+| Exposure | Client interface | Request and response handling |
+| --- | --- | --- |
+| **Actions/tools** (`openapi_http`) | Broker invoke, CLI and MCP actions | Builds supported JSON/form requests from typed inputs and returns bounded JSON. |
+| **HTTP gateway** (`openapi_gateway`) | Ordinary HTTP clients using an operator-approved gateway hostname | Forwards accepted methods and paths with bounded raw request and response streams, including binary files. |
+
+Exposure is fixed at creation. Import a document under separate service identities
+to use both modes. Gateway actions remain policy identities for administration,
+credentials, token restrictions and audit; they are omitted from ordinary agent
+service/action discovery. Administrators supply native clients with the gateway
+address and Broker authentication setup.
+
+The [HTTP gateway setup guide](http-gateway-setup.md) covers approved bindings,
+anonymous and static upstream authentication, document authoring, route guards,
+raw-body limits and native client use. The required `gatewayBindings` array in
+the [administrative import list](imported-services.md#openapi-http-gateway-imports)
+identifies reserved gateway choices; its `available` flag means eligible for new
+import creation, not current execution health. The rest of this page describes the
+**Actions/tools** profile. Both modes use the existing import review and
+quarantine lifecycle; their execution profiles are distinct.
+
 The `openapi_http` adapter turns reviewed operations from a Swagger 2.0 or
 OpenAPI 3.1 JSON document into
 ordinary broker actions. It uses the same imported-service administration, grants,
@@ -34,7 +56,8 @@ without fetching a document.
 
 In **Admin > Catalog > Import service**, a base administrator:
 
-1. Selects OpenAPI / Swagger and enters a service name and API base URL.
+1. Selects OpenAPI / Swagger, chooses **Actions/tools**, and enters a service name
+   and API base URL.
 2. Chooses **From URL** and enters a document URL, or **Upload file** and browses
    for or drops a Swagger 2.0 or OpenAPI 3.1 JSON file. A private URL can use a
    separate Basic, Bearer or named API-key discovery credential. It is independent
@@ -60,6 +83,10 @@ The username and secret preserve spaces and Unicode exactly. Usernames cannot
 contain a colon, and neither field can contain control characters. Both must be
 nonempty; usernames are limited to 256 UTF-8 bytes, with a 32 KiB combined
 serialized-secret limit. There is no credential normalization or challenge retry.
+
+Actions/tools definitions require one or two execution credential bindings,
+selecting service credentials, personal credentials, or both. Anonymous document
+discovery does not enable anonymous API execution.
 
 The API uses `adapterKind: "openapi_http"`, `endpoint` for the API base URL, and
 these string-valued `connectionSettings`:
@@ -331,8 +358,10 @@ for naming limits, shared HTTP quotas and stdio whole-catalog limits.
 
 ## Service-specific MCP readiness
 
-Import detail and mutation responses include a derived `scopedMcp` object with
-`ready`, bounded `issues` (codes and canonical action IDs), and `truncated`.
+Import detail and mutation responses require `scopedMcp`. HTTP gateway imports
+return `null` and have no service-specific MCP connection. Actions/tools imports
+return a derived object with `ready`, bounded `issues` (codes and canonical action
+IDs), and `truncated`.
 It describes the current published definitions, including actions the current
 agent cannot see. Disabled, retired, and quarantined actions are excluded.
 The ordinary caller catalog exposes only `scopedMcpReady` on services and
@@ -340,7 +369,8 @@ The ordinary caller catalog exposes only `scopedMcpReady` on services and
 administrative data.
 
 Preview responses separately include `scopedMcpWarnings`, with `toolIndex`,
-`proposedAction`, and `codes`. These provisional warnings do not block accepting
+`proposedAction`, and `codes`; HTTP gateways return an empty array. These
+provisional warnings do not block accepting
 an otherwise supported aggregate action, and are outside the stored manifest
 and its hash. Editing canonical names can affect warnings for unnamed OpenAPI
 operations. Acceptance recomputes readiness from the final selection.

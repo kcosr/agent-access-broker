@@ -2791,8 +2791,9 @@ allowed_endpoints = ["https://tools.internal.example/mcp"]
 disabled_services = []
 ```
 
-`allowed_kinds` names linked adapters: `mcp_http`, `openapi_http` and `command`
-in this binary. An adapter that declares itself a development fixture is accepted only
+`allowed_kinds` names adapters: `mcp_http`, `openapi_http`, `openapi_gateway` and
+`command` in this binary. A syntactically valid allowed kind missing from the
+assembly produces a startup warning; its retained imports remain unavailable. An adapter that declares itself a development fixture is accepted only
 with non-production `deployment.enable_fake_service`; the shipped adapters are not
 development fixtures.
 
@@ -2812,6 +2813,75 @@ Imported credential bindings come from the effective runtime catalog, separately
 from the TOML credential definitions; an import with a personal binding
 publishes its own [credential connection](#credential-connections) under its
 service ID. See the [import workflow and supported limits](imported-services.md).
+
+### Imported gateway bindings
+
+An OpenAPI HTTP gateway uses a reserved identity from
+`[imports.gateway_bindings.<service>]`. The binding fixes its service ID, API
+endpoint, ingress hosts and common transport limits. The portal selects an
+unused binding; it does not create an independent gateway or choose another
+upstream endpoint. The API endpoint must also match `imports.allowed_endpoints`.
+A URL source needs its document destination independently allowed; uploads need
+no document URL.
+
+Configuring any binding requires managed identity and policy authority, a managed
+store, credential encryption, and `management.enabled = true`, even when
+`imports.enabled = false`. The endpoint must use HTTPS in production. Its path
+must not contain repeated slashes or `.`/`..` components; at most one trailing
+slash is allowed.
+
+```toml
+[imports]
+enabled = true
+allowed_kinds = ["openapi_gateway"]
+allowed_endpoints = [
+  "https://inventory.example/api",
+  "https://inventory.example/openapi.json",
+]
+
+[imports.gateway_bindings.inventory]
+endpoint = "https://inventory.example/api"
+broker_hosts = ["inventory.gateway.example"]
+auth_modes = ["bearer_broker_token", "basic_broker_token"]
+basic_broker_token_username = "agent-access"
+allow_forwarded_identity = false
+redirect_policy = "none"
+# Optional per-gateway caps, no larger than the matching host limit:
+# request_body_max_bytes = 1048576
+# response_body_max_bytes = 8388608
+# streaming_idle_timeout_ms = 30000
+correlation_headers = true
+```
+
+The binding also accepts an optional `egress_proxy` using the common proxy
+configuration. Authentication modes govern Broker ingress, independently of the
+upstream authentication selected during import. `basic_broker_token_username`
+defaults to `"agent-access"` and must be nonempty printable ASCII without a colon
+or whitespace. `allow_forwarded_identity` defaults to `false`; trusted ingress
+requires `true` and the existing trusted-caller admission contract. Anonymous
+upstream access never permits anonymous Broker ingress. `redirect_policy`
+defaults to `"none"`, its only accepted value. `correlation_headers` defaults to
+`true`. Byte limits must be positive and cannot
+exceed `limits.max_http_body_bytes` or `limits.max_upstream_response_bytes`;
+`streaming_idle_timeout_ms`, when set, must be positive.
+
+Hosts must be lowercase DNS names without ports, wildcards or trailing dots, and
+are reserved jointly with static gateways.
+A binding reserves its hosts while its import is absent, drafted, disabled,
+retired or unavailable. Its ID cannot be `broker`, a selected native provider
+kind, a configured service/static gateway, a TOML credential identity, a
+credential connection, or a retained non-gateway import. A retained gateway
+must keep its binding ID and exact endpoint; retargeting requires a new service
+identity and independent acceptance/grants. Removing the binding keeps the
+import but makes it unavailable. Host aliases and transport settings on the
+same binding may change through a successful configuration reload, which
+publishes the host index atomically and cancels queued work. A failed reload
+preserves the active generation.
+
+The administrative import list returns safe `gatewayBindings` choices with
+service, endpoint, hosts, ingress modes and creation availability. Proxy
+credentials and references are omitted. See [HTTP gateway setup](http-gateway-setup.md)
+for import review, source coverage and native-client setup.
 
 ### Command imports
 

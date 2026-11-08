@@ -70,6 +70,9 @@ impl ImportedAdapter for PlannedCommand {
     fn kind(&self) -> &'static str {
         "command"
     }
+    fn supports_credential_free_execution(&self) -> bool {
+        true
+    }
     fn development_only(&self) -> bool {
         false
     }
@@ -344,6 +347,7 @@ fn record(
     actions: Vec<ImportedActionRecord>,
 ) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        gateway_routes: None,
         document: None,
         definition: ImportedServiceDefinition {
             service: SERVICE.into(),
@@ -593,6 +597,7 @@ fn import_config() -> BrokerConfig {
     let mut config = config();
     project_resources(&mut config);
     config.imports = ImportsConfig {
+        gateway_bindings: Default::default(),
         enabled: true,
         allowed_kinds: vec!["command".into()],
         ..ImportsConfig::default()

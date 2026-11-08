@@ -4063,6 +4063,16 @@ excluded from agent MCP tools. Restoring retained grants requires confirmation.
 Preview results include grant IDs by action, so reviewing one changed action need
 not confirm unrelated grants on the same service.
 
+`GET /v1/admin/imports` always includes `gatewayBindings`, an array of the
+operator's reserved gateway identities; it is empty when none are configured.
+Each entry requires `service`, `endpoint`, `brokerHosts`, `authModes`,
+`allowForwardedIdentity`, and `available`. An unavailable entry also includes
+`unavailableReason`. Here, `available` means that the identity is eligible for
+creating a new gateway import: an already retained identity, a disabled binding,
+or a missing permitted gateway adapter/protocol makes it false. It does not
+report whether an existing import can execute. Proxy credentials and secret
+references are not returned. See [gateway bindings](configuration.md#imported-gateway-bindings).
+
 `PUT /v1/admin/imports/{service}/document` is available for imports configured
 with an uploaded document source. Required query parameters are `expectedVersion`
 and `expectedCatalogRevision`; optional `filename` is a bounded basename, never
@@ -4118,9 +4128,11 @@ after dispatch may be uncertain and are never automatically replayed. Saving a l
 response is separate from operation success. See the imported-services guide in
 `docs/imported-services.md` for administrative setup and supported protocol limits.
 
-Import service result objects include `scopedMcp: {ready, issues, truncated}`.
-Each issue has a `code` and canonical `actions`. Import preview results also
-include `scopedMcpWarnings: [{toolIndex, proposedAction, codes}]`, independently
-of the persisted manifest/hash. These warnings describe possible scoped MCP
-name conflicts, not unsupported aggregate operations. See
+Import detail and mutation result objects require `scopedMcp`. Gateway imports
+return `scopedMcp: null`; actions/tools imports return
+`scopedMcp: {ready, issues, truncated}`. Each issue has a `code` and canonical
+`actions`. Import preview results also require
+`scopedMcpWarnings: [{toolIndex, proposedAction, codes}]`; gateways return an empty
+array. These warnings are independent of the persisted manifest/hash and describe
+possible scoped MCP name conflicts, not unsupported aggregate operations. See
 [imported service readiness](imported-services.md#service-specific-mcp-readiness).

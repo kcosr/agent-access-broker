@@ -45,6 +45,8 @@ export const SELECTION_ENTRY_POINTS = Object.freeze({
   "agent-access-jira": ["agent_access_jira::JIRA_BACKEND"],
   "agent-access-mcp-upstream": ["agent_access_mcp_upstream::registration"],
   "agent-access-openapi-upstream": ["agent_access_openapi_upstream::registration"],
+  "agent-access-openapi-gateway": ["agent_access_openapi_gateway::registration"],
+  "agent-access-openapi-gateway-import": ["agent_access_openapi_gateway_import::registration"],
   "agent-access-teams": ["agent_access_teams::TEAMS_BACKEND"],
 });
 

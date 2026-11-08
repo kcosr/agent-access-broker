@@ -7,10 +7,17 @@ pub(super) fn route_specs() -> Vec<HttpRouteSpec> {
     let mut routes = Vec::new();
     let mut list = get_management_route(BASE, "admin.imports.list", RouteAccess::AdminRead);
     list.result_schema = Some(json!({"type":"object","additionalProperties":false,
-    "required":["catalogRevision","operatorEnabled","services","availableKinds","commandImports","importAuthentication"],"properties":{
+    "required":["catalogRevision","operatorEnabled","services","availableKinds","commandImports","importAuthentication","gatewayBindings"],"properties":{
         "operatorEnabled":{"type":"boolean"},"availableKinds":{"type":"array","items":service_name_schema()},"importAuthentication":import_authentication(),
         "commandImports":{"type":"array","description":"Operator-approved command names a command import may name as command:<name>; paths are never returned.",
             "items":{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string"}}}},
+        "gatewayBindings":{"type":"array","description":"Reserved gateway identities; available means eligible for creating a new import.","items":{
+            "type":"object","additionalProperties":false,"required":["service","endpoint","brokerHosts","authModes","allowForwardedIdentity","available"],"properties":{
+                "service":service_name_schema(),"endpoint":{"type":"string"},"brokerHosts":{"type":"array","items":{"type":"string"}},
+                "authModes":{"type":"array","items":{"enum":["basic_broker_token","bearer_broker_token"]}},
+                "allowForwardedIdentity":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":"string"}
+            }
+        }},
         "catalogRevision":revision(),"services":{"type":"array","items":service_view()}
     }}));
     routes.push(list);
@@ -217,7 +224,7 @@ fn service_definition() -> Value {
             "service":service_name_schema(),"displayName":{"type":"string","minLength":1,"maxLength":256},
             "adapterKind":service_name_schema(),"endpoint":{"type":"string","format":"uri","maxLength":4096},
             "connectionSettings":{"type":"object","maxProperties":16,"propertyNames":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9._-]+$"},"additionalProperties":{"type":"string","maxLength":4096},"default":{}},
-            "executionBindings":{"type":"array","minItems":0,"maxItems":2,"description":"One or two bindings; a command import without a credential has none.","items":{
+            "executionBindings":{"type":"array","minItems":0,"maxItems":2,"description":"One or two static/delegated bindings, or none for an explicitly credential-free command or anonymous HTTP gateway.","items":{
                 "type":"object","additionalProperties":false,"required":["ownerMode","mechanism","delivery","status"],"properties":{
                     "ownerMode":{"enum":["service","per_user"]},"mechanism":{"enum":["static_token","oauth"]},"delivery":delivery(),
                     "status":{"enum":["configured","unsupported"]},"adapterId":{"type":["string","null"],"minLength":1,"maxLength":256},
@@ -427,7 +434,7 @@ fn command_version() -> Value {
 fn service_result() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["catalogRevision","operatorAllowed","available","unavailableReason","service","importAuthentication","scopedMcp"],"properties":{
         "operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),
-        "catalogRevision":revision(),"service":service_view(),"scopedMcp":scoped_mcp_readiness(),"commandVersion":command_version(),
+        "catalogRevision":revision(),"service":service_view(),"scopedMcp":{"oneOf":[{"type":"null"},scoped_mcp_readiness()]},"commandVersion":command_version(),
         "resourceTypeEffects":resource_type_effects()
     }})
 }
@@ -478,7 +485,7 @@ fn preview_result() -> Value {
         "catalogRevision":revision(),"operatorAllowed":{"type":"boolean"},"available":{"type":"boolean"},"unavailableReason":{"type":["string","null"]},"importAuthentication":import_authentication(),"service":service_view(),
         "affectedGrants":{"type":"array","items":{"type":"string"},"uniqueItems":true},
         "affectedGrantsByAction":{"type":"object","additionalProperties":{"type":"array","items":{"type":"string"},"uniqueItems":true}},
-        "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":scoped_mcp_readiness(),"scopedMcpWarnings":scoped_mcp_warnings(),
+        "preview":{"oneOf":[{"type":"null"},preview_record()]},"scopedMcp":{"oneOf":[{"type":"null"},scoped_mcp_readiness()]},"scopedMcpWarnings":scoped_mcp_warnings(),
         "commandVersion":command_version()
     }})
 }
@@ -503,6 +510,12 @@ mod tests {
                 "{}",
                 route.operation
             );
+        }
+        for schema in [service_result(), preview_result()] {
+            let validator = jsonschema::validator_for(&schema["properties"]["scopedMcp"]).unwrap();
+            assert!(validator.is_valid(&Value::Null));
+            assert!(validator.is_valid(&json!({"ready":true,"issues":[],"truncated":false})));
+            assert!(!validator.is_valid(&json!({"ready":true})));
         }
         let readiness = jsonschema::validator_for(&scoped_mcp_readiness()).unwrap();
         let mut value = json!({"ready":false,"issues":[{"code":"duplicate_name","actions":["one","two"]}],"truncated":false});

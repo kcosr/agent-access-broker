@@ -51,7 +51,7 @@ describe("catalog shared service caps", () => {
     expect(html).not.toContain("No shared cap");
   });
 
-  test.each(["command", "mcp_http", "openapi_http"])("keeps %s personal defaults separate from shared TOML policy", (adapterKind) => {
+  test.each(["command", "mcp_http", "openapi_http", "openapi_gateway"])("keeps %s personal defaults separate from shared TOML policy", (adapterKind) => {
     const data = commandDraft();
     data.service.definition.adapterKind = adapterKind;
     data.service.definition.invocationLimit = { requests: 7, windowSeconds: 90 };

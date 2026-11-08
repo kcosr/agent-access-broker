@@ -329,6 +329,7 @@ mod tests {
     #[test]
     fn adapters_cannot_record_resource_type_changes() {
         let mut discovery = ImportedDiscovery {
+            gateway_routes: None,
             protocol_version: "agent-access-command/1".into(),
             metadata: json!({}),
             tools: Vec::new(),

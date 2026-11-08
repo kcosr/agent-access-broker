@@ -36,7 +36,10 @@ mod import_control;
 mod inherited_network_tests;
 pub use import_control::{ImportDiscoveryError, ImportPreparationError};
 mod imports;
-pub use imports::{PreparedImportedCredentialContract, PreparedImportedDocumentUpload};
+pub use imports::{
+    GatewayExecutionBinding, ImportedGatewayDispatchFence, PreparedImportedCredentialContract,
+    PreparedImportedDocumentUpload,
+};
 mod input_explanation;
 mod lookup_access;
 mod mcp_views;
@@ -1780,6 +1783,7 @@ pub struct BrokerRuntime {
     command_providers: Arc<BTreeMap<String, Arc<dyn crate::imports::CommandProvider>>>,
     imported_catalog: Arc<crate::ImportedCatalog>,
     imported_credential_contracts: Arc<imports::ImportedCredentialContracts>,
+    imported_gateway_diagnostics: Arc<BTreeMap<String, imports::ImportedGatewayDiagnostic>>,
     effective_credentials: Arc<crate::CredentialsConfig>,
     import_dispatch: Arc<BTreeMap<String, Arc<AtomicBool>>>,
     /// Command-import budgets and live process supervisors, carried from
@@ -1917,6 +1921,7 @@ pub struct PreparedGatewayOperation {
     /// What the request presents upstream, through
     /// [`Self::upstream_presentation`].
     access: gateway_access::GatewayAccess,
+    imported_fence: Option<ImportedGatewayDispatchFence>,
     pub matched_grant: MatchedGrantAudit,
     terminal_audit: Option<GatewayTerminalAuditGuard>,
     finalize_context: FinalizeContext,
@@ -2355,7 +2360,10 @@ impl BrokerRuntime {
                 .check_active_credential_keys(ring)
                 .map_err(runtime_managed_store_error)?;
         }
-        let imported_providers = imports::build_providers(
+        let imports::BuiltImportedProviders {
+            providers: imported_providers,
+            gateway_diagnostics: imported_gateway_diagnostics,
+        } = imports::build_providers(
             &config,
             &imported_catalog,
             &imported_credential_contracts,
@@ -2365,17 +2373,23 @@ impl BrokerRuntime {
             &network,
         )?;
         let mut command_providers = BTreeMap::new();
+        let mut imported_gateways = BTreeMap::new();
         for (service, provider) in imported_providers {
             if let Some(command) = provider.command() {
                 command_providers.insert(service.clone(), command.clone());
             }
-            provider_map.insert(
-                service.clone(),
-                ServiceProvider::new(
-                    (**services.get(&service).expect("retained import descriptor")).clone(),
-                    provider.provider(),
-                ),
-            );
+            if let Some(gateway) = provider.gateway() {
+                imported_gateways.insert(service.clone(), gateway.clone());
+            }
+            if let Some(provider) = provider.provider() {
+                provider_map.insert(
+                    service.clone(),
+                    ServiceProvider::new(
+                        (**services.get(&service).expect("retained import descriptor")).clone(),
+                        provider,
+                    ),
+                );
+            }
         }
         let source_config = config.clone();
         imports::effective_credentials_with_contracts(
@@ -2426,7 +2440,7 @@ impl BrokerRuntime {
             &trusted_callers,
             &identity_sources,
         )?;
-        let gateways = config
+        let mut gateways = config
             .gateways
             .iter()
             .map(|(service, gateway)| {
@@ -2449,9 +2463,12 @@ impl BrokerRuntime {
                 Ok((service.clone(), protocol))
             })
             .collect::<Result<BTreeMap<_, _>, RuntimeError>>()?;
+        gateways.extend(imported_gateways);
+        let mut gateway_configs = config.gateways.clone();
+        gateway_configs.extend(imports::managed_gateway_configs(&config, &imported_catalog));
         let mut runtime = Self {
             gateways: Arc::new(gateways),
-            gateway_configs: Arc::new(config.gateways.clone()),
+            gateway_configs: Arc::new(gateway_configs),
             identity_sources: Arc::new(identity_sources),
             audit,
             effective_credentials: Arc::new(config.credentials.clone()),
@@ -2467,6 +2484,7 @@ impl BrokerRuntime {
             services: Arc::new(services),
             imported_catalog: Arc::new(imported_catalog),
             imported_credential_contracts: Arc::new(imported_credential_contracts),
+            imported_gateway_diagnostics: Arc::new(imported_gateway_diagnostics),
             import_dispatch: Arc::new(BTreeMap::new()),
             command_registry: previous
                 .map(|previous| previous.command_registry.clone())
@@ -3985,6 +4003,16 @@ impl BrokerRuntime {
             finalize_context,
         } = plan;
 
+        let imported_fence = if self.imported_catalog.service(&service).is_some() {
+            match self.imported_gateway_dispatch_fence(&service, &action) {
+                Ok(fence) => Some(fence),
+                Err(error) => {
+                    return Err(Box::new(self.finalize(finalize_context, Err(error)).await));
+                }
+            }
+        } else {
+            None
+        };
         let access = match self
             .resolve_gateway_access(&service, &action, &credential_mode, &identity, &correlation)
             .await
@@ -4003,6 +4031,7 @@ impl BrokerRuntime {
             resource_scopes,
             credential_mode,
             access,
+            imported_fence,
             matched_grant,
             terminal_audit: None,
             finalize_context,
@@ -7788,6 +7817,12 @@ pub(crate) fn preflight_configured_egress_proxies(
         preflight_egress_proxy(
             &format!("gateways.{service}.egress_proxy"),
             gateway.egress_proxy.as_ref(),
+        )?;
+    }
+    for (service, binding) in &config.imports.gateway_bindings {
+        preflight_egress_proxy(
+            &format!("imports.gateway_bindings.{service}.egress_proxy"),
+            binding.egress_proxy.as_ref(),
         )?;
     }
     Ok(())

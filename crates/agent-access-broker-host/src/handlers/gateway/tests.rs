@@ -3668,6 +3668,8 @@ async fn forward_prepared_git_http(
         GatewayForwardOwnership {
             permits,
             disposal: None,
+            dispatch_identity: None,
+            reloadable: None,
         },
     )
     .await

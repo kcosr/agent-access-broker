@@ -11,6 +11,7 @@ fn command_record(
     kind: Option<ImportedCredentialKind>,
 ) -> ImportedServiceRecord {
     ImportedServiceRecord {
+        gateway_routes: None,
         document: None,
         definition: ImportedServiceDefinition {
             service: "ticketing".into(),
@@ -80,6 +81,9 @@ impl crate::imports::ImportedAdapter for CommandForm {
     }
     fn kind(&self) -> &'static str {
         "command"
+    }
+    fn supports_credential_free_execution(&self) -> bool {
+        true
     }
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         definition.validate()

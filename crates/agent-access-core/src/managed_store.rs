@@ -16,6 +16,7 @@ use principal_access::{
 mod imported_store;
 pub use imported_store::*;
 mod imported_documents;
+mod imported_gateway_routes;
 pub use imported_documents::ImportedDocumentMetadata;
 pub(crate) use imported_documents::{validate_document_bytes, validate_document_filename};
 mod imported_resource_types;
@@ -78,6 +79,7 @@ use sha2::Sha256;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -85,7 +87,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION;
+const MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION: &str = "035_imported_gateway_routes";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION: &str =
     "034_agent_token_issuance_contexts";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_VERSION: &str = "033_agent_token_issuance";
@@ -295,6 +298,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/agent_token_issuance_contexts.sql"),
         seed: Some(agent_token_issuance::seed_contexts),
         structural_validation: agent_token_issuance::validate_context_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION,
+        checksum: "34d8fe4dc229a986e6ba5f2bbcefb36bd150e660c1b0e3d54602fb5400954187",
+        sql: include_str!("managed_store/imported_gateway_routes.sql"),
+        seed: None,
+        structural_validation: imported_gateway_routes::validate_structure,
     },
 ];
 
@@ -619,6 +629,95 @@ fn local_password_work_for_store(path: &Path) -> Result<Arc<LocalPasswordWork>, 
     Ok(work)
 }
 
+const MATERIAL_CURRENT: u8 = 0;
+const MATERIAL_COMMITTING: u8 = 1;
+const MATERIAL_RETIRED: u8 = 2;
+
+/// Reopened connections share proofs, but only live executions retain entries.
+/// The connection lock precedes this registry lock on reads and material writes.
+#[derive(Default)]
+struct CredentialMaterialProofs {
+    current: BTreeMap<(String, String), Weak<AtomicU8>>,
+}
+impl CredentialMaterialProofs {
+    fn capture(&mut self, credential_id: &str, version: &str) -> Arc<AtomicU8> {
+        self.current.retain(|_, proof| proof.strong_count() > 0);
+        let key = (credential_id.to_owned(), version.to_owned());
+        if let Some(proof) = self.current.get(&key).and_then(Weak::upgrade) {
+            return proof;
+        }
+        let proof = Arc::new(AtomicU8::new(MATERIAL_CURRENT));
+        self.current.insert(key, Arc::downgrade(&proof));
+        proof
+    }
+
+    fn prepare_commit(&mut self, credential_id: &str) -> CredentialMaterialCommit {
+        self.current.retain(|_, proof| proof.strong_count() > 0);
+        let proofs = self
+            .current
+            .iter()
+            .filter_map(|((id, _), proof)| {
+                if id != credential_id {
+                    return None;
+                }
+                let proof = proof.upgrade()?;
+                proof
+                    .compare_exchange(
+                        MATERIAL_CURRENT,
+                        MATERIAL_COMMITTING,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .ok()
+                    .map(|_| proof)
+            })
+            .collect();
+        CredentialMaterialCommit { proofs }
+    }
+}
+
+/// Dispatch cannot cross a successful commit before its old proofs are retired.
+/// A failed commit drops this guard and restores the still-current material.
+struct CredentialMaterialCommit {
+    proofs: Vec<Arc<AtomicU8>>,
+}
+impl CredentialMaterialCommit {
+    fn committed(self) {
+        for proof in &self.proofs {
+            proof.store(MATERIAL_RETIRED, Ordering::Release);
+        }
+    }
+}
+impl Drop for CredentialMaterialCommit {
+    fn drop(&mut self) {
+        for proof in &self.proofs {
+            let _ = proof.compare_exchange(
+                MATERIAL_COMMITTING,
+                MATERIAL_CURRENT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+}
+
+fn credential_material_proofs_for_store(
+    path: &Path,
+) -> Result<Arc<Mutex<CredentialMaterialProofs>>, ManagedStoreError> {
+    type StoreProofs = Mutex<CredentialMaterialProofs>;
+    static STORES: OnceLock<Mutex<BTreeMap<PathBuf, Weak<StoreProofs>>>> = OnceLock::new();
+    let path = fs::canonicalize(path)
+        .map_err(|error| ManagedStoreError::Unavailable(error.to_string()))?;
+    let mut stores = STORES.get_or_init(Mutex::default).lock().unwrap();
+    stores.retain(|_, proofs| proofs.strong_count() > 0);
+    if let Some(proofs) = stores.get(&path).and_then(Weak::upgrade) {
+        return Ok(proofs);
+    }
+    let proofs = Arc::new(Mutex::new(CredentialMaterialProofs::default()));
+    stores.insert(path, Arc::downgrade(&proofs));
+    Ok(proofs)
+}
+
 #[derive(Clone)]
 pub struct ManagedStore {
     path: PathBuf,
@@ -628,6 +727,7 @@ pub struct ManagedStore {
     /// families: set by the active OAuth configuration.
     oauth_revocation: Arc<Mutex<Option<oauth_revocation::RevocationCapture>>>,
     local_password_work: Arc<LocalPasswordWork>,
+    credential_material_proofs: Arc<Mutex<CredentialMaterialProofs>>,
     schema_version: String,
     schema_checksum: String,
     latest_migration_checksum: String,
@@ -725,6 +825,7 @@ impl ManagedStore {
         };
         let store = Self {
             local_password_work: local_password_work_for_store(&path)?,
+            credential_material_proofs: credential_material_proofs_for_store(&path)?,
             path,
             connection,
             identity_key_ring: Arc::new(Mutex::new(None)),
@@ -4209,6 +4310,7 @@ impl ManagedStore {
         validate_credential_secret(&request.credential_kind, &request.secret)?;
         let now = now_string();
         let mut conn = self.connection.lock().unwrap();
+        let mut proofs = self.credential_material_proofs.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -4364,7 +4466,9 @@ impl ManagedStore {
             &request.service,
             &request.name,
         )?;
+        let commit = proofs.prepare_commit(&credential_id);
         tx.commit().map_err(sql_unavailable)?;
+        commit.committed();
         Ok(metadata)
     }
 
@@ -4475,6 +4579,7 @@ impl ManagedStore {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
         let mut conn = self.connection.lock().unwrap();
+        let mut proofs = self.credential_material_proofs.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -4487,7 +4592,9 @@ impl ManagedStore {
             params![metadata.credential_id],
         )
         .map_err(sql_unavailable)?;
+        let commit = proofs.prepare_commit(&metadata.credential_id);
         tx.commit().map_err(sql_unavailable)?;
+        commit.committed();
         Ok(metadata)
     }
 
@@ -4498,6 +4605,7 @@ impl ManagedStore {
     ) -> Result<CredentialMetadata, ManagedStoreError> {
         validate_uuid_id(credential_id, "credentialId")?;
         let mut conn = self.connection.lock().unwrap();
+        let mut proofs = self.credential_material_proofs.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -4515,7 +4623,9 @@ impl ManagedStore {
             params![metadata.credential_id],
         )
         .map_err(sql_unavailable)?;
+        let commit = proofs.prepare_commit(&metadata.credential_id);
         tx.commit().map_err(sql_unavailable)?;
+        commit.committed();
         Ok(metadata)
     }
 
@@ -4546,10 +4656,33 @@ impl ManagedStore {
         accepted_profiles: &[String],
         requirement: Option<&crate::imports::ImportedCredentialRequirement>,
     ) -> Result<ExecutionCredential, ManagedStoreError> {
+        self.resolve_user_credential_with_material_fence(
+            key_ring,
+            owner_principal_id,
+            service,
+            name,
+            accepted_profiles,
+            requirement,
+        )
+        .map(|(credential, _)| credential)
+    }
+
+    /// Capture the selected plaintext and its immutable material identity under
+    /// one store lock. Rewrap changes encryption, never this identity.
+    pub(crate) fn resolve_user_credential_with_material_fence(
+        &self,
+        key_ring: &CredentialKeyRing,
+        owner_principal_id: &str,
+        service: &str,
+        name: &str,
+        accepted_profiles: &[String],
+        requirement: Option<&crate::imports::ImportedCredentialRequirement>,
+    ) -> Result<(ExecutionCredential, CredentialMaterialFence), ManagedStoreError> {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(service, name)?;
         validate_profiles(accepted_profiles)?;
         let conn = self.connection.lock().unwrap();
+        let mut proofs = self.credential_material_proofs.lock().unwrap();
         if imported_store::contains_service(&conn, service)? != requirement.is_some() {
             return Err(ManagedStoreError::CredentialInvalid(
                 "imported credential contract is required exactly for imported connections".into(),
@@ -4567,7 +4700,68 @@ impl ManagedStore {
             params![row.credential_id, now_string()],
         )
         .map_err(sql_unavailable)?;
-        Ok(credential)
+        Ok((
+            credential,
+            CredentialMaterialFence {
+                current: proofs.capture(&row.credential_id, &row.material_version),
+                expires_at: credential_metadata_expires_at(&row.metadata),
+                credential_id: row.credential_id,
+                material_version: row.material_version,
+                owner_principal_id: owner_principal_id.to_owned(),
+                service: service.to_owned(),
+                name: name.to_owned(),
+            },
+        ))
+    }
+
+    /// Recheck metadata only; never resolve replacement secret material for an
+    /// already admitted request. Missing, disabled, replaced and rotated rows
+    /// have the same value-free refusal.
+    pub(crate) fn validate_credential_material_fence(
+        &self,
+        fence: &CredentialMaterialFence,
+    ) -> Result<(), ManagedStoreError> {
+        fence.validate_current()?;
+        let conn = self.connection.lock().unwrap();
+        let current: Option<Value> = conn
+            .query_row(
+                "SELECT c.metadata_json FROM credentials c
+             INNER JOIN credential_secret_material m ON m.secret_ref = c.secret_ref
+             WHERE c.owner_kind = 'user' AND c.owner_principal_id = ?1
+               AND c.service = ?2 AND c.name = ?3 AND c.credential_id = ?4
+               AND c.material_version = ?5 AND c.status = 'active'",
+                params![
+                    fence.owner_principal_id,
+                    fence.service,
+                    fence.name,
+                    fence.credential_id,
+                    fence.material_version
+                ],
+                |row| {
+                    let raw: String = row.get(0)?;
+                    serde_json::from_str(&raw).map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
+                    })
+                },
+            )
+            .optional()
+            .map_err(sql_unavailable)?;
+        let metadata = current.ok_or_else(|| {
+            fence.current.store(MATERIAL_RETIRED, Ordering::Release);
+            ManagedStoreError::CredentialInvalid(
+                "selected credential material is no longer available".into(),
+            )
+        })?;
+        if credential_metadata_expires_at(&metadata).is_some_and(|expires| expires <= Utc::now()) {
+            return Err(ManagedStoreError::CredentialExpired);
+        }
+        fence.validate_current()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_credential_test_connection_lock(&self, operation: impl FnOnce()) {
+        let _connection = self.connection.lock().unwrap();
+        operation();
     }
 
     /// Check the same stored material as execution, without recording use or
@@ -6524,6 +6718,31 @@ pub struct RewrapSummary {
     pub to_key: String,
     pub rewrapped: u64,
     pub conflicts: u64,
+}
+
+/// Private execution fence; contains identifiers only and exposes no material.
+#[derive(Clone)]
+pub(crate) struct CredentialMaterialFence {
+    credential_id: String,
+    material_version: String,
+    owner_principal_id: String,
+    service: String,
+    name: String,
+    current: Arc<AtomicU8>,
+    expires_at: Option<DateTime<Utc>>,
+}
+impl CredentialMaterialFence {
+    pub(crate) fn validate_current(&self) -> Result<(), ManagedStoreError> {
+        if self.current.load(Ordering::Acquire) != MATERIAL_CURRENT {
+            return Err(ManagedStoreError::CredentialInvalid(
+                "selected credential material is no longer available".into(),
+            ));
+        }
+        if self.expires_at.is_some_and(|expires| expires <= Utc::now()) {
+            return Err(ManagedStoreError::CredentialExpired);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -9797,6 +10016,7 @@ mod tests {
     include!("managed_store/agent_token_issuance_tests.rs");
     include!("managed_store/agent_token_issuance_contexts_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");
+    include!("managed_store/credential_material_fence_tests.rs");
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
     use std::sync::{Arc, Barrier};

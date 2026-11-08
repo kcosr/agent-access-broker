@@ -111,6 +111,8 @@ dependencies = [
  "agent-access-gmail",
  "agent-access-jira",
  "agent-access-mcp-upstream",
+ "agent-access-openapi-gateway",
+ "agent-access-openapi-gateway-import",
  "agent-access-openapi-upstream",
  "agent-access-provider",
  "agent-access-teams",
@@ -140,6 +142,8 @@ dependencies = [
  "agent-access-gmail",
  "agent-access-jira",
  "agent-access-mcp-upstream",
+ "agent-access-openapi-gateway",
+ "agent-access-openapi-gateway-import",
  "agent-access-openapi-upstream",
  "agent-access-provider",
  "agent-access-teams",
@@ -445,10 +449,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-access-openapi-common"
+version = "0.2.0"
+dependencies = [
+ "http",
+ "httpdate",
+ "percent-encoding",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "url",
+]
+
+[[package]]
+name = "agent-access-openapi-gateway"
+version = "0.2.0"
+dependencies = [
+ "agent-access-openapi-common",
+ "agent-access-provider",
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "agent-access-openapi-gateway-import"
+version = "0.2.0"
+dependencies = [
+ "agent-access-core",
+ "agent-access-openapi-common",
+ "agent-access-provider",
+ "async-trait",
+ "axum",
+ "http",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "agent-access-openapi-upstream"
 version = "0.2.0"
 dependencies = [
  "agent-access-core",
+ "agent-access-openapi-common",
  "agent-access-provider",
  "async-trait",
  "axum",

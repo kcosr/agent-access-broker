@@ -11,7 +11,7 @@ import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import type { ImportCredentialInput, ImportBinding, ImportListResult, ImportPreviewResult, ImportPurpose } from "../../import-types";
 import { errorMessage } from "../../lib/helpers";
 import { importItemNoun } from "../../lib/imports";
-import { openApiDocumentSource } from "../../lib/import-openapi";
+import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_GATEWAY_KIND, gatewayIngressLabel, isOpenApiImport, openApiDocumentSource, openApiExposureLabel } from "../../lib/import-openapi";
 import { COMMAND_KIND, commandCredentialText, commandName } from "../../lib/import-command";
 import { formatServiceLimit } from "../../lib/service-limits";
 import {
@@ -66,7 +66,7 @@ function deliveryLabel(binding: ImportBinding | undefined) {
 function discoveryText(data: ImportPreviewResult) {
   const discovery = data.service.definition.discovery;
   if (data.service.definition.adapterKind === COMMAND_KIND) return "Discovery runs the command's describe without credentials.";
-  if (data.service.definition.adapterKind === "openapi_http" && openApiDocumentSource(data.service.definition.connectionSettings) === "upload") return "Discovery reads the stored uploaded document without a discovery credential.";
+  if (isOpenApiImport(data.service.definition.adapterKind) && openApiDocumentSource(data.service.definition.connectionSettings) === "upload") return "Discovery reads the stored uploaded document without a discovery credential.";
   if (discovery.kind === "anonymous") return "The public definition document is loaded without credentials.";
   if (discovery.kind === "execution") return "Discovery uses the shared execution credential.";
   if (discovery.kind === "slot") return "Discovery uses a separate discovery credential.";
@@ -119,7 +119,10 @@ export function ImportTab({
   }
   const record = data.service;
   const definition = record.definition;
-  const openapi = definition.adapterKind === "openapi_http";
+  const openapi = isOpenApiImport(definition.adapterKind);
+  const gateway = definition.adapterKind === OPENAPI_GATEWAY_KIND;
+  const gatewayBinding = gateway ? imports?.gatewayBindings.find((binding) => binding.service === definition.service) : undefined;
+  const anonymous = gateway && definition.connectionSettings.executionAuthentication === "anonymous";
   const uploaded = openapi && openApiDocumentSource(definition.connectionSettings) === "upload";
   const command = definition.adapterKind === COMMAND_KIND;
   const accepted = record.acceptedMetadata;
@@ -260,7 +263,9 @@ export function ImportTab({
       <SettingsSection
         title="Definition"
         description={
-          openapi
+          gateway
+            ? "Native HTTP clients use the gateway hosts; the Broker forwards accepted operations to the approved API base URL."
+            : openapi
             ? "The OpenAPI or Swagger document describes operations; agent calls go to the API base URL."
             : command
               ? "Each agent call runs the approved command once, with the request on its stdin. Service ID and command are fixed after creation."
@@ -276,6 +281,9 @@ export function ImportTab({
           labelWidth={160}
           items={[
             { label: "Import type", value: <>{adapterLabel(definition.adapterKind)} <span className="wb-num wb-muted">{definition.adapterKind}</span></> },
+            isOpenApiImport(definition.adapterKind) ? { label: "Exposure", value: openApiExposureLabel(definition.adapterKind) } : null,
+            gateway ? { label: "Gateway hosts", value: gatewayBinding ? <span className="wb-mono pt-catalog-break">{gatewayBinding.brokerHosts.join(", ")}</span> : <span className="wb-muted">Binding unavailable</span> } : null,
+            gatewayBinding ? { label: "Broker ingress", value: gatewayIngressLabel(gatewayBinding) } : null,
             command
               ? { label: "Command", value: <span className="wb-mono pt-catalog-break">{commandName(definition.endpoint)}</span> }
               : { label: openapi ? "API base URL" : "Endpoint", value: <span className="wb-mono pt-catalog-break">{definition.endpoint}</span> },
@@ -320,7 +328,7 @@ export function ImportTab({
             openapi
               ? {
                   label: "API security scheme",
-                  value: definition.connectionSettings.securityScheme ? (
+                  value: anonymous ? "Anonymous upstream" : definition.connectionSettings.securityScheme ? (
                     <span className="wb-mono">{definition.connectionSettings.securityScheme}</span>
                   ) : (
                     <span className="wb-muted">Select after loading the definition</span>
@@ -329,8 +337,9 @@ export function ImportTab({
               : null,
             {
               label: "Execution credentials",
-              value: definition.executionBindings.length ? definition.executionBindings.map(bindingLabel).join(", ") : <span className="wb-muted">None</span>
+              value: anonymous ? "None; authenticated Broker callers still require service-mode grants" : definition.executionBindings.length ? definition.executionBindings.map(bindingLabel).join(", ") : <span className="wb-muted">None</span>
             },
+            gateway ? { label: "Active credential verification", value: "Not supported by this gateway import" } : null,
             command
               ? definition.executionBindings.length
                 ? { label: "Credential delivery", value: "Request on stdin" }
@@ -356,6 +365,13 @@ export function ImportTab({
             }
           ]}
         />
+        {gateway ? <div className="pt-catalog-stack">
+          <p className="pt-prose wb-small">{GATEWAY_AUTHORITY_NOTICE}</p>
+          <p className="pt-prose wb-small">{GATEWAY_BODY_NOTICE}</p>
+          <p className="pt-prose wb-small">{GATEWAY_TEMPLATE_NOTICE}</p>
+          <p className="pt-prose wb-small">Configure native clients with the gateway address and Broker authentication supplied by your administrator. This service is omitted from ordinary agent service/action discovery and MCP tools. DNS, listener and TLS setup are operator responsibilities.</p>
+          {gatewayBinding?.brokerHosts[0] ? <p className="pt-prose wb-small">Gateway address example: <code>https://{gatewayBinding.brokerHosts[0]}/&lt;operation-path&gt;</code>. Confirm the external scheme and port with your operator; the upstream base path is added by the Broker.</p> : null}
+        </div> : null}
       </SettingsSection>
 
       <SettingsSection
@@ -390,7 +406,7 @@ export function ImportTab({
           ]}
         />
         <div className="pt-catalog-stack">
-          <ScopedMcpStatus value={data.scopedMcp} />
+          {!gateway && data.scopedMcp ? <ScopedMcpStatus value={data.scopedMcp} /> : null}
           {discoverError ? (
             <Banner tone="danger" slim title="Discovery failed" live>
               {discoverError}
@@ -409,7 +425,7 @@ export function ImportTab({
           </SettingsRow>
         ) : null}
         {!credentialRows.length && !personalToken ? (
-          <p className="pt-prose">{command && !definition.executionBindings.length ? "This command takes no credential." : "This configuration uses no service-owned credentials."}</p>
+          <p className="pt-prose">{anonymous ? "Upstream access is anonymous. No execution credential is stored or presented; Broker ingress and grants are still required." : command && !definition.executionBindings.length ? "This command takes no credential." : "This configuration uses no service-owned credentials."}</p>
         ) : null}
       </SettingsSection>
 
@@ -483,6 +499,7 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
         authentication={dialog.data.importAuthentication ?? imports?.importAuthentication ?? []}
         availableKinds={imports?.availableKinds ?? []}
         commandImports={imports?.commandImports.map((entry) => entry.name) ?? []}
+        gatewayBindings={imports?.gatewayBindings ?? []}
         onClose={close}
         onSave={(definition, confirmed) => actions.update(dialog.data, definition, confirmed)}
       />
@@ -490,7 +507,7 @@ export function ImportDialogs({ dialog, imports, onDialog }: { dialog: ImportDia
   }
   if (dialog.kind === "review") {
     const review = dialog.data;
-    const configurable = review.service.definition.adapterKind === "openapi_http" && review.service.status === "draft" && !review.service.actions.length;
+    const configurable = isOpenApiImport(review.service.definition.adapterKind) && review.service.status === "draft" && !review.service.actions.length;
     return (
       <ImportReview
         key={`review-${review.preview?.manifestHash ?? "none"}`}

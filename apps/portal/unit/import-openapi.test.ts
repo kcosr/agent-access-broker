@@ -86,7 +86,7 @@ describe("OpenAPI import configuration", () => {
     const accepted = renderEditor(data);
     expect(accepted).toContain("The definition settings and credential delivery are fixed");
     expect(accepted.match(/<input[^>]*value="https:\/\/docs.example.test\/openapi.json"[^>]*>/)?.[0]).toContain('disabled=""');
-    expect(renderEditor(data, [])).toContain("openapi_http (unavailable)");
+    expect(renderEditor(data, [])).toContain("Actions/tools (unavailable)");
   });
   test("long operation names remain in accessible review labels without repeating visibly", () => {
     const data = fixture();

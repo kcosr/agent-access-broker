@@ -183,10 +183,22 @@ fn service_view<'a>(runtime: &BrokerRuntime, record: &'a ImportedServiceRecord) 
     }
 }
 
+fn import_scoped_mcp(runtime: &BrokerRuntime, service: &str) -> Value {
+    if runtime
+        .imported_catalog()
+        .service(service)
+        .is_some_and(|record| record.gateway_routes.is_some())
+    {
+        Value::Null
+    } else {
+        json!(runtime.scoped_mcp_diagnostics(service))
+    }
+}
+
 fn record_result(runtime: &BrokerRuntime, catalog: &ImportedCatalog, service: &str) -> Value {
     let record = catalog.service(service);
     let unavailable = runtime.imported_service_unavailable_reason(service);
-    let mut result = json!({"catalogRevision": catalog.revision, "service":record.map(|record| service_view(runtime, record)), "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(service)});
+    let mut result = json!({"catalogRevision": catalog.revision, "service":record.map(|record| service_view(runtime, record)), "operatorAllowed": record.is_some_and(|record| operator_allowed(runtime,&record.definition)), "available":unavailable.is_none(), "unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":import_scoped_mcp(runtime, service)});
     if let Some(version) = record.and_then(command_version) {
         result["commandVersion"] = json!(version);
     }
@@ -223,6 +235,9 @@ fn preview_scoped_mcp_warnings(
     record: &ImportedServiceRecord,
     preview: Option<&ImportedPreview>,
 ) -> Result<Vec<ScopedMcpWarning>, ManagedStoreError> {
+    if record.gateway_routes.is_some() {
+        return Ok(Vec::new());
+    }
     let Some(preview) = preview else {
         return Ok(Vec::new());
     };
@@ -412,7 +427,7 @@ pub(crate) async fn list(
         .iter()
         .map(|record| service_view(&context.snapshot.runtime, record))
         .collect::<Vec<_>>();
-    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"commandImports":command_imports(&context.snapshot.runtime),"importAuthentication":context.snapshot.runtime.import_authentication()})).await
+    management_success_response(&context, operation, None, json!({"catalogRevision":catalog.revision,"services":services,"operatorEnabled":context.snapshot.runtime.config().imports.enabled,"availableKinds":context.snapshot.runtime.available_import_kinds(),"commandImports":command_imports(&context.snapshot.runtime),"importAuthentication":context.snapshot.runtime.import_authentication(),"gatewayBindings":context.snapshot.runtime.imported_gateway_bindings()})).await
 }
 
 pub(crate) async fn get(
@@ -496,7 +511,7 @@ async fn preview_response(
         let unavailable = runtime.imported_service_unavailable_reason(&service_owned);
         let warnings = preview_scoped_mcp_warnings(&runtime, record, preview.as_ref())?;
         let type_changes = super::import_types::type_changes(&store, &runtime, record, preview.as_ref())?;
-        let mut result = json!({"catalogRevision":catalog.revision,"service":service_view(&runtime, record),"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":runtime.scoped_mcp_diagnostics(&service_owned),"scopedMcpWarnings":warnings});
+        let mut result = json!({"catalogRevision":catalog.revision,"service":service_view(&runtime, record),"preview":preview,"resourceTypeChanges":type_changes,"affectedGrants":affected,"affectedGrantsByAction":by_action,"operatorAllowed":operator_allowed(&runtime,&record.definition),"available":unavailable.is_none(),"unavailableReason":unavailable,"importAuthentication":runtime.import_authentication(),"scopedMcp":import_scoped_mcp(&runtime, &service_owned),"scopedMcpWarnings":warnings});
         if let Some(version) = command_version(record) {
             result["commandVersion"] = json!(version);
         }
@@ -769,7 +784,16 @@ async fn change(
                         runtime.require_import_bindings(&definition, None)?;
                         validate_discovery_owner(&definition, &actor)?;
                         let service = definition.service.clone();
+                        let gateway_routes =
+                            runtime.initial_imported_gateway_routes(&definition)?;
                         let record = ImportedServiceRecord {
+                            gateway_routes: gateway_routes
+                                .as_ref()
+                                .map(|routes| {
+                                    imports::ImportedGatewayRouteRecord::next(None, routes.clone())
+                                })
+                                .transpose()
+                                .map_err(|_| invalid("initial gateway routes are invalid"))?,
                             definition: definition.clone(),
                             status: ImportedServiceStatus::Draft,
                             version: 1,
@@ -783,10 +807,12 @@ async fn change(
                             updated_by: actor.clone(),
                         };
                         let providers = runtime.prepare_imported_service_change(&record, None)?;
-                        let mutation =
-                            store.create_imported_service(definition, &actor, |catalog| {
-                                runtime.with_imported_catalog(catalog.clone(), providers)
-                            })?;
+                        let mutation = store.create_imported_service_with_routes(
+                            definition,
+                            gateway_routes,
+                            &actor,
+                            |catalog| runtime.with_imported_catalog(catalog.clone(), providers),
+                        )?;
                         let response = record_result(&mutation.value, &mutation.catalog, &service);
                         Ok((mutation.value, Ok((response, None))))
                     }
@@ -1301,9 +1327,11 @@ fn prepare_update(
                     .map_err(ManagedStoreError::InputInvalid)?;
                 // Adapter source validation is independent of the scoped naming
                 // profile. A valid but out-of-profile name remains acceptable.
-                adapter
-                    .scoped_mcp_name(&definition)
-                    .map_err(ManagedStoreError::InputInvalid)?;
+                if adapter.gateway_kind().is_none() {
+                    adapter
+                        .scoped_mcp_name(&definition)
+                        .map_err(ManagedStoreError::InputInvalid)?;
+                }
                 if let Some(old) = record.actions.iter().find(|a| {
                     a.definition.source == definition.source
                         && a.status != ImportedActionStatus::Retired
@@ -1589,7 +1617,17 @@ async fn publish_discovery(
                 // planned before the quarantine is computed.
                 super::import_types::plan_discovery(store, &record, &mut discovery)?;
                 let quarantine = quarantined_actions(&record, &discovery);
+                let gateway_routes = discovery.gateway_routes.clone();
                 let mut candidate = record;
+                if let Some(routes) = &gateway_routes {
+                    candidate.gateway_routes = Some(
+                        imports::ImportedGatewayRouteRecord::next(
+                            candidate.gateway_routes.as_ref(),
+                            routes.clone(),
+                        )
+                        .map_err(|_| invalid("gateway route manifest cannot be prepared"))?,
+                    );
+                }
                 if let Some(document) = &document {
                     candidate.document = Some(document.metadata().clone());
                 }
@@ -1607,6 +1645,7 @@ async fn publish_discovery(
                 "manifestHash":format!("{:x}", Sha256::digest(&manifest_bytes)),
                 "quarantinedActions":quarantine});
                 let request = ImportedPreviewWriteRequest {
+                    gateway_routes,
                     service: service_for_store.clone(),
                     expected_version: versions.expected_version,
                     expected_catalog_revision: versions.expected_catalog_revision,
@@ -1702,6 +1741,7 @@ mod tests {
             definition
         };
         let mut record = ImportedServiceRecord {
+            gateway_routes: None,
             definition: ImportedServiceDefinition {
                 service: "fixture".into(),
                 display_name: "Fixture".into(),
@@ -1743,6 +1783,7 @@ mod tests {
             });
         }
         let manifest = ImportedDiscovery {
+            gateway_routes: None,
             protocol_version: "fixture".into(),
             metadata: json!({}),
             tools: [

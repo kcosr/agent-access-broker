@@ -346,6 +346,7 @@ mod tests {
                 .unwrap(),
         ));
         config.imports = crate::ImportsConfig {
+            gateway_bindings: Default::default(),
             enabled: true,
             allowed_kinds: vec!["contract_fixture".into()],
             allowed_endpoints: vec!["https://inventory.example.test/api".into()],
@@ -353,6 +354,7 @@ mod tests {
         };
         runtime.config = Arc::new(config);
         let record = ImportedServiceRecord {
+            gateway_routes: None,
             document: None,
             definition: ImportedServiceDefinition {
                 service: "inventory".into(),

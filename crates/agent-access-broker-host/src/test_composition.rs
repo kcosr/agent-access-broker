@@ -34,10 +34,11 @@ static OAUTH_DIALECTS: [&OAuthDialectRegistration; 4] = [
 ];
 
 /// The MCP selection contributes its mcp_oauth companion dialect.
-fn import_adapters() -> [ImportedAdapterRegistration; 3] {
+fn import_adapters() -> [ImportedAdapterRegistration; 4] {
     [
         agent_access_mcp_upstream::registration(),
         agent_access_openapi_upstream::registration(),
+        agent_access_openapi_gateway_import::registration(),
         agent_access_command_import::registration(),
     ]
 }
@@ -107,7 +108,10 @@ fn registry_of(
         .expect("linked OAuth dialects register consistently")
         .with_imported_adapters(import_adapters())
         .expect("linked imported adapters register consistently")
-        .with_gateways([&agent_access_git_http::GIT_HTTP_GATEWAY])
+        .with_gateways([
+            &agent_access_git_http::GIT_HTTP_GATEWAY,
+            agent_access_openapi_gateway::registration(),
+        ])
         .expect("linked gateways register consistently")
 }
 
@@ -124,6 +128,7 @@ pub(crate) fn composition() -> BrokerComposition {
     }
     builder
         .gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)
+        .gateway(agent_access_openapi_gateway::registration())
         .build()
         .expect("linked modules compose consistently")
 }

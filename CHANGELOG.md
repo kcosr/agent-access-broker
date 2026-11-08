@@ -6,18 +6,6 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- **Gateway modules require explicit assembly selection.** Downstream assemblies
-  using Git must link `agent-access-git-http` and select `GIT_HTTP_GATEWAY` with
-  `BrokerComposition::builder().gateway(...)`. The standard assembly includes it.
-  Keep upstream crate revisions aligned and regenerate the lockfile. Existing Git
-  TOML, action IDs, resources and credentials keep their shapes; no stored-policy
-  migration is required. Gateway configuration/protocol hooks now belong to the
-  public SDK and module inventory has a `gateway` role. Connection consumer
-  responses require `credentialVerificationSupported`; upgrade Broker, CLI and
-  portal together. See [assembly selection](docs/downstream-assembly.md#selecting-modules)
-  and [gateway authoring](docs/provider-sdk.md#gateway-protocols).
-  ([#103](https://github.com/kcosr/agent-access-broker/pull/103))
-
 - **Gateway services are omitted from ordinary agent discovery.** HTTP service
   and action lists/describes, CLI discovery, and HTTP/stdio MCP discovery helpers
   no longer advertise Git gateways or their policy actions. Direct ordinary
@@ -29,6 +17,25 @@ All notable changes to this project are documented in this file.
   describe; configured allowances remain in `/v1/me.serviceLimits` and
   administrator service-limits routes.
   ([#102](https://github.com/kcosr/agent-access-broker/pull/102))
+
+- **Managed HTTP gateways add a managed-store migration.** Back up before
+  applying `035_imported_gateway_routes` and upgrade the Broker, CLI and portal
+  together. Existing imports retain their definitions and credentials; rollback
+  across this schema change requires the pre-migration backup. See
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104))
+
+- **Gateway modules require explicit assembly selection.** Downstream assemblies
+  using Git must link `agent-access-git-http` and select `GIT_HTTP_GATEWAY` with
+  `BrokerComposition::builder().gateway(...)`. The standard assembly includes it.
+  Keep upstream crate revisions aligned and regenerate the lockfile. Existing Git
+  TOML, action IDs, resources and credentials keep their shapes; no stored-policy
+  migration is required. Gateway configuration/protocol hooks now belong to the
+  public SDK and module inventory has a `gateway` role. Connection consumer
+  responses require `credentialVerificationSupported`; upgrade Broker, CLI and
+  portal together. See [assembly selection](docs/downstream-assembly.md#selecting-modules)
+  and [gateway authoring](docs/provider-sdk.md#gateway-protocols).
+  ([#103](https://github.com/kcosr/agent-access-broker/pull/103))
 
 - **Agent token issuance requires explicit context permission and a read-only choice.**
   Upgrade Broker, CLI and portal together. `agentTokenIssuance` is now a complete
@@ -146,6 +153,25 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
+  2.0 and OpenAPI 3.1 documents by URL or upload, choose immutable Actions/tools
+  or HTTP gateway exposure, review and accept operations, and authorize native
+  HTTP clients with whole-operation grants. Operator
+  `[imports.gateway_bindings.<service>]` entries pin each service's Broker hosts
+  and upstream endpoint. Gateway execution supports explicitly selected anonymous
+  access with no execution bindings, or static Basic, bearer or header API-key
+  bindings. Existing MCP and OpenAPI actions/tools imports still require execution
+  credential bindings.
+  Refresh retains literal route guards and quarantines changed or missing
+  accepted operations. Import lists include safe `gatewayBindings` choices;
+  gateway services report `scopedMcp: null` and expose no invoke or MCP tools.
+  The portal shows raw-body limits and verification eligibility while preserving
+  eligible Git and mixed-connection probes. HTTP traces record extension methods
+  as `OTHER` to keep caller-supplied method text out of diagnostics. See
+  [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports)
+  and the [HTTP gateway setup guide](docs/http-gateway-setup.md).
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104))
 
 - **Context-limited account/group issuance and read-only agent tokens.** A mode
   dropdown and dynamic context checklist define each enabled policy. Explicit
@@ -310,6 +336,13 @@ All notable changes to this project are documented in this file.
   ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
+
+- **Unlinked import adapters preserve configuration validity.** Syntactically
+  valid `imports.allowed_kinds` entries may name adapters absent from the selected
+  assembly. Startup and reload warn about each missing adapter; its imports
+  remain unavailable while the adapter is absent. See
+  [import operator controls](docs/configuration.md#imported-services-operator-controls).
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104))
 
 - **Raw downloads use explicit download response headers.** Successful native
   and command downloads carry `Content-Disposition: attachment` and

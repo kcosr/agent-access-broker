@@ -899,6 +899,53 @@ impl core::marker::Unpin for agent_access_core::imports::definition::ImportedSer
 impl core::marker::UnsafeUnpin for agent_access_core::imports::definition::ImportedServiceDefinition
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::definition::ImportedServiceDefinition
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::definition::ImportedServiceDefinition
+pub mod agent_access_core::imports::gateway
+#[non_exhaustive] pub struct agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::data: serde_json::value::Value
+pub agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::version: u32
+impl agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::content_hash(&self) -> core::result::Result<alloc::string::String, alloc::string::String>
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::encoded(&self) -> core::result::Result<alloc::vec::Vec<u8>, alloc::string::String>
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::is_supported(&self) -> bool
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::new(serde_json::value::Value) -> core::result::Result<Self, alloc::string::String>
+impl core::clone::Clone for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::clone(&self) -> agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::cmp::PartialEq for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::eq(&self, &agent_access_core::imports::gateway::ImportedGatewayRouteCandidate) -> bool
+impl core::fmt::Debug for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl serde_core::ser::Serialize for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteCandidate::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::marker::Send for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::marker::Sync for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::marker::Unpin for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::marker::UnsafeUnpin for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+#[non_exhaustive] pub struct agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+pub agent_access_core::imports::gateway::ImportedGatewayRouteRecord::content_hash: alloc::string::String
+pub agent_access_core::imports::gateway::ImportedGatewayRouteRecord::generation: u64
+pub agent_access_core::imports::gateway::ImportedGatewayRouteRecord::manifest: agent_access_core::imports::gateway::ImportedGatewayRouteCandidate
+impl agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteRecord::next(core::option::Option<&Self>, agent_access_core::imports::gateway::ImportedGatewayRouteCandidate) -> core::result::Result<Self, alloc::string::String>
+impl core::clone::Clone for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteRecord::clone(&self) -> agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::cmp::PartialEq for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteRecord::eq(&self, &agent_access_core::imports::gateway::ImportedGatewayRouteRecord) -> bool
+impl core::fmt::Debug for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+pub fn agent_access_core::imports::gateway::ImportedGatewayRouteRecord::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::marker::Freeze for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::marker::Send for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::marker::Sync for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::marker::Unpin for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::marker::UnsafeUnpin for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::imports::gateway::ImportedGatewayRouteRecord
 pub mod agent_access_core::imports::metadata
 pub enum agent_access_core::imports::metadata::ImportedCredentialKind
 pub agent_access_core::imports::metadata::ImportedCredentialKind::Token
@@ -1218,6 +1265,7 @@ pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::cre
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::created_by: alloc::string::String
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::definition: agent_access_core::imports::definition::ImportedServiceDefinition
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::document: core::option::Option<agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata>
+pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::gateway_routes: core::option::Option<agent_access_core::imports::gateway::ImportedGatewayRouteRecord>
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::slot_versions: alloc::collections::btree::map::BTreeMap<agent_access_core::imports::definition::ImportedCredentialPurpose, alloc::string::String>
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::status: agent_access_core::managed_store::imported_store::ImportedServiceStatus
 pub agent_access_core::managed_store::imported_store::ImportedServiceRecord::updated_at: alloc::string::String
@@ -1824,6 +1872,8 @@ struct agent_access_core::imports::definition::ImportedActionDefinition: named f
 struct agent_access_core::imports::definition::ImportedCredentialBinding: named fields
 struct agent_access_core::imports::definition::ImportedInvocationLimit: named fields
 struct agent_access_core::imports::definition::ImportedServiceDefinition: named fields
+struct agent_access_core::imports::gateway::ImportedGatewayRouteCandidate: named fields, non-exhaustive
+struct agent_access_core::imports::gateway::ImportedGatewayRouteRecord: named fields, non-exhaustive
 struct agent_access_core::imports::metadata::ImportedCredentialDeclaration: named fields
 struct agent_access_core::imports::metadata::ImportedResourceAttributeDeclaration: named fields
 struct agent_access_core::imports::metadata::ImportedResourceTypeDeclaration: named fields

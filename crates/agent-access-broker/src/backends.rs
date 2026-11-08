@@ -34,10 +34,11 @@ static OAUTH_DIALECTS: [&OAuthDialectRegistration; 4] = [
 ];
 
 /// Shipped import adapters, selected through their registrations.
-fn import_adapters() -> [ImportedAdapterRegistration; 3] {
+fn import_adapters() -> [ImportedAdapterRegistration; 4] {
     [
         agent_access_mcp_upstream::registration(),
         agent_access_openapi_upstream::registration(),
+        agent_access_openapi_gateway_import::registration(),
         agent_access_command_import::registration(),
     ]
 }
@@ -58,6 +59,7 @@ pub fn composition() -> Result<BrokerComposition, CompositionError> {
     }
     builder
         .gateway(&agent_access_git_http::GIT_HTTP_GATEWAY)
+        .gateway(agent_access_openapi_gateway::registration())
         .build()
 }
 
@@ -89,7 +91,7 @@ mod tests {
         );
         assert_eq!(
             composition.gateway_kinds().collect::<Vec<_>>(),
-            ["git_http"]
+            ["git_http", "openapi_gateway"]
         );
         assert!(composition.oauth_dialect_ids().any(|id| id == "google"));
         assert!(composition.oauth_dialect_ids().any(|id| id == "gitlab"));
@@ -98,7 +100,7 @@ mod tests {
         assert!(composition.oauth_dialect_ids().any(|id| id == "stub"));
         assert_eq!(
             composition.import_kinds().collect::<Vec<_>>(),
-            ["mcp_http", "openapi_http", "command"]
+            ["mcp_http", "openapi_http", "openapi_gateway", "command"]
         );
         assert_eq!(
             composition
@@ -156,6 +158,8 @@ mod tests {
                 "agent-access-gmail: native gmail, oauth google",
                 "agent-access-jira: native jira",
                 "agent-access-mcp-upstream: oauth mcp_oauth, import mcp_http",
+                "agent-access-openapi-gateway: gateway openapi_gateway",
+                "agent-access-openapi-gateway-import: import openapi_gateway",
                 "agent-access-openapi-upstream: import openapi_http",
                 "agent-access-teams: native teams",
             ]

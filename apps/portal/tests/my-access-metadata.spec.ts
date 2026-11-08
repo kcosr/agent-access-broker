@@ -12,6 +12,7 @@ import path from "node:path";
 import { brokerBinary, portalDist, repoRoot } from "./support/binaries";
 import { startBroker } from "./support/broker-process";
 import { releaseTestRoot } from "./support/test-root";
+import type { CredentialList, CredentialTarget } from "../src/types";
 
 test.use({ actionTimeout: 15_000 });
 
@@ -222,6 +223,18 @@ async function saveAndVerifyGitCredential(page: Page, drawer: Locator, verifyPat
   await expect(drawer.getByText("Verification failed").first()).toBeVisible();
 }
 
+/** The real Broker must explicitly retain Git verification on both credential views. */
+async function expectGitVerificationContract(page: Page, credentialsPath: string) {
+  const [list, targets] = await Promise.all([
+    manage<CredentialList>(page, credentialsPath),
+    manage<CredentialTarget[]>(page, `${credentialsPath}/targets`)
+  ]);
+  for (const connections of [list.connections, targets]) {
+    const git = connections.flatMap((connection) => connection.consumers).find((consumer) => consumer.service === "gitlab_git");
+    expect(git).toMatchObject({ credentialVerificationSupported: true, credentialVerificationInputs: ["repository"] });
+  }
+}
+
 test("My access shows names, effects and the repository input when the default context has no grants", async ({ page }) => {
   await signInAsAdmin(page);
   await page.goto(`${baseUrl}/ui/admin/policies`);
@@ -325,6 +338,7 @@ test("My access shows names, effects and the repository input when the default c
 
   // Credential connections are named, and verifying through GitLab Git asks for a repository.
   await page.goto(`${baseUrl}/ui/credentials`);
+  await expectGitVerificationContract(page, "/v1/credentials");
   const credentials = page.getByRole("table", { name: "Credentials", exact: true });
   await expect(tableRow(credentials, "Jira")).toBeVisible();
   await tableRow(credentials, "GitLab Git").getByRole("link", { name: "GitLab Git", exact: true }).click();
@@ -334,6 +348,7 @@ test("My access shows names, effects and the repository input when the default c
   // An administrator managing the user's credentials sees the same repository input.
   await signInAsAdmin(page);
   await page.goto(`${baseUrl}/ui/admin/principals/${USER}/credentials`);
+  await expectGitVerificationContract(page, `/v1/admin/principals/${USER}/credentials`);
   const managed = page.getByRole("table", { name: "Credentials", exact: true });
   await expect(tableRow(managed, "Jira")).toBeVisible();
   await tableRow(managed, "GitLab Git").getByRole("link", { name: "GitLab Git", exact: true }).click();

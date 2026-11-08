@@ -10,11 +10,15 @@ mod authentication_tests;
 mod authority;
 mod credentials;
 mod documents;
+mod gateway;
 pub use credentials::PreparedImportedCredentialContract;
 pub(super) use credentials::{
     ImportedCredentialContracts, credential_contract, resolve_credential_contracts,
 };
 pub use documents::PreparedImportedDocumentUpload;
+use gateway::compile_executable;
+pub use gateway::{GatewayExecutionBinding, ImportedGatewayDispatchFence};
+pub(super) use gateway::{ImportedExecutable, ImportedGatewayDiagnostic, managed_gateway_configs};
 #[cfg(test)]
 mod command_tests;
 #[cfg(test)]
@@ -26,7 +30,7 @@ mod retained_grants;
 /// callers cannot substitute arbitrary providers or attest their own token writes.
 pub struct PreparedImportedProviders {
     base_catalog: Arc<ImportedCatalog>,
-    providers: BTreeMap<String, ImportedProvider>,
+    providers: BTreeMap<String, ImportedExecutable>,
     service: String,
     definition: ImportedServiceDefinition,
     status: ImportedServiceStatus,
@@ -35,6 +39,8 @@ pub struct PreparedImportedProviders {
     /// record must carry the same.
     accepted_metadata: Option<crate::imports::ImportedServiceMetadata>,
     document: Option<crate::ImportedDocumentMetadata>,
+    gateway_routes: Option<crate::imports::ImportedGatewayRouteRecord>,
+    gateway_actions: Option<Vec<crate::ImportedActionRecord>>,
     transport: PreparedTransport,
     credential_contracts: ImportedCredentialContracts,
 }
@@ -71,7 +77,7 @@ impl PreparedImportedProviders {
         self,
         runtime: &BrokerRuntime,
         catalog: &ImportedCatalog,
-    ) -> Result<BTreeMap<String, ImportedProvider>, ManagedStoreError> {
+    ) -> Result<BTreeMap<String, ImportedExecutable>, ManagedStoreError> {
         if !Arc::ptr_eq(&self.base_catalog, &runtime.imported_catalog) {
             return Err(preparation_mismatch());
         }
@@ -83,6 +89,11 @@ impl PreparedImportedProviders {
             || enabled_definitions(record) != self.enabled_actions
             || record.accepted_metadata != self.accepted_metadata
             || record.document != self.document
+            || record.gateway_routes != self.gateway_routes
+            || self
+                .gateway_actions
+                .as_ref()
+                .is_some_and(|actions| &record.actions != actions)
         {
             return Err(preparation_mismatch());
         }
@@ -118,12 +129,23 @@ impl PreparedImportedProviders {
             if runtime.imported_catalog.service(name) != Some(candidate) {
                 return Err(preparation_mismatch());
             }
-            match (runtime.providers.get(name), self.providers.get(name)) {
-                (None, None) => {}
-                (Some(old), Some(prepared))
-                    if Arc::ptr_eq(old, &prepared.provider())
-                        && runtime.command_providers.get(name).is_some()
-                            == prepared.command().is_some() => {}
+            match self.providers.get(name) {
+                None if !runtime.imported_executable_available(name) => {}
+                Some(prepared)
+                    if prepared.gateway().is_some_and(|candidate| {
+                        runtime
+                            .gateways
+                            .get(name)
+                            .is_some_and(|old| Arc::ptr_eq(old, candidate))
+                    }) => {}
+                Some(prepared)
+                    if prepared.provider().is_some_and(|candidate| {
+                        runtime
+                            .providers
+                            .get(name)
+                            .is_some_and(|old| Arc::ptr_eq(old, &candidate))
+                    }) && runtime.command_providers.get(name).is_some()
+                        == prepared.command().is_some() => {}
                 _ => return Err(preparation_mismatch()),
             }
         }
@@ -141,6 +163,29 @@ fn enabled_definitions(record: &ImportedServiceRecord) -> Vec<ImportedActionDefi
     actions.sort_by(|left, right| left.action.cmp(&right.action));
     actions
 }
+
+pub(super) fn validate_gateway_request_headers(
+    config: &BrokerConfig,
+    adapter: &dyn crate::imports::ImportedAdapter,
+    action: &ImportedActionDefinition,
+) -> Result<(), ImportedGatewayDiagnostic> {
+    if adapter.gateway_kind().is_none() {
+        return Ok(());
+    }
+    let names = adapter
+        .request_header_names(action)
+        .map_err(|_| ImportedGatewayDiagnostic::ActionPlanInvalid)?;
+    if names.iter().any(|name| {
+        config
+            .identity
+            .sources
+            .iter()
+            .any(|source| source.header.eq_ignore_ascii_case(name))
+    }) {
+        return Err(ImportedGatewayDiagnostic::IdentityHeaderCollision);
+    }
+    Ok(())
+}
 /// Core's adapter inputs for `record`: its accepted metadata and, for a
 /// `command:<name>` endpoint, the operator's `[command_imports.<name>]` entry.
 pub(super) fn adapter_context<'a>(
@@ -154,6 +199,7 @@ pub(super) fn adapter_context<'a>(
         .and_then(|endpoint| endpoint.command_name().map(str::to_owned))
         .and_then(|name| config.command_imports.get(&name));
     ImportedAdapterContext::new(record.accepted_metadata.as_ref(), command)
+        .with_gateway_routes(record.gateway_routes.as_ref())
 }
 
 /// Whether an adapter built the provider shape its endpoint form requires:
@@ -190,14 +236,11 @@ pub(super) fn execution_credential_kind(
         .kind()
 }
 
-/// Whether an import declares no execution credential: a command import
-/// without execution bindings. Its actions use service mode without a slot,
-/// as backends without an execution credential do.
+/// Whether the retained definition explicitly declares no execution credential.
+/// Runtime admission separately requires the selected adapter's capability;
+/// retained modes remain stable when an adapter is no longer linked.
 pub(crate) fn credential_free(definition: &ImportedServiceDefinition) -> bool {
     definition.execution_bindings.is_empty()
-        && definition
-            .endpoint()
-            .is_ok_and(|endpoint| endpoint.form() == ImportEndpointForm::Command)
 }
 
 /// The credential modes an import's grants may name: its bindings' modes,
@@ -222,20 +265,25 @@ pub(super) fn descriptor_with_contract(
     contract: Option<&ImportedCredentialContract>,
 ) -> ServiceDescriptor {
     let modes = declared_modes(&record.definition);
-    // Arbitrary upstream content may contain private data or credentials.
-    let sensitive_output_pointers: Vec<String> = config
-        .providers
-        .registry()
-        .imported_adapter(&record.definition.adapter_kind)
-        .map(|adapter| adapter.sensitive_output_pointers())
-        .unwrap_or(&["/result"])
-        .iter()
-        .map(|pointer| (*pointer).to_owned())
-        .collect();
     let adapter = config
         .providers
         .registry()
         .imported_adapter(&record.definition.adapter_kind);
+    let gateway = record.gateway_routes.is_some()
+        || adapter.is_some_and(|adapter| adapter.gateway_kind().is_some());
+    // Raw gateway responses have no Broker JSON result envelope. Their
+    // sensitive, private/no-store delivery is enforced by the gateway host,
+    // independently of JSON output pointers used by invoke services.
+    let sensitive_output_pointers: Vec<String> = if gateway {
+        Vec::new()
+    } else {
+        adapter
+            .map(|adapter| adapter.sensitive_output_pointers())
+            .unwrap_or(&["/result"])
+            .iter()
+            .map(|pointer| (*pointer).to_owned())
+            .collect()
+    };
     let mut resource_scopes = BTreeMap::new();
     let actions = record
         .actions
@@ -267,7 +315,7 @@ pub(super) fn descriptor_with_contract(
             action
         })
         .collect();
-    let descriptor = ServiceDescriptor::new(
+    let mut descriptor = ServiceDescriptor::new(
         record.definition.service.clone(),
         record.definition.display_name.clone(),
     )
@@ -293,6 +341,21 @@ pub(super) fn descriptor_with_contract(
             None => CredentialDescriptor::default(),
         }
     });
+    if gateway {
+        descriptor.surface = ServiceSurface::Gateway {
+            kind: adapter
+                .and_then(|adapter| adapter.gateway_kind())
+                .unwrap_or(&record.definition.adapter_kind)
+                .into(),
+            broker_hosts: config
+                .imports
+                .gateway_bindings
+                .get(&record.definition.service)
+                .map(|b| b.broker_hosts.clone())
+                .unwrap_or_default(),
+        };
+        descriptor.credentials.verification_supported = false;
+    }
     // An HTTP import acts on its endpoint; a command import declares none.
     match UpstreamAuthority::from_base_url(&record.definition.endpoint) {
         Ok(authority) => descriptor.with_upstream_authority(authority),
@@ -313,7 +376,16 @@ fn destination_allowed(config: &BrokerConfig, definition: &ImportedServiceDefini
     {
         return false;
     }
+    match (
+        adapter.gateway_kind(),
+        config.imports.gateway_bindings.get(&definition.service),
+    ) {
+        (Some(_), Some(binding)) if binding.endpoint == definition.endpoint => {}
+        (None, None) => {}
+        _ => return false,
+    }
     definition.validate().is_ok()
+        && (!credential_free(definition) || adapter.supports_credential_free_execution())
         && definition
             .endpoint()
             .is_ok_and(|endpoint| endpoint.form() == adapter.endpoint_form())
@@ -628,9 +700,17 @@ impl BrokerRuntime {
                     .registry()
                     .imported_adapter(kind)
                     .is_some_and(|adapter| {
-                        !adapter.development_only()
+                        (!adapter.development_only()
                             || (self.config.deployment.environment != "production"
-                                && self.config.deployment.enable_fake_service)
+                                && self.config.deployment.enable_fake_service))
+                            && adapter.gateway_kind().is_none_or(|kind| {
+                                self.config
+                                    .providers
+                                    .registry()
+                                    .gateway(kind)
+                                    .and_then(|registration| registration.managed_builder())
+                                    .is_some()
+                            })
                     })
             })
             .cloned()
@@ -643,6 +723,69 @@ impl BrokerRuntime {
         self.config.command_imports.keys().cloned().collect()
     }
 
+    pub fn imported_gateway_bindings(&self) -> Vec<crate::ImportedGatewayBindingView> {
+        self.config
+            .imports
+            .gateway_bindings
+            .iter()
+            .map(|(service, binding)| {
+                let reason = if self.imported_catalog.service(service).is_some() {
+                    Some("This service identity is already retained by an import.")
+                } else if !self.config.imports.enabled
+                    || self.config.imports.disabled_services.contains(service)
+                {
+                    Some("This binding is disabled by operator policy.")
+                } else if !self.available_import_kinds().iter().any(|kind| {
+                    self.config
+                        .providers
+                        .registry()
+                        .imported_adapter(kind)
+                        .is_some_and(|adapter| adapter.gateway_kind().is_some())
+                }) {
+                    Some("No permitted gateway adapter and protocol module are linked.")
+                } else {
+                    None
+                };
+                crate::ImportedGatewayBindingView {
+                    service: service.clone(),
+                    endpoint: binding.endpoint.clone(),
+                    broker_hosts: binding.broker_hosts.clone(),
+                    auth_modes: binding.auth_modes.clone(),
+                    allow_forwarded_identity: binding.allow_forwarded_identity,
+                    available: reason.is_none(),
+                    unavailable_reason: reason.map(str::to_owned),
+                }
+            })
+            .collect()
+    }
+
+    pub fn initial_imported_gateway_routes(
+        &self,
+        definition: &ImportedServiceDefinition,
+    ) -> Result<Option<crate::imports::ImportedGatewayRouteCandidate>, ManagedStoreError> {
+        self.require_import_destination(definition)?;
+        let adapter = self
+            .config
+            .providers
+            .registry()
+            .imported_adapter(&definition.adapter_kind)
+            .ok_or_else(|| {
+                ManagedStoreError::InputInvalid("import adapter is not linked".into())
+            })?;
+        let routes = adapter
+            .initial_gateway_routes()
+            .map_err(ManagedStoreError::InputInvalid)?;
+        if routes.is_some() != adapter.gateway_kind().is_some() {
+            return Err(ManagedStoreError::InputInvalid(
+                "import adapter has an inconsistent gateway routing contract".into(),
+            ));
+        }
+        if let Some(routes) = &routes {
+            routes.encoded().map_err(ManagedStoreError::InputInvalid)?;
+        }
+        Ok(routes)
+    }
+
     pub fn import_catalog_revision(&self) -> u64 {
         self.imported_catalog.revision
     }
@@ -651,9 +794,6 @@ impl BrokerRuntime {
         let record = self.imported_catalog.service(service)?;
         if record.status != ImportedServiceStatus::Enabled {
             return Some("Imported service is not enabled.");
-        }
-        if !destination_allowed(&self.config, &record.definition) {
-            return Some("Imported service is disabled by operator policy.");
         }
         if self
             .config
@@ -664,7 +804,29 @@ impl BrokerRuntime {
         {
             return Some("The imported adapter is not linked in this broker.");
         }
-        if !self.providers.contains_key(service) {
+        if let Some(kind) = self
+            .config
+            .providers
+            .registry()
+            .imported_adapter(&record.definition.adapter_kind)
+            .and_then(|adapter| adapter.gateway_kind())
+            && self
+                .config
+                .providers
+                .registry()
+                .gateway(kind)
+                .and_then(|registration| registration.managed_builder())
+                .is_none()
+        {
+            return Some("The imported gateway protocol module is not linked in this broker.");
+        }
+        if !destination_allowed(&self.config, &record.definition) {
+            return Some("Imported service is disabled by operator policy.");
+        }
+        if !self.imported_executable_available(service) {
+            if let Some(diagnostic) = self.imported_gateway_diagnostics.get(service) {
+                return Some(diagnostic.message());
+            }
             return Some(
                 "The retained definition or transport credential is unavailable; review the import before enabling it.",
             );
@@ -710,7 +872,7 @@ impl BrokerRuntime {
             .is_some_and(|current| current.load(Ordering::Acquire))
             && record.status == ImportedServiceStatus::Enabled
             && destination_allowed(&self.config, &record.definition)
-            && self.providers.contains_key(service)
+            && self.imported_executable_available(service)
     }
 
     pub fn imported_mode_available(&self, service: &str, mode: &str) -> bool {
@@ -737,6 +899,22 @@ impl BrokerRuntime {
                     let prior = previous
                         .filter(|old| {
                             old.imported_catalog.service(name) == Some(record)
+                                && old.managed_store.as_ref().map(ManagedStore::path)
+                                    == self.managed_store.as_ref().map(ManagedStore::path)
+                                && old
+                                    .config
+                                    .identity
+                                    .sources
+                                    .iter()
+                                    .map(|source| source.header.to_ascii_lowercase())
+                                    .collect::<BTreeSet<_>>()
+                                    == self
+                                        .config
+                                        .identity
+                                        .sources
+                                        .iter()
+                                        .map(|source| source.header.to_ascii_lowercase())
+                                        .collect::<BTreeSet<_>>()
                                 && ProviderLimits::from(&old.config.limits)
                                     == ProviderLimits::from(&self.config.limits)
                                 && old.config.network.outbound_tls.trust
@@ -759,8 +937,20 @@ impl BrokerRuntime {
                                     == destination_allowed(&self.config, &record.definition)
                                 && adapter_context(&old.config, record).command
                                     == adapter_context(&self.config, record).command
-                                && old.providers.contains_key(name)
-                                    == self.providers.contains_key(name)
+                                && old.imported_executable_available(name)
+                                    == self.imported_executable_available(name)
+                                && old
+                                    .config
+                                    .imports
+                                    .gateway_bindings
+                                    .get(name)
+                                    .map(|binding| binding.fingerprint())
+                                    == self
+                                        .config
+                                        .imports
+                                        .gateway_bindings
+                                        .get(name)
+                                        .map(|binding| binding.fingerprint())
                         })
                         .and_then(|old| old.import_dispatch.get(name))
                         .filter(|flag| flag.load(Ordering::Acquire));
@@ -801,6 +991,8 @@ impl BrokerRuntime {
         catalog: ImportedCatalog,
         prepared: PreparedImportedProviders,
     ) -> Result<Self, ManagedStoreError> {
+        crate::imports_config::validate_imported_gateway_bindings(&self.config, &catalog)
+            .map_err(ManagedStoreError::InputInvalid)?;
         self.validate_import_mcp_names(&catalog)?;
         let changed_service = prepared.service.clone();
         let contracts = prepared.credential_contracts.clone();
@@ -812,11 +1004,13 @@ impl BrokerRuntime {
         let mut services = (*self.services).clone();
         let mut providers = (*self.providers).clone();
         let mut command_providers = (*self.command_providers).clone();
+        let mut gateways = (*self.gateways).clone();
         for old in &self.imported_catalog.services {
             let name = &old.definition.service;
             services.remove(name);
             providers.remove(name);
             command_providers.remove(name);
+            gateways.remove(name);
             config.credentials.per_user.remove(name);
         }
         for record in &catalog.services {
@@ -865,7 +1059,7 @@ impl BrokerRuntime {
                     || record
                         .slot_versions
                         .contains_key(&ImportedCredentialPurpose::Transport))
-                && (self.providers.contains_key(name) || newly_enabled);
+                && (self.imported_executable_available(name) || newly_enabled);
             if required && !imported_providers.contains_key(name) {
                 return Err(ManagedStoreError::InputInvalid(
                     "prepared provider missing for available imported service".into(),
@@ -902,7 +1096,12 @@ impl BrokerRuntime {
             if let Some(command) = provider.command() {
                 command_providers.insert(name.clone(), command.clone());
             }
-            providers.insert(name, provider.provider());
+            if let Some(gateway) = provider.gateway() {
+                gateways.insert(name.clone(), gateway.clone());
+            }
+            if let Some(provider) = provider.provider() {
+                providers.insert(name, provider);
+            }
         }
         // `config` began as source TOML, so its per-import wait policy and rate
         // fallback survive every publication. Stored import rates override only
@@ -929,8 +1128,16 @@ impl BrokerRuntime {
         next.services = Arc::new(services);
         next.providers = Arc::new(providers);
         next.command_providers = Arc::new(command_providers);
+        next.gateways = Arc::new(gateways);
+        let mut gateway_configs = config.gateways.clone();
+        gateway_configs.extend(managed_gateway_configs(&config, &catalog));
+        next.gateway_configs = Arc::new(gateway_configs);
         next.imported_catalog = Arc::new(catalog);
         next.imported_credential_contracts = Arc::new(contracts);
+        let mut diagnostics = (*self.imported_gateway_diagnostics).clone();
+        diagnostics.remove(&changed_service);
+        diagnostics.retain(|service, _| next.imported_catalog.service(service).is_some());
+        next.imported_gateway_diagnostics = Arc::new(diagnostics);
         next.initialize_import_dispatch(Some(self));
         next.initialize_scoped_mcp_readiness(Some(&changed_service));
         next.policy_snapshot = Arc::new(ArcSwap::from(self.policy_snapshot()));
@@ -1046,6 +1253,12 @@ impl BrokerRuntime {
     }
 }
 
+/// Executables and safe failure classifications for one startup generation.
+pub(super) struct BuiltImportedProviders {
+    pub providers: BTreeMap<String, ImportedExecutable>,
+    pub gateway_diagnostics: BTreeMap<String, ImportedGatewayDiagnostic>,
+}
+
 /// Build a host-controlled adapter without contacting upstream. Call outside a
 /// managed transaction; token material resolution must not reenter its DB lock.
 pub(super) fn build_providers(
@@ -1056,12 +1269,24 @@ pub(super) fn build_providers(
     store: Option<&ManagedStore>,
     ring: Option<&CredentialKeyRing>,
     network: &HostNetwork,
-) -> Result<BTreeMap<String, ImportedProvider>, RuntimeError> {
+) -> Result<BuiltImportedProviders, RuntimeError> {
+    crate::imports_config::validate_imported_gateway_bindings(config, catalog)
+        .map_err(|message| RuntimeError::ManagedStore { message })?;
+    for kind in &config.imports.allowed_kinds {
+        if config.providers.registry().imported_adapter(kind).is_none() {
+            tracing::warn!(
+                event = "import_adapter_unlinked",
+                kind,
+                "imports of this kind remain unavailable"
+            );
+        }
+    }
     // Each generation reports approved commands it cannot use yet.
     for warning in crate::command_import_warnings(config) {
         tracing::warn!(event = "command_import_config_warning", warning = %warning);
     }
     let mut providers = BTreeMap::new();
+    let mut gateway_diagnostics = BTreeMap::new();
     for record in &catalog.services {
         let definition = &record.definition;
         if record.status != ImportedServiceStatus::Enabled
@@ -1069,6 +1294,18 @@ pub(super) fn build_providers(
         {
             continue;
         }
+        let is_gateway = record.gateway_routes.is_some()
+            || config
+                .providers
+                .registry()
+                .imported_adapter(&definition.adapter_kind)
+                .is_some_and(|adapter| adapter.gateway_kind().is_some());
+        let mut unavailable = |diagnostic: ImportedGatewayDiagnostic| {
+            if is_gateway {
+                diagnostic.warn(&definition.service);
+                gateway_diagnostics.insert(definition.service.clone(), diagnostic);
+            }
+        };
         if definition.validate().is_err()
             || descriptor_with_contract(
                 record,
@@ -1079,6 +1316,7 @@ pub(super) fn build_providers(
             .validate()
             .is_err()
         {
+            unavailable(ImportedGatewayDiagnostic::DefinitionInvalid);
             continue;
         }
         let Some(adapter) = config
@@ -1095,6 +1333,7 @@ pub(super) fn build_providers(
             continue;
         }
         let Some(contract) = contracts.get(&definition.service) else {
+            unavailable(ImportedGatewayDiagnostic::CredentialContractUnavailable);
             continue;
         };
         let transport = if definition.transport_auth {
@@ -1130,7 +1369,9 @@ pub(super) fn build_providers(
         let actions = record
             .actions
             .iter()
-            .filter(|action| action.status == ImportedActionStatus::Enabled)
+            .filter(|action| {
+                record.gateway_routes.is_some() || action.status == ImportedActionStatus::Enabled
+            })
             .map(|action| action.definition.clone())
             .collect::<Vec<_>>();
         let clients = network.client_factory(ClientCaller::ImportAdapter {
@@ -1142,23 +1383,50 @@ pub(super) fn build_providers(
             ProviderAttributionConfig::default(),
             None,
         );
-        if actions.iter().any(|action| {
-            adapter.validate_action(action).is_err() || adapter.scoped_mcp_name(action).is_err()
-        }) {
+        // Retained non-dispatchable plans still reserve their routes. Only
+        // enabled actions may send a declared header under this configuration.
+        if let Err(diagnostic) = record
+            .actions
+            .iter()
+            .filter(|action| action.status == ImportedActionStatus::Enabled)
+            .try_for_each(|action| {
+                validate_gateway_request_headers(config, adapter, &action.definition)
+            })
+        {
+            unavailable(diagnostic);
             continue;
         }
-        if let Ok(provider) = adapter.build(
+        if actions.iter().any(|action| {
+            adapter.validate_action(action).is_err()
+                || (adapter.gateway_kind().is_none() && adapter.scoped_mcp_name(action).is_err())
+        }) {
+            unavailable(ImportedGatewayDiagnostic::ActionPlanInvalid);
+            continue;
+        }
+        let provider = match adapter.build(
             definition,
             &actions,
             transport,
             &adapter_context(config, record),
             &host,
-        ) && provider_matches_endpoint(definition, &provider)
-        {
-            providers.insert(definition.service.clone(), provider);
+        ) {
+            Ok(provider) => provider,
+            Err(_) => {
+                unavailable(ImportedGatewayDiagnostic::AdapterBuildRejected);
+                continue;
+            }
+        };
+        match compile_executable(config, record, provider) {
+            Ok(executable) => {
+                providers.insert(definition.service.clone(), executable);
+            }
+            Err(diagnostic) => unavailable(diagnostic),
         }
     }
-    Ok(providers)
+    Ok(BuiltImportedProviders {
+        providers,
+        gateway_diagnostics,
+    })
 }
 
 impl BrokerRuntime {
@@ -1197,6 +1465,15 @@ impl BrokerRuntime {
     /// it needs no provisioned credential.
     pub fn import_credential_free(&self, definition: &ImportedServiceDefinition) -> bool {
         credential_free(definition)
+            && self
+                .config
+                .providers
+                .registry()
+                .imported_adapter(&definition.adapter_kind)
+                .is_some_and(|adapter| {
+                    adapter.supports_credential_free_execution()
+                        && adapter.validate_definition(definition).is_ok()
+                })
     }
 
     pub fn import_binding_available(
@@ -1264,15 +1541,50 @@ impl BrokerRuntime {
         record: &ImportedServiceRecord,
         transport_override: Option<Option<String>>,
     ) -> Result<PreparedImportedProviders, ManagedStoreError> {
+        // Gateway builders consume exact durable action revisions. Predict only
+        // the store's documented change rule and verify the committed parity.
+        let mut normalized = record.clone();
+        if record.gateway_routes.is_some() {
+            let previous = self.imported_catalog.service(&record.definition.service);
+            for action in &mut normalized.actions {
+                let old = previous.and_then(|old| {
+                    old.actions
+                        .iter()
+                        .find(|old| old.definition.action == action.definition.action)
+                });
+                action.version = old
+                    .map_or(Some(1), |old| {
+                        old.version.checked_add(u64::from(
+                            old.definition != action.definition || old.status != action.status,
+                        ))
+                    })
+                    .ok_or_else(preparation_mismatch)?;
+                action.definition_hash = format!(
+                    "{:x}",
+                    Sha256::digest(
+                        serde_json::to_vec(&action.definition)
+                            .map_err(|_| preparation_mismatch())?
+                    )
+                );
+            }
+            normalized
+                .actions
+                .sort_by(|left, right| left.definition.action.cmp(&right.definition.action));
+        }
+        let record = &normalized;
         let mut providers = self
             .imported_catalog
             .services
             .iter()
             .filter_map(|old| {
                 let name = &old.definition.service;
-                let provider = match self.command_providers.get(name) {
-                    Some(command) => ImportedProvider::Command(command.clone()),
-                    None => ImportedProvider::Upstream(self.providers.get(name)?.clone()),
+                let provider = if let Some(gateway) = self.gateways.get(name) {
+                    ImportedExecutable::Gateway(gateway.clone())
+                } else {
+                    ImportedExecutable::Invoke(match self.command_providers.get(name) {
+                        Some(command) => ImportedProvider::Command(command.clone()),
+                        None => ImportedProvider::Upstream(self.providers.get(name)?.clone()),
+                    })
                 };
                 Some((name.clone(), provider))
             })
@@ -1309,6 +1621,11 @@ impl BrokerRuntime {
             enabled_actions: enabled_definitions(record),
             accepted_metadata: record.accepted_metadata.clone(),
             document: record.document.clone(),
+            gateway_routes: record.gateway_routes.clone(),
+            gateway_actions: record
+                .gateway_routes
+                .as_ref()
+                .map(|_| record.actions.clone()),
             transport: transport_provenance,
             credential_contracts: contracts,
         };
@@ -1379,16 +1696,38 @@ impl BrokerRuntime {
         let actions = record
             .actions
             .iter()
-            .filter(|action| action.status == ImportedActionStatus::Enabled)
+            .filter(|action| {
+                record.gateway_routes.is_some() || action.status == ImportedActionStatus::Enabled
+            })
             .map(|action| action.definition.clone())
             .collect::<Vec<_>>();
+        for action in record
+            .actions
+            .iter()
+            .filter(|action| action.status == ImportedActionStatus::Enabled)
+        {
+            validate_gateway_request_headers(&self.config, adapter, &action.definition).map_err(
+                |diagnostic| {
+                    diagnostic.warn(&definition.service);
+                    ManagedStoreError::InputInvalid(diagnostic.message().into())
+                },
+            )?;
+        }
         for action in &actions {
-            adapter
-                .validate_action(action)
-                .map_err(ManagedStoreError::InputInvalid)?;
-            adapter
-                .scoped_mcp_name(action)
-                .map_err(ManagedStoreError::InputInvalid)?;
+            adapter.validate_action(action).map_err(|error| {
+                if adapter.gateway_kind().is_some() {
+                    let diagnostic = ImportedGatewayDiagnostic::ActionPlanInvalid;
+                    diagnostic.warn(&definition.service);
+                    ManagedStoreError::InputInvalid(diagnostic.message().into())
+                } else {
+                    ManagedStoreError::InputInvalid(error)
+                }
+            })?;
+            if adapter.gateway_kind().is_none() {
+                adapter
+                    .scoped_mcp_name(action)
+                    .map_err(ManagedStoreError::InputInvalid)?;
+            }
         }
         let clients = self.network.client_factory(ClientCaller::ImportAdapter {
             kind: adapter.kind(),
@@ -1407,10 +1746,17 @@ impl BrokerRuntime {
                 &adapter_context(&self.config, record),
                 &host,
             )
-            .ok()
-            .filter(|provider| provider_matches_endpoint(definition, provider))
-            .ok_or_else(|| {
-                ManagedStoreError::InputInvalid("imported provider could not be prepared".into())
+            .map_err(|_| ImportedGatewayDiagnostic::AdapterBuildRejected)
+            .and_then(|provider| compile_executable(&self.config, record, provider))
+            .map_err(|diagnostic| {
+                if adapter.gateway_kind().is_some() || record.gateway_routes.is_some() {
+                    diagnostic.warn(&definition.service);
+                    ManagedStoreError::InputInvalid(diagnostic.message().into())
+                } else {
+                    ManagedStoreError::InputInvalid(
+                        "imported provider could not be prepared".into(),
+                    )
+                }
             })?;
         prepared
             .providers

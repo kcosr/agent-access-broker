@@ -71,6 +71,30 @@ struct GatewayAdmission {
     counted: bool,
 }
 
+type GatewayIdentityRecheck =
+    Pin<Box<dyn Future<Output = Result<IdentityContext, ProviderError>> + Send>>;
+
+type GatewayDispatchRecheck =
+    Pin<Box<dyn Future<Output = Result<GatewayDispatchIdentity, ProviderError>> + Send>>;
+
+/// The current authority actually checked by the blocking identity read. Keep
+/// its snapshot through the await and reject intervening publication before send.
+struct GatewayDispatchIdentity {
+    identity: IdentityContext,
+    snapshot: Arc<RuntimeSnapshot>,
+    reloadable: Arc<crate::state::ReloadableState>,
+}
+
+impl GatewayDispatchIdentity {
+    fn validate(&self, expected: &IdentityContext) -> Result<(), ProviderError> {
+        if &self.identity == expected && Arc::ptr_eq(&self.snapshot, &self.reloadable.current()) {
+            Ok(())
+        } else {
+            Err(gateway_identity_invalid(IdentityFailure::Invalid))
+        }
+    }
+}
+
 struct GatewayContext {
     snapshot: Arc<RuntimeSnapshot>,
     agent_request_id: String,
@@ -80,6 +104,7 @@ struct GatewayContext {
     execution_context: ExecutionContext,
     permits: RequestPermits,
     rate_admission: Option<agent_access_core::InvocationAdmissionAudit>,
+    dispatch_identity: GatewayDispatchRecheck,
 }
 
 struct GatewayIngressContext {
@@ -149,6 +174,9 @@ enum GatewayPreparedRequestBody {
 struct GatewayForwardOwnership {
     permits: Option<RequestPermits>,
     disposal: Option<GatewayDisposalAudit>,
+    dispatch_identity: Option<GatewayDispatchRecheck>,
+    #[cfg(test)]
+    reloadable: Option<Arc<crate::state::ReloadableState>>,
 }
 
 /// The last connection disposal owner releases this audit lease, whether the
@@ -500,13 +528,26 @@ pub(crate) async fn gateway_dispatch(
                             agent_request_id,
                             broker_request_id,
                             identity: IdentityContext::anonymous(),
-                            service: matched_gateway.service,
+                            service: matched_gateway.service.clone(),
                             action: "gateway.classify".to_string(),
                             source,
                         },
                         execution_context,
                     },
-                    error,
+                    if snapshot
+                        .runtime
+                        .config()
+                        .imports
+                        .gateway_bindings
+                        .contains_key(&matched_gateway.service)
+                    {
+                        error.with_audit(json!({"gateway": {
+                            "kind": matched_gateway.config.kind,
+                            "method": observability::bounded_http_method(request.method()),
+                        }}))
+                    } else {
+                        error
+                    },
                 )
                 .await;
             return gateway_runtime_response(response);
@@ -575,6 +616,7 @@ async fn gateway_dispatch_admitted(
         execution_context,
         permits,
         rate_admission,
+        dispatch_identity,
     } = context;
     let runtime = snapshot.runtime.clone();
     matched_gateway.config.request_body_max_bytes = Some(
@@ -661,21 +703,39 @@ async fn gateway_dispatch_admitted(
             );
         }
     };
-    let upstream_url =
-        match validate_forward_plan(&matched_gateway.config, &classified.method, &plan) {
-            Ok(url) => url,
-            Err(error) => {
-                return gateway_runtime_response(
-                    runtime
-                        .reject_gateway_operation_without_credential(
-                            operation_context,
-                            classified.resource_scopes,
-                            error,
-                        )
-                        .await,
-                );
-            }
-        };
+    let upstream_url = match validate_forward_plan(
+        &matched_gateway.config,
+        &classified.method,
+        &plan,
+    )
+    .and_then(|url| {
+        if plan.headers.keys().any(|name| {
+            configured_identity_header(&runtime, name.as_str())
+                || imported_credential_header(&runtime, &matched_gateway.service, name.as_str())
+        }) {
+            Err(contract_failure())
+        } else {
+            Ok(url)
+        }
+    }) {
+        Ok(url) => url,
+        Err(error) => {
+            return gateway_runtime_response(
+                runtime
+                    .reject_gateway_operation_without_credential(
+                        operation_context,
+                        classified.resource_scopes,
+                        error,
+                    )
+                    .await,
+            );
+        }
+    };
+    #[cfg(test)]
+    state
+        .reloadable
+        .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::BeforePrepare)
+        .await;
     let prepared = match runtime
         .prepare_gateway_operation(operation_context, classified.resource_scopes)
         .await
@@ -683,6 +743,11 @@ async fn gateway_dispatch_admitted(
         Ok(prepared) => prepared,
         Err(response) => return gateway_runtime_response(*response),
     };
+    #[cfg(test)]
+    state
+        .reloadable
+        .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterPrepare)
+        .await;
     forward_prepared_gateway(
         runtime,
         matched_gateway.config,
@@ -693,6 +758,9 @@ async fn gateway_dispatch_admitted(
         GatewayForwardOwnership {
             permits: Some(permits),
             disposal: Some(disposal),
+            dispatch_identity: Some(dispatch_identity),
+            #[cfg(test)]
+            reloadable: Some(state.reloadable.clone()),
         },
     )
     .await
@@ -736,7 +804,7 @@ async fn gateway_context(
         },
         execution_context: execution_context.clone(),
     };
-    let (pending, recheck) =
+    let (pending, recheck, dispatch_identity) =
         match gateway_identity(state, &snapshot, headers, matched_gateway, &admission).await {
             Ok(pending) => pending,
             Err(error) => {
@@ -876,6 +944,7 @@ async fn gateway_context(
         execution_context,
         permits,
         rate_admission,
+        dispatch_identity,
     })
 }
 
@@ -993,7 +1062,8 @@ async fn gateway_identity(
 ) -> Result<
     (
         PendingIdentity<IdentityContext, ProviderError>,
-        Pin<Box<dyn Future<Output = Result<IdentityContext, ProviderError>> + Send>>,
+        GatewayIdentityRecheck,
+        GatewayDispatchRecheck,
     ),
     ProviderError,
 > {
@@ -1016,6 +1086,9 @@ async fn gateway_identity(
             admission: admission.clone(),
             proof: resolved.proof,
         };
+        let dispatch_pin = pin.clone();
+        let dispatch_state = state.reloadable.clone();
+        let dispatch_headers = headers.clone();
         let resolve = move || {
             let pin = pin.clone();
             let reloadable = state.reloadable.clone();
@@ -1025,6 +1098,18 @@ async fn gateway_identity(
         };
         let renewal_recheck = resolve();
         let rate_recheck = resolve();
+        let dispatch_recheck = async move {
+            let current = dispatch_state.current();
+            let identity = dispatch_pin
+                .revalidate(dispatch_state.clone(), current.clone(), dispatch_headers)
+                .await
+                .map_err(gateway_identity_invalid)?;
+            Ok(GatewayDispatchIdentity {
+                identity,
+                snapshot: current,
+                reloadable: dispatch_state,
+            })
+        };
         return Ok((
             PendingIdentity::new(
                 resolved.identity,
@@ -1033,6 +1118,7 @@ async fn gateway_identity(
             )
             .map_err(gateway_identity_invalid),
             Box::pin(async move { rate_recheck.await.map_err(gateway_identity_invalid) }),
+            Box::pin(dispatch_recheck),
         ));
     }
     let token = basic_broker_token(headers, matched_gateway)?;
@@ -1058,12 +1144,43 @@ async fn gateway_identity(
     };
     let resolved = resolve(token.clone()).await?;
     let recheck = resolve(token.clone());
-    let rate_recheck = resolve(token);
+    let rate_recheck = resolve(token.clone());
+    let dispatch_state = state.reloadable.clone();
+    let dispatch_caller = admission.caller_id().map(str::to_owned);
+    let dispatch_epoch = dispatch_caller
+        .as_ref()
+        .map(|_| snapshot.caller_security_epoch);
+    let dispatch_recheck = async move {
+        let worker_state = dispatch_state.clone();
+        let (current, identity) = tokio::task::spawn_blocking(move || {
+            let check = || {
+                let current = worker_state.current();
+                let mut resolved = current.runtime.resolve_gateway_basic_broker_token(&token)?;
+                resolved.identity.caller_id = dispatch_caller;
+                Ok((current, resolved.identity))
+            };
+            match dispatch_epoch {
+                Some(epoch) => {
+                    worker_state.with_caller_security(epoch, IdentityFailure::Invalid, |_| check())
+                }
+                None => check(),
+            }
+        })
+        .await
+        .unwrap_or(Err(IdentityFailure::Unavailable))
+        .map_err(gateway_identity_invalid)?;
+        Ok(GatewayDispatchIdentity {
+            identity,
+            snapshot: current,
+            reloadable: dispatch_state,
+        })
+    };
     Ok((
         PendingIdentity::new(resolved.identity, resolved.membership_renewal, async move {
             recheck.await.map(|resolved| resolved.identity)
         }),
         Box::pin(async move { rate_recheck.await.map(|resolved| resolved.identity) }),
+        Box::pin(dispatch_recheck),
     ))
 }
 
@@ -1139,7 +1256,13 @@ async fn forward_prepared_gateway(
     mut prepared: PreparedGatewayOperation,
     ownership: GatewayForwardOwnership,
 ) -> Response<Body> {
-    let GatewayForwardOwnership { permits, disposal } = ownership;
+    let GatewayForwardOwnership {
+        permits,
+        disposal,
+        dispatch_identity,
+        #[cfg(test)]
+        reloadable,
+    } = ownership;
     let method = plan.method.clone();
     let limits = gateway_forward_limits(&runtime, &gateway);
     let request_body = prepare_protocol_request_body(
@@ -1236,6 +1359,80 @@ async fn forward_prepared_gateway(
     {
         return gateway_runtime_response(*response);
     }
+    #[cfg(test)]
+    if let Some(state) = &reloadable {
+        state
+            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::BeforeSend)
+            .await;
+    }
+    // Material mutations retire an in-memory proof across subsequent awaits.
+    // Recheck identity last: identity-store revocation need not publish a new
+    // runtime snapshot and must not be hidden by a contended material query.
+    let material = prepared.recheck_imported_material().await;
+    #[cfg(test)]
+    if let Some(state) = &reloadable {
+        state
+            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterMaterialRecheck)
+            .await;
+    }
+    // Generated gateways must keep the original identity and generation through
+    // every await above. Never select replacement credentials or remap a proof.
+    let dispatch_proof = if runtime
+        .imported_catalog()
+        .service(&prepared.service)
+        .is_some()
+    {
+        match dispatch_identity {
+            Some(recheck) => match recheck.await {
+                Ok(proof) => Some(proof),
+                Err(error) => {
+                    return gateway_runtime_response(
+                        runtime
+                            .fail_prepared_gateway_operation(
+                                prepared,
+                                error.with_audit(attempt_audit.value()),
+                            )
+                            .await,
+                    );
+                }
+            },
+            None => {
+                return gateway_runtime_response(
+                    runtime
+                        .fail_prepared_gateway_operation(
+                            prepared,
+                            contract_failure().with_audit(attempt_audit.value()),
+                        )
+                        .await,
+                );
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(test)]
+    if let Some(proof) = &dispatch_proof {
+        proof
+            .reloadable
+            .wait_gateway_dispatch_barrier(crate::state::GatewayDispatchPhase::AfterIdentityRecheck)
+            .await;
+    }
+    let validated = material
+        .and_then(|()| prepared.validate_imported_dispatch())
+        .and_then(|()| {
+            if let Some(proof) = &dispatch_proof {
+                proof.validate(&prepared.identity)
+            } else {
+                Ok(())
+            }
+        });
+    if let Err(error) = validated {
+        return gateway_runtime_response(
+            runtime
+                .fail_prepared_gateway_operation(prepared, error.with_audit(attempt_audit.value()))
+                .await,
+        );
+    }
     if let Some(progress) = &upload_progress {
         progress.audit.lock().unwrap().lease = prepared.retain_gateway_request_body();
         if let Some(disposal) = &disposal {
@@ -1308,9 +1505,9 @@ async fn forward_prepared_gateway(
             .and_then(|length| usize::try_from(length).ok())
     };
     let response_error = if plan.response.translate_unauthorized && status == 401 {
-        Some(ProviderError::deny(
-            ReasonCode::CredentialInvalid,
-            "upstream rejected the selected gateway credential",
+        Some(ProviderError::error(
+            ReasonCode::UpstreamUnauthorized,
+            "gateway upstream authentication failed",
         ))
     } else if plan.response.reject_redirects && (300..400).contains(&status) && status != 304 {
         Some(ProviderError::error(

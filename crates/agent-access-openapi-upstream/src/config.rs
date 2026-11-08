@@ -16,7 +16,10 @@ pub(crate) enum DefinitionSource {
 impl Settings {
     pub fn parse(definition: &ImportedServiceDefinition) -> Result<Self, String> {
         definition.validate()?;
-        if definition.adapter_kind != "openapi_http" || definition.transport_auth {
+        if definition.adapter_kind != "openapi_http"
+            || definition.transport_auth
+            || definition.execution_bindings.is_empty()
+        {
             return Err(
                 "OpenAPI imports require openapi_http without transport authentication".into(),
             );

@@ -175,7 +175,7 @@ export function commandImportList(services: ImportPreviewResult[], names = ["tic
   return {
     catalogRevision: services[0]?.catalogRevision ?? 1,
     operatorEnabled: true,
-    availableKinds: ["mcp_http", "openapi_http", "command"],
+    gatewayBindings: [], availableKinds: ["mcp_http", "openapi_http", "command"],
     commandImports: names.map((name) => ({ name })),
     importAuthentication: [],
     services: services.map((data) => data.service)

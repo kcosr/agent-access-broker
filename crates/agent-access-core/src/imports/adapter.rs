@@ -32,6 +32,10 @@ pub struct ImportedDiscovery {
     /// Bounded nonsecret source metadata; never arbitrary server instructions.
     pub metadata: Value,
     pub tools: Vec<ImportedDiscoveredTool>,
+    /// Complete durable route guards, separate from the expiring preview.
+    /// This in-memory publication candidate is stored only in its dedicated row.
+    #[serde(skip)]
+    pub gateway_routes: Option<super::ImportedGatewayRouteCandidate>,
     /// The service-level metadata acceptance stores with the accepted
     /// actions (`imported_services.accepted_metadata_json`), as the adapter
     /// proposes it; `None` for adapters that record none. Omitted from the
@@ -67,6 +71,7 @@ pub struct ImportedAdapterContext<'a> {
     pub command_registry: Option<&'a CommandRegistry>,
     /// Retained or newly uploaded bytes, supplied only for document discovery.
     document: Option<&'a [u8]>,
+    gateway_routes: Option<&'a super::ImportedGatewayRouteRecord>,
 }
 
 impl<'a> ImportedAdapterContext<'a> {
@@ -79,6 +84,7 @@ impl<'a> ImportedAdapterContext<'a> {
             command,
             command_registry: None,
             document: None,
+            gateway_routes: None,
         }
     }
 
@@ -95,6 +101,18 @@ impl<'a> ImportedAdapterContext<'a> {
 
     pub fn document(&self) -> Option<&'a [u8]> {
         self.document
+    }
+
+    pub fn with_gateway_routes(
+        mut self,
+        routes: Option<&'a super::ImportedGatewayRouteRecord>,
+    ) -> Self {
+        self.gateway_routes = routes;
+        self
+    }
+
+    pub fn gateway_routes(&self) -> Option<&'a super::ImportedGatewayRouteRecord> {
+        self.gateway_routes
     }
 }
 
@@ -126,14 +144,20 @@ pub enum ImportedProvider {
     /// runs invocations and verification through the [`CommandProvider`]
     /// hook; see [`super::CommandProvider`].
     Command(Arc<dyn CommandProvider>),
+    /// Bounded versioned operation plans for a separately linked gateway builder.
+    Gateway {
+        kind: String,
+        plans: std::collections::BTreeMap<String, agent_access_provider::GatewayVersionedData>,
+    },
 }
 
 impl ImportedProvider {
-    /// The provider core publishes for the service.
-    pub fn provider(&self) -> Arc<dyn Provider> {
+    /// An invoke provider, absent for a gateway build result.
+    pub fn provider(&self) -> Option<Arc<dyn Provider>> {
         match self {
-            Self::Upstream(provider) => provider.clone(),
-            Self::Command(provider) => provider.clone(),
+            Self::Upstream(provider) => Some(provider.clone()),
+            Self::Command(provider) => Some(provider.clone()),
+            Self::Gateway { .. } => None,
         }
     }
 
@@ -141,7 +165,7 @@ impl ImportedProvider {
     pub fn command(&self) -> Option<&Arc<dyn CommandProvider>> {
         match self {
             Self::Command(provider) => Some(provider),
-            Self::Upstream(_) => None,
+            Self::Upstream(_) | Self::Gateway { .. } => None,
         }
     }
 }
@@ -151,6 +175,7 @@ impl std::fmt::Debug for ImportedProvider {
         f.write_str(match self {
             Self::Upstream(_) => "ImportedProvider::Upstream",
             Self::Command(_) => "ImportedProvider::Command",
+            Self::Gateway { .. } => "ImportedProvider::Gateway",
         })
     }
 }
@@ -179,6 +204,22 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         import: &ImportedAdapterContext<'_>,
     ) -> Result<super::ImportedCredentialContract, String>;
     fn kind(&self) -> &'static str;
+    /// The registered gateway protocol kind built by this adapter. Invoke
+    /// adapters return `None`; this selection cannot come from source data.
+    fn gateway_kind(&self) -> Option<&'static str> {
+        None
+    }
+    /// Empty durable route universe reserved at creation, before discovery.
+    fn initial_gateway_routes(
+        &self,
+    ) -> Result<Option<super::ImportedGatewayRouteCandidate>, String> {
+        Ok(None)
+    }
+    /// Explicit support for a credential-free execution contract. A missing
+    /// credential never selects this mode by itself.
+    fn supports_credential_free_execution(&self) -> bool {
+        false
+    }
     /// A development fixture: the host accepts its kind only in a non-production
     /// deployment with `deployment.enable_fake_service`.
     fn development_only(&self) -> bool;
@@ -192,7 +233,8 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     /// Validate protocol-specific configuration without contacting upstream.
     fn validate_definition(&self, definition: &ImportedServiceDefinition) -> Result<(), String> {
         definition.validate()?;
-        if !definition.connection_settings.is_empty()
+        if definition.execution_bindings.is_empty()
+            || !definition.connection_settings.is_empty()
             || matches!(definition.discovery, ImportedDiscoveryCredential::Anonymous)
         {
             return Err(
@@ -214,6 +256,16 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
         &["/result"]
     }
     fn validate_action(&self, action: &ImportedActionDefinition) -> Result<(), String>;
+    /// Request header names declared by a gateway action, including its selected
+    /// credential header. Core rejects collisions with configured identity
+    /// carriers during discovery and executable preparation. Invoke adapters
+    /// declare none; the host independently filters every forwarded request.
+    fn request_header_names(
+        &self,
+        _action: &ImportedActionDefinition,
+    ) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
     /// The resources an accepted action names and the credential modes it
     /// supports, read offline from its definition; core maps them onto the
     /// action's descriptor. The default declares neither: the action is
@@ -240,9 +292,10 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     /// The host builds an adapter's clients in the ordinary routing category.
     /// A command import never runs its command here: startup and reload stay
     /// offline. An adapter whose [`Self::endpoint_form`] is `Command` returns
-    /// [`ImportedProvider::Command`]; every other adapter returns
-    /// [`ImportedProvider::Upstream`], and core fails the import closed
-    /// otherwise.
+    /// [`ImportedProvider::Command`]. A gateway adapter returns versioned plans
+    /// in [`ImportedProvider::Gateway`], and other HTTP adapters return
+    /// [`ImportedProvider::Upstream`]. Core checks this role and resolves the
+    /// separately registered gateway builder before publishing the executable.
     fn build(
         &self,
         definition: &ImportedServiceDefinition,

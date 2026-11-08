@@ -278,7 +278,8 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let result = agent_access_provider::host::with_provider_context(
         CorrelationContext::for_tests(),
         "example".into(),
@@ -333,7 +334,8 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -357,7 +359,8 @@ async fn input_and_credential_rejections_dispatch_nothing() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     assert_eq!(
         provider
             .invoke(invocation(json!({}), "secret"))
@@ -405,7 +408,8 @@ async fn independent_credentials_and_transport_auth_are_never_reused() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     for token in ["alice-token", "bob-token"] {
         let mut request = invocation(json!({"region":"east"}), token);
         request = InvocationBuilder::from(request)
@@ -452,7 +456,8 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -486,7 +491,8 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -554,7 +560,8 @@ async fn bounded_json_and_sse_results_include_discarded_bytes() {
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
             .await
@@ -582,7 +589,8 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let capture = test_support::install_trace_capture().start();
     let result = capture
         .run(agent_access_provider::host::with_provider_context(
@@ -731,7 +739,8 @@ async fn official_sdk_current_server_accepts_generated_headers_and_rejects_misma
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     for region in ["east", " café ", "=?base64?YQ==?=", "line\r\nbreak"] {
         let result = provider
             .invoke(invocation(json!({"region":region}), "secret"))
@@ -957,7 +966,8 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
             &host.context(),
         )
         .unwrap()
-        .provider();
+        .provider()
+        .unwrap();
     let (request, _) = leased_invocation(&fixture.endpoint, false);
     let request = InvocationBuilder::from(request)
         .execution(ExecutionAccess::Delegated(
@@ -1010,7 +1020,8 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         let result = provider.invoke(request).await;
         if status == StatusCode::OK {
@@ -1058,7 +1069,8 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
                 &host.context(),
             )
             .unwrap()
-            .provider();
+            .provider()
+            .unwrap();
         let (mut request, lease) = leased_invocation(&fixture.endpoint, failure == "revoked");
         if failure == "resource" {
             let mut access = lease.access.lock().unwrap();

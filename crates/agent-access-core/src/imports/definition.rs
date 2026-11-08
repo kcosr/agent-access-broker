@@ -157,6 +157,13 @@ pub struct ImportedServiceDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation_limit: Option<ImportedInvocationLimit>,
 }
+/// An accepted action's persisted JSON is a durable byte contract. Field order,
+/// serialized names and default omission must preserve the bytes of existing
+/// definitions: their SHA-256 hash binds accepted plans and dispatch generations,
+/// and gateway loading verifies that hash after parsing and serializing again.
+/// The imported-store golden fixtures freeze historical bytes and hashes; never
+/// regenerate them for a refactor. A format change requires an explicit store
+/// migration coordinated with the accepted-version and publication fences.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedActionDefinition {
@@ -279,20 +286,11 @@ impl ImportedServiceDefinition {
             return Err("import adapter kind is invalid".into());
         }
         let form = self.endpoint()?.form();
-        // A command import may declare no execution credential; it then has
-        // no bindings and its grants use service mode without a slot.
-        let minimum_bindings = match form {
-            ImportEndpointForm::Http => 1,
-            ImportEndpointForm::Command => 0,
-        };
-        if self.execution_bindings.len() < minimum_bindings || self.execution_bindings.len() > 2 {
-            return Err(match form {
-                ImportEndpointForm::Http => "import requires one or two execution bindings",
-                ImportEndpointForm::Command => {
-                    "command import allows at most two execution bindings"
-                }
-            }
-            .into());
+        // Absence is a declaration, not missing secret material. The selected
+        // adapter's capability and definition validation must explicitly admit
+        // credential-free execution before this record becomes executable.
+        if self.execution_bindings.len() > 2 {
+            return Err("import allows at most two execution bindings".into());
         }
         if form == ImportEndpointForm::Command
             && (self.transport_auth || !self.connection_settings.is_empty())
@@ -807,10 +805,12 @@ mod tests {
         let mut service = command_definition();
         service.endpoint = format!("command:{}", "a".repeat(63));
         service.validate().unwrap();
-        // Credential-free commands have no bindings; HTTP imports need one.
+        // Structural storage admits an explicit credential-free definition;
+        // the selected adapter and operator gate authorize its execution.
         let mut http = definition();
         http.execution_bindings.clear();
-        assert!(http.validate().is_err());
+        http.discovery = ImportedDiscoveryCredential::Anonymous;
+        assert!(http.validate().is_ok());
         let mut service = command_definition();
         for mode in [
             ImportedCredentialMode::Service,

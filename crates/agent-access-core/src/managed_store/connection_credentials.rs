@@ -22,6 +22,7 @@ impl ManagedStore {
         validate_principal_id(owner_principal_id)?;
         validate_service_and_name(connection, crate::CONNECTION_CREDENTIAL_NAME)?;
         let mut conn = self.connection.lock().unwrap();
+        let mut proofs = self.credential_material_proofs.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -42,7 +43,9 @@ impl ManagedStore {
             params![metadata.credential_id],
         )
         .map_err(sql_unavailable)?;
+        let commit = proofs.prepare_commit(&metadata.credential_id);
         tx.commit().map_err(sql_unavailable)?;
+        commit.committed();
         Ok(metadata)
     }
 
@@ -61,6 +64,7 @@ impl ManagedStore {
         validate_uuid_id(credential_id, "credentialId")?;
         validate_principal_id(owner_principal_id)?;
         let mut conn = self.connection.lock().unwrap();
+        let mut proofs = self.credential_material_proofs.lock().unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
@@ -84,7 +88,9 @@ impl ManagedStore {
             params![metadata.credential_id],
         )
         .map_err(sql_unavailable)?;
+        let commit = proofs.prepare_commit(&metadata.credential_id);
         tx.commit().map_err(sql_unavailable)?;
+        commit.committed();
         Ok(metadata)
     }
 }

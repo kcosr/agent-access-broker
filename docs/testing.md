@@ -178,6 +178,31 @@ selection and terminal auditing. Core registry tests check linked gateway select
 and reason ownership; the independent downstream consumer compiles an SDK-only
 gateway and explicitly selects Git in its assembly.
 
+Host `tests::openapi_gateway` drives real local Broker HTTP listeners and synthetic
+upstreams through uploaded/remote discovery, acceptance, credentials and grants.
+It covers both supported document dialects, raw JSON/form/binary transfers,
+conditional/range/HEAD replies, encoded bytes, upstream authentication failures,
+limits, no-replay failures and transfer ownership. It extracts the marked setup
+guide document directly from `docs/http-gateway-setup.md` for import and native
+client requests. These tests do not contact a live vendor or prove application-
+specific client compatibility.
+
+The same suite checks retained route guards, quarantine, binding reloads,
+unsupported verification, trusted identity/context, and audit/event/span privacy.
+Deterministic barriers exercise publication, personal credential replacement and
+identity revocation before forwarding, queued cancellation and original-snapshot
+completion after forwarding starts. Generated gateways require final current-
+authority checks before sending; ordinary invocation snapshot behavior above is
+unchanged. Separate response and cleanup deadlines verify early responses without
+releasing retained upload/disposal ownership prematurely.
+
+Portal `imports-gateway-live.spec.ts` drives a real Broker through approved binding
+selection, uploaded-source review, shared Basic credential setup and the grant
+editor. It issues a Broker token through the management API and sends native HTTP
+to the dedicated gateway listener, checking credential separation and denial of
+an unaccepted literal route that shadows a template. Other gateway UI tests use
+mocked API contracts to cover editor states and errors.
+
 The `git_http_gateway` integration test requires Git, including `git http-backend`.
 It drives real protocol-v2 clone, fetch, and push commands through an in-process
 Broker gateway to a disposable Git repository behind a local TLS origin. Both

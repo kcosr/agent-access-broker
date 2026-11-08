@@ -636,7 +636,7 @@ and Git smart HTTP gateway rules in [git-http-gateway.md](git-http-gateway.md).
 
 ## Linked module trust
 
-Native providers, OAuth companions and import adapters are compiled into the
+Native providers, gateway protocols, OAuth companions and import adapters are compiled into the
 Broker executable. The assembly selects them when it is built; nothing is loaded
 at run time. Every linked module runs with the authority of the whole process:
 every credential the process can decrypt, the managed and audit stores, files,
@@ -667,11 +667,13 @@ credential or substitute that tenant's content. Delegated access is revalidated
 before each authorized hop. Debug output names only the kind or header,
 and release builds offer no credential comparison; test builds compare in
 constant time. A cooperating provider therefore cannot log, return or forward
-the material by mistake. The host's own Git smart HTTP gateway and credential
+the material by mistake. The host's gateway transport and credential
 verification attach credentials to their requests through a host-only port, and
 can present a token as HTTP Basic under a configured username through a
 host-only placement; the crate-boundary check forbids both in provider,
-adapter, reference and helper crates. OAuth companions are the exception by role: they exchange and refresh
+gateway, adapter, reference and helper crates. Gateway modules receive no
+credentials or HTTP clients; they classify requests and return bounded relative
+plans for the host to validate and execute. OAuth companions are the exception by role: they exchange and refresh
 tokens with authorization servers through the OAuth dialect contract. Command
 imports are the other, deliberate exception: the Broker writes credential
 plaintext to the stdin of operator-approved local commands; see
@@ -1243,8 +1245,8 @@ does not publish. Service and personal credentials remain distinct, and a select
 personal credential never falls back to a shared credential. Discovery credentials
 are not execution fallback credentials.
 
-Swagger and OpenAPI share one accepted execution plan and request-validation
-path. Basic execution and definition-fetch credentials are independent encrypted
+In Actions/tools mode, Swagger and OpenAPI share one accepted execution plan
+and request-validation path. Basic execution and definition-fetch credentials are independent encrypted
 username/token records. Local validation rejects invalid material before an
 opaque credential reaches the adapter; availability checks neither contact the
 upstream nor record credential use. Service-slot and personal credential writes
@@ -1287,6 +1289,53 @@ fetched. Write-capable success means upstream acceptance, with an unverified
 mutation outcome. An error after dispatch does not establish that a write failed
 and must not trigger automatic replay. See [imported services](imported-services.md)
 for supported protocol, schema bounds and remaining limitations.
+
+## Imported HTTP gateways
+
+HTTP gateway imports use separate versioned plans and authorize whole operations.
+Accepting a parameterized route authorizes every parameter value permitted by its
+compiled profile and selected upstream credential. Body schemas do not constrain
+fields: JSON, form and binary payloads pass through as bounded raw bytes. No
+resource scope is inferred from a path, query, schema or operation name, and
+read-only classification requires administrator review.
+
+The operator reserves the service identity, gateway hosts and exact upstream
+base independently of the administrator's source document. A document cannot
+retarget the binding, supply upstream credentials or enable another host.
+Anonymous upstream access is explicit and still requires Broker authentication
+and action grants. Static service and personal credentials retain their separate
+selection; a missing personal credential never falls back. Gateway imports offer
+no active credential-verification probe or delegated OpenAPI OAuth.
+
+Before sending, the host rechecks the admitted generation, original caller proof
+against current authority, and exact personal credential material version. A
+managed-database switch retires the old generation, and a publication guard closes
+the asynchronous identity-read boundary. A revoked or replaced selection
+fails without switching credentials or destinations. Encryption-key rewrap keeps
+the material version, and a transfer already forwarding retains its snapshot.
+
+Full source paths and retained historical paths form a bounded denial-guard
+universe. An unaccepted literal such as `/items/admin` takes precedence over an
+accepted `/items/{id}` template, including after that literal disappears from a
+later document. The Broker cannot infer a backend literal omitted from every
+source version; authors must describe shadowing routes even when they will not
+accept them. Guard conflicts and capacity limits reject a candidate refresh
+without evicting earlier guards. Offline startup uses retained plans and manifests.
+
+Only the finite request/response header profile and validated declarations pass
+through. The host consumes Broker identity carriers and selected credential
+headers before the protocol hook, injects selected upstream authorization,
+refuses redirects and retains private/no-store responses. Upstream 401 becomes
+HTTP 424 `upstream_unauthorized` without its challenge or a retry; other permitted
+HTTP errors retain their status and bounded body. Concrete parameter values, query
+values, arbitrary headers and bodies are excluded from gateway audit facts.
+
+Transfer failure after forwarding starts may leave upstream work applied. The
+Broker records partial or uncertain delivery and never replays when processing
+is possible. A completed HTTP response establishes transfer completion, not
+business success. See the [setup guide](http-gateway-setup.md) for the supported
+profile and [import management](imported-services.md) for publication and upgrade
+rules.
 
 ## Command imports
 

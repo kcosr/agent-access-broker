@@ -429,6 +429,7 @@ mod tests {
         types: Vec<ImportedResourceTypeDeclaration>,
     ) -> ImportedServiceRecord {
         ImportedServiceRecord {
+            gateway_routes: None,
             document: None,
             definition: ImportedServiceDefinition {
                 service: service.into(),

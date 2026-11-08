@@ -11,6 +11,7 @@ fn upload_definition() -> ImportedServiceDefinition {
 
 fn document_preview(catalog: &ImportedCatalog) -> ImportedPreviewWriteRequest {
     ImportedPreviewWriteRequest {
+        gateway_routes: None,
         service: "observability".into(),
         expected_version: catalog.services[0].version,
         expected_catalog_revision: catalog.revision,

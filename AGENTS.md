@@ -824,6 +824,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   credential ownership, refresh, limits, and invocation outcomes.
 - `docs/imported-openapi.md`: OpenAPI/Swagger document/API destination setup, discovery
   authentication, scheme selection, supported operation profile and write receipts.
+- `docs/http-gateway-setup.md`: approved gateway bindings, hand-authored OpenAPI
+  documents, whole-action grants, raw HTTP bodies and native-client setup. Keep
+  the marked document example aligned with the compiler acceptance fixture.
 - `docs/imported-oauth.md`: approved MCP OAuth registrations, metadata validation,
   discovery onboarding, unknown upstream identity, and optional refresh.
 - `docs/command-imports.md`: operator-approved local command imports:
@@ -1131,6 +1134,40 @@ Use only synthetic endpoints in deterministic tests; live sends require an
 explicitly authorized dedicated Workflow.
 
 ## Imported services
+
+Managed HTTP gateways use `openapi_gateway` and a separate protocol runtime map.
+Keep the import adapter, common compiler and gateway module independently selected
+and within their crate roles. Never add an invoke provider for a gateway. Operator
+bindings reserve exact service/host/upstream identities even when unavailable;
+validate them jointly with static gateways and retain the independent destination
+allowlist. Exposure and accepted connection settings are immutable.
+
+Retain the complete bounded current and historical path-guard universe; choose
+the path before its method and dispatchability, without broader-route fallback.
+Compile matching at publication. Refresh publishes source, guards and quarantine
+atomically; stale admitted requests fail their original dispatch fences before
+upstream work. Never regenerate V1 plan/manifest or earlier import golden bytes.
+Keep schema-ledger rollback tied to restoring the matching database and binary.
+Preserve path case while denying capture aliases that ASCII-casefold onto a
+guarded literal in any alternate full-path match, including mixed templates.
+
+Generated gateways authorize whole operations without resource inference. They
+use explicit anonymous or static upstream authentication; no personal-to-shared
+fallback, active verification probe or delegated OpenAPI OAuth. Preserve Git's
+independent verification and OAuth capabilities. Forward bounded raw bodies with
+no claim of field-schema enforcement. Host transport owns authorization, framing,
+bounded Retry-After, completion and permits. Recheck the original caller proof,
+publication and selected personal material version after awaited preparation and
+audit work, immediately before sending; never resolve replacement credentials for
+a prepared request. Rewrap preserves material identity. Strip selected credential
+and configured identity-source headers before protocol hooks and reject module
+replacements. The adapter declares request headers through its core interface;
+core rejects configured identity collisions without parsing protocol plan JSON.
+Keep SQLite work off asynchronous executor workers. Check material before the
+final identity revalidation, then perform only cheap in-memory proof checks after
+the last await. Concrete parameter
+values, queries, bodies and arbitrary headers never enter generated-gateway audit
+facts; classifier denials record only a bounded method and safe gateway kind.
 
 Imported integrations use DB-managed stable service/action identities and compiled
 adapter factories. Core must not depend on a protocol adapter. Preserve offline
