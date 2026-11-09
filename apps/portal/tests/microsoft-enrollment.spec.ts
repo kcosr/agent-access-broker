@@ -100,7 +100,7 @@ for (const microsoftEnabled of [true, false]) {
     await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
     await dialog.getByLabel("Microsoft email", { exact: true }).fill("person@example.test");
     await expect(dialog.getByLabel("Microsoft email", { exact: true })).toHaveAttribute("required", "");
-    await expect(dialog).toContainText("paused Microsoft provider permits preparation");
+    await expect(dialog).not.toContainText(reservation().tenantId);
     await dialog.getByRole("button", { name: "Create user", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`principals/${returnedId}$`));
     await expect(signIn(page)).toContainText("Awaiting first Microsoft sign-in");

@@ -104,7 +104,6 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
         {!enrollMicrosoft ? <Field label="Email" optional>
           <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
         </Field> : null}
-        {enrollMicrosoft && microsoftAvailable ? <p className="pt-prose">Tenant: <span className="wb-num">{config?.microsoftEnrollment?.tenantId}</span>. A paused Microsoft provider permits preparation; sign-in requires it enabled. Automatic groups apply once at first Microsoft sign-in.</p> : null}
         <Field label="Groups" optional hint={groupWritesEnabled ? undefined : `Group changes are unavailable while identity authority is ${identityAuthority}.`}>
           <Combobox
             multiple
