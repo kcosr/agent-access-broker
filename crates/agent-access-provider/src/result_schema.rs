@@ -469,50 +469,41 @@ pub(crate) fn validate_action_result_schemas(
     }
 }
 
-/// The shared `result` of a failed or refused request: the retry, receipt and
-/// execution details the SDK's helpers, the Broker host and its admission
-/// add, whatever the action. Every property is optional and the object is
-/// open, so a validator accepts fields a later Broker adds.
+/// The shared `result` of a failed request: the receipt, retry and
+/// execution details the SDK's helpers and the Broker host add, whatever the
+/// action, as delivered to clients. Every property is optional and the object
+/// is open, so a validator accepts fields a later Broker adds.
+///
+/// It declares only fields a client can receive: the Broker's own rate,
+/// concurrency, identity, context and admission refusals are rewritten to the
+/// reserved `broker` service without a `result` before delivery. Fields a
+/// provider reports itself, such as a write's `applied` success status or a
+/// command import's process facts, belong to that action's own schemas.
 ///
 /// The host merges these properties into each provider error schema (see
 /// [`with_shared_failure_properties`]) and offers this schema as the failure
 /// branch of every action's composed result.
 pub fn shared_failure_result_schema() -> Value {
-    json!({
-        "type": "object",
-        "description": "Retry, receipt or execution details for a failed or refused request.",
-        "properties": shared_failure_properties(),
-    })
+    json!({"type": "object", "properties": shared_failure_properties()})
 }
 
 fn shared_failure_properties() -> Value {
-    let integer = json!({"type": "integer"});
     json!({
         "mutationStatus": {
             "type": "string",
-            "enum": ["not_applied", "unknown", "applied_unverified", "applied", "applied_verified"],
+            "enum": ["not_applied", "unknown", "applied_unverified"],
             "description": "Whether the write applied; only not_applied is safe to retry."
         },
         "retrySafe": {"type": "boolean", "description": "Whether repeating the request cannot apply anything twice."},
-        "verificationStage": {"type": "string", "description": "The check that could not confirm an applied write."},
-        "safeLocators": {"type": "object", "description": "Provider-defined identifiers of what changed, for reconciliation."},
-        "operationDispatched": {"type": "boolean", "description": "Whether a command import started its process."},
+        "verificationStage": {"type": "string"},
+        "safeLocators": {"type": "object", "description": "Identifiers of what changed, for reconciliation before any retry."},
         "executionState": {"type": "string", "enum": ["not_dispatched", "unknown", "completed"]},
-        "deadlineKind": {"type": "string", "enum": ["rate_wait", "operation", "body"]},
-        "limitScope": {"type": "string", "enum": ["upstream", "principal", "service"]},
+        "deadlineKind": {"type": "string", "enum": ["operation", "body"]},
+        "limitScope": {"const": "upstream"},
         "service": {"type": "string"},
-        "limit": integer,
-        "windowSeconds": integer,
         "retryAfterSeconds": {"type": "integer", "description": "Seconds to wait before retrying."},
-        "retryAt": {"type": "string", "description": "RFC 3339 instant after which a retry may succeed."},
-        "maxWaitSeconds": integer,
-        "queuedRequests": integer,
-        "waitedMilliseconds": integer,
-        "remainingWaitMilliseconds": integer,
-        "hints": {
-            "type": "object",
-            "properties": {"upstreamResourceOwnership": {"type": "string", "enum": ["acting_user"]}}
-        }
+        "retryAt": {"type": "string", "description": "When a retry may succeed (RFC 3339)."},
+        "hints": {"type": "object", "properties": {"upstreamResourceOwnership": {"const": "acting_user"}}}
     })
 }
 
@@ -887,6 +878,16 @@ mod tests {
             branches["anyOf"][0]["properties"]["executionState"]["type"],
             "string"
         );
+        // Only delivered fields are declared: admission refusal details and
+        // command-import process facts are not shared failure fields.
+        for absent in [
+            "limit",
+            "windowSeconds",
+            "queuedRequests",
+            "operationDispatched",
+        ] {
+            assert!(shared["properties"].get(absent).is_none(), "{absent}");
+        }
         assert_eq!(
             branches["anyOf"][1]["properties"]["retrySafe"],
             json!({"const": false})

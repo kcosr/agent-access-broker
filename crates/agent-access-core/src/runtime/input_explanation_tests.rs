@@ -975,8 +975,19 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
                     described.as_object_mut().unwrap().remove("scopedMcpName");
                     described["service"] = json!(service.service);
                     if let Some(detail) = detail {
-                        assert_eq!(detail.as_object().unwrap().len(), 2);
+                        // name, inputSchema and, when the action declares
+                        // result schemas, the outputSchema composed from them,
+                        // which replaces the detail's resultSchemas.
+                        assert_eq!(
+                            detail.get("outputSchema").is_some(),
+                            action.result_schemas.is_some()
+                        );
+                        assert_eq!(
+                            detail.as_object().unwrap().len(),
+                            2 + usize::from(action.result_schemas.is_some())
+                        );
                         assert!(detail.get("documentation").is_none());
+                        described.as_object_mut().unwrap().remove("resultSchemas");
                         described["mcpTool"] = detail;
                     }
                     // The host's output::result reserves 8192 bytes for HTTP

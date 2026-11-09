@@ -6575,6 +6575,18 @@ impl BrokerRuntime {
             self.action_descriptor(&service, &action),
             match &result {
                 Ok(result) => Some(&result.result),
+                // The reserved pre-dispatch refusals are only the Broker's
+                // own; they are delivered under the `broker` service without
+                // a result (see `PreDispatchFailure::apply`).
+                Err(error)
+                    if error
+                        .reason_code()
+                        .standard()
+                        .and_then(trusted_callers::PreDispatchFailure::for_reason)
+                        .is_some() =>
+                {
+                    None
+                }
                 Err(error) => error.result.as_deref(),
             },
         );

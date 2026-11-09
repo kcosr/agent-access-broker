@@ -97,73 +97,52 @@ pub fn envelope_schema(result: Value) -> Value {
 }
 
 /// An HTTP MCP tool, admission or delivery failure that carries no action
-/// result.
+/// result. Only the fields an agent acts on are typed; the object is open.
 fn http_failure_schema() -> Value {
     json!({
         "type": "object",
-        "description": "HTTP MCP tool or delivery failure; no action result is returned. Do not repeat an operation only to recover its output.",
+        "description": "Tool or delivery failure without the action result; never repeat an operation only to recover its output.",
         "properties": {
             "error": {"type": "object", "properties": {"code": string(), "message": string()}, "required": ["message"]},
-            "agentRequestId": string(),
             "brokerRequestId": string(),
-            "service": string(),
-            "action": string(),
             "brokerOutcome": {"type": "object", "properties": {
-                "status": {"type": "integer"},
                 "decision": {"type": "string", "enum": DECISIONS},
-                "reasonCode": {"type": ["string", "null"]},
                 "mutationStatus": string()
-            }, "required": ["status", "decision", "reasonCode"]},
+            }},
             "execution": {"type": "object", "properties": {
-                "dispatched": {"type": "boolean"},
                 "completion": {"type": "string", "enum": ["completed", "unknown", "not_started"]}
-            }, "required": ["dispatched", "completion"]},
-            "resultAvailable": {"type": "boolean"},
-            "retrySafe": {"type": "boolean"},
-            "status": {"type": "integer"}
+            }},
+            "retrySafe": {"type": "boolean"}
         },
         "required": ["error"]
     })
 }
 
-fn file_output_schema() -> Value {
-    json!({"type": "object", "properties": {
-        "status": {"type": "string", "enum": ["succeeded", "failed"]},
-        "path": string(),
-        "size": {"type": "integer"},
-        "sha256": string(),
-        "contentType": string(),
-        "sensitive": {"type": "boolean"},
-        "destinationReplaced": {"type": "boolean"},
-        "error": string()
-    }, "required": ["status", "path"]})
-}
-
 /// A stdio receipt for a response saved through `outputPath`, or for a save
 /// that failed. A download receipt also keeps the metadata envelope, whose
-/// `result` is typed as `download_result`.
+/// `result` is typed as `download_result`. Only the fields an agent acts on
+/// are typed; the object is open.
 fn file_receipt_schema(download_result: Option<Value>) -> Value {
     let mut properties = json!({
-        "agentRequestId": string(),
         "brokerRequestId": string(),
         "decision": {"type": "string", "enum": DECISIONS},
-        "service": string(),
-        "action": string(),
         "reasonCode": string(),
         "operationStatus": {"type": "string", "enum": ["succeeded", "applied_unverified", "not_applied", "unknown"]},
         "mutationStatus": string(),
         "retrySafe": {"type": "boolean"},
-        "verificationStage": string(),
         "safeLocators": {"type": "object"},
         "message": string(),
-        "output": file_output_schema(),
-        "metadataOutput": file_output_schema()
+        "output": {"type": "object", "properties": {
+            "status": {"type": "string", "enum": ["succeeded", "failed"]},
+            "path": string(),
+            "size": {"type": "integer"},
+            "sha256": string(),
+            "contentType": string(),
+            "error": string()
+        }, "required": ["status", "path"]}
     });
     let description = match download_result {
         Some(result) => {
-            properties["resourceScopes"] =
-                json!({"type": "object", "additionalProperties": strings()});
-            properties["reason"] = string();
             properties["result"] = result;
             "Local download receipt: output describes the saved file or the failed save; result holds the download metadata."
         }

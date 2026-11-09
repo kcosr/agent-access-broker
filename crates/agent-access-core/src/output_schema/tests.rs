@@ -121,10 +121,22 @@ fn the_payload_union_injects_rendered_bodies_markdown_and_shared_failures() {
             true,
         ),
         (
-            json!({"limitScope": "principal", "service": "jira", "limit": 5, "windowSeconds": 60, "retryAfterSeconds": 3,
-            "retryAt": "2026-11-09T00:00:00Z", "maxWaitSeconds": 0, "queuedRequests": 0, "deadlineKind": "rate_wait",
-            "waitedMilliseconds": 0, "remainingWaitMilliseconds": 0, "executionState": "not_dispatched", "retrySafe": true}),
+            json!({"limitScope": "upstream", "service": "jira", "retryAfterSeconds": 3,
+                "retryAt": "2026-11-09T00:00:00Z"}),
             true,
+        ),
+        (
+            json!({"executionState": "completed", "retrySafe": false, "mutationStatus": "applied_unverified"}),
+            true,
+        ),
+        // Broker admission refusals are delivered without these details.
+        (
+            json!({"limitScope": "principal", "limit": 5, "windowSeconds": 60}),
+            false,
+        ),
+        (
+            json!({"executionState": "not_dispatched", "deadlineKind": "rate_wait"}),
+            false,
         ),
         (
             json!({"hints": {"upstreamResourceOwnership": "acting_user"}}),
