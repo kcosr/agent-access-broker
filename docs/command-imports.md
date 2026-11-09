@@ -724,6 +724,17 @@ below. The command result is marked sensitive at
 `/result/upstreamCommand` on every surface, including reads, as other imported
 payloads are. With an `outputSchema`, `result` must validate against it.
 
+Every command action publishes fixed result schemas in its catalog
+`resultSchemas`, typed OpenAPI responses and MCP
+[output schema](mcp.md#output-schemas). A JSON action's success has an open
+`upstreamCommand`; a [download](#download-responses)'s metadata has
+`result.filename`, `result.contentType`, `result.size` and `result.sha256`
+beside an object `result.upstreamCommand` holding the command's own metadata,
+and its MCP tool exists only on local stdio. Both add optional write `mutationStatus`,
+`retrySafe` and `safeLocators`; a failure adds `operationDispatched` beside the
+shared failure fields. They never follow the manifest's `outputSchema` or the
+action's classification, so a refresh or acceptance does not change them.
+
 ### Download responses
 
 An action declares `"download": true` in its manifest and always returns one

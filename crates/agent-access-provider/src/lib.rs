@@ -16,6 +16,10 @@
 //!   ([`BodyAdmission`]), verifies credentials and serves
 //!   [`ProviderInvocation`]s with a [`ProviderResult`] or a [`ProviderError`];
 //!   a write's [`MutationReceipt`] says whether a failed write applied.
+//!   An action may declare the schemas of its payloads
+//!   ([`ActionResultSchemas`], loaded from a bundled
+//!   [`ResultSchemaBundle`]), which the host composes into its advertised
+//!   output schemas.
 //!   It reaches upstream services through the host services defined here:
 //!   [`UpstreamClient`]s built through the host's client factory, upstream
 //!   allowlists, correlation ([`InvocationScope`]), upstream trace events
@@ -203,6 +207,7 @@ mod provider;
 mod reason;
 mod resource;
 mod result;
+mod result_schema;
 mod scope;
 mod search;
 mod signing;
@@ -307,6 +312,10 @@ pub use resource::{
 pub use result::{
     BoundedDownload, ProviderByteStream, ProviderCredentialVerification, ProviderError,
     ProviderResult, ProviderResultStream, ProviderResultStreamSource, ProviderStreamError,
+};
+pub use result_schema::{
+    ActionResultSchemas, ResultSchemaBundle, shared_failure_result_schema,
+    with_shared_failure_properties,
 };
 pub use scope::{ScopeRequest, ScopeResolution};
 pub use search::{

@@ -41,6 +41,7 @@ pub mod microsoft_oidc;
 mod network;
 mod node_identity;
 pub mod oauth;
+pub mod output_schema;
 mod resource_policy;
 mod runtime;
 mod sqlite_support;

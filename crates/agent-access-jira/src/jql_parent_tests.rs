@@ -104,7 +104,7 @@ async fn invalid_parent_inputs_fail_before_dispatch_without_echoing_values() {
             SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()]),
         ))
         .build();
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_checked(request).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{query}");
         assert!(!error.message.contains("PRIVATE_MARKER"));
         assert!(!error.message.contains("example.invalid"));
@@ -158,7 +158,7 @@ async fn parent_search_audit_uses_value_free_shape_and_only_execution_search() {
             SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()]),
         ))
         .build();
-    let response = provider.invoke(request).await.unwrap();
+    let response = provider.invoke_checked(request).await.unwrap();
     let audit = response.audit.unwrap();
     assert_eq!(audit["queryAstVersion"], 5);
     assert_eq!(audit["queryShape"]["filter"]["field"], "parent");
@@ -202,7 +202,7 @@ async fn parent_upstream_rejection_keeps_generic_error_without_lookup() {
     .build();
     let error = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
-        provider.invoke(request),
+        provider.invoke_checked(request),
     )
     .await
     .unwrap_err();

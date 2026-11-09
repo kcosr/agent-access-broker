@@ -75,7 +75,9 @@ async fn download(
                 .unwrap()
         );
     }
-    let result = provider.invoke(draft_invocation(action, inputs)).await;
+    let result = provider
+        .invoke_checked(draft_invocation(action, inputs))
+        .await;
     (
         result,
         backend.content_requests.load(Ordering::SeqCst),

@@ -923,6 +923,7 @@ fn invoke_formats_project_into_openapi_and_send_schema() {
         response_formats: vec!["json".to_string(), "markdown".to_string()],
         rendered_body_owners: Vec::new(),
         optional_rendered_body_owner_prefixes: Vec::new(),
+        result_schemas: None,
     };
     let mut catalog = empty_catalog(json!({}));
     catalog.services.push(ApiServiceSpec {
@@ -989,6 +990,7 @@ fn non_advertising_actions_accept_only_explicit_default_response_formats() {
         response_formats: Vec::new(),
         rendered_body_owners: Vec::new(),
         optional_rendered_body_owner_prefixes: Vec::new(),
+        result_schemas: None,
     };
     let mut upload = base.clone();
     upload.action = "attachment.add".to_string();
@@ -1078,6 +1080,7 @@ fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_action
         response_formats: Vec::new(),
         rendered_body_owners: Vec::new(),
         optional_rendered_body_owner_prefixes: Vec::new(),
+        result_schemas: None,
     };
     let mut sensitive_action = action.clone();
     sensitive_action.action = "secret.echo".to_string();
@@ -1189,6 +1192,7 @@ fn generated_specs_describe_multipart_uploads() {
             response_formats: Vec::new(),
             rendered_body_owners: Vec::new(),
             optional_rendered_body_owner_prefixes: Vec::new(),
+            result_schemas: None,
         }],
     });
 
@@ -1289,6 +1293,7 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             response_formats: Vec::new(),
             rendered_body_owners: Vec::new(),
             optional_rendered_body_owner_prefixes: Vec::new(),
+            result_schemas: None,
         }],
     });
 
@@ -1358,6 +1363,7 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             response_formats: Vec::new(),
             rendered_body_owners: Vec::new(),
             optional_rendered_body_owner_prefixes: Vec::new(),
+            result_schemas: None,
         }],
     });
 

@@ -11,6 +11,45 @@ use axum::{
 use std::sync::Mutex;
 use tokio::task::JoinHandle;
 
+/// An imported OpenAPI provider whose every invocation outcome is checked
+/// strictly against the result schemas core attaches to the action's
+/// descriptor; tests build every provider through [`Checked::checked`].
+struct Conforming(Arc<dyn Provider>);
+
+#[async_trait]
+impl Provider for Conforming {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.0.resolve_scopes(request).await
+    }
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        let accepted = action(&definition(
+            "https://api.example/api",
+            "https://docs.example/spec.json",
+        ));
+        let described =
+            ActionDescriptor::new(request.action(), "Imported", json!({"type": "object"}))
+                .result_schemas(OpenApiAdapter.result_schemas(&accepted).unwrap());
+        let outcome = self.0.invoke(request).await;
+        test_support::assert_result_conforms(&described, &outcome);
+        outcome
+    }
+}
+
+trait Checked {
+    /// The built invoke provider, checking every outcome (see [`Conforming`]).
+    fn checked(&self) -> Option<Arc<dyn Provider>>;
+}
+
+impl Checked for ImportedProvider {
+    fn checked(&self) -> Option<Arc<dyn Provider>> {
+        self.provider()
+            .map(|provider| Arc::new(Conforming(provider)) as Arc<dyn Provider>)
+    }
+}
+
 /// The build host imported OpenAPI tests share: a short request timeout and
 /// a 256 KiB response cap.
 fn test_host() -> test_support::TestHost {
@@ -220,7 +259,7 @@ async fn private_document_token_is_separate_from_selected_execution_token() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     provider.invoke(invocation(input())).await.unwrap();
     let calls = fixture.state.calls.lock().unwrap();
@@ -336,7 +375,7 @@ async fn execution_serializes_separate_locations_and_never_refetches_definition(
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let result=provider.invoke(invocation(json!({"path":{"id":"space ü"},"query":{"q":"a&b=/x","tags":["a,b","c&d"]},"headers":{"Count":1.0},"body":{"value":"created"}}))).await.unwrap();
     assert_eq!(result.result["mutationStatus"], "applied_unverified");
@@ -369,7 +408,7 @@ async fn invalid_inputs_and_missing_personal_credentials_never_dispatch() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     for id in ["..", "../secret", "%2f", "a\\b", "a/b"] {
         let mut value = input();
@@ -419,7 +458,7 @@ async fn errors_redirects_and_throttling_do_not_replay_writes() {
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
         assert_eq!(error.reason_code(), status_reason(status));
@@ -451,7 +490,7 @@ async fn proven_unsent_writes_are_not_applied_and_retry_safe() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let error = provider.invoke(invocation(input())).await.err().unwrap();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
@@ -487,7 +526,7 @@ async fn malformed_success_and_timeout_preserve_unknown_write_receipts() {
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let error = provider.invoke(invocation(input())).await.err().unwrap();
         assert!(matches!(
@@ -551,7 +590,7 @@ async fn no_content_operations_omit_empty_accept_and_return_null_body() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let result = provider.invoke(invocation(input())).await.unwrap();
     assert_eq!(
@@ -652,6 +691,112 @@ fn accepted_download_semantics_are_rejected_by_openapi() {
             .contains("download")
     );
     assert!(CompiledAction::new(&definition).is_err());
+}
+
+#[test]
+fn result_schemas_are_one_open_wrapper_within_the_profile() {
+    let service = definition(
+        "https://api.example.test",
+        "https://api.example.test/openapi.json",
+    );
+    let mut accepted = action(&service);
+    let declared = OpenApiAdapter.result_schemas(&accepted).unwrap();
+    // Declared responses and their schemas never narrow the wrapper, so a
+    // refresh that changes them cannot invalidate a cached client validator.
+    accepted.output_schema = Some(json!({"type": "string"}));
+    accepted.read_only = true;
+    assert_eq!(OpenApiAdapter.result_schemas(&accepted).unwrap(), declared);
+    let upstream = &declared.success()["properties"]["upstreamHttp"]["properties"];
+    assert_eq!(
+        upstream["status"],
+        json!({"type": "integer", "description": "The upstream HTTP status."})
+    );
+    assert_eq!(upstream["body"].get("type"), None);
+    let mut descriptor = ServiceDescriptor::new("example", "Example").with_actions(vec![
+        ActionDescriptor::new("item.update", "Updates", json!({"type": "object"}))
+            .credential_modes(vec!["service"])
+            .result_schemas(declared),
+    ]);
+    descriptor.actions[0].sensitive_output_pointers = vec!["/result/upstreamHttp".into()];
+    descriptor.validate().unwrap();
+    assert!(
+        test_support::check_result_conforms(
+            &descriptor.actions[0],
+            &Ok(ProviderResult::new(
+                json!({"upstreamHttp": {"status": 200, "body": null, "headers": {}}})
+            ))
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn statuses_bodies_and_receipts_conform_to_the_result_schemas() {
+    let mut document = document();
+    document["paths"]["/items/{id}"]["post"]["responses"] = json!({
+        "200": {"description": "OK", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Item"}}}},
+        "204": {"description": "No content"},
+        "400": {"description": "Invalid", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Item"}}}},
+        "default": {"description": "Other", "content": {"application/json": {"schema": true}}}
+    });
+    // Status, body, and whether the error result keeps the upstream response.
+    let cases = [
+        (200, json!({"value": "created"}), true),
+        (202, Value::Null, true),
+        (204, Value::Null, true),
+        (404, json!({"error": "missing"}), true),
+        (400, json!({"error": "undeclared shape"}), false),
+        (429, json!([1]), true),
+    ];
+    for read_only in [true, false] {
+        for (status, body, kept) in &cases {
+            let fixture =
+                Fixture::new(document.clone(), *status, body.clone(), Duration::ZERO).await;
+            let def = fixture.definition();
+            let mut accepted = discovered(document.clone(), &def).definition;
+            accepted.action = "item.update".into();
+            accepted.read_only = read_only;
+            let host = test_host();
+            let outcome = OpenApiAdapter
+                .build(
+                    &def,
+                    &[accepted],
+                    None,
+                    &ImportedAdapterContext::default(),
+                    &host.context(),
+                )
+                .unwrap()
+                .checked()
+                .unwrap()
+                .invoke(invocation(input()))
+                .await;
+            let success = (200..300).contains(status);
+            assert_eq!(outcome.is_ok(), success, "{status}");
+            let result = match &outcome {
+                Ok(result) => Some(&result.result),
+                Err(error) => error.result.as_deref(),
+            };
+            if *kept {
+                let upstream = &result.unwrap()["upstreamHttp"];
+                assert_eq!(upstream["status"], *status);
+                assert_eq!(&upstream["body"], body);
+            } else {
+                assert!(result.is_none_or(|result| result.get("upstreamHttp").is_none()));
+            }
+            match (read_only, success) {
+                (true, _) => {
+                    assert!(result.is_none_or(|result| result.get("mutationStatus").is_none()))
+                }
+                (false, true) => {
+                    assert_eq!(result.unwrap()["mutationStatus"], "applied_unverified")
+                }
+                (false, false) => {
+                    assert_eq!(result.unwrap()["mutationStatus"], "unknown");
+                    assert_eq!(result.unwrap()["operationDispatched"], true);
+                }
+            }
+        }
+    }
 }
 
 mod unified;

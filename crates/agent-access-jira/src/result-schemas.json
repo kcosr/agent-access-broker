@@ -1,0 +1,857 @@
+{
+  "definitions": {
+    "nstr": {"type": ["string", "null"]},
+    "nadf": {"type": ["object", "null"], "description": "ADF document; null when none"},
+    "issueRef": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "key": {"type": "string"},
+        "project": {"type": "string"},
+        "webUrl": {"type": "string"}
+      },
+      "required": ["id", "key", "project", "webUrl"]
+    },
+    "user": {
+      "type": ["object", "null"],
+      "properties": {
+        "accountId": {"$ref": "#/definitions/nstr"},
+        "displayName": {"$ref": "#/definitions/nstr"}
+      },
+      "required": ["accountId", "displayName"]
+    },
+    "priority": {
+      "type": ["object", "null"],
+      "properties": {"id": {"$ref": "#/definitions/nstr"}, "name": {"$ref": "#/definitions/nstr"}},
+      "required": ["id", "name"]
+    },
+    "labels": {"type": ["array", "null"], "items": {"type": "string"}},
+    "issueReadback": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "key": {"type": "string"},
+        "project": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "summary": {"$ref": "#/definitions/nstr"},
+        "status": {"$ref": "#/definitions/nstr"},
+        "issueType": {"$ref": "#/definitions/nstr"},
+        "description": {"$ref": "#/definitions/nadf"},
+        "created": {"$ref": "#/definitions/nstr"},
+        "updated": {"$ref": "#/definitions/nstr"},
+        "creator": {"$ref": "#/definitions/user"},
+        "reporter": {"$ref": "#/definitions/user"},
+        "assignee": {"$ref": "#/definitions/user"},
+        "priority": {"$ref": "#/definitions/priority"},
+        "labels": {"$ref": "#/definitions/labels"}
+      },
+      "required": ["id", "key", "project", "webUrl", "summary", "status", "issueType", "description", "created", "updated", "creator", "reporter", "assignee", "priority", "labels"]
+    },
+    "searchIssue": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "key": {"type": "string"},
+        "project": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "summary": {"$ref": "#/definitions/nstr"},
+        "status": {"$ref": "#/definitions/nstr"},
+        "issueType": {"$ref": "#/definitions/nstr"},
+        "created": {"$ref": "#/definitions/nstr"},
+        "updated": {"$ref": "#/definitions/nstr"},
+        "creator": {"$ref": "#/definitions/user"},
+        "reporter": {"$ref": "#/definitions/user"},
+        "assignee": {"$ref": "#/definitions/user"},
+        "priority": {"$ref": "#/definitions/priority"},
+        "labels": {"$ref": "#/definitions/labels"}
+      },
+      "required": ["id", "key", "project", "webUrl", "summary", "status", "issueType", "created", "updated", "creator", "reporter", "assignee", "priority", "labels"]
+    },
+    "comment": {
+      "type": "object",
+      "properties": {
+        "commentId": {"type": "string"},
+        "parentCommentId": {"type": "string", "description": "Thread root; present on replies"},
+        "author": {
+          "type": "object",
+          "properties": {"accountId": {"type": "string"}, "displayName": {"type": "string"}}
+        },
+        "created": {"type": "string"},
+        "updated": {"type": "string"},
+        "visibility": {
+          "type": "object",
+          "properties": {
+            "type": {"enum": ["group", "role"]},
+            "value": {"type": "string"},
+            "identifier": {"type": "string"}
+          },
+          "required": ["type"]
+        },
+        "body": {
+          "type": "object",
+          "description": "ADF document; absent from metadata-only listings"
+        }
+      },
+      "required": ["commentId"]
+    },
+    "commentPage": {
+      "type": "object",
+      "description": "Present when includeComments is true; continue with comment.list includeBodies=true",
+      "properties": {
+        "comments": {"type": "array", "items": {"$ref": "#/definitions/comment"}},
+        "startAt": {"type": "integer"},
+        "maxResults": {"type": "integer"},
+        "count": {"type": "integer"},
+        "total": {"type": ["integer", "null"]},
+        "isLast": {"type": ["boolean", "null"], "description": "null when Jira reported no total"},
+        "nextStartAt": {
+          "type": ["integer", "null"],
+          "description": "Next startAt with the same includeBodies, maxResults and orderBy; null when last or unknown"
+        },
+        "orderBy": {"enum": ["+created", "-created"]},
+        "includeBodies": {"type": "boolean"},
+        "limitedBy": {
+          "const": "body_bytes",
+          "description": "Present when the page body byte budget cut whole comments; continue from nextStartAt"
+        }
+      },
+      "required": ["comments", "startAt", "maxResults", "count", "total", "isLast", "nextStartAt", "orderBy", "includeBodies"]
+    },
+    "namedValue": {
+      "type": "object",
+      "properties": {"id": {"type": "string"}, "name": {"$ref": "#/definitions/nstr"}},
+      "required": ["id", "name"]
+    },
+    "namedValues": {"type": ["array", "null"], "items": {"$ref": "#/definitions/namedValue"}},
+    "reference": {
+      "type": "object",
+      "properties": {
+        "key": {"type": "string"},
+        "summary": {"$ref": "#/definitions/nstr"},
+        "issueType": {"$ref": "#/definitions/nstr"}
+      },
+      "required": ["key", "summary", "issueType"]
+    },
+    "issueLink": {
+      "type": "object",
+      "properties": {
+        "key": {"type": "string"},
+        "type": {"type": "string", "description": "Link type name"},
+        "direction": {"enum": ["inward", "outward"]},
+        "relationship": {
+          "type": "string",
+          "description": "Read as <viewed issue> <relationship> <key>"
+        },
+        "summary": {"$ref": "#/definitions/nstr"},
+        "issueType": {"$ref": "#/definitions/nstr"}
+      },
+      "required": ["key", "type", "direction", "relationship", "summary", "issueType"]
+    },
+    "option": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "value": {"type": "string"},
+        "child": {
+          "type": ["object", "null"],
+          "description": "cascadingOption only",
+          "properties": {"id": {"type": "string"}, "value": {"type": "string"}},
+          "required": ["id", "value"]
+        }
+      },
+      "required": ["id", "value"]
+    },
+    "fieldUser": {
+      "type": "object",
+      "properties": {"accountId": {"type": "string"}, "displayName": {"$ref": "#/definitions/nstr"}},
+      "required": ["accountId", "displayName"]
+    },
+    "customField": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"$ref": "#/definitions/nstr"},
+        "type": {
+          "type": ["string", "null"],
+          "enum": ["text", "url", "number", "date", "datetime", "adf", "option", "options", "cascadingOption", "user", "users", "labels", null],
+          "description": "null when unsupported"
+        },
+        "status": {"enum": ["supported", "unsupported", "withheld"]},
+        "value": {
+          "description": "Present when supported (shape follows type), or an empty null/[] for any status",
+          "anyOf": [
+            {"type": ["string", "number", "null"]},
+            {"$ref": "#/definitions/option"},
+            {"$ref": "#/definitions/fieldUser"},
+            {"type": "object", "description": "ADF document (type adf)"},
+            {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {"type": "string"},
+                  {"$ref": "#/definitions/option"},
+                  {"$ref": "#/definitions/fieldUser"}
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": ["id", "name", "type", "status"]
+    },
+    "matched": {
+      "type": "object",
+      "properties": {"status": {"const": "matched"}},
+      "required": ["status"]
+    },
+    "truncated": {"const": true, "description": "Name or description shortened to 4096 bytes"},
+    "pvNamed": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "previewTruncated": {"$ref": "#/definitions/truncated"}
+      },
+      "required": ["id", "name", "description"]
+    },
+    "pvVersion": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "released": {"type": "boolean"},
+        "archived": {"type": "boolean"},
+        "releaseDate": {"type": "string"},
+        "startDate": {"type": "string"},
+        "previewTruncated": {"$ref": "#/definitions/truncated"}
+      },
+      "required": ["id", "name", "description", "released", "archived"]
+    },
+    "pvIssueType": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "subtask": {"type": "boolean"},
+        "previewTruncated": {"$ref": "#/definitions/truncated"}
+      },
+      "required": ["id", "name", "description", "subtask"]
+    },
+    "pvStatus": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "statusCategory": {
+          "type": "object",
+          "properties": {
+            "id": {"type": "integer"},
+            "key": {"type": "string"},
+            "name": {"type": "string"},
+            "previewTruncated": {"$ref": "#/definitions/truncated"}
+          },
+          "required": ["id", "key", "name"]
+        },
+        "previewTruncated": {"$ref": "#/definitions/truncated"}
+      },
+      "required": ["id", "name", "description"]
+    },
+    "pvField": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "description": "REST field ID, such as customfield_N"},
+        "name": {"type": "string"},
+        "jqlReference": {"type": "string", "description": "JQL clause, such as cf[N]"},
+        "types": {"type": "array", "items": {"type": "string"}},
+        "operators": {
+          "type": "array",
+          "description": "Operators both Jira and Broker's JQL grammar support",
+          "items": {"type": "string"}
+        },
+        "previewTruncated": {"$ref": "#/definitions/truncated"}
+      },
+      "required": ["id", "name", "jqlReference", "types", "operators"]
+    },
+    "uploaded": {
+      "type": "object",
+      "properties": {
+        "attachmentId": {"type": "string"},
+        "filename": {"type": "string"},
+        "contentType": {"type": "string"},
+        "size": {"type": "integer"}
+      },
+      "required": ["attachmentId", "filename", "contentType", "size"]
+    },
+    "uploadFailure": {
+      "type": "object",
+      "properties": {
+        "status": {"enum": ["failed", "skipped"]},
+        "attachment": {
+          "type": "object",
+          "properties": {
+            "filename": {"type": "string"},
+            "contentType": {"type": "string"},
+            "size": {"type": "integer"},
+            "sha256": {"type": "string"}
+          },
+          "required": ["filename", "contentType", "size", "sha256"]
+        },
+        "reason": {
+          "type": "string",
+          "description": "Sanitized reason code; skipped uploads use not_attempted_after_previous_failure"
+        }
+      },
+      "required": ["status", "attachment", "reason"]
+    },
+    "checked": {
+      "type": "object",
+      "properties": {"type": {"enum": ["comment", "attachment"]}, "id": {"type": "string"}},
+      "required": ["type", "id"]
+    }
+  },
+  "actions": {
+    "project.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "key": {"type": "string"},
+                "name": {"type": "string"},
+                "webUrl": {"type": "string"},
+                "previewTruncated": {"const": true, "description": "Name shortened to 4096 bytes"},
+                "projectTypeKey": {"type": "string"}
+              },
+              "required": ["id", "key", "name", "webUrl"]
+            }
+          },
+          "count": {"type": "integer", "description": "Released item count, not an upstream total"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {
+            "enum": ["more", "scan_budget", "exhausted"],
+            "description": "more or scan_budget: continue with nextPageToken, even after an empty page; exhausted: done"
+          },
+          "nextPageToken": {
+            "type": "string",
+            "description": "Pass as pageToken with the same maxResults; absent when exhausted"
+          }
+        },
+        "required": ["items", "count", "maxResults", "scanStatus"]
+      }
+    },
+    "project.view": {
+      "success": {
+        "type": "object",
+        "description": "Each section appears only when requested by include (default [fields])",
+        "properties": {
+          "operation": {"const": "project.view"},
+          "project": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "description": {"type": "string"},
+              "key": {"type": "string"},
+              "webUrl": {"type": "string"},
+              "previewTruncated": {"$ref": "#/definitions/truncated"}
+            },
+            "required": ["id", "name", "description", "key", "webUrl"]
+          },
+          "fields": {
+            "type": "object",
+            "properties": {
+              "count": {"type": "integer"},
+              "items": {"type": "array", "items": {"$ref": "#/definitions/pvField"}},
+              "truncated": {"type": "boolean", "description": "More than 100 matches; narrow query"}
+            },
+            "required": ["count", "items", "truncated"]
+          },
+          "versions": {
+            "type": "object",
+            "properties": {
+              "count": {"type": "integer"},
+              "items": {"type": "array", "items": {"$ref": "#/definitions/pvVersion"}},
+              "truncated": {"type": "boolean", "description": "More than 100 matches; narrow query"}
+            },
+            "required": ["count", "items", "truncated"]
+          },
+          "components": {
+            "type": "object",
+            "properties": {
+              "count": {"type": "integer"},
+              "items": {"type": "array", "items": {"$ref": "#/definitions/pvNamed"}},
+              "truncated": {"type": "boolean", "description": "More than 100 matches; narrow query"}
+            },
+            "required": ["count", "items", "truncated"]
+          },
+          "issueTypes": {
+            "type": "object",
+            "properties": {
+              "count": {"type": "integer"},
+              "items": {"type": "array", "items": {"$ref": "#/definitions/pvIssueType"}},
+              "truncated": {"type": "boolean", "description": "More than 100 matches; narrow query"}
+            },
+            "required": ["count", "items", "truncated"]
+          },
+          "statuses": {
+            "type": "object",
+            "properties": {
+              "count": {"type": "integer"},
+              "items": {"type": "array", "items": {"$ref": "#/definitions/pvStatus"}},
+              "truncated": {"type": "boolean", "description": "More than 100 matches; narrow query"}
+            },
+            "required": ["count", "items", "truncated"]
+          }
+        },
+        "required": ["operation", "project"]
+      }
+    },
+    "issue_type.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue_type.list"},
+          "project": {"type": "string"},
+          "issueTypes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string", "description": "Pass as issueTypeId"},
+                "name": {"type": "string"},
+                "description": {"type": "string"},
+                "subtask": {"type": "boolean"}
+              },
+              "required": ["id", "name", "description", "subtask"]
+            }
+          },
+          "startAt": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "total": {"type": "integer"},
+          "count": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextStartAt": {"type": ["integer", "null"], "description": "null on the last page"}
+        },
+        "required": ["operation", "project", "issueTypes", "startAt", "maxResults", "total", "count", "isLast", "nextStartAt"]
+      }
+    },
+    "issue.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "key": {"type": "string"},
+          "project": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "summary": {"$ref": "#/definitions/nstr"},
+          "status": {"$ref": "#/definitions/nstr"},
+          "issueType": {"$ref": "#/definitions/nstr"},
+          "description": {"$ref": "#/definitions/nadf"},
+          "created": {"$ref": "#/definitions/nstr"},
+          "updated": {"$ref": "#/definitions/nstr"},
+          "creator": {"$ref": "#/definitions/user"},
+          "reporter": {"$ref": "#/definitions/user"},
+          "assignee": {"$ref": "#/definitions/user"},
+          "priority": {"$ref": "#/definitions/priority"},
+          "labels": {"$ref": "#/definitions/labels"},
+          "customFields": {
+            "type": "array",
+            "description": "Custom fields Jira returned, by numeric ID",
+            "items": {"$ref": "#/definitions/customField"}
+          },
+          "resolution": {
+            "type": ["object", "null"],
+            "properties": {"id": {"type": "string"}, "name": {"$ref": "#/definitions/nstr"}},
+            "required": ["id", "name"]
+          },
+          "resolutionDate": {"$ref": "#/definitions/nstr"},
+          "dueDate": {"$ref": "#/definitions/nstr"},
+          "components": {"$ref": "#/definitions/namedValues"},
+          "fixVersions": {"$ref": "#/definitions/namedValues"},
+          "affectedVersions": {"$ref": "#/definitions/namedValues"},
+          "statusCategory": {
+            "type": ["object", "null"],
+            "properties": {
+              "id": {"type": "integer", "minimum": 0},
+              "key": {"type": "string"},
+              "name": {"$ref": "#/definitions/nstr"}
+            },
+            "required": ["id", "key", "name"]
+          },
+          "parent": {
+            "type": ["object", "null"],
+            "description": "Present only with universal same-mode authority; null means Jira returned no parent",
+            "properties": {
+              "key": {"type": "string"},
+              "summary": {"$ref": "#/definitions/nstr"},
+              "issueType": {"$ref": "#/definitions/nstr"}
+            },
+            "required": ["key", "summary", "issueType"]
+          },
+          "subtasks": {
+            "type": "array",
+            "description": "Present only with universal same-mode authority and when Jira returned them",
+            "items": {"$ref": "#/definitions/reference"}
+          },
+          "issueLinks": {
+            "type": "array",
+            "description": "Present only with universal same-mode authority and when Jira returned them",
+            "items": {"$ref": "#/definitions/issueLink"}
+          },
+          "commentPage": {"$ref": "#/definitions/commentPage"}
+        },
+        "required": ["id", "key", "project", "webUrl", "summary", "status", "issueType", "description", "created", "updated", "creator", "reporter", "assignee", "priority", "labels", "customFields", "resolution", "resolutionDate", "dueDate", "components", "fixVersions", "affectedVersions", "statusCategory"]
+      }
+    },
+    "issue.create": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.create"},
+          "issue": {"$ref": "#/definitions/issueReadback"}
+        },
+        "required": ["operation", "issue"]
+      }
+    },
+    "issue.update": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.update"},
+          "issue": {"$ref": "#/definitions/issueReadback"},
+          "changedFields": {"type": "array", "items": {"enum": ["summary", "description"]}},
+          "notifyUsers": {
+            "type": ["boolean", "null"],
+            "description": "null when omitted (Jira default)"
+          }
+        },
+        "required": ["operation", "issue", "changedFields", "notifyUsers"]
+      }
+    },
+    "issue.child.create": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.child.create"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "parentIssue": {"$ref": "#/definitions/issueRef"},
+          "verification": {"$ref": "#/definitions/matched"}
+        },
+        "required": ["operation", "issue", "parentIssue", "verification"]
+      }
+    },
+    "issue.parent.set": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.parent.set"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "parentIssue": {"$ref": "#/definitions/issueRef"},
+          "verification": {"$ref": "#/definitions/matched"}
+        },
+        "required": ["operation", "issue", "parentIssue", "verification"]
+      }
+    },
+    "issue.dependency.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.dependency.add"},
+          "status": {"const": "present"},
+          "linkType": {"type": "string"},
+          "blockingIssue": {"$ref": "#/definitions/issueRef"},
+          "blockedIssue": {"$ref": "#/definitions/issueRef"},
+          "verification": {"$ref": "#/definitions/matched"}
+        },
+        "required": ["operation", "status", "linkType", "blockingIssue", "blockedIssue", "verification"]
+      }
+    },
+    "search": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "issues": {"type": "array", "items": {"$ref": "#/definitions/searchIssue"}},
+          "maxResults": {"type": "integer"},
+          "startAt": {"type": "integer"},
+          "total": {"type": ["integer", "null"], "description": "null when Jira reports no total"},
+          "nextPageToken": {
+            "type": ["string", "null"],
+            "description": "Opaque Broker continuation: pass back unchanged with the same query, projects and maxResults; null when no more pages"
+          },
+          "isLast": {"type": ["boolean", "null"], "description": "null when unknown"}
+        },
+        "required": ["issues", "maxResults", "startAt", "total", "nextPageToken", "isLast"]
+      }
+    },
+    "comment.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.list"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "comments": {"type": "array", "items": {"$ref": "#/definitions/comment"}},
+          "startAt": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "count": {"type": "integer"},
+          "total": {"type": ["integer", "null"]},
+          "isLast": {"type": ["boolean", "null"], "description": "null when Jira reported no total"},
+          "nextStartAt": {
+            "type": ["integer", "null"],
+            "description": "Next startAt with the same includeBodies, maxResults and orderBy; null when last or unknown"
+          },
+          "orderBy": {"enum": ["+created", "-created"]},
+          "includeBodies": {"type": "boolean"},
+          "limitedBy": {
+            "const": "body_bytes",
+            "description": "Present when the page body byte budget cut whole comments; continue from nextStartAt"
+          }
+        },
+        "required": ["operation", "issue", "comments", "startAt", "maxResults", "count", "total", "isLast", "nextStartAt", "orderBy", "includeBodies"]
+      }
+    },
+    "comment.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.view"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "comment": {"$ref": "#/definitions/comment"}
+        },
+        "required": ["operation", "issue", "comment"]
+      }
+    },
+    "comment.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.add"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "comment": {"$ref": "#/definitions/comment"}
+        },
+        "required": ["operation", "issue", "comment"]
+      }
+    },
+    "comment.reply": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.reply"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "requestedParentCommentId": {"type": "string"},
+          "parentCommentId": {"type": "string", "description": "Effective top-level thread root"},
+          "comment": {"$ref": "#/definitions/comment"}
+        },
+        "required": ["operation", "issue", "requestedParentCommentId", "parentCommentId", "comment"]
+      }
+    },
+    "comment.update": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.update"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "comment": {"$ref": "#/definitions/comment"}
+        },
+        "required": ["operation", "issue", "comment"]
+      }
+    },
+    "comment.delete": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.delete"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "commentId": {"type": "string"},
+          "status": {"const": "deleted"}
+        },
+        "required": ["operation", "issue", "commentId", "status"]
+      }
+    },
+    "comment.property.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.property.list"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "commentId": {"type": "string"},
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {"key": {"type": "string"}},
+              "required": ["key"]
+            }
+          },
+          "count": {"type": "integer"}
+        },
+        "required": ["operation", "issue", "commentId", "keys", "count"]
+      }
+    },
+    "comment.property.get": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.property.get"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "commentId": {"type": "string"},
+          "propertyKey": {"type": "string"},
+          "value": {"description": "Stored property JSON value"}
+        },
+        "required": ["operation", "issue", "commentId", "propertyKey", "value"]
+      }
+    },
+    "comment.property.set": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.property.set"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "commentId": {"type": "string"},
+          "propertyKey": {"type": "string"},
+          "status": {"const": "set"}
+        },
+        "required": ["operation", "issue", "commentId", "propertyKey", "status"]
+      }
+    },
+    "comment.property.delete": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "comment.property.delete"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "commentId": {"type": "string"},
+          "propertyKey": {"type": "string"},
+          "status": {"const": "deleted"}
+        },
+        "required": ["operation", "issue", "commentId", "propertyKey", "status"]
+      }
+    },
+    "attachment.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "status": {"const": "complete"},
+          "issueKey": {"type": "string"},
+          "project": {"type": "string"},
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/uploaded"}},
+          "failures": {"type": "array", "items": {"$ref": "#/definitions/uploadFailure"}}
+        },
+        "required": ["status", "issueKey", "project", "attachments", "failures"]
+      },
+      "error": {
+        "type": "object",
+        "description": "Partial upload: some attachments were created",
+        "properties": {
+          "status": {"const": "partial"},
+          "issueKey": {"type": "string"},
+          "project": {"type": "string"},
+          "attachments": {
+            "type": "array",
+            "description": "Created before the failure; do not repeat the batch",
+            "items": {"$ref": "#/definitions/uploaded"},
+            "minItems": 1
+          },
+          "failures": {
+            "type": "array",
+            "items": {"$ref": "#/definitions/uploadFailure"},
+            "minItems": 1
+          }
+        },
+        "required": ["status", "issueKey", "project", "attachments", "failures"]
+      }
+    },
+    "attachment.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "issueKey": {"type": "string"},
+          "project": {"type": "string"},
+          "attachmentId": {"type": "string"},
+          "filename": {"type": "string"},
+          "contentType": {"type": "string", "description": "Downloaded response content type"},
+          "metadataContentType": {
+            "type": "string",
+            "description": "Content type in Jira's attachment metadata"
+          },
+          "size": {"type": "integer", "description": "Bytes"},
+          "sha256": {
+            "type": "string",
+            "description": "Hex SHA-256 of the bytes, when known before delivery"
+          }
+        },
+        "required": ["issueKey", "project", "attachmentId", "filename", "contentType", "metadataContentType", "size"]
+      }
+    },
+    "attachment.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "attachment.list"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attachmentId": {"type": "string"},
+                "filename": {"type": "string"},
+                "size": {"type": "integer"},
+                "contentType": {"type": "string"}
+              },
+              "required": ["attachmentId", "filename", "size", "contentType"]
+            }
+          },
+          "count": {"type": "integer"}
+        },
+        "required": ["operation", "issue", "attachments", "count"]
+      }
+    },
+    "verify": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "verification": {
+            "type": "object",
+            "properties": {
+              "status": {"const": "matched"},
+              "checked": {"type": "array", "items": {"$ref": "#/definitions/checked"}}
+            },
+            "required": ["status", "checked"]
+          },
+          "issueKey": {"type": "string"},
+          "project": {"type": "string"}
+        },
+        "required": ["verification", "issueKey", "project"]
+      },
+      "error": {
+        "type": "object",
+        "properties": {
+          "verification": {
+            "type": "object",
+            "properties": {
+              "status": {"const": "mismatch"},
+              "checked": {
+                "type": "array",
+                "description": "Targets confirmed before the mismatch",
+                "items": {"$ref": "#/definitions/checked"}
+              },
+              "mismatch": {"$ref": "#/definitions/checked"}
+            },
+            "required": ["status", "checked", "mismatch"]
+          },
+          "issueKey": {"type": "string"},
+          "project": {"type": "string"}
+        },
+        "required": ["verification", "issueKey", "project"]
+      }
+    }
+  }
+}

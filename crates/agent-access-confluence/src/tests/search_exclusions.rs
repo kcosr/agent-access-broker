@@ -195,7 +195,7 @@ async fn exclusion_searches_check_the_whole_page_against_authorized_spaces() {
                     .credential(credential())
                     .search(SearchAuthorization::new("space", scope.clone()))
                     .build();
-                let result = provider.invoke(request).await;
+                let result = provider.invoke_checked(request).await;
                 if include_denied {
                     let error = result.unwrap_err();
                     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -239,7 +239,7 @@ async fn wildcard_keys_stay_invalid_and_text_wildcards_remain_constrained() {
         );
         for spaces in [json!([]), json!(["*"])] {
             let error = provider
-                .invoke(
+                .invoke_checked(
                     InvocationBuilder::new("confluence", action)
                         .inputs(json!({ "query": { "type": "cql", "value": "id != 12345" }, "spaces": spaces }))
                         .credential(credential())
@@ -252,7 +252,7 @@ async fn wildcard_keys_stay_invalid_and_text_wildcards_remain_constrained() {
         }
         assert!(server.received_requests().await.unwrap().is_empty());
         provider
-            .invoke(
+            .invoke_checked(
                 InvocationBuilder::new("confluence", action)
                     .inputs(json!({ "query": { "type": "text", "value": "*" } }))
                     .credential(credential())

@@ -378,7 +378,8 @@ keeps their intersection. A second-fetch failure fails the command.
 with `service` added. A fresh caller-visible runtime catalog
 supplies IO, presentation, and sensitive-field metadata. Actions with an available
 aggregate MCP name also include `mcpTool` containing the exact name and argument
-schema. The top-level `inputSchema` describes
+schema, plus the stdio [`outputSchema`](mcp.md#output-schemas) in place of the
+catalog's `resultSchemas` when the action declares result schemas. The top-level `inputSchema` describes
 raw broker inputs; `mcpTool.inputSchema` describes the local MCP wrapper.
 Invoke actions with an unavailable aggregate name omit `mcpTool` and include
 `mcpToolUnavailable`: `name_conflict`, `name_too_long`, or `reserved_name`.

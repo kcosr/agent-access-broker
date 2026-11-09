@@ -19065,6 +19065,17 @@ thread_local! {
 /// the test's own thread; a spawned thread's exit would remove the
 /// directory early.
 /// A personal credential entry consuming `connection`.
+/// The fake service's descriptor without result schemas, for test doubles
+/// whose results are not the echo's or whose definitions are calibrated to
+/// a page budget: the strict conformance check skips it.
+pub(crate) fn untyped_fake_descriptor() -> ServiceDescriptor {
+    let mut descriptor = agent_access_fake::fake_descriptor();
+    for action in &mut descriptor.actions {
+        action.result_schemas = None;
+    }
+    descriptor
+}
+
 pub(crate) fn connection_credential(connection: &str) -> CredentialConfig {
     CredentialConfig {
         kind: "connection".to_string(),

@@ -1160,7 +1160,7 @@ async fn search_text_negation_continuations_bind_each_operand_and_polarity() {
             "value": "title !~ \"obsolete\" AND text !~ \"deprecated\""
         }});
         let first = provider
-            .invoke(search_invocation(action, finite(&["ENG"]), query.clone()))
+            .invoke_checked(search_invocation(action, finite(&["ENG"]), query.clone()))
             .await
             .unwrap();
         let token = first.result["nextPageToken"].as_str().unwrap().to_string();
@@ -1176,7 +1176,7 @@ async fn search_text_negation_continuations_bind_each_operand_and_polarity() {
             let mut changed = next.clone();
             changed["query"]["value"] = json!(changed_query);
             let error = provider
-                .invoke(search_invocation(action, finite(&["ENG"]), changed))
+                .invoke_checked(search_invocation(action, finite(&["ENG"]), changed))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
@@ -1187,7 +1187,7 @@ async fn search_text_negation_continuations_bind_each_operand_and_polarity() {
             );
         }
         let error = provider
-            .invoke(search_invocation(
+            .invoke_checked(search_invocation(
                 action,
                 finite(&["ENG", "OPS"]),
                 next.clone(),
@@ -1205,7 +1205,7 @@ async fn search_text_negation_continuations_bind_each_operand_and_polarity() {
         // Canonical case and quote normalization do not change the query.
         next["query"]["value"] = json!("TITLE !~ 'obsolete' and TEXT !~ 'deprecated'");
         let second = provider
-            .invoke(search_invocation(action, finite(&["ENG"]), next))
+            .invoke_checked(search_invocation(action, finite(&["ENG"]), next))
             .await
             .unwrap();
         assert!(second.result["nextPageToken"].is_null());
@@ -1227,7 +1227,7 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
             "value": "title ~ \"runbook\" AND space != ARCHIVE AND content.id NOT IN (777777, 888888)"
         } });
         let first = provider
-            .invoke(search_invocation(action, finite(&["ENG"]), query.clone()))
+            .invoke_checked(search_invocation(action, finite(&["ENG"]), query.clone()))
             .await
             .unwrap();
         let token = first.result["nextPageToken"].as_str().unwrap().to_string();
@@ -1239,7 +1239,7 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
         next["query"]["value"] =
             json!("title ~ \"runbook\" AND space != ARCHIVE AND id NOT IN (777777, 888888)");
         let second = provider
-            .invoke(search_invocation(action, finite(&["ENG"]), next.clone()))
+            .invoke_checked(search_invocation(action, finite(&["ENG"]), next.clone()))
             .await
             .unwrap();
         assert!(second.result["nextPageToken"].is_null());
@@ -1258,7 +1258,7 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
             let mut changed = next.clone();
             changed["query"]["value"] = json!(value);
             let error = provider
-                .invoke(search_invocation(action, finite(&["ENG"]), changed))
+                .invoke_checked(search_invocation(action, finite(&["ENG"]), changed))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
@@ -1269,7 +1269,7 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
                 .build();
         assert_eq!(
             provider
-                .invoke(changed_context)
+                .invoke_checked(changed_context)
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -1279,7 +1279,7 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
         // A grant change that recomposes the query asks for a new search,
         // before Confluence sees the cursor.
         let error = provider
-            .invoke(search_invocation(
+            .invoke_checked(search_invocation(
                 action,
                 finite(&["ENG", "OPS"]),
                 next.clone(),
@@ -1297,12 +1297,12 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
         let mut narrowed = next.clone();
         narrowed["spaces"] = json!(["ENG"]);
         let error = provider
-            .invoke(search_invocation(action, finite(&["OPS"]), narrowed))
+            .invoke_checked(search_invocation(action, finite(&["OPS"]), narrowed))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
         let error = provider
-            .invoke(search_invocation(
+            .invoke_checked(search_invocation(
                 action,
                 SearchAuthorizationScope::excluding_exact_values(vec!["ENG".into()]),
                 next.clone(),
@@ -1318,7 +1318,7 @@ async fn search_pages_relay_only_confluence_cursors_and_reauthorize_every_page()
             "search"
         };
         let error = provider
-            .invoke(search_invocation(other, finite(&["ENG"]), next))
+            .invoke_checked(search_invocation(other, finite(&["ENG"]), next))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);

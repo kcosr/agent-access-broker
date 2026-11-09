@@ -1,6 +1,7 @@
 mod documentation;
 mod file_reads;
 mod plain_inputs;
+mod webhook_results;
 
 use super::*;
 use crate::{
@@ -443,7 +444,7 @@ async fn project_upload_streams_html_with_selected_credential_and_sanitizes_audi
             part.sha256_hex(),
         ))
         .build();
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_strict(request).await.unwrap();
     assert_eq!(
         result.result["upload"]["markdown"],
         upload_response()["markdown"]
@@ -500,7 +501,11 @@ async fn project_upload_rechecks_authorized_repository_before_accepting_or_sendi
     );
     request = InvocationBuilder::from(request).body_part(part).build();
     assert_eq!(
-        provider.invoke(request).await.unwrap_err().reason_code(),
+        provider
+            .invoke_strict(request)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
     assert!(
@@ -596,7 +601,7 @@ async fn project_upload_attachment_refusals_follow_scope_resolution() {
         let request = InvocationBuilder::from(request)
             .body_part(part.clone())
             .build();
-        let error = provider.invoke(request).await.unwrap_err();
+        let error = provider.invoke_strict(request).await.unwrap_err();
         assert_eq!(error.reason_code(), reason, "{case}");
     }
     assert!(
@@ -848,6 +853,24 @@ fn test_invocation(action: &str, inputs: Value) -> ProviderInvocation {
         .credential(test_credential())
         .lookup_credential(test_credential())
         .build()
+}
+
+impl GitlabProvider {
+    /// [`Provider::invoke`], asserting that the outcome conforms strictly to
+    /// the action's declared result schemas. Unit tests invoke through it.
+    pub(crate) async fn invoke_strict(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = request.action().to_owned();
+        let outcome = self.invoke(request).await;
+        let descriptor = gitlab_descriptor(&self.config);
+        let declared = descriptor
+            .action(&action)
+            .unwrap_or_else(|| panic!("GitLab declares no action {action}"));
+        agent_access_provider::test_support::assert_result_conforms(declared, &outcome);
+        outcome
+    }
 }
 
 fn test_project() -> GitlabProject {
@@ -2244,6 +2267,107 @@ fn audit_inputs_record_targets_and_never_content_or_secrets() {
     }
 }
 
+/// The supported configurations whose descriptors differ: every search
+/// engine and scope combination, and everything enabled with provisioning.
+fn descriptor_configurations() -> Vec<(&'static str, GitlabProviderConfig)> {
+    let categories = config().search.engines.basic.project_categories;
+    [
+        "default",
+        "search-disabled",
+        "project-only",
+        "instance-only",
+        "both",
+        "mixed",
+        "zoekt-default",
+        "all-enabled",
+    ]
+    .into_iter()
+    .map(|name| {
+        let mut config = config();
+        let search = &mut config.search;
+        match name {
+            "default" => {}
+            "search-disabled" => {
+                search.engines.basic.project_categories.clear();
+                search.engines.basic.instance_categories.clear();
+            }
+            "project-only" => search.engines.basic.instance_categories.clear(),
+            "instance-only" | "both" => {
+                search.engines.basic.project_categories.clear();
+                search.engines.basic.instance_categories.clear();
+                search.default_engine = "advanced".into();
+                search.engines.advanced.instance_categories = categories.clone();
+                if name == "both" {
+                    search.engines.advanced.project_categories = categories.clone();
+                }
+            }
+            "mixed" => {
+                search.engines.advanced.instance_categories = categories.clone();
+                search.engines.zoekt.project_categories = vec!["code".into()];
+            }
+            "zoekt-default" => {
+                search.engines.basic.project_categories.clear();
+                search.engines.basic.instance_categories.clear();
+                search.default_engine = "zoekt".into();
+                search.engines.zoekt.project_categories = vec!["code".into()];
+                search.engines.zoekt.instance_categories = vec!["code".into()];
+            }
+            "all-enabled" => {
+                search.default_engine = "advanced".into();
+                search.engines.advanced.project_categories = categories.clone();
+                search.engines.advanced.instance_categories = categories.clone();
+                search.engines.zoekt.project_categories = vec!["code".into()];
+                search.engines.zoekt.instance_categories = vec!["code".into()];
+                config.provisioning.enabled = true;
+                config.provisioning.max_access_level = 40;
+                config.provisioning.max_token_lifetime_days = 365;
+                config.provisioning.allowed_token_scopes = ["api", "read_api", "self_rotate"]
+                    .map(str::to_string)
+                    .into();
+                config.webhooks.allowed_destinations = vec!["https://hooks.example.com/*".into()];
+                config.webhooks.allow_disable_ssl_verification = true;
+                config.attachments.media_types =
+                    vec!["text/plain".into(), "application/json".into()];
+            }
+            _ => unreachable!("known configuration"),
+        }
+        (name, config)
+    })
+    .collect()
+}
+
+#[test]
+fn every_configuration_declares_bundled_result_schemas_for_exactly_its_actions() {
+    let limits = ProviderLimits::default();
+    let credentials = ServiceCredentialKinds::default()
+        .with_service(Some(CredentialSource::static_kind("bearer_token")));
+    let context = ValidationContext::new("production", "managed", &limits, credentials);
+    let mut published = BTreeSet::new();
+    for (name, config) in descriptor_configurations() {
+        let mut errors = Vec::new();
+        config.validate(&context, &mut errors);
+        assert!(errors.is_empty(), "{name}: {errors:?}");
+        // Descriptor validation checks each schema's profile and budget, and
+        // that every declared renderedBody owner resolves in it.
+        let descriptor = config.descriptor();
+        assert_eq!(descriptor.validate(), Ok(()), "{name}");
+        for action in &descriptor.actions {
+            assert_eq!(
+                action.result_schemas,
+                Some(result_schemas::RESULT_SCHEMAS.action(&action.action)),
+                "{name}: {}",
+                action.action
+            );
+            published.insert(action.action.clone());
+        }
+    }
+    // No bundle entry outlives its action.
+    assert_eq!(
+        published.iter().map(String::as_str).collect::<Vec<_>>(),
+        result_schemas::RESULT_SCHEMAS.actions()
+    );
+}
+
 #[test]
 fn gitlab_descriptor_marks_issued_tokens_and_transfer_io() {
     let descriptor = gitlab_descriptor(&config());
@@ -3178,7 +3302,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
     ];
     for (action, inputs) in cases {
         let error = provider
-            .invoke(test_invocation(action, inputs))
+            .invoke_strict(test_invocation(action, inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied, "{action}");
@@ -3187,7 +3311,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
 
     let unsupported_sentinel = "UNSUPPORTED_SENTINEL";
     let error = provider
-        .invoke(test_invocation(
+        .invoke_strict(test_invocation(
             "issue.note.add",
             json!({
                 "project": "sip/service",
@@ -3203,7 +3327,7 @@ async fn normalized_gitlab_source_failures_precede_every_action_lookup_and_hide_
 
     let malformed_sentinel = "MALFORMED_SENTINEL";
     let error = provider
-        .invoke(test_invocation(
+        .invoke_strict(test_invocation(
             "issue.note.add",
             json!({
                 "project": "sip/service",
@@ -3482,7 +3606,7 @@ async fn provider_issue_note_add_applies_configured_attribution_footer() {
         .await;
 
     let result = provider
-        .invoke(
+        .invoke_strict(
             InvocationBuilder::new("gitlab", "issue.note.add")
                 .inputs(json!({
                     "project": "sip/service",
@@ -3558,7 +3682,7 @@ async fn provider_issue_create_applies_attribution_to_supplied_description() {
         .await;
 
     let result = provider
-        .invoke(
+        .invoke_strict(
             InvocationBuilder::new("gitlab", "issue.create")
                 .inputs(json!({
                     "project": "sip/service",
@@ -3639,7 +3763,7 @@ async fn provider_issue_update_records_target_absent_when_description_is_omitted
         .await;
 
     let result = provider
-        .invoke(
+        .invoke_strict(
             InvocationBuilder::new("gitlab", "issue.update")
                 .inputs(json!({
                     "project": "sip/service",
@@ -3683,7 +3807,7 @@ async fn provider_issue_note_add_reports_attribution_when_footer_exceeds_body_ca
     let provider = GitlabProvider::new(config, &host.context()).unwrap();
 
     let error = provider
-        .invoke(
+        .invoke_strict(
             InvocationBuilder::new("gitlab", "issue.note.add")
                 .inputs(json!({
                     "project": "sip/service",
@@ -5978,7 +6102,7 @@ async fn static_token_readback_rejections_after_an_accepted_webhook_write_keep_i
                 .await;
 
             let error = webhook_server_provider(&server, 1024 * 1024)
-                .invoke(test_invocation(write.action, write.inputs.clone()))
+                .invoke_strict(test_invocation(write.action, write.inputs.clone()))
                 .await
                 .unwrap_err();
             assert!(!error.message.contains("upstream-detail"), "{case}");
@@ -6015,7 +6139,7 @@ async fn out_of_bounds_webhook_readback_leaves_the_accepted_write_unverified() {
                 .await;
 
             let outcome = webhook_server_provider(&server, 64)
-                .invoke(test_invocation(write.action, write.inputs.clone()))
+                .invoke_strict(test_invocation(write.action, write.inputs.clone()))
                 .await;
             if description.len() <= 64 {
                 let result = outcome.unwrap_or_else(|error| panic!("{case}: {error:?}"));
@@ -6075,7 +6199,7 @@ async fn static_token_failures_before_or_rejecting_a_webhook_write_keep_their_re
                     .mount(&server)
                     .await;
                 let error = webhook_server_provider(&server, 1024 * 1024)
-                    .invoke(test_invocation(write.action, write.inputs.clone()))
+                    .invoke_strict(test_invocation(write.action, write.inputs.clone()))
                     .await
                     .unwrap_err();
                 assert_eq!(error.reason_code(), before_write, "{case}: {error:?}");
@@ -6099,7 +6223,7 @@ async fn static_token_failures_before_or_rejecting_a_webhook_write_keep_their_re
             )
             .await;
             let error = webhook_server_provider(&server, 1024 * 1024)
-                .invoke(test_invocation(write.action, write.inputs.clone()))
+                .invoke_strict(test_invocation(write.action, write.inputs.clone()))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), write_rejected, "{case}: {error:?}");
@@ -6129,7 +6253,7 @@ async fn webhook_writes_the_allowlist_refuses_are_never_reported_applied() {
     let server = MockServer::start().await;
     serve_accepted_webhook_write(&server, &create).await;
     let error = allowlisted_server_provider(&server, &[project], 1024 * 1024)
-        .invoke(test_invocation(create.action, create.inputs.clone()))
+        .invoke_strict(test_invocation(create.action, create.inputs.clone()))
         .await
         .unwrap_err();
     assert_eq!(error.decision(), Decision::Error);
@@ -6148,7 +6272,7 @@ async fn webhook_writes_the_allowlist_refuses_are_never_reported_applied() {
     let server = MockServer::start().await;
     serve_accepted_webhook_write(&server, &create).await;
     let error = allowlisted_server_provider(&server, &[project, create.route], 1024 * 1024)
-        .invoke(test_invocation(create.action, create.inputs.clone()))
+        .invoke_strict(test_invocation(create.action, create.inputs.clone()))
         .await
         .unwrap_err();
     assert_eq!(
@@ -6315,7 +6439,7 @@ async fn invoke_probing_write(
         }));
     }
     let error = allowlisted_server_provider(&server, &allowed, 1024 * 1024)
-        .invoke(request.build())
+        .invoke_strict(request.build())
         .await
         .unwrap_err();
     (error, received_requests(&server).await)
@@ -7177,7 +7301,7 @@ async fn project_view_exposes_bounded_details_without_adding_them_to_audit() {
         .await;
     let invoke = || test_invocation("project.view", json!({"project": "sip/service"}));
     let result = allowlisted_server_provider(&server, &["/api/v4/**"], description.len() as u64)
-        .invoke(invoke())
+        .invoke_strict(invoke())
         .await
         .unwrap();
     assert_eq!(result.result["project"]["description"], description);
@@ -7198,7 +7322,7 @@ async fn project_view_exposes_bounded_details_without_adding_them_to_audit() {
     }
 
     let error = allowlisted_server_provider(&server, &["/api/v4/**"], description.len() as u64 - 1)
-        .invoke(invoke())
+        .invoke_strict(invoke())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -7620,7 +7744,10 @@ async fn fork_suggestions_pin_numeric_scope_state_and_recheck_it_before_writing(
             "provider_state_type_mismatch",
         ),
     ] {
-        let error = provider.invoke(invocation(state, &both)).await.unwrap_err();
+        let error = provider
+            .invoke_strict(invocation(state, &both))
+            .await
+            .unwrap_err();
         assert_eq!(error.decision(), Decision::Error);
         assert_eq!(
             error.reason_code(),
@@ -7644,7 +7771,7 @@ async fn fork_suggestions_pin_numeric_scope_state_and_recheck_it_before_writing(
         (preflight(42, 141), &["sip/service"][..]),
     ] {
         let error = provider
-            .invoke(invocation(Some(state), paths))
+            .invoke_strict(invocation(Some(state), paths))
             .await
             .unwrap_err();
         assert_eq!(error.decision(), Decision::Deny);
@@ -7657,7 +7784,7 @@ async fn fork_suggestions_pin_numeric_scope_state_and_recheck_it_before_writing(
     // Matching state passes the recheck and reaches the suggestion proof,
     // whose discussion read this fixture does not serve.
     let error = provider
-        .invoke(invocation(Some(preflight(42, 141)), &both))
+        .invoke_strict(invocation(Some(preflight(42, 141)), &both))
         .await
         .unwrap_err();
     assert_eq!(error.message, "GitLab note was not found or not permitted");
@@ -8173,7 +8300,7 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
     ] {
         let (base, seen) = scripted_gitlab(webhook_reads(), fate);
         let error = scripted_provider(&base)
-            .invoke(webhook_delete())
+            .invoke_strict(webhook_delete())
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), reason);
@@ -8250,7 +8377,7 @@ async fn refused_writes_are_not_applied_but_sent_writes_stay_unverified() {
     ] {
         let (base, seen) = scripted_gitlab(vec![project.clone()], fate);
         let error = scripted_provider(&base)
-            .invoke(issue_create())
+            .invoke_strict(issue_create())
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), reason);
@@ -8519,7 +8646,7 @@ async fn execution_acts_on_the_moved_project_id_only_under_its_admitted_current_
     };
 
     let viewed = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "issue.view",
             json!({ "url": "https://gitlab.example.com/old/service/-/issues/5" }),
             "sip/service",
@@ -8535,7 +8662,7 @@ async fn execution_acts_on_the_moved_project_id_only_under_its_admitted_current_
     // A write through the old path goes to the numeric project ID; GitLab
     // refuses writes to a moved project's old path with 405.
     let noted = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "issue.note.add",
             json!({ "project": "old/service", "iid": 5, "contentFormat": "markdown", "content": "noted" }),
             "sip/service",
@@ -8556,7 +8683,7 @@ async fn execution_acts_on_the_moved_project_id_only_under_its_admitted_current_
     // never reaches the moved project.
     for admitted in ["old/service", "sip/other"] {
         let error = provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 "issue.view",
                 json!({ "project": "old/service", "iid": 5 }),
                 admitted,
@@ -8625,12 +8752,15 @@ async fn an_old_path_another_project_now_owns_resolves_to_its_current_owner() {
             .lookup_credential(test_credential())
             .build()
     };
-    let viewed = provider.invoke(invocation("sip/old-name")).await.unwrap();
+    let viewed = provider
+        .invoke_strict(invocation("sip/old-name"))
+        .await
+        .unwrap();
     assert_eq!(viewed.audit.as_ref().unwrap()["gitlab"]["projectId"], 99);
     // The path's former owner, now `sip/service`, is not what the path
     // names any more.
     let error = provider
-        .invoke(invocation("sip/service"))
+        .invoke_strict(invocation("sip/service"))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -8679,7 +8809,7 @@ async fn execution_follows_an_authorized_path_to_the_project_that_took_it_over()
     assert_eq!(scopes, repository_scopes_from_path("team/repo"));
 
     let viewed = provider
-        .invoke(
+        .invoke_strict(
             InvocationBuilder::new("gitlab", "issue.view")
                 .inputs(inputs)
                 .resources(scopes)
@@ -8700,4 +8830,360 @@ async fn execution_follows_an_authorized_path_to_the_project_that_took_it_over()
             "GET /api/v4/projects/99/issues/5"
         ]
     );
+}
+
+const SHAPE_BASE_SHA: &str = "1111111111111111111111111111111111111111";
+const SHAPE_START_SHA: &str = "2222222222222222222222222222222222222222";
+const SHAPE_HEAD_SHA: &str = "3333333333333333333333333333333333333333";
+
+async fn serve_get(server: &MockServer, route: &str, body: Value) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+/// Project 42, merge request 5 (ID 500) at [`SHAPE_HEAD_SHA`] and the acting
+/// user 314: the reads every merge request result-shape test starts from.
+async fn serve_merge_request_reads(server: &MockServer) {
+    serve_get(
+        server,
+        "/api/v4/projects/sip%2Fservice",
+        json!({ "id": 42, "path_with_namespace": "sip/service" }),
+    )
+    .await;
+    serve_get(
+        server,
+        "/api/v4/projects/42/merge_requests/5",
+        json!({
+            "id": 500, "iid": 5, "project_id": 42, "source_project_id": 42,
+            "target_project_id": 42, "sha": SHAPE_HEAD_SHA,
+            "diff_refs": {
+                "base_sha": SHAPE_BASE_SHA, "start_sha": SHAPE_START_SHA,
+                "head_sha": SHAPE_HEAD_SHA
+            }
+        }),
+    )
+    .await;
+    serve_get(
+        server,
+        "/api/v4/user",
+        json!({ "id": 314, "username": "service-user" }),
+    )
+    .await;
+}
+
+/// A resolved multiline diff note with two suggestions: every optional note
+/// key.
+fn positioned_note_json(applied: bool) -> Value {
+    let suggestions = [456, 457].map(|id| {
+        json!({
+            "id": id, "from_line": 12, "to_line": 12, "applicable": !applied,
+            "applied": applied, "from_content": "read()\n", "to_content": "read_bounded()\n"
+        })
+    });
+    json!({
+        "id": 901, "body": "Prefer the bounded reader.", "type": "DiffNote",
+        "author": { "id": 314, "username": "service-user" },
+        "noteable_type": "MergeRequest", "noteable_iid": 5, "noteable_id": 500,
+        "project_id": 42, "resolvable": true, "resolved": true,
+        "resolved_by": {
+            "id": 315, "username": "reviewer", "name": "Rev Iewer",
+            "web_url": "https://gitlab.example.com/reviewer"
+        },
+        "resolved_at": "2026-11-01T10:00:00Z", "commit_id": SHAPE_HEAD_SHA,
+        "created_at": "2026-11-01T09:00:00Z", "updated_at": "2026-11-01T10:00:00Z",
+        "system": false, "confidential": false,
+        "position": {
+            "position_type": "text", "base_sha": SHAPE_BASE_SHA,
+            "start_sha": SHAPE_START_SHA, "head_sha": SHAPE_HEAD_SHA,
+            "old_path": "src/lib.rs", "new_path": "src/lib.rs",
+            "old_line": null, "new_line": 12,
+            "line_range": {
+                "start": { "line_code": "abc_11_11", "type": "new", "old_line": null, "new_line": 11 },
+                "end": { "line_code": "abc_12_12", "type": null, "old_line": 12, "new_line": 12 }
+            }
+        },
+        "suggestions": suggestions
+    })
+}
+
+#[tokio::test]
+async fn full_and_summary_collections_conform_to_their_result_schemas() {
+    let server = MockServer::start().await;
+    serve_merge_request_reads(&server).await;
+    serve_get(
+        &server,
+        "/api/v4/projects/42/issues/7",
+        json!({ "id": 700, "iid": 7, "project_id": 42 }),
+    )
+    .await;
+    serve_get(
+        &server,
+        "/api/v4/projects/42/issues/7/notes",
+        json!([note_json(701, "issue note", "Issue", 7)]),
+    )
+    .await;
+    serve_get(
+        &server,
+        "/api/v4/projects/42/merge_requests/5/notes",
+        json!([
+            positioned_note_json(false),
+            note_json(902, "plain", "MergeRequest", 5)
+        ]),
+    )
+    .await;
+    serve_get(
+        &server,
+        "/api/v4/projects/42/merge_requests/5/discussions",
+        json!([
+            { "id": "d1", "individual_note": false, "notes": [positioned_note_json(false)] },
+            { "id": "d2", "notes": [note_json(902, "plain", "MergeRequest", 5)] }
+        ]),
+    )
+    .await;
+    serve_get(
+        &server,
+        "/api/v4/projects/42/merge_requests/5/draft_notes",
+        json!([
+            {
+                "id": 11, "note": "positioned draft", "author_id": 314,
+                "merge_request_id": 500, "resolve_discussion": false,
+                "discussion_id": null, "commit_id": null,
+                "position": {
+                    "position_type": "image", "base_sha": null,
+                    "start_sha": SHAPE_START_SHA, "head_sha": SHAPE_HEAD_SHA,
+                    "old_path": "logo.png", "new_path": "logo.png",
+                    "width": 64, "height": 32, "x": 4, "y": 8
+                }
+            },
+            { "id": 12, "note": "reply draft", "author_id": 314, "discussion_id": "d1" }
+        ]),
+    )
+    .await;
+    let provider = provider_for_server(&server);
+    let collections = [
+        ("issue.note.list", 7, "notes"),
+        ("merge_request.note.list", 5, "notes"),
+        ("merge_request.discussion.list", 5, "discussions"),
+        ("merge_request.draft_note.list", 5, "draftNotes"),
+    ];
+    for (action, iid, key) in collections {
+        for projection in ["full", "summary"] {
+            let result = provider
+                .invoke_strict(test_invocation(
+                    action,
+                    json!({ "project": "sip/service", "iid": iid, "projection": projection }),
+                ))
+                .await
+                .unwrap()
+                .result;
+            assert_eq!(result["projection"], projection, "{action}");
+            assert_eq!(result["isLast"], true, "{action}");
+            assert!(result["nextPageToken"].is_null(), "{action}");
+            let items = result[key].as_array().unwrap();
+            assert!(!items.is_empty(), "{action}");
+            for item in items {
+                let notes = match key {
+                    "discussions" => item["notes"].as_array().unwrap().clone(),
+                    _ => vec![item.clone()],
+                };
+                for note in notes {
+                    // Summary items never carry a body; full items always do.
+                    assert_eq!(
+                        note.get("body").is_some(),
+                        projection == "full",
+                        "{action} {projection}: {note}"
+                    );
+                }
+                if key == "discussions" {
+                    assert_eq!(
+                        item.get("noteCount").is_some(),
+                        projection == "summary",
+                        "{action}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn merge_returns_the_merged_request_without_its_description() {
+    let server = MockServer::start().await;
+    serve_merge_request_reads(&server).await;
+    let reviewer = json!({
+        "id": 315, "username": "reviewer", "name": "Rev Iewer",
+        "web_url": "https://gitlab.example.com/reviewer"
+    });
+    Mock::given(method("PUT"))
+        .and(path("/api/v4/projects/42/merge_requests/5/merge"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 500, "iid": 5, "project_id": 42, "title": "Bound reads",
+            "description": "merged description", "state": "merged", "draft": false,
+            "source_branch": "feature", "target_branch": "main",
+            "source_project_id": 42, "target_project_id": 42, "sha": SHAPE_HEAD_SHA,
+            "merge_commit_sha": "4444444444444444444444444444444444444444",
+            "squash_commit_sha": null, "merge_status": "can_be_merged",
+            "detailed_merge_status": "mergeable", "has_conflicts": false,
+            "blocking_discussions_resolved": true, "discussion_locked": null,
+            "changes_count": "1000+", "user_notes_count": 3,
+            "prepared_at": "2026-11-01T08:00:00Z",
+            "diff_refs": {
+                "base_sha": null, "start_sha": SHAPE_START_SHA, "head_sha": SHAPE_HEAD_SHA
+            },
+            "head_pipeline": {
+                "id": 77, "sha": SHAPE_HEAD_SHA, "ref": "feature", "status": "success",
+                "web_url": "https://gitlab.example.com/sip/service/-/pipelines/77"
+            },
+            "web_url": "https://gitlab.example.com/sip/service/-/merge_requests/5",
+            "created_at": "2026-11-01T07:00:00Z", "updated_at": "2026-11-01T11:00:00Z",
+            "author": reviewer, "assignees": [reviewer], "reviewers": [],
+            "labels": ["backend"],
+            "milestone": { "id": 9, "iid": 2, "title": "v1", "state": "active", "due_date": null }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = provider_for_server(&server)
+        .invoke_strict(test_invocation(
+            "merge_request.merge",
+            json!({ "project": "sip/service", "iid": 5, "sha": SHAPE_HEAD_SHA }),
+        ))
+        .await
+        .unwrap()
+        .result;
+    let merged = &result["mergeRequest"];
+    assert_eq!(merged["state"], "merged");
+    assert_eq!(merged["project"], "sip/service");
+    assert!(merged["description"].is_null());
+}
+
+#[tokio::test]
+async fn unapprove_reports_the_acting_user_and_no_head_sha() {
+    let server = MockServer::start().await;
+    serve_merge_request_reads(&server).await;
+    let approvals = |approved: bool| {
+        let approved_by = if approved {
+            json!([{ "user": { "id": 314, "username": "service-user" },
+                     "approved_at": "2026-11-01T09:00:00Z" }])
+        } else {
+            json!([])
+        };
+        json!({
+            "approvals_required": 1, "approvals_left": u64::from(!approved),
+            "approved": approved, "user_has_approved": approved, "user_can_approve": true,
+            "approved_by": approved_by
+        })
+    };
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/42/merge_requests/5/approvals"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(approvals(true)))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/projects/42/merge_requests/5/approvals"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(approvals(false)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/projects/42/merge_requests/5/unapprove"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(approvals(false)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let result = provider_for_server(&server)
+        .invoke_strict(test_invocation(
+            "merge_request.unapprove",
+            json!({ "project": "sip/service", "iid": 5 }),
+        ))
+        .await
+        .unwrap()
+        .result;
+    assert_eq!(
+        result,
+        json!({
+            "mutationStatus": "applied", "retrySafe": false, "userId": 314,
+            "headSha": null, "approved": false
+        })
+    );
+}
+
+#[tokio::test]
+async fn batch_suggestion_apply_conforms_on_success_and_outdated_suggestions() {
+    let action = "merge_request.suggestion.batch_apply";
+    let locators =
+        [456, 457].map(|id| json!({ "discussionId": "d1", "noteId": 901, "suggestionId": id }));
+    let inputs = json!({
+        "project": "sip/service", "iid": 5, "expectedHeadSha": SHAPE_HEAD_SHA,
+        "suggestions": locators
+    });
+    for already_applied in [false, true] {
+        let server = MockServer::start().await;
+        serve_merge_request_reads(&server).await;
+        let discussion = |applied| json!({ "id": "d1", "notes": [positioned_note_json(applied)] });
+        // Each suggestion is proven applicable before the write, and applied after.
+        Mock::given(method("GET"))
+            .and(path("/api/v4/projects/42/merge_requests/5/discussions/d1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(discussion(already_applied)))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        serve_get(
+            &server,
+            "/api/v4/projects/42/merge_requests/5/discussions/d1",
+            discussion(true),
+        )
+        .await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v4/suggestions/batch_apply"))
+            .and(body_json(json!({ "ids": [456, 457] })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(positioned_note_json(true)["suggestions"].clone()),
+            )
+            .expect(u64::from(!already_applied))
+            .mount(&server)
+            .await;
+        let provider = provider_for_server(&server);
+        let fixture = agent_access_provider::test_support::ScopeRequestFixture::new(
+            "gitlab",
+            action,
+            inputs.clone(),
+        )
+        .lookup_credential(test_credential());
+        let (scopes, state) = provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap()
+            .into_parts();
+        let outcome = provider
+            .invoke_strict(
+                InvocationBuilder::new("gitlab", action)
+                    .inputs(inputs.clone())
+                    .resources(scopes)
+                    .state(state.unwrap())
+                    .credential(test_credential())
+                    .lookup_credential(test_credential())
+                    .build(),
+            )
+            .await;
+        if already_applied {
+            let error = outcome.unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+            assert_eq!(
+                error.result.as_deref(),
+                Some(&json!({ "inputCategory": "suggestion_outdated" }))
+            );
+        } else {
+            assert_eq!(
+                outcome.unwrap().result,
+                json!({ "mutationStatus": "applied", "retrySafe": false, "suggestionIds": [456, 457] })
+            );
+        }
+    }
 }

@@ -310,6 +310,12 @@ mod tests {
         fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
             Ok(action.action.clone())
         }
+        fn result_schemas(
+            &self,
+            _: &ImportedActionDefinition,
+        ) -> Result<agent_access_provider::ActionResultSchemas, String> {
+            Ok(crate::imports::test_result_schemas("upstreamMcp"))
+        }
         fn build(
             &self,
             _: &ImportedServiceDefinition,

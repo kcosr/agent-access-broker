@@ -334,7 +334,7 @@ async fn a_lookup_401_recovers_once_and_execution_presents_the_renewed_access() 
         &repository_scopes_from_path("sip/service")
     );
     let result = provider
-        .invoke(delegated_invocation(
+        .invoke_strict(delegated_invocation(
             "project.view",
             project_inputs(),
             &credential,
@@ -376,7 +376,7 @@ async fn a_second_401_fails_as_reconnect_required_without_another_recovery() {
         .await
         .unwrap();
     let error = provider
-        .invoke(delegated_invocation("issue.view", inputs, &credential))
+        .invoke_strict(delegated_invocation("issue.view", inputs, &credential))
         .await
         .unwrap_err();
     assert_eq!(error, already_recovered());
@@ -434,7 +434,7 @@ async fn access_refreshed_between_requests_is_presented_without_recovery() {
         .await
         .unwrap();
     provider
-        .invoke(delegated_invocation(
+        .invoke_strict(delegated_invocation(
             "project.view",
             project_inputs(),
             &credential,
@@ -488,7 +488,7 @@ async fn delegated_search_page_tokens_survive_refresh_but_not_another_connection
     });
     let credential = delegated_credential(lease);
     let first = provider
-        .invoke(delegated_invocation(
+        .invoke_strict(delegated_invocation(
             "issue.search",
             project_inputs(),
             &credential,
@@ -498,7 +498,7 @@ async fn delegated_search_page_tokens_survive_refresh_but_not_another_connection
     let token = first.result["nextPageToken"].as_str().unwrap().to_owned();
     let next_inputs = json!({ "project": "sip/service", "pageToken": token });
     let second = provider
-        .invoke(delegated_invocation(
+        .invoke_strict(delegated_invocation(
             "issue.search",
             next_inputs.clone(),
             &credential,
@@ -512,7 +512,7 @@ async fn delegated_search_page_tokens_survive_refresh_but_not_another_connection
         ..Lease::new(&server.uri())
     }));
     let error = provider
-        .invoke(delegated_invocation(
+        .invoke_strict(delegated_invocation(
             "issue.search",
             next_inputs,
             &reconnected,
@@ -548,7 +548,7 @@ async fn a_rejected_write_is_repeated_once_with_renewed_access() {
         let lease = Arc::new(Lease::new(&server.uri()));
         let credential = delegated_credential(lease.clone());
         let outcome = provider(&server)
-            .invoke(delegated_invocation(
+            .invoke_strict(delegated_invocation(
                 "issue.create",
                 json!({ "project": "sip/service", "title": "New issue" }),
                 &credential,
@@ -632,7 +632,7 @@ async fn a_rejected_upload_is_sent_again_whole_with_renewed_access() {
                 part.sha256_hex(),
             ))
             .build();
-    let result = provider(&server).invoke(request).await.unwrap();
+    let result = provider(&server).invoke_strict(request).await.unwrap();
     assert_eq!(result.upstream_status, Some(201));
     let posts = server
         .received_requests()
@@ -698,7 +698,7 @@ async fn delegated_access_is_refused_before_sending_unless_pinned_to_this_instan
     );
     assert_eq!(
         provider
-            .invoke(delegated_invocation(
+            .invoke_strict(delegated_invocation(
                 "project.view",
                 project_inputs(),
                 &credential
@@ -811,7 +811,7 @@ async fn delegated_access_lost_after_an_accepted_webhook_write_keeps_its_receipt
             let provider = GitlabProvider::new(config, &TestHost::default().context()).unwrap();
 
             let error = provider
-                .invoke(delegated_invocation(
+                .invoke_strict(delegated_invocation(
                     action,
                     inputs,
                     &delegated_credential(lease.clone()),
@@ -950,7 +950,10 @@ async fn delegated_access_lost_before_a_write_or_version_check_keeps_its_reason(
                 }));
             }
 
-            let error = provider(&server).invoke(request.build()).await.unwrap_err();
+            let error = provider(&server)
+                .invoke_strict(request.build())
+                .await
+                .unwrap_err();
             assert_eq!(error, failure, "{action}");
             // Nothing was sent after the read that preceded the failure.
             assert_eq!(

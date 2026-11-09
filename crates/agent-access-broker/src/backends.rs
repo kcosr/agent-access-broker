@@ -215,6 +215,21 @@ mod tests {
                 .count();
             let definitions = registry.definitions();
             assert_eq!(definitions.len(), expected + 5, "{mode:?}");
+            // Every advertised output schema is self-contained and within the
+            // per-tool budget.
+            for tool in &definitions {
+                let Some(schema) = tool.get("outputSchema") else {
+                    continue;
+                };
+                let encoded = serde_json::to_string(schema).unwrap();
+                assert!(
+                    encoded.len() <= agent_access_core::output_schema::MAX_OUTPUT_SCHEMA_BYTES,
+                    "{} {mode:?}: {} bytes",
+                    tool["name"],
+                    encoded.len()
+                );
+                assert!(!encoded.contains("\"$ref\""), "{}", tool["name"]);
+            }
             assert!(
                 definitions
                     .iter()

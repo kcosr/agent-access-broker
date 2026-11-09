@@ -20,6 +20,50 @@ use tokio::task::JoinHandle;
 
 mod compatibility;
 
+/// An imported MCP provider whose every invocation outcome is checked
+/// strictly against the result schemas core attaches to the action's
+/// descriptor; tests build every provider through [`Checked::checked`].
+struct Conforming(Arc<dyn Provider>);
+
+#[async_trait]
+impl Provider for Conforming {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.0.resolve_scopes(request).await
+    }
+    async fn verify_execution_credential(
+        &self,
+        credential: &ExecutionCredential,
+        correlation: &CorrelationContext,
+    ) -> Result<Option<ProviderCredentialVerification>, ProviderError> {
+        self.0
+            .verify_execution_credential(credential, correlation)
+            .await
+    }
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        let described =
+            ActionDescriptor::new(request.action(), "Imported", json!({"type": "object"}))
+                .result_schemas(McpAdapter.result_schemas(&action()).unwrap());
+        let outcome = self.0.invoke(request).await;
+        test_support::assert_result_conforms(&described, &outcome);
+        outcome
+    }
+}
+
+trait Checked {
+    /// The built invoke provider, checking every outcome (see [`Conforming`]).
+    fn checked(&self) -> Option<Arc<dyn Provider>>;
+}
+
+impl Checked for ImportedProvider {
+    fn checked(&self) -> Option<Arc<dyn Provider>> {
+        self.provider()
+            .map(|provider| Arc::new(Conforming(provider)) as Arc<dyn Provider>)
+    }
+}
+
 /// The build host imported MCP tests share: a short request timeout and a
 /// 256 KiB response cap.
 fn test_host() -> test_support::TestHost {
@@ -278,7 +322,7 @@ async fn invoke_uses_accepted_schema_no_listing_and_preserves_nullable_result() 
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let result = agent_access_provider::host::with_provider_context(
         CorrelationContext::for_tests(),
@@ -334,7 +378,7 @@ async fn missing_or_invalid_output_and_continuations_are_unknown_writes_without_
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
@@ -359,7 +403,7 @@ async fn input_and_credential_rejections_dispatch_nothing() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     assert_eq!(
         provider
@@ -408,7 +452,7 @@ async fn independent_credentials_and_transport_auth_are_never_reused() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     for token in ["alice-token", "bob-token"] {
         let mut request = invocation(json!({"region":"east"}), token);
@@ -456,7 +500,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
@@ -491,7 +535,7 @@ async fn timeouts_status_errors_redirects_and_mismatched_ids_are_not_retried() {
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
@@ -560,7 +604,7 @@ async fn bounded_json_and_sse_results_include_discarded_bytes() {
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let error = provider
             .invoke(invocation(json!({"region":"east"}), "secret"))
@@ -589,7 +633,7 @@ async fn sdk_and_host_trace_events_do_not_include_wire_credentials_inputs_or_res
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let capture = test_support::install_trace_capture().start();
     let result = capture
@@ -739,7 +783,7 @@ async fn official_sdk_current_server_accepts_generated_headers_and_rejects_misma
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     for region in ["east", " café ", "=?base64?YQ==?=", "line\r\nbreak"] {
         let result = provider
@@ -966,7 +1010,7 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
             &host.context(),
         )
         .unwrap()
-        .provider()
+        .checked()
         .unwrap();
     let (request, _) = leased_invocation(&fixture.endpoint, false);
     let request = InvocationBuilder::from(request)
@@ -1020,7 +1064,7 @@ async fn oauth_lease_revalidates_every_post_and_never_recovers_or_replays_a_401_
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let (request, lease) = leased_invocation(&fixture.endpoint, false);
         let result = provider.invoke(request).await;
@@ -1069,7 +1113,7 @@ async fn oauth_lease_binding_revocation_and_static_fallback_fail_before_tool_dis
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         let (mut request, lease) = leased_invocation(&fixture.endpoint, failure == "revoked");
         if failure == "resource" {
@@ -1170,4 +1214,130 @@ fn basic_delivery_is_rejected_by_mcp_validation_contract_and_build() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn result_schemas_are_one_open_wrapper_within_the_profile() {
+    let mut accepted = action();
+    let declared = McpAdapter.result_schemas(&accepted).unwrap();
+    // The accepted upstream output schema never narrows the wrapper, so a
+    // refresh that changes it cannot invalidate a cached client validator.
+    accepted.output_schema = None;
+    accepted.read_only = true;
+    assert_eq!(McpAdapter.result_schemas(&accepted).unwrap(), declared);
+    let upstream = &declared.success()["properties"]["upstreamMcp"]["properties"];
+    assert_eq!(upstream["structuredContent"].get("type"), None);
+    assert_eq!(upstream["content"]["items"], json!({"type": "object"}));
+    let mut descriptor = ServiceDescriptor::new("example", "Example").with_actions(vec![
+        ActionDescriptor::new("item.update", "Updates", json!({"type": "object"}))
+            .credential_modes(vec!["service"])
+            .result_schemas(declared.clone()),
+    ]);
+    descriptor.actions[0].sensitive_output_pointers = vec!["/result/upstreamMcp".into()];
+    descriptor.validate().unwrap();
+    // Strict checks still require every emitted field to be declared.
+    let action = &descriptor.actions[0];
+    let wrapper = json!({"content": [], "isError": false});
+    assert!(
+        test_support::check_result_conforms(
+            action,
+            &Ok(ProviderResult::new(
+                json!({"upstreamMcp": wrapper, "extra": 1})
+            ))
+        )
+        .is_err()
+    );
+    assert!(
+        test_support::check_result_conforms(
+            action,
+            &Ok(ProviderResult::new(
+                json!({"upstreamMcp": {"content": [], "isError": false, "other": 1}})
+            ))
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn reads_writes_and_tool_errors_conform_to_the_result_schemas() {
+    let results = [
+        json!({"content":[{"type":"text","text":"done"}]}),
+        json!({"content":[],"structuredContent":null}),
+        json!({"structuredContent":{"items":[{"id":1}],"next":null}}),
+        json!({"content":[{"type":"image","data":"aGk=","mimeType":"image/png"},
+            {"type":"resource","resource":{"uri":"file:///a.txt","text":"a"}}],"structuredContent":[1,2]}),
+        json!({"isError":true,"content":[{"type":"text","text":"failed"}],"structuredContent":{"code":"E1"}}),
+        json!({"isError":true,"content":[]}),
+    ];
+    for read_only in [true, false] {
+        for raw in &results {
+            let fixture = Fixture::new(FixtureState {
+                result: raw.clone(),
+                ..Default::default()
+            })
+            .await;
+            let mut accepted = action();
+            accepted.output_schema = None;
+            accepted.read_only = read_only;
+            let host = test_host();
+            let provider = McpAdapter
+                .build(
+                    &definition(&fixture.endpoint),
+                    &[accepted],
+                    None,
+                    &ImportedAdapterContext::default(),
+                    &host.context(),
+                )
+                .unwrap()
+                .checked()
+                .unwrap();
+            let outcome = provider
+                .invoke(invocation(json!({"region":"east"}), "secret"))
+                .await;
+            let tool_error = raw["isError"] == true;
+            let result = match &outcome {
+                Ok(result) => &result.result,
+                Err(error) => error.result.as_deref().unwrap(),
+            };
+            assert_eq!(outcome.is_err(), tool_error, "{raw}");
+            assert_eq!(result["upstreamMcp"]["isError"], tool_error);
+            assert_eq!(
+                result["upstreamMcp"].get("structuredContent"),
+                raw.get("structuredContent")
+            );
+            match (read_only, tool_error) {
+                (true, _) => assert!(result.get("mutationStatus").is_none()),
+                (false, false) => assert_eq!(result["mutationStatus"], "applied_unverified"),
+                (false, true) => {
+                    assert_eq!(result["mutationStatus"], "unknown");
+                    assert_eq!(result["toolDispatched"], true);
+                }
+            }
+        }
+    }
+    // A write that fails before any result keeps only its receipt.
+    let fixture = Fixture::new(FixtureState {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        ..Default::default()
+    })
+    .await;
+    let host = test_host();
+    let error = McpAdapter
+        .build(
+            &definition(&fixture.endpoint),
+            &[action()],
+            None,
+            &ImportedAdapterContext::default(),
+            &host.context(),
+        )
+        .unwrap()
+        .checked()
+        .unwrap()
+        .invoke(invocation(json!({"region":"east"}), "secret"))
+        .await
+        .unwrap_err();
+    let result = error.result.as_deref().unwrap();
+    assert_eq!(result["limitScope"], "upstream");
+    assert_eq!(result["toolDispatched"], true);
+    assert!(result.get("upstreamMcp").is_none());
 }

@@ -811,7 +811,7 @@ async fn assert_project_collection_pages(action: &str) {
     let mut input = json!({"maxResults":2});
     for expected in [Some("team/first"), Some("team/second"), None] {
         let result = provider
-            .invoke(invocation(action, input.clone(), scope()))
+            .invoke_strict(invocation(action, input.clone(), scope()))
             .await
             .unwrap();
         let released = format!(
@@ -865,7 +865,7 @@ async fn assert_project_collection_binding(action: &str) {
             ResponseTemplate::new(200).set_body_json(if after.is_some(){json!([])}else{json!([{"id":1,"path_with_namespace":"hidden/secret","name":"DENIED_NAME","description":"DENIED_BODY","archived":false},{"id":2,"path_with_namespace":"team/new-repository","name":"New","description":"visible","archived":false}])})
         }).expect(2).mount(&server).await;
     let first = provider
-        .invoke(invocation(action, json!({"maxResults":2}), scope()))
+        .invoke_strict(invocation(action, json!({"maxResults":2}), scope()))
         .await
         .unwrap();
     assert_eq!(first.result["count"], 1);
@@ -891,7 +891,7 @@ async fn assert_project_collection_binding(action: &str) {
         ),
     ] {
         let error = provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 action,
                 json!({"maxResults":size,"pageToken":token}),
                 boundary,
@@ -902,7 +902,7 @@ async fn assert_project_collection_binding(action: &str) {
     }
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     let second = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             action,
             json!({"maxResults":2,"pageToken":token}),
             scope(),
@@ -947,7 +947,7 @@ async fn project_list_empty_budget_pages_preserve_independent_allows_and_current
         ("exhausted", 0),
     ] {
         let result = provider
-            .invoke(invocation("project.list", input.clone(), scope.clone()))
+            .invoke_strict(invocation("project.list", input.clone(), scope.clone()))
             .await
             .unwrap();
         assert_eq!(result.result["scanStatus"], status);
@@ -985,7 +985,7 @@ async fn content_confirms_current_paths_discards_denied_and_unavailable_then_ret
     project(&server, 3, "team/deleted", 404).await;
     project(&server, 4, "team/reused", 200).await;
     let result = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.issues",
             json!({"search":"needle","maxResults":4}),
             scope(),
@@ -1018,7 +1018,7 @@ async fn filtered_page_budget_returns_empty_resumable_page_and_missing_headers_n
     project(&server, 2, "team/visible", 200).await;
     page(&server, 3, json!([]), None).await;
     let first = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.issues",
             json!({"search":"needle","maxResults":2}),
             scope(),
@@ -1028,7 +1028,7 @@ async fn filtered_page_budget_returns_empty_resumable_page_and_missing_headers_n
     assert_eq!(first.result["count"], 0);
     assert_eq!(first.result["scanStatus"], "scan_budget");
     let second = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.issues",
             json!({"search":"needle","maxResults":2,"pageToken":first.result["nextPageToken"]}),
             scope(),
@@ -1038,7 +1038,7 @@ async fn filtered_page_budget_returns_empty_resumable_page_and_missing_headers_n
     assert_eq!(second.result["count"], 1);
     assert_eq!(second.result["scanStatus"], "more");
     let last = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.issues",
             json!({"search":"needle","maxResults":2,"pageToken":second.result["nextPageToken"]}),
             scope(),
@@ -1056,7 +1056,7 @@ async fn every_confirmation_failure_except_candidate_403_404_aborts_without_curs
         page(&server, 1, json!([issue(1, 1)]), Some("")).await;
         project(&server, 1, "team/repo", status).await;
         let result = provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 "search.issues",
                 json!({"search":"needle","maxResults":1}),
                 scope(),
@@ -1083,7 +1083,7 @@ async fn every_confirmation_failure_except_candidate_403_404_aborts_without_curs
             .await;
         assert!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "search.issues",
                     json!({"search":"needle","maxResults":1}),
                     scope()
@@ -1154,7 +1154,7 @@ async fn all_six_categories_use_fixed_scopes_and_allowlisted_projections() {
             .await;
         project(&server, 7, "team/repo", 200).await;
         let result = provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 &format!("search.{category}"),
                 json!({"search":" native expression ","maxResults":1}),
                 scope(),
@@ -1190,7 +1190,7 @@ async fn explicit_project_uses_safe_rename_current_authority_and_numeric_route()
     Mock::given(path("/api/v4/projects/7/search")).and(query_param("scope","blobs")).and(query_param("search_type","basic"))
         .respond_with(ResponseTemplate::new(200).insert_header("X-Search-Type","basic").insert_header("X-Next-Page","").set_body_json(json!([{"project_id":7,"path":"lib.rs","ref":"main","startline":1,"data":"needle"}]))).expect(1).mount(&server).await;
     let result = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.code",
             json!({"search":"needle","project":"old/repo"}),
             scope(),
@@ -1212,7 +1212,7 @@ async fn explicit_project_and_collection_403_404_are_errors_and_hit_ownership_is
             .await;
         assert!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "search.code",
                     json!({"search":"needle","project":"team/repo"}),
                     scope()
@@ -1226,7 +1226,7 @@ async fn explicit_project_and_collection_403_404_are_errors_and_hit_ownership_is
             .await;
         assert!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "search.issues",
                     json!({"search":"needle"}),
                     scope()
@@ -1255,7 +1255,7 @@ async fn explicit_project_and_collection_403_404_are_errors_and_hit_ownership_is
         .await;
     assert_eq!(
         provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 "search.issues",
                 json!({"search":"needle","project":"team/repo"}),
                 scope()
@@ -1282,7 +1282,7 @@ async fn headers_and_page_failure_never_return_partially_projected_items() {
             .await;
         assert_eq!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "search.issues",
                     json!({"search":"needle"}),
                     scope()
@@ -1305,7 +1305,7 @@ async fn headers_and_page_failure_never_return_partially_projected_items() {
     .await;
     project(&server, 1, "team/repo", 200).await;
     let error = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.issues",
             json!({"search":"needle","maxResults":2}),
             scope(),
@@ -1325,7 +1325,7 @@ async fn unavailable_projects_are_memoized_and_reconfirmed_on_later_operations()
     for _ in 0..2 {
         assert_eq!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "search.issues",
                     json!({"search":"needle","maxResults":2}),
                     scope()
@@ -1354,7 +1354,7 @@ async fn changing_boundaries_inputs_and_explicit_identity_invalidates_continuati
     project(&server, 1, "team/repo", 200).await;
     let input = json!({"search":"needle","maxResults":1});
     let first = provider
-        .invoke(invocation("search.issues", input.clone(), scope()))
+        .invoke_strict(invocation("search.issues", input.clone(), scope()))
         .await
         .unwrap();
     let token = first.result["nextPageToken"].clone();
@@ -1379,7 +1379,7 @@ async fn changing_boundaries_inputs_and_explicit_identity_invalidates_continuati
     ] {
         assert_eq!(
             provider
-                .invoke(invocation("search.issues", query, boundary))
+                .invoke_strict(invocation("search.issues", query, boundary))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -1397,7 +1397,7 @@ async fn request_and_decoded_byte_budgets_fail_before_partial_page_release() {
     cfg.search.max_upstream_requests = 3;
     assert_eq!(
         provider(cfg)
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 "search.issues",
                 json!({"search":"needle"}),
                 scope()
@@ -1415,7 +1415,7 @@ async fn request_and_decoded_byte_budgets_fail_before_partial_page_release() {
     cfg.search.max_scan_bytes = body.len() as u64 + 5;
     assert_eq!(
         provider(cfg)
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 "search.issues",
                 json!({"search":"needle","maxResults":1}),
                 scope()
@@ -1955,7 +1955,7 @@ async fn discovery_reapplies_archived_filter_and_rejects_duplicate_current_paths
         .mount(&server)
         .await;
     let result = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "project.search",
             json!({"archived":false,"maxResults":2}),
             scope(),
@@ -1974,7 +1974,7 @@ async fn discovery_reapplies_archived_filter_and_rejects_duplicate_current_paths
         .await;
     assert_eq!(
         provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 "project.search",
                 json!({"maxResults":2}),
                 scope()
@@ -2000,7 +2000,7 @@ async fn exact_path_grants_do_not_follow_moved_projects_but_reused_paths_are_cur
         vec![],
     );
     let result = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.issues",
             json!({"search":"needle","maxResults":2}),
             exact,
@@ -2027,7 +2027,7 @@ async fn any_unsupported_capability_fails_before_a_request_without_engine_fallba
     ] {
         assert_eq!(
             provider
-                .invoke(invocation(action, input, scope()))
+                .invoke_strict(invocation(action, input, scope()))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -2066,7 +2066,7 @@ async fn zoekt_sends_explicit_regex_choice_and_never_tries_basic() {
         }
         if default_engine == "basic" {
             let error = provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "search.code",
                     json!({"search": "literal"}),
                     scope(),
@@ -2089,7 +2089,7 @@ async fn zoekt_sends_explicit_regex_choice_and_never_tries_basic() {
             }
             assert_eq!(
                 provider
-                    .invoke(invocation("search.code", input, scope()))
+                    .invoke_strict(invocation("search.code", input, scope()))
                     .await
                     .unwrap()
                     .result["engine"],
@@ -2107,7 +2107,7 @@ async fn invalid_confidential_payloads_and_binding_changes_make_no_collection_re
     for token in ["a".repeat(99), "a".repeat(100), "bad".into()] {
         assert_eq!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     "project.search",
                     json!({"pageToken":token}),
                     scope()
@@ -2223,7 +2223,7 @@ async fn one_candidate_page_allows_one_401_replay_and_smallest_budget_covers_ren
         .mount(&server)
         .await;
     let result = provider
-        .invoke(delegated_request(
+        .invoke_strict(delegated_request(
             "search.issues",
             json!({"search":"needle","project":"old/repo"}),
             &lease,
@@ -2279,7 +2279,7 @@ async fn collection_replay_consumes_one_page_slot_and_repeated_401_cannot_recove
             .mount(&server)
             .await;
         let result = provider
-            .invoke(delegated_request(
+            .invoke_strict(delegated_request(
                 "search.issues",
                 json!({"search":"needle"}),
                 &lease,
@@ -2317,7 +2317,7 @@ async fn consumed_error_body_exhaustion_prevents_authentication_replay() {
         .await;
     assert_eq!(
         provider
-            .invoke(delegated_request(
+            .invoke_strict(delegated_request(
                 "search.issues",
                 json!({"search":"needle"}),
                 &lease
@@ -2428,7 +2428,7 @@ async fn wiki_parent_group_metadata_uses_current_project_authority_on_both_route
             .mount(&server)
             .await;
         let result = provider
-            .invoke(invocation("search.wiki", input, scope()))
+            .invoke_strict(invocation("search.wiki", input, scope()))
             .await
             .unwrap();
         assert_eq!(result.result["count"], 1);
@@ -2494,7 +2494,7 @@ async fn explicit_routes_reject_non_repository_hits_while_instance_routes_discar
         }
         assert_eq!(
             provider
-                .invoke(invocation(
+                .invoke_strict(invocation(
                     &format!("search.{category}"),
                     json!({"search":"needle","project":"team/repo"}),
                     scope()
@@ -2505,7 +2505,7 @@ async fn explicit_routes_reject_non_repository_hits_while_instance_routes_discar
             ReasonCode::UpstreamProtocolFailed
         );
         let result = provider
-            .invoke(invocation(
+            .invoke_strict(invocation(
                 &format!("search.{category}"),
                 json!({"search":"needle"}),
                 scope(),
@@ -2542,7 +2542,7 @@ async fn legal_git_names_and_empty_commit_titles_survive_http_projection() {
         .mount(&server)
         .await;
     let result = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.code",
             json!({"search":"needle","project":"team/repo"}),
             scope(),
@@ -2584,7 +2584,7 @@ async fn legal_git_names_and_empty_commit_titles_survive_http_projection() {
         .mount(&server)
         .await;
     let result = provider
-        .invoke(invocation(
+        .invoke_strict(invocation(
             "search.commits",
             json!({"search":"needle","project":"team/repo"}),
             scope(),
@@ -2622,4 +2622,71 @@ fn relaxed_git_data_still_rejects_invalid_paths_and_malformed_commit_titles() {
             .is_err()
         );
     }
+}
+
+#[tokio::test]
+async fn advanced_window_ends_resumed_scans_without_a_continuation() {
+    let server = MockServer::start().await;
+    let mut cfg = config(&server);
+    cfg.search.max_results = 100;
+    cfg.search.max_candidate_pages = 32;
+    cfg.search.default_engine = "advanced".into();
+    cfg.search.engines.advanced.project_categories =
+        CATEGORIES.iter().map(|s| (*s).into()).collect();
+    let provider = provider(cfg);
+    Mock::given(path("/api/v4/projects/team%2Frepo"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id":1,"path_with_namespace":"team/repo"})),
+        )
+        .mount(&server)
+        .await;
+    // Every page is empty and names its successor; the 100th page of 100
+    // reaches advanced search's 10,000-result retrieval window.
+    Mock::given(path("/api/v4/projects/1/search"))
+        .and(query_param("search_type", "advanced"))
+        .respond_with(|request: &wiremock::Request| {
+            let page: u64 = request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "page")
+                .map(|(_, value)| value.parse().unwrap())
+                .unwrap();
+            let next = if page < 100 {
+                (page + 1).to_string()
+            } else {
+                String::new()
+            };
+            ResponseTemplate::new(200)
+                .insert_header("X-Search-Type", "advanced")
+                .insert_header("X-Next-Page", next.as_str())
+                .set_body_json(json!([]))
+        })
+        .mount(&server)
+        .await;
+    let mut input = json!({"search":"needle","project":"team/repo","maxResults":100});
+    let mut statuses = Vec::new();
+    loop {
+        let result = provider
+            .invoke_strict(invocation("search.issues", input.clone(), scope()))
+            .await
+            .unwrap();
+        assert_eq!(result.result["count"], 0);
+        assert_eq!(result.result["engine"], "advanced");
+        statuses.push(result.result["scanStatus"].as_str().unwrap().to_owned());
+        let Some(token) = result.result.get("nextPageToken") else {
+            break;
+        };
+        input["pageToken"] = token.clone();
+        assert!(statuses.len() < 8, "{statuses:?}");
+    }
+    assert_eq!(
+        statuses,
+        [
+            "scan_budget",
+            "scan_budget",
+            "scan_budget",
+            "upstream_window"
+        ]
+    );
 }

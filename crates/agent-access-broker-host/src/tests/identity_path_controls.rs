@@ -58,7 +58,7 @@ fn project_schema() -> Value {
 
 impl agent_access_provider::test_support::DescribedProvider for PathProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        let mut descriptor = agent_access_fake::fake_descriptor();
+        let mut descriptor = super::untyped_fake_descriptor();
         let echo = descriptor.actions[0].clone();
         assert!(echo.read_only);
         let locator = json!({

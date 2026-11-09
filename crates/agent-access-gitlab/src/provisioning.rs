@@ -962,6 +962,359 @@ impl HttpGitlabBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_access_provider::test_support::{InvocationBuilder, TestHost, bearer_credential};
+    use wiremock::matchers::{body_json, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn provisioning_provider(server: &MockServer) -> GitlabProvider {
+        let config: GitlabProviderConfig = serde_json::from_value(json!({
+            "api_base_url": format!("{}/api/v4", server.uri()),
+            "web_base_url": format!("{}/gitlab", server.uri()),
+            "allowed_upstream_hosts": [format!("{}/api/v4/**", server.uri())],
+            "provisioning": {"enabled": true},
+        }))
+        .unwrap();
+        GitlabProvider::new(config, &TestHost::default().context()).unwrap()
+    }
+
+    fn provisioning_invocation(action: &str, inputs: Value) -> ProviderInvocation {
+        InvocationBuilder::new("gitlab", action)
+            .inputs(inputs)
+            .resources(repository_scopes_from_path("sip/service"))
+            .credential(bearer_credential("execution-token"))
+            .lookup_credential(bearer_credential("lookup-token"))
+            .build()
+    }
+
+    async fn provisioning_ok(provider: &GitlabProvider, action: &str, inputs: Value) -> Value {
+        provider
+            .invoke_strict(provisioning_invocation(action, inputs))
+            .await
+            .unwrap_or_else(|error| panic!("{action}: {error:?}"))
+            .result
+    }
+
+    async fn mount(server: &MockServer, verb: &str, route: &str, response: ResponseTemplate) {
+        Mock::given(method(verb))
+            .and(path(route))
+            .respond_with(response)
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_project(server: &MockServer) {
+        mount(
+            server,
+            "GET",
+            "/api/v4/projects/sip%2Fservice",
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id":42,"path_with_namespace":"sip/service"})),
+        )
+        .await;
+    }
+
+    fn expiry() -> String {
+        (Utc::now().date_naive() + chrono::Duration::days(7))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    fn page(items: Value, next: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200)
+            .insert_header("X-Next-Page", next)
+            .set_body_json(items)
+    }
+
+    #[tokio::test]
+    async fn project_token_issuance_exports_the_secret_only_on_create_and_rotate() {
+        let server = MockServer::start().await;
+        let provider = provisioning_provider(&server);
+        mount_project(&server).await;
+        let expires = expiry();
+        let current = json!({"id":10,"user_id":70,"name":"deploy-bot","scopes":["api"],"access_level":30,"expires_at":expires,"created_at":"2026-11-01T00:00:00Z","last_used_at":null,"active":true,"revoked":false});
+        mount(
+            &server,
+            "GET",
+            "/api/v4/projects/42/access_tokens/10",
+            ResponseTemplate::new(200).set_body_json(current.clone()),
+        )
+        .await;
+        // A listed token may omit every optional metadata key.
+        mount(
+            &server,
+            "GET",
+            "/api/v4/projects/42/access_tokens",
+            page(
+                json!([{"id":10,"user_id":70,"name":"deploy-bot","scopes":["api"]}]),
+                "2",
+            ),
+        )
+        .await;
+        let mut issued = current.clone();
+        issued["token"] = json!("glpat-issued-secret");
+        Mock::given(method("POST"))
+            .and(path("/api/v4/projects/42/access_tokens"))
+            .and(body_json(json!({"name":"deploy-bot","scopes":["api"],"access_level":30,"expires_at":expires})))
+            .respond_with(ResponseTemplate::new(201).set_body_json(issued))
+            .mount(&server)
+            .await;
+        let mut rotated = current.clone();
+        rotated["id"] = json!(11);
+        rotated["token"] = json!("glpat-rotated-secret");
+        Mock::given(method("POST"))
+            .and(path("/api/v4/projects/42/access_tokens/10/rotate"))
+            .and(body_json(json!({"expires_at":expires})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rotated))
+            .mount(&server)
+            .await;
+        mount(
+            &server,
+            "DELETE",
+            "/api/v4/projects/42/access_tokens/11",
+            ResponseTemplate::new(204),
+        )
+        .await;
+
+        let created = provisioning_ok(
+            &provider,
+            "project.access_token.create",
+            json!({"project":"sip/service","name":"deploy-bot","scopes":["api"],"accessLevel":30,"expiresAt":expires}),
+        )
+        .await;
+        assert_eq!(created["issuedToken"], "glpat-issued-secret");
+        assert_eq!(created["accessToken"]["id"], 10);
+        assert!(created["accessToken"].get("token").is_none());
+        assert_eq!(created["mutationStatus"], "applied");
+        let rotated = provisioning_ok(
+            &provider,
+            "project.access_token.rotate",
+            json!({"project":"sip/service","tokenId":10,"expiresAt":expires}),
+        )
+        .await;
+        assert_eq!(rotated["issuedToken"], "glpat-rotated-secret");
+        assert_eq!(rotated["accessToken"]["id"], 11);
+        let viewed = provisioning_ok(
+            &provider,
+            "project.access_token.view",
+            json!({"project":"sip/service","tokenId":10}),
+        )
+        .await;
+        assert_eq!(
+            viewed,
+            json!({"accessToken":{"id":10,"userId":70,"name":"deploy-bot","scopes":["api"],"accessLevel":30,"expiresAt":expires,"createdAt":"2026-11-01T00:00:00Z","lastUsedAt":null,"active":true,"revoked":false}})
+        );
+        let listed = provisioning_ok(
+            &provider,
+            "project.access_token.list",
+            json!({"project":"sip/service"}),
+        )
+        .await;
+        assert_eq!(
+            listed["items"],
+            json!([{"id":10,"userId":70,"name":"deploy-bot","scopes":["api"]}])
+        );
+        assert_eq!(listed["isLast"], false);
+        assert!(listed["nextPageToken"].is_string());
+        // A project token's bot user is known only when GitLab reports it.
+        let revoked = provisioning_ok(
+            &provider,
+            "project.access_token.revoke",
+            json!({"project":"sip/service","tokenId":11}),
+        )
+        .await;
+        assert_eq!(
+            revoked,
+            json!({"tokenId":11,"mutationStatus":"applied","retrySafe":false})
+        );
+    }
+
+    #[tokio::test]
+    async fn service_account_lifecycle_results_match_their_schemas() {
+        let server = MockServer::start().await;
+        let provider = provisioning_provider(&server);
+        mount_project(&server).await;
+        let expires = expiry();
+        let account = json!({"id":70,"name":"Release bot","username":"release-bot"});
+        Mock::given(method("POST"))
+            .and(path("/api/v4/projects/42/service_accounts"))
+            .and(body_json(
+                json!({"name":"Release bot","username":"release-bot"}),
+            ))
+            .respond_with(ResponseTemplate::new(201).set_body_json(account.clone()))
+            .mount(&server)
+            .await;
+        mount(
+            &server,
+            "GET",
+            "/api/v4/projects/42/service_accounts/70",
+            ResponseTemplate::new(200).set_body_json(account.clone()),
+        )
+        .await;
+        mount(
+            &server,
+            "GET",
+            "/api/v4/projects/42/service_accounts",
+            page(json!([account]), ""),
+        )
+        .await;
+        mount(
+            &server,
+            "GET",
+            "/api/v4/projects/42/members/70",
+            ResponseTemplate::new(200).set_body_json(json!({"id":70,"access_level":20})),
+        )
+        .await;
+        Mock::given(method("PUT"))
+            .and(path("/api/v4/projects/42/members/70"))
+            .and(body_json(json!({"access_level":30})))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"id":70,"access_level":30})),
+            )
+            .mount(&server)
+            .await;
+        let tokens = "/api/v4/projects/42/service_accounts/70/personal_access_tokens";
+        let token = json!({"id":12,"user_id":70,"name":"ci","scopes":["read_api"],"expires_at":expires,"active":true,"revoked":false});
+        let mut issued = token.clone();
+        issued["token"] = json!("glpat-account-secret");
+        Mock::given(method("POST"))
+            .and(path(tokens))
+            .and(body_json(
+                json!({"name":"ci","scopes":["read_api"],"expires_at":expires}),
+            ))
+            .respond_with(ResponseTemplate::new(201).set_body_json(issued))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(tokens))
+            .and(query_param("page", "1"))
+            .respond_with(page(json!([token]), ""))
+            .mount(&server)
+            .await;
+        let mut rotated = token.clone();
+        rotated["id"] = json!(13);
+        rotated["token"] = json!("glpat-account-rotated");
+        Mock::given(method("POST"))
+            .and(path(format!("{tokens}/12/rotate")))
+            .and(body_json(json!({"expires_at":expires})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(rotated))
+            .mount(&server)
+            .await;
+        mount(
+            &server,
+            "DELETE",
+            &format!("{tokens}/13"),
+            ResponseTemplate::new(204),
+        )
+        .await;
+        mount(
+            &server,
+            "DELETE",
+            "/api/v4/projects/42/service_accounts/70",
+            ResponseTemplate::new(204),
+        )
+        .await;
+
+        let created = provisioning_ok(
+            &provider,
+            "service_account.create",
+            json!({"project":"sip/service","name":"Release bot","username":"release-bot"}),
+        )
+        .await;
+        assert_eq!(created["serviceAccount"], account);
+        let viewed = provisioning_ok(
+            &provider,
+            "service_account.view",
+            json!({"project":"sip/service","userId":70}),
+        )
+        .await;
+        assert_eq!(viewed, json!({"serviceAccount":account}));
+        let listed = provisioning_ok(
+            &provider,
+            "service_account.list",
+            json!({"project":"sip/service"}),
+        )
+        .await;
+        assert_eq!(listed["isLast"], true);
+        assert_eq!(listed["nextPageToken"], Value::Null);
+        let member = provisioning_ok(
+            &provider,
+            "service_account.member.set",
+            json!({"project":"sip/service","userId":70,"accessLevel":30}),
+        )
+        .await;
+        assert_eq!(member["member"], json!({"userId":70,"accessLevel":30}));
+        let issued = provisioning_ok(
+            &provider,
+            "service_account.token.create",
+            json!({"project":"sip/service","userId":70,"name":"ci","scopes":["read_api"],"expiresAt":expires}),
+        )
+        .await;
+        assert_eq!(issued["issuedToken"], "glpat-account-secret");
+        let listed = provisioning_ok(
+            &provider,
+            "service_account.token.list",
+            json!({"project":"sip/service","userId":70}),
+        )
+        .await;
+        assert_eq!(listed["items"][0]["id"], 12);
+        assert!(!listed.to_string().contains("glpat-"));
+        let rotated = provisioning_ok(
+            &provider,
+            "service_account.token.rotate",
+            json!({"project":"sip/service","userId":70,"tokenId":12,"expiresAt":expires}),
+        )
+        .await;
+        assert_eq!(rotated["issuedToken"], "glpat-account-rotated");
+        assert_eq!(rotated["accessToken"]["id"], 13);
+        let revoked = provisioning_ok(
+            &provider,
+            "service_account.token.revoke",
+            json!({"project":"sip/service","userId":70,"tokenId":13}),
+        )
+        .await;
+        assert_eq!(
+            revoked,
+            json!({"userId":70,"tokenId":13,"mutationStatus":"applied","retrySafe":false})
+        );
+        let deleted = provisioning_ok(
+            &provider,
+            "service_account.delete",
+            json!({"project":"sip/service","userId":70}),
+        )
+        .await;
+        assert_eq!(
+            deleted,
+            json!({"userId":70,"mutationStatus":"applied","retrySafe":false})
+        );
+    }
+
+    #[tokio::test]
+    async fn unverifiable_issuance_reports_an_unverified_receipt_without_the_secret() {
+        let server = MockServer::start().await;
+        let provider = provisioning_provider(&server);
+        mount_project(&server).await;
+        let expires = expiry();
+        // GitLab accepted the write but named the token differently.
+        mount(
+            &server,
+            "POST",
+            "/api/v4/projects/42/access_tokens",
+            ResponseTemplate::new(201).set_body_json(json!({"id":10,"user_id":70,"name":"other","scopes":["api"],"access_level":30,"expires_at":expires,"active":true,"revoked":false,"token":"glpat-unverified-secret"})),
+        )
+        .await;
+        let error = provider
+            .invoke_strict(provisioning_invocation(
+                "project.access_token.create",
+                json!({"project":"sip/service","name":"deploy-bot","scopes":["api"],"accessLevel":30,"expiresAt":expires}),
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::MutationVerificationFailed);
+        let result = error.result.as_deref().unwrap();
+        assert_eq!(result["mutationStatus"], "applied_unverified");
+        assert_eq!(result["safeLocators"], json!({"userId":70,"tokenId":10}));
+        assert!(!result.to_string().contains("glpat-"));
+    }
 
     #[test]
     fn provisioning_operator_limits_reject_invalid_configuration() {

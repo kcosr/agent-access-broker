@@ -273,6 +273,10 @@ pub(crate) async fn action_describe(
         agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
     )?;
     if let Some(tool) = registry.action_detail(service, action) {
+        // The tool's outputSchema composes the payload schemas.
+        if let Some(object) = detail.as_object_mut() {
+            object.remove("resultSchemas");
+        }
         detail["mcpTool"] = tool;
     } else if let Some(issue) = registry.action_unavailable(service, action) {
         detail["mcpToolUnavailable"] = json!(issue.code.as_str());

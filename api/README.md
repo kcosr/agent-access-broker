@@ -99,7 +99,10 @@ contracts section of each inventory shows the result per type.
   non-`const` `declared` constructors for types declared at runtime, whose
   owned data the same accessors return, and a `ResourceTypeRegistry` holds
   either form as a shared descriptor. `ResourcePattern`, a declared type's
-  value grammar, has private fields and a fallible constructor.
+  value grammar, has private fields and a fallible constructor. A
+  `ResultSchemaBundle` is declared as a `static` with its `const` constructor
+  and parses its bundled files on first use; the `ActionResultSchemas` it
+  returns have private fields, a constructor, a builder and accessors.
 - Inputs only the SDK reads (`UpstreamClientSpec`, `RedirectRules`,
   `BoundedDownload`, `UrlPatternPolicy`, `MutationReceipt`,
   `CredentialPlacement`) and lent credential material (`DelegatedAccess`,
@@ -138,7 +141,7 @@ These shapes are intentionally exhaustive, each an explicit API decision:
 | `presentation::ReadContentFormat` | Every embedded-body codec receives the format and must render each one. |
 | `AttachmentLimitsConfig`, `MediaTypePolicyConfig`, `SearchLimitsConfig`, `EgressProxyConfig`, `OAuthRegistrationConfig`, `OAuthPermissionProfile`, `OAuthLoginBinding` | Configuration schema: the fields are the documented keys of tables that reject unknown keys, so a new key is a configuration contract change every renderer and validator must handle. Build them from `Default` with struct update syntax or by deserializing. |
 | `host::ScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. |
-| `InvalidReasonCodeId`, `SigningError`, `SearchProjectionError`, `UnsupportedCredentialMode`, `presentation::RenderError` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. |
+| `InvalidReasonCodeId`, `SigningError`, `SearchProjectionError`, `UnsupportedCredentialMode`, `presentation::RenderError`, `presentation::UnresolvedBodyOwner` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. |
 
 Changing any of these, or making a non-exhaustive item exhaustive, is an
 incompatible change reviewed under the rules below.

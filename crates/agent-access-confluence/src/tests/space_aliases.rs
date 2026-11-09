@@ -186,7 +186,7 @@ async fn search_returns_aliased_links_and_replaces_a_foreign_one_without_failing
     )
     .await;
     let result = alias_provider(&server)
-        .invoke(alias_invocation(
+        .invoke_checked(alias_invocation(
             "search",
             json!({
                 "query": {
@@ -261,7 +261,7 @@ async fn blog_search_returns_aliased_links_and_replaces_a_foreign_one_without_fa
     )
     .await;
     let result = alias_provider(&server)
-        .invoke(alias_invocation(
+        .invoke_checked(alias_invocation(
             "blog.search",
             json!({
                 "query": { "type": "cql", "value": r#"text ~ "launch""# },
@@ -370,7 +370,7 @@ async fn page_url_locators_with_an_alias_scope_the_space_key() {
     );
 
     let view = provider
-        .invoke(alias_invocation("page.view", json!({ "url": aliased_url })))
+        .invoke_checked(alias_invocation("page.view", json!({ "url": aliased_url })))
         .await
         .unwrap();
     assert_eq!(view.result["space"], "ROCKET");
@@ -465,7 +465,7 @@ async fn blog_url_locators_and_reads_use_the_v2_space_alias() {
         );
 
         let view = provider
-            .invoke(alias_invocation("blog.view", json!({ "url": aliased_url })))
+            .invoke_checked(alias_invocation("blog.view", json!({ "url": aliased_url })))
             .await
             .unwrap();
         assert_eq!(view.result["space"], "ROCKET");
@@ -612,7 +612,7 @@ async fn page_create_keeps_aliased_links_from_the_resolved_space() {
         mount_json(&server, "/wiki/api/v2/pages/900001".to_string(), created).await;
 
         let result = alias_provider(&server)
-            .invoke(alias_invocation(
+            .invoke_checked(alias_invocation(
                 "page.create",
                 json!({
                     "space": "ROCKET",
@@ -657,7 +657,7 @@ async fn page_update_keeps_aliased_links_when_the_response_omits_the_space_link(
         .await;
 
     let result = alias_provider(&server)
-        .invoke(alias_invocation(
+        .invoke_checked(alias_invocation(
             "page.update",
             json!({
                 "pageId": PAGE_ID,
@@ -832,7 +832,7 @@ async fn searches_naming_an_alias_are_checked_against_the_authorized_boundary() 
             .lookup_credential(credential())
             .search(SearchAuthorization::new("space".to_string(), scope.clone()))
             .build();
-        let result = alias_provider(&server).invoke(request).await;
+        let result = alias_provider(&server).invoke_checked(request).await;
         let case = format!("{action} {scope:?} {inputs}");
         match outcome {
             Ok(()) => {

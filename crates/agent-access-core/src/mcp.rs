@@ -378,9 +378,11 @@ pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
         if mode == ProjectionMode::Stdio {
             properties["outputPath"] = json_output_path_schema();
         }
+        let helper = HelperKind::from_name(name).expect("static helper kind");
         json!({
             "name":name,"description":helper_description(name, description, mode),
             "inputSchema":{"type":"object","additionalProperties":false,"properties":properties,"required":required},
+            "outputSchema":crate::output_schema::helper_output_schema(helper, mode),
             // Stdio callers may overwrite a local file through outputPath. Tool hints
             // cover every supported argument combination, including that side effect.
             "annotations":{"readOnlyHint":mode == ProjectionMode::Http,"destructiveHint":mode == ProjectionMode::Stdio,"idempotentHint":true,"openWorldHint":false}

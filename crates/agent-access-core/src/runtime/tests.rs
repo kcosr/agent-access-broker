@@ -3849,7 +3849,7 @@ struct PendingStreamProvider;
 
 impl agent_access_provider::test_support::DescribedProvider for MissingStreamHandleProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        untyped_fake_descriptor()
     }
 }
 
@@ -3878,7 +3878,7 @@ impl Provider for MissingStreamHandleProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for FailingStreamProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        untyped_fake_descriptor()
     }
 }
 
@@ -3916,7 +3916,7 @@ impl Provider for FailingStreamProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for CompletedStreamProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        untyped_fake_descriptor()
     }
 }
 
@@ -3951,7 +3951,7 @@ impl Provider for CompletedStreamProvider {
 
 impl agent_access_provider::test_support::DescribedProvider for PendingStreamProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        untyped_fake_descriptor()
     }
 }
 
@@ -4529,7 +4529,7 @@ struct InMemoryDownloadProvider;
 
 impl agent_access_provider::test_support::DescribedProvider for InMemoryDownloadProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        untyped_fake_descriptor()
     }
 }
 
@@ -8787,6 +8787,16 @@ impl Provider for BodyPartCorrelationCaptureProvider {
     }
 }
 
+/// The fake service's descriptor without result schemas, for test doubles
+/// whose results are not the echo's: the strict conformance check skips it.
+pub(super) fn untyped_fake_descriptor() -> ServiceDescriptor {
+    let mut descriptor = agent_access_fake::fake_descriptor();
+    for action in &mut descriptor.actions {
+        action.result_schemas = None;
+    }
+    descriptor
+}
+
 pub(super) fn base_fake_config() -> BrokerConfig {
     let deployment = DeploymentConfig {
         enable_fake_service: true,
@@ -10158,6 +10168,9 @@ fn trusted_caller_credentials_are_distinct_and_rotation_changes_private_binding(
 
 #[tokio::test]
 async fn predispatch_admission_preserves_retry_header_metadata_without_a_result() {
+    // The fake echo declares result schemas; a reserved refusal is delivered
+    // without its result, so the conformance check never sees the malformed
+    // retry value.
     let runtime = BrokerRuntime::new(base_fake_config()).unwrap();
     for (value, expected) in [
         (json!(12), Some(12)),

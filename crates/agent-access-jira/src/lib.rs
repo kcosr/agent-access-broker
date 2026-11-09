@@ -15,6 +15,8 @@ mod plain_input_tests;
 mod present;
 mod project_list;
 mod project_view;
+#[cfg(test)]
+mod result_conformance;
 mod search_continuation;
 mod search_diagnostics;
 #[cfg(test)]
@@ -216,6 +218,11 @@ pub static JIRA_PROJECT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDescripto
 /// What connecting an Atlassian account through OAuth lets agents do in
 /// Jira, shown where a person connects it.
 const JIRA_OAUTH_CONNECTION: &str = "Lets agents act on Jira as your Atlassian account, through the Atlassian gateway. Agent access is limited by your Broker grants. Atlassian's consent page lists the broader scopes the connection grants.";
+
+/// The result payload schemas of every Jira action, across all supported
+/// configurations.
+static RESULT_SCHEMAS: ResultSchemaBundle =
+    ResultSchemaBundle::new(&[include_str!("result-schemas.json")]);
 
 /// Jira's authoritative service definition. Every action is authorized
 /// against a project; comment writes are offered only while ADF comment
@@ -802,8 +809,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
+                    let schemas = RESULT_SCHEMAS.action(&action.action);
                     documentation::with_guidance(
-                        action.presentation(presentation),
+                        action.presentation(presentation).result_schemas(schemas),
                         &config.tenant_host,
                     )
                 })

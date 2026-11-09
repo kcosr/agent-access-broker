@@ -537,6 +537,26 @@ impl core::marker::Unpin for agent_access_provider::presentation::ResponseOption
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseOptions
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseOptions
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseOptions
+pub struct agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::clone::Clone for agent_access_provider::presentation::UnresolvedBodyOwner
+pub fn agent_access_provider::presentation::UnresolvedBodyOwner::clone(&self) -> agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::cmp::Eq for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::cmp::PartialEq for agent_access_provider::presentation::UnresolvedBodyOwner
+pub fn agent_access_provider::presentation::UnresolvedBodyOwner::eq(&self, &agent_access_provider::presentation::UnresolvedBodyOwner) -> bool
+impl core::error::Error for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::fmt::Debug for agent_access_provider::presentation::UnresolvedBodyOwner
+pub fn agent_access_provider::presentation::UnresolvedBodyOwner::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for agent_access_provider::presentation::UnresolvedBodyOwner
+pub fn agent_access_provider::presentation::UnresolvedBodyOwner::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::marker::Freeze for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::marker::Send for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::marker::Sync for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::marker::Unpin for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::UnresolvedBodyOwner
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::UnresolvedBodyOwner
 pub const agent_access_provider::presentation::MAX_PRESENTATION_WORK_UNITS: usize
 pub const agent_access_provider::presentation::READ_CONTENT_FORMATS: &[&str]
 pub const agent_access_provider::presentation::RENDER_FAILURE_MESSAGE: &str
@@ -559,6 +579,8 @@ pub fn agent_access_provider::presentation::field_code(&mut agent_access_provide
 pub fn agent_access_provider::presentation::field_raw(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
 pub fn agent_access_provider::presentation::field_url(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
 pub fn agent_access_provider::presentation::fields(&mut agent_access_provider::presentation::MarkdownWriter, &[(&str, core::option::Option<&str>)]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
+pub fn agent_access_provider::presentation::inject_rendered_body_schema(&mut serde_json::value::Value, &str) -> core::result::Result<(), agent_access_provider::presentation::UnresolvedBodyOwner>
+pub fn agent_access_provider::presentation::markdown_result_schema() -> serde_json::value::Value
 pub fn agent_access_provider::presentation::normalize_fenced_text_literal(&str) -> alloc::string::String
 pub fn agent_access_provider::presentation::optional_display(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<alloc::string::String>, agent_access_provider::presentation::RenderError>
 pub fn agent_access_provider::presentation::optional_scalar<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<&'a str>, agent_access_provider::presentation::RenderError>
@@ -704,13 +726,17 @@ impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::test_suppo
 pub const agent_access_provider::test_support::TEST_CERT_PEM: &str
 pub trait agent_access_provider::test_support::DescribedProvider: agent_access_provider::Provider + 'static
 pub fn agent_access_provider::test_support::DescribedProvider::descriptor(&self) -> agent_access_provider::ServiceDescriptor
+pub fn agent_access_provider::test_support::assert_result_conforms(&agent_access_provider::ActionDescriptor, &core::result::Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError>)
 pub fn agent_access_provider::test_support::basic_credential(&str, &str) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::test_support::bearer_credential(&str) -> agent_access_provider::ExecutionCredential
+pub fn agent_access_provider::test_support::check_result_conforms(&agent_access_provider::ActionDescriptor, &core::result::Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError>) -> core::result::Result<(), alloc::string::String>
+pub fn agent_access_provider::test_support::check_strict_conformance(&serde_json::value::Value, &serde_json::value::Value) -> core::result::Result<(), alloc::string::String>
 pub fn agent_access_provider::test_support::credential_with_profile(agent_access_provider::ExecutionCredential, &str) -> agent_access_provider::ExecutionCredential
 pub fn agent_access_provider::test_support::delegated_binding_id(&str) -> agent_access_provider::DelegatedBindingId
 pub async fn agent_access_provider::test_support::in_invocation_hook<F: core::future::future::Future>(&str, &str, F) -> <F as core::future::future::Future>::Output
 pub fn agent_access_provider::test_support::install_trace_capture() -> &'static agent_access_provider::test_support::TraceCaptureDispatcher
 pub fn agent_access_provider::test_support::replay_gateway_body(agent_access_provider::GatewayBody) -> agent_access_provider::GatewayBodyStream
+pub fn agent_access_provider::test_support::strict_result_schema(&serde_json::value::Value) -> serde_json::value::Value
 pub fn agent_access_provider::test_support::synthetic_gateway_body(alloc::vec::Vec<core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>>, usize) -> agent_access_provider::GatewayBody
 pub fn agent_access_provider::test_support::synthetic_gateway_request_head<'a>(&'a http::method::Method, &'a str, &'a http::header::map::HeaderMap) -> agent_access_provider::GatewayRequestHead<'a>
 pub fn agent_access_provider::test_support::test_signing_key(u8) -> alloc::sync::Arc<dyn agent_access_provider::StableSigningKey>
@@ -2095,6 +2121,7 @@ pub agent_access_provider::ActionDescriptor::reports_universal_reach: bool
 pub agent_access_provider::ActionDescriptor::requires_resource_attributes: bool
 pub agent_access_provider::ActionDescriptor::requires_stable_signing_key: bool
 pub agent_access_provider::ActionDescriptor::resource_scope: core::option::Option<alloc::string::String>
+pub agent_access_provider::ActionDescriptor::result_schemas: core::option::Option<agent_access_provider::ActionResultSchemas>
 pub agent_access_provider::ActionDescriptor::scoped_mcp_name_source: agent_access_provider::ScopedMcpNameSource
 pub agent_access_provider::ActionDescriptor::sensitive_output_pointers: alloc::vec::Vec<alloc::string::String>
 pub agent_access_provider::ActionDescriptor::token_only: bool
@@ -2119,6 +2146,7 @@ pub fn agent_access_provider::ActionDescriptor::reports_universal_reach(self) ->
 pub fn agent_access_provider::ActionDescriptor::required_scope_types(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn agent_access_provider::ActionDescriptor::requires_stable_signing_key(self) -> Self
 pub fn agent_access_provider::ActionDescriptor::resource_attributes(self) -> Self
+pub fn agent_access_provider::ActionDescriptor::result_schemas(self, agent_access_provider::ActionResultSchemas) -> Self
 pub fn agent_access_provider::ActionDescriptor::scope(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::sensitive_output(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn agent_access_provider::ActionDescriptor::token_only(self) -> Self
@@ -2137,6 +2165,26 @@ impl core::marker::Unpin for agent_access_provider::ActionDescriptor
 impl core::marker::UnsafeUnpin for agent_access_provider::ActionDescriptor
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ActionDescriptor
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionDescriptor
+#[non_exhaustive] pub struct agent_access_provider::ActionResultSchemas
+impl agent_access_provider::ActionResultSchemas
+pub fn agent_access_provider::ActionResultSchemas::error(&self) -> core::option::Option<&serde_json::value::Value>
+pub fn agent_access_provider::ActionResultSchemas::new(serde_json::value::Value) -> Self
+pub fn agent_access_provider::ActionResultSchemas::success(&self) -> &serde_json::value::Value
+pub fn agent_access_provider::ActionResultSchemas::with_error(self, serde_json::value::Value) -> Self
+impl core::clone::Clone for agent_access_provider::ActionResultSchemas
+pub fn agent_access_provider::ActionResultSchemas::clone(&self) -> agent_access_provider::ActionResultSchemas
+impl core::cmp::PartialEq for agent_access_provider::ActionResultSchemas
+pub fn agent_access_provider::ActionResultSchemas::eq(&self, &agent_access_provider::ActionResultSchemas) -> bool
+impl core::fmt::Debug for agent_access_provider::ActionResultSchemas
+pub fn agent_access_provider::ActionResultSchemas::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ActionResultSchemas
+impl core::marker::Freeze for agent_access_provider::ActionResultSchemas
+impl core::marker::Send for agent_access_provider::ActionResultSchemas
+impl core::marker::Sync for agent_access_provider::ActionResultSchemas
+impl core::marker::Unpin for agent_access_provider::ActionResultSchemas
+impl core::marker::UnsafeUnpin for agent_access_provider::ActionResultSchemas
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ActionResultSchemas
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ActionResultSchemas
 pub struct agent_access_provider::AdmissionStage
 impl agent_access_provider::ContinuationStage for agent_access_provider::AdmissionStage
 impl core::clone::Clone for agent_access_provider::AdmissionStage
@@ -4234,6 +4282,20 @@ impl core::marker::Unpin for agent_access_provider::ResourceTypeRegistry
 impl core::marker::UnsafeUnpin for agent_access_provider::ResourceTypeRegistry
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourceTypeRegistry
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourceTypeRegistry
+#[non_exhaustive] pub struct agent_access_provider::ResultSchemaBundle
+impl agent_access_provider::ResultSchemaBundle
+pub fn agent_access_provider::ResultSchemaBundle::action(&self, &str) -> agent_access_provider::ActionResultSchemas
+pub fn agent_access_provider::ResultSchemaBundle::actions(&self) -> alloc::vec::Vec<&str>
+pub const fn agent_access_provider::ResultSchemaBundle::new(&'static [&'static str]) -> Self
+impl core::fmt::Debug for agent_access_provider::ResultSchemaBundle
+pub fn agent_access_provider::ResultSchemaBundle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl !core::marker::Freeze for agent_access_provider::ResultSchemaBundle
+impl core::marker::Send for agent_access_provider::ResultSchemaBundle
+impl core::marker::Sync for agent_access_provider::ResultSchemaBundle
+impl core::marker::Unpin for agent_access_provider::ResultSchemaBundle
+impl core::marker::UnsafeUnpin for agent_access_provider::ResultSchemaBundle
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResultSchemaBundle
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResultSchemaBundle
 pub struct agent_access_provider::ScopeRequest<'a>
 impl<'a> agent_access_provider::ScopeRequest<'a>
 pub fn agent_access_provider::ScopeRequest<'a>::action(&self) -> &'a str
@@ -4924,6 +4986,7 @@ pub fn agent_access_provider::response_has_json_content_type(&reqwest::async_imp
 pub fn agent_access_provider::same_origin(&url::Url, &url::Url) -> bool
 pub fn agent_access_provider::sanitize_field(&str) -> core::option::Option<alloc::string::String>
 pub fn agent_access_provider::sanitize_fragment(&str) -> core::option::Option<alloc::string::String>
+pub fn agent_access_provider::shared_failure_result_schema() -> serde_json::value::Value
 pub fn agent_access_provider::take_upstream_trace(&mut reqwest::async_impl::response::Response) -> core::option::Option<agent_access_provider::PendingUpstreamTrace>
 pub fn agent_access_provider::upstream_rate_limited(&str, core::option::Option<agent_access_provider::UpstreamRetryAfter>) -> agent_access_provider::ProviderError
 pub fn agent_access_provider::upstream_rate_limited_message(&str, core::option::Option<&agent_access_provider::UpstreamRetryAfter>) -> alloc::string::String
@@ -4941,6 +5004,7 @@ pub fn agent_access_provider::validate_upload_limits(&str, u64, u64, &[alloc::st
 pub fn agent_access_provider::validate_upstream_allowlist(&str, &[alloc::string::String], bool, &mut alloc::vec::Vec<alloc::string::String>)
 pub fn agent_access_provider::validate_upstream_base_url(&str, &str, bool, &mut alloc::vec::Vec<alloc::string::String>) -> core::option::Option<url::Url>
 pub fn agent_access_provider::validate_url_patterns(&str, &[alloc::string::String], agent_access_provider::UrlPatternPolicy, &mut alloc::vec::Vec<alloc::string::String>)
+pub fn agent_access_provider::with_shared_failure_properties(&serde_json::value::Value) -> serde_json::value::Value
 pub type agent_access_provider::BackendConfigParser = fn(toml::de::deserializer::value::ValueDeserializer<'_>) -> core::result::Result<alloc::boxed::Box<dyn agent_access_provider::BackendConfig>, toml::de::error::Error>
 pub type agent_access_provider::GatewayBodyStream = core::pin::Pin<alloc::boxed::Box<(dyn futures_core::stream::Stream<Item = core::result::Result<agent_access_provider::GatewayBodyFrame, agent_access_provider::GatewayBodyError>> + core::marker::Send)>>
 pub type agent_access_provider::GatewayConfigParser = fn(toml::value::Value) -> core::result::Result<alloc::sync::Arc<dyn agent_access_provider::GatewayConfig>, alloc::string::String>
@@ -5019,6 +5083,7 @@ enum agent_access_provider::presentation::RenderBudgetExhausted: non-exhaustive
 enum agent_access_provider::presentation::ResponseFormat: non-exhaustive
 struct agent_access_provider::ActionCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ActionDescriptor: named fields, non-exhaustive
+struct agent_access_provider::ActionResultSchemas: named fields, private fields, non-exhaustive
 struct agent_access_provider::AdmissionStage: named fields, private fields
 struct agent_access_provider::AdmittedContext: tuple fields, private fields
 struct agent_access_provider::AdmittedRequest: named fields, private fields
@@ -5113,6 +5178,7 @@ struct agent_access_provider::ResourceType: tuple fields, private fields
 struct agent_access_provider::ResourceTypeDescriptor: named fields, private fields, non-exhaustive
 struct agent_access_provider::ResourceTypeMetadata: named fields, non-exhaustive
 struct agent_access_provider::ResourceTypeRegistry: named fields, private fields
+struct agent_access_provider::ResultSchemaBundle: named fields, private fields, non-exhaustive
 struct agent_access_provider::ScopeRequest: named fields, private fields
 struct agent_access_provider::ScopeResolution: named fields, private fields
 struct agent_access_provider::ScopeResolutionStage: named fields, private fields
@@ -5156,6 +5222,7 @@ struct agent_access_provider::presentation::RenderError: unit
 struct agent_access_provider::presentation::RenderedBody: named fields, non-exhaustive
 struct agent_access_provider::presentation::ResponseCapabilities: named fields, non-exhaustive
 struct agent_access_provider::presentation::ResponseOptions: named fields, non-exhaustive
+struct agent_access_provider::presentation::UnresolvedBodyOwner: unit
 struct agent_access_provider::test_support::BuiltClient: named fields, non-exhaustive
 struct agent_access_provider::test_support::InvocationBuilder: named fields, private fields
 struct agent_access_provider::test_support::ScopeRequestFixture: named fields, private fields

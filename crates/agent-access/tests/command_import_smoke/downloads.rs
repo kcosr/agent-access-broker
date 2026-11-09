@@ -8,6 +8,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Child, ChildStdin, Stdio};
 
+#[path = "../common/mcp_output.rs"]
+mod mcp_output;
+
 const WARNING: &str = "Only completed synthetic records are included.";
 const SENTINEL: &[u8] = b"\0\xfffile-payload-sentinel-7331\x80\n";
 const COMMAND: &str = r#"#!/bin/sh
@@ -360,6 +363,20 @@ async fn imported_downloads_cross_real_cli_http_and_stdio_boundaries() {
         .iter()
         .find(|tool| tool["_meta"]["agent-access/action"] == "report.download")
         .unwrap();
+    // The imported download advertises its receipt with the adapter's
+    // metadata wrapper: computed integrity, open command metadata.
+    let metadata = &tool["outputSchema"]["anyOf"][0]["properties"]["result"]["anyOf"][0];
+    assert_eq!(
+        metadata["required"],
+        json!([
+            "upstreamCommand",
+            "filename",
+            "contentType",
+            "size",
+            "sha256"
+        ])
+    );
+    assert_eq!(metadata["properties"]["upstreamCommand"]["type"], "object");
     assert!(
         tool["inputSchema"]["required"]
             .as_array()
@@ -580,11 +597,14 @@ async fn remote_and_local_failures_preserve_files_and_never_replay_commands() {
     stop(fixture.broker).await;
 }
 
+/// A stdio MCP subprocess. Every `tools/call` result it returns is checked
+/// against the listed tool's advertised `outputSchema`.
 struct StdioMcp {
     child: Child,
     stdin: Option<ChildStdin>,
     responses: tokio::sync::mpsc::UnboundedReceiver<String>,
     next_id: u64,
+    tools: mcp_output::AdvertisedTools,
 }
 
 impl StdioMcp {
@@ -612,6 +632,7 @@ impl StdioMcp {
             stdin,
             responses,
             next_id: 1,
+            tools: Default::default(),
         }
     }
 
@@ -627,6 +648,19 @@ impl StdioMcp {
     }
 
     async fn request(&mut self, method: &str, params: Value) -> Value {
+        let call = (method == "tools/call")
+            .then(|| params["name"].as_str().map(str::to_owned))
+            .flatten();
+        let response = self.exchange(method, params).await;
+        match call {
+            Some(name) => self.tools.check_call(&name, &response),
+            None if method == "tools/list" => self.tools.record_listing(&response),
+            None => {}
+        }
+        response
+    }
+
+    async fn exchange(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}));

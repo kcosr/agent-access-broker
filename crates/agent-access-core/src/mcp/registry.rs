@@ -38,7 +38,7 @@ impl HelperKind {
             Self::ServicesDescribe => "services_describe",
         }
     }
-    fn from_name(name: &str) -> Option<Self> {
+    pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "services_list" => Some(Self::ServicesList),
             "resource_access_describe" => Some(Self::ResourceAccessDescribe),
@@ -251,7 +251,7 @@ impl ToolRegistry {
                         service.service, action.action
                     ));
                 }
-                let definition = json!({
+                let mut definition = json!({
                     "name": name,
                     "description": description,
                     "inputSchema": input_schema(action, mode),
@@ -261,6 +261,9 @@ impl ToolRegistry {
                         "agent-access/sensitive-output-pointers": action.sensitive_output_pointers
                     }
                 });
+                if let Some(schema) = crate::output_schema::action_output_schema(action, mode) {
+                    definition["outputSchema"] = schema;
+                }
                 let target = ToolTarget::Action {
                     service: service.service.clone(),
                     action: action.action.clone(),
@@ -316,7 +319,11 @@ impl ToolRegistry {
         self.entries.iter().find_map(|entry| match &entry.target {
             ToolTarget::Action { service: selected_service, action: selected_action }
                 if selected_service == service && selected_action == action => {
-                    Some(json!({"name":entry.definition["name"],"inputSchema":entry.definition["inputSchema"]}))
+                    let mut detail = json!({"name":entry.definition["name"],"inputSchema":entry.definition["inputSchema"]});
+                    if let Some(schema) = entry.definition.get("outputSchema") {
+                        detail["outputSchema"] = schema.clone();
+                    }
+                    Some(detail)
                 }
             _ => None,
         })

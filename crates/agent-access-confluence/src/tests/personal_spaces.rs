@@ -333,7 +333,7 @@ async fn personal_space_page_and_blog_reads_and_writes_keep_authorized_space() {
         ),
     ] {
         let result = provider
-            .invoke(personal_invocation(action, inputs.clone(), "~alice"))
+            .invoke_checked(personal_invocation(action, inputs.clone(), "~alice"))
             .await
             .unwrap();
         assert_eq!(result.result["space"], "~alice", "{action}");
@@ -362,7 +362,7 @@ async fn personal_space_page_and_blog_reads_and_writes_keep_authorized_space() {
         }
         for other_key in ["~Alice", "~bob"] {
             let error = provider
-                .invoke(personal_invocation(action, inputs.clone(), other_key))
+                .invoke_checked(personal_invocation(action, inputs.clone(), other_key))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{action}");
@@ -422,7 +422,7 @@ async fn personal_space_page_and_blog_searches_enforce_finite_and_excluded_scope
             .build();
             let result = agent_access_provider::host::with_correlation_context(
                 crate::CorrelationContext::for_tests(),
-                provider.invoke(request),
+                provider.invoke_checked(request),
             )
             .await;
             if allowed {
