@@ -1,6 +1,7 @@
 //! Generic, bounded MCP imports through the broker's ordinary provider boundary.
 mod oauth;
 mod protocol;
+mod result_schema;
 mod schema;
 mod transport;
 
@@ -102,6 +103,11 @@ impl ImportedAdapter for McpAdapter {
 
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         source_tool_name(action).map(str::to_owned)
+    }
+
+    /// One wrapper for every tool, whatever output schema it declares.
+    fn result_schemas(&self, _: &ImportedActionDefinition) -> Result<ActionResultSchemas, String> {
+        Ok(result_schema::result_schemas())
     }
 
     fn build(

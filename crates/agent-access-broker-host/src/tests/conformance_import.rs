@@ -100,6 +100,19 @@ impl ImportedAdapter for ConformanceImportAdapter {
         self.validate_action(action)?;
         Ok("upstream_inspect".into())
     }
+    /// The fixture's result holds the synthetic upstream reply as an open
+    /// leaf, like the MCP adapter's.
+    fn result_schemas(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<ActionResultSchemas, String> {
+        self.validate_action(action)?;
+        Ok(ActionResultSchemas::new(json!({
+            "type": "object",
+            "properties": {"upstreamMcp": {"type": "object"}},
+            "required": ["upstreamMcp"]
+        })))
+    }
     fn build(
         &self,
         definition: &ImportedServiceDefinition,

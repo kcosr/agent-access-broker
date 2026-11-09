@@ -6,8 +6,8 @@ use super::{
 };
 use crate::CommandImportConfig;
 use agent_access_provider::{
-    AuditInput, BuildContext, DelegatedCredential, ExecutionCredential, Provider,
-    ProviderBuildError, ProviderError,
+    ActionResultSchemas, AuditInput, BuildContext, DelegatedCredential, ExecutionCredential,
+    Provider, ProviderBuildError, ProviderError,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -288,6 +288,20 @@ pub trait ImportedAdapter: Send + Sync + std::fmt::Debug {
     /// Exact accepted source name, derived offline without applying the narrower
     /// scoped MCP profile. Must succeed for every action accepted by validation.
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String>;
+    /// The result schemas of an accepted invocation action, read offline from
+    /// its definition: the stable wrapper every result of the action follows,
+    /// with upstream payloads as open leaves even when the definition carries
+    /// an upstream output schema, so refresh and acceptance never invalidate
+    /// a client's cached validator. Core attaches them to the action's
+    /// descriptor, where descriptor validation applies the SDK's result
+    /// schema profile. Must succeed for every action accepted by validation;
+    /// an error leaves the import unavailable, as an invalid action plan does.
+    /// Gateway actions are not invocation actions: core never asks a gateway
+    /// adapter, which reports an error.
+    fn result_schemas(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<ActionResultSchemas, String>;
     /// Construction compiles accepted schemas and host transports without network I/O.
     /// The host builds an adapter's clients in the ordinary routing category.
     /// A command import never runs its command here: startup and reload stay
@@ -335,4 +349,16 @@ impl From<ProviderError> for AdapterDiscoveryError {
     fn from(error: ProviderError) -> Self {
         Self::Failed(error)
     }
+}
+
+/// The result schemas of core's synthetic invocation adapters: each result
+/// holds its payload as the open leaf `wrapper`. Production adapters state
+/// their own.
+#[cfg(test)]
+pub(crate) fn test_result_schemas(wrapper: &str) -> ActionResultSchemas {
+    ActionResultSchemas::new(serde_json::json!({
+        "type": "object",
+        "properties": {wrapper: {}},
+        "required": [wrapper]
+    }))
 }
