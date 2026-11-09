@@ -11448,6 +11448,13 @@ async fn run_send_http(
             route_spec.route
         )));
     }
+    if body.is_none() && route_spec.body_required {
+        require_cli_input::<()>(Err(anyhow::anyhow!(
+            "route {} {} requires a JSON body",
+            route_spec.method,
+            route_spec.route
+        )));
+    }
     let path = resolve_route_path(&route_spec, path_params, query)?;
     let method = reqwest::Method::from_bytes(route_spec.method.as_bytes())
         .map_err(|error| anyhow::anyhow!("catalog method is invalid: {error}"))?;
@@ -13015,11 +13022,10 @@ async fn run_admin_microsoft_enrollment(
             run_broker_json_method(
                 ctx,
                 reqwest::Method::DELETE,
-                &path,
-                Some(serde_json::json!({
-                    "enrollmentId": enrollment_id.to_string(),
-                    "expectedRevision": expected_revision,
-                })),
+                &format!(
+                    "{path}?enrollmentId={enrollment_id}&expectedRevision={expected_revision}"
+                ),
+                None,
             )
             .await
         }

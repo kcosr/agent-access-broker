@@ -8,24 +8,26 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_json, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ENROLLMENT_ID: &str = "9a430808-cdb6-4cec-ab3b-36e2b5e5b951";
 const TENANT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
 
-fn command(url: &str) -> Command {
+fn cli(url: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
     for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("AGENT_ACCESS_")) {
         command.env_remove(key);
     }
-    command.env("AGENT_ACCESS_CONFIG", "/dev/null").args([
-        "--url",
-        url,
-        "--no-token",
-        "admin",
-        "principals",
-    ]);
+    command
+        .env("AGENT_ACCESS_CONFIG", "/dev/null")
+        .args(["--url", url, "--no-token"]);
+    command
+}
+
+fn command(url: &str) -> Command {
+    let mut command = cli(url);
+    command.args(["admin", "principals"]);
     command
 }
 
@@ -74,7 +76,7 @@ async fn microsoft_enrollment_commands_preserve_identity_and_revision_fences() {
                 "8",
             ],
             "DELETE",
-            Some(json!({"enrollmentId":ENROLLMENT_ID,"expectedRevision":8})),
+            None,
             json!({"cancelled":true}),
         ),
     ];
@@ -82,6 +84,11 @@ async fn microsoft_enrollment_commands_preserve_identity_and_revision_fences() {
         let mut mock = Mock::given(method(verb)).and(path(route));
         if let Some(body) = body {
             mock = mock.and(body_json(body));
+        }
+        if verb == "DELETE" {
+            mock = mock
+                .and(query_param("enrollmentId", ENROLLMENT_ID))
+                .and(query_param("expectedRevision", "8"));
         }
         mock.respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "ok":true,"result":result,
@@ -104,6 +111,7 @@ async fn microsoft_enrollment_commands_preserve_identity_and_revision_fences() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 4);
     assert!(requests[0].body.is_empty());
+    assert!(requests[3].body.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -188,9 +196,8 @@ async fn stale_enrollment_mutation_surfaces_conflict_without_retrying() {
         .and(path(
             "/v1/admin/principals/alice/login-methods/oidc/microsoft/enrollment",
         ))
-        .and(body_json(
-            json!({"enrollmentId":ENROLLMENT_ID,"expectedRevision":3}),
-        ))
+        .and(query_param("enrollmentId", ENROLLMENT_ID))
+        .and(query_param("expectedRevision", "3"))
         .respond_with(ResponseTemplate::new(409).set_body_json(json!({
             "ok":false,"decision":"deny","reasonCode":"oidc_login_method_conflict",
             "requestId":"enrollment-conflict","brokerRequestId":"enrollment-conflict",
@@ -213,7 +220,103 @@ async fn stale_enrollment_mutation_surfaces_conflict_without_retrying() {
     assert!(!output.status.success());
     let response: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(response["reasonCode"], "oidc_login_method_conflict");
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].body.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies() {
+    let server = MockServer::start().await;
+    let types = agent_access_provider::ResourceTypeRegistry::new([]).unwrap();
+    let routes = agent_access_core::http_route_specs(&types)
+        .into_iter()
+        .filter(|route| {
+            route
+                .operation
+                .starts_with("admin.principals.login_methods.oidc.microsoft.enrollment.")
+                || route.operation == "credentials.verify"
+        })
+        .collect::<Vec<_>>();
+    Mock::given(method("GET"))
+        .and(path("/v1/spec/catalog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "version":"agent-access.catalog.v2", "identity":{}, "services":[], "routes":routes,
+            "send":{"version":"agent-access.send.v1", "catalogRequired":true}
+        })))
+        .expect(4)
+        .mount(&server)
+        .await;
+    let route = "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment";
+    Mock::given(method("DELETE"))
+        .and(path("/v1/admin/principals/alice/login-methods/oidc/microsoft/enrollment"))
+        .and(query_param("enrollmentId", ENROLLMENT_ID))
+        .and(query_param("expectedRevision", "3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "requestId":"cancel", "brokerRequestId":"cancel", "decision":"allow", "result":{"cancelled":true}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/credentials/connections/example/verify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "requestId":"verify", "brokerRequestId":"verify", "decision":"allow", "result":{}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let cancel = json!({
+        "version":"agent-access.send.v1", "kind":"http", "method":"DELETE", "route":route,
+        "pathParams":{"principal":"alice"}, "query":{"enrollmentId":ENROLLMENT_ID,"expectedRevision":3}
+    });
+    let run = |request: &Value| {
+        cli(&server.uri())
+            .args(["send", "--request-json", &request.to_string()])
+            .output()
+            .unwrap()
+    };
+    let output = run(&cancel);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut old_body = cancel.clone();
+    let fences = old_body.as_object_mut().unwrap().remove("query").unwrap();
+    old_body["body"] = fences;
+    let output = run(&old_body);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not accept a JSON body"));
+
+    let missing_body = json!({
+        "version":"agent-access.send.v1", "kind":"http", "method":"POST", "route":route,
+        "pathParams":{"principal":"alice"}
+    });
+    let output = run(&missing_body);
+    assert_eq!(output.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires a JSON body"));
+    let optional_body = json!({
+        "version":"agent-access.send.v1", "kind":"http", "method":"POST",
+        "route":"/v1/credentials/connections/{connection}/verify", "pathParams":{"connection":"example"}
+    });
+    let output = run(&optional_body);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = server.received_requests().await.unwrap();
+    let mutations = requests
+        .iter()
+        .filter(|request| request.method.as_str() != "GET")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mutations.len(),
+        2,
+        "rejected bodies must not dispatch a mutation"
+    );
+    assert!(mutations.iter().all(|request| request.body.is_empty()));
 }
 
 fn toml_string(value: impl std::fmt::Display) -> String {

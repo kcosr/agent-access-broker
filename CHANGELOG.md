@@ -117,8 +117,10 @@ All notable changes to this project are documented in this file.
   ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Route and imported API additions require consumer updates.**
-  `HttpRouteSpec` gains `request_body_kind`; downstream struct literals must
-  supply `RequestBodyKind::Json` for ordinary JSON routes.
+  `HttpRouteSpec` gains `request_body_kind` and `body_required`; downstream struct
+  literals must supply `RequestBodyKind::Json` for ordinary JSON routes and an
+  explicit required-body Boolean. HTTP catalog routes serialize that Boolean as
+  `bodyRequired`; credential verification keeps its body optional.
   `ImportedActionDefinition`, exposed through the host's `test-support` API,
   gains the public `download: bool` field. Downstream struct literals must
   supply it (`false` preserves existing JSON actions), and exhaustive
@@ -180,9 +182,12 @@ All notable changes to this project are documented in this file.
   inspect/create/update/cancel operations; the portal shows pending enrollment
   separately from profile email. Binding consumes the reservation and preserves
   the principal without a later approval, directory lookup or automatic token
-  distribution. Paused providers permit preparation. Login audit adds consumed
-  `enrollmentId` and `displayNameUpdated`, preserves `jitCreated`, and records
-  actual initial memberships in `autoEnrolledGroupIds`.
+  distribution. Paused providers permit preparation. Login audit adds
+  `enrollmentId` and `tenantId` when pending enrollment is consumed, plus
+  `displayNameUpdated`; it preserves `jitCreated` and records actual initial
+  memberships in `autoEnrolledGroupIds`. `config.status` adds the
+  `microsoftEnrollment` availability/tenant object for administrative preparation.
+  See the [HTTP API](docs/http-api.md).
 
 - **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
   2.0 and OpenAPI 3.1 documents by URL or upload, choose immutable Actions/tools
@@ -481,8 +486,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
-- HTTP send schemas require declared request bodies, matching the HTTP handlers
-  and OpenAPI contract, including fenced Microsoft enrollment mutations.
+- HTTP route metadata declares whether a request body is required, keeping send
+  schemas and OpenAPI aligned with handlers while preserving optional credential
+  verification bodies. Microsoft enrollment cancellation carries its required
+  ID/revision query parameters without a JSON body.
 
 - GitLab raw downloads use the execution credential and metadata from the same
   response as their bytes. GitLab's potentially converted-content hash is no

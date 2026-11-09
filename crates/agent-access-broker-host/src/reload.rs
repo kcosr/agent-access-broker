@@ -455,19 +455,14 @@ pub(crate) async fn admin_config_status(
     let provider = if context.snapshot.runtime.config().identity.authority == "managed"
         && context.snapshot.runtime.managed_store().is_some()
     {
-        match context
+        // Enrollment preparation is optional status metadata. A failed read must
+        // not hide the active configuration or its reload/health diagnostics.
+        context
             .snapshot
             .managed_store_call(|store| store.oidc_provider_state())
             .await
-        {
-            Ok(provider) => provider,
-            Err(error) => {
-                return crate::handlers::management::common::management_store_error_response(
-                    &context, operation, None, error,
-                )
-                .await;
-            }
-        }
+            .ok()
+            .flatten()
     } else {
         None
     };

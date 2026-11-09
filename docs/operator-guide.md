@@ -750,8 +750,8 @@ sudo journalctl -u agent-access-broker -f -o cat \
 
 The `oidc_claims_observed` event is emitted only after the ID token and stable
 Microsoft identity have been cryptographically validated. It covers successful
-callbacks, JIT admission denials, incomplete group claims, and store/conflict
-outcomes. Fields include the request IDs, canonical tenant and user Object IDs,
+callbacks, pending-enrollment and JIT admission denials, incomplete group claims,
+and store/conflict outcomes. Fields include the request IDs, canonical tenant and user Object IDs,
 sanitized `name`, `preferredUsername`, and `email`, group-claim status, the
 deduplicated claimed group Object IDs, admission outcome, and—on success—the
 matched external groups and resulting broker/policy groups. These fields are
@@ -759,6 +759,13 @@ directory metadata and PII; apply appropriate journal access and retention.
 The event never contains an ID/access token, authorization code, client secret,
 flow key, state, nonce, PKCE value, cookie, session token, or raw JWT payload.
 Durable audit records are unchanged.
+
+An `admissionOutcome` of `pending_enrollment_owner_disabled` means the validated
+email matched a pending reservation whose Broker account is disabled. Inspect
+that account's status and enrollment; adding a group mapping will not bypass
+the disabled owner. `jit_disabled` and `no_mapped_group` instead describe
+unmatched JIT admission. All three return the external `oidc_admission_denied`
+reason without exposing which account or reservation matched.
 
 Example event:
 
@@ -1963,7 +1970,7 @@ thresholds; raising invocation limits does not raise login budgets.
 | `oidc_provider_denied` | Review the Entra sign-in result, user/application assignment, consent, and tenant policy. Provider error details are intentionally not echoed as identity data. In an `oidc.membership.renewal_failed` record it means Microsoft rejected the renewal request itself (`request_rejected`); the service log's `error` and `errorCodes` identify the rejection. |
 | `oidc_identity_invalid` | Check the configured tenant/client IDs, exact redirect URI, app registration, and Entra signing-key availability. A token with the wrong issuer, tenant, audience, nonce, subject, signature, or time window is rejected. |
 | `oidc_group_claims_incomplete` | The ID token indicated group overage/distributed claims or contained malformed group IDs. Reduce the user's app-visible security-group memberships or adjust Entra assignment/claim configuration; the broker does not query Graph. |
-| `oidc_admission_denied` | For an unmatched first/JIT login, create an active mapping from a claimed Entra group Object ID to an active Broker group and assign the user in Entra, or explicitly prepare/link an existing principal. A matching pending email or existing link permits complete empty/unmapped groups. |
+| `oidc_admission_denied` | Check whether a matching pending enrollment belongs to a disabled account; its diagnostic outcome is `pending_enrollment_owner_disabled`, and group mappings cannot bypass it. For unmatched `jit_disabled`/`no_mapped_group` denials, review JIT configuration and active Entra-to-Broker group mapping, or explicitly prepare/link an existing principal. An enabled matching pending owner or existing link permits complete empty/unmapped groups. |
 | `oidc_login_method_conflict` | A Microsoft object or pending tenant/email is reserved elsewhere, the principal has a conflicting method/enrollment, the enrollment ID/revision is stale, or a tenant change conflicts with durable pending enrollments, bindings or methods. Inspect current state and deliberately edit, cancel, unlink or remove the conflicting object. |
 | `oidc.membership.renewal_failed` audit records | A [membership renewal](#microsoft-membership-renewal) failed; `providerAudit.oidc.classification` says why. `oidc_sign_in_required` means Microsoft no longer honours the person's refresh token (inactivity, revoked sessions, a disabled account, removed consent): renewal ended and the person signs in again. `oidc_client_rejected` means Microsoft rejected the client ID or secret: correct `client_secret_ref` and reload; a blocked renewal is eligible again at least one hour after its failure (later for a longer `Retry-After` or a provider-wide 429 pause), when a request next needs it, so recovery can take longer than an hour. `oidc_unavailable`, `oidc_identity_invalid` and `oidc_group_claims_incomplete` keep renewal and retry as described there. |
 | Microsoft sign-in asks for consent after enabling `membership_renewal` | Users cannot consent to `offline_access` in this tenant. Have an Entra administrator grant admin consent for it (see [Microsoft membership renewal](#microsoft-membership-renewal)), or turn `membership_renewal` off and reload. |

@@ -20,16 +20,22 @@ async function fixture(page: Page, pending = true) {
   };
   const model = {
     principal, role: "admin", available: true, microsoftEnabled: false, linked: false, conflict: false, rejectCreate: false,
-    writes: [] as { path: string; method: string; body: Record<string, unknown> }[], errors: [] as string[]
+    writes: [] as { path: string; method: string; body: Record<string, unknown>; query?: Record<string, string> }[], errors: [] as string[]
   };
   page.on("pageerror", (error) => model.errors.push(error.message));
   await page.route("**/v1/**", async (route) => {
     const request = route.request();
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
     const method = request.method();
     const write = method !== "GET";
     const body = write && request.postData() ? request.postDataJSON() as Record<string, unknown> : {};
-    if (write) model.writes.push({ path, method, body });
+    if (write) model.writes.push({ path, method, body, ...(method === "DELETE" ? { query: Object.fromEntries(url.searchParams) } : {}) });
+    if (path === endpoint && method === "DELETE") {
+      expect(request.postData()).toBeNull();
+      expect(url.searchParams.has("enrollmentId")).toBe(true);
+      expect(url.searchParams.has("expectedRevision")).toBe(true);
+    }
     if ((model.conflict && write && path === endpoint) || (model.rejectCreate && write && path === "/v1/admin/principals")) {
       await route.fulfill({ status: 409, json: { ok: false, error: { message: "Enrollment changed or email already reserved" } } });
       return;
@@ -151,7 +157,7 @@ test("explicit cancellation retains account setup and allows fresh paused-provid
   await create.getByRole("button", { name: "Prepare Microsoft sign-in", exact: true }).click();
   await expect(signIn(page)).toContainText("fresh@example.test");
   expect(model.writes).toEqual([
-    { path: endpoint, method: "DELETE", body: { enrollmentId: "enrollment-1", expectedRevision: 3 } },
+    { path: endpoint, method: "DELETE", body: {}, query: { enrollmentId: "enrollment-1", expectedRevision: "3" } },
     { path: endpoint, method: "POST", body: { email: "fresh@example.test" } }
   ]);
   expect(model.principal.email).toBe("profile@example.test");
@@ -176,7 +182,8 @@ for (const action of ["edit", "cancel"] as const) {
     await expect(dialog).toContainText("Enrollment changed or email already reserved");
     await expect(dialog.getByRole("button", { name: label, exact: true })).toHaveCount(0);
     expect(model.writes).toHaveLength(1);
-    expect(model.writes[0]!.body).toMatchObject({ enrollmentId: "enrollment-1", expectedRevision: 3 });
+    if (action === "edit") expect(model.writes[0]!.body).toMatchObject({ enrollmentId: "enrollment-1", expectedRevision: 3 });
+    else expect(model.writes[0]).toMatchObject({ body: {}, query: { enrollmentId: "enrollment-1", expectedRevision: "3" } });
     await dialog.getByRole("button", { name: "Refresh enrollment", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     if (action === "edit") {

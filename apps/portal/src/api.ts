@@ -547,10 +547,10 @@ export const brokerApi = {
       `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment`,
       { method: "PATCH", body: JSON.stringify(body) }, session
     ),
-  adminCancelMicrosoftEnrollment: (session: Session, principalId: string, body: { enrollmentId: string; expectedRevision: number }) =>
+  adminCancelMicrosoftEnrollment: (session: Session, principalId: string, fence: { enrollmentId: string; expectedRevision: number }) =>
     managementRequest<{ cancelled: boolean }>(
-      `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment`,
-      { method: "DELETE", body: JSON.stringify(body) }, session
+      `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment?enrollmentId=${enc(fence.enrollmentId)}&expectedRevision=${enc(String(fence.expectedRevision))}`,
+      { method: "DELETE" }, session
     ),
   adminLinkMicrosoftLogin: (session: Session, principalId: string, userObjectId: string) =>
     managementRequest<LoginMethodRecord>(

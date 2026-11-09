@@ -556,8 +556,10 @@ agent-access admin principals login-methods oidc enrollment cancel morgan \
 
 Create is only for an account with neither pending enrollment nor a Microsoft
 method. Use the current ID and revision returned by inspect for updates or
-cancellation; stale requests conflict. A disabled account keeps its reservation
-and refuses matching login. Cancellation releases the reservation and preserves
+cancellation; stale requests conflict. The cancellation CLI sends those values
+as the HTTP DELETE's required query parameters, without a JSON body.
+A disabled account keeps its reservation and refuses matching login.
+Cancellation releases the reservation and preserves
 prepared access, but does not ban ordinary JIT sign-in. A paused reconciled
 Microsoft provider permits preparation and pauses authentication. Pending rows,
 Microsoft methods and external group mappings prevent changing the configured
@@ -626,7 +628,8 @@ initially reports `local_and_microsoft`; its local membership continues to
 provide access when the Microsoft contribution ends. Review that consequence
 when selecting groups. Membership grants no account role or service management
 assignment. Successful login audit details include `jitCreated`, `enrollmentId`
-when a pending row was consumed, `displayNameUpdated` for an existing name change,
+and `tenantId` when a pending row was consumed, `displayNameUpdated` for an
+existing name change,
 and `autoEnrolledGroupIds` for actual inserts. No name or raw claim is recorded.
 Enrollment changes and group setting changes have supplemental success records.
 

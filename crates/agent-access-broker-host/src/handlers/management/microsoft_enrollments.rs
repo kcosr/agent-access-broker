@@ -10,7 +10,7 @@ use agent_access_core::{
     MicrosoftEnrollmentCreateRequest, MicrosoftEnrollmentRecord, MicrosoftEnrollmentUpdateRequest,
 };
 use axum::Json;
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use serde::Deserialize;
@@ -118,7 +118,7 @@ pub(crate) async fn cancel(
     Path(principal): Path<String>,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(body): Json<CancelBody>,
+    Query(body): Query<CancelBody>,
 ) -> Response {
     write(state, principal, remote, headers, Mutation::Cancel(body)).await
 }

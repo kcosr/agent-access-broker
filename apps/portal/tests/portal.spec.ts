@@ -1060,7 +1060,7 @@ test("local browser login supports administration, self-service credentials, tok
     await principalInput.pressSequentially(principalId);
     await expect(principalInput).toBeFocused();
     await dialog.getByLabel("Display name").fill("Alice Portal");
-    await dialog.getByLabel("Email").fill(`${principalId}@example.com`);
+    await dialog.getByRole("textbox", { name: "Email (optional)", exact: true }).fill(`${principalId}@example.com`);
     await expect(dialog.getByLabel("Agent token issuance", { exact: true })).toHaveValue("inherit");
     await dialog.getByLabel("Agent token issuance", { exact: true }).selectOption("write_capable");
     for (const context of ["default", "internal", "external"]) await dialog.getByRole("group", { name: "Permitted issuance contexts", exact: true }).getByLabel(context, { exact: true }).check();
@@ -1251,7 +1251,7 @@ test("local browser login supports administration, self-service credentials, tok
 
     await tabs.getByRole("link", { name: "Overview", exact: true }).click();
     await page.getByLabel("Display name").fill("Alice Updated");
-    await page.getByLabel("Email").fill(`${principalId}.updated@example.com`);
+    await page.getByRole("textbox", { name: "Email", exact: true }).fill(`${principalId}.updated@example.com`);
     await page.getByRole("button", { name: "Save profile", exact: true }).click();
     await expect(toast("Profile saved")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Alice Updated", exact: true })).toBeVisible();

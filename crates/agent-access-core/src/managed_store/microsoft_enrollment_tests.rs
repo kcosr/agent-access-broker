@@ -417,7 +417,7 @@ fn microsoft_enrollment_missing_email_disabled_owner_and_existing_identity_never
     let mut request = microsoft_first_request(provider.config_generation, TEST_OIDC_USER, 4);
     request.jit_provisioning = true;
     assert!(
-        matches!(store.complete_oidc_login(&hasher, request).unwrap(), OidcCompletionOutcome::Denied { reason } if reason == "login_method_disabled")
+        matches!(store.complete_oidc_login(&hasher, request).unwrap(), OidcCompletionOutcome::Denied { reason } if reason == "pending_enrollment_owner_disabled")
     );
     store
         .create_principal(

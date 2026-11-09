@@ -482,6 +482,10 @@ advertised services and actions are filtered through it. Administrative
 `visibility=all` is context-independent and omits `executionContext`, so it is
 configuration inventory rather than proof of caller authorization.
 Gateway services and gateway broker hosts are not included in invoke/send specs.
+Each HTTP route includes Boolean `bodyRequired`, independently of `bodyAllowed`
+and the request-body schema. OpenAPI `requestBody.required` and the send schema
+use it to require a body only where the handler requires one. Credential
+verification bodies remain optional; a supplied body still follows its schema.
 Routes with `requestBodyKind: "raw_json"` require the original UTF-8 JSON bytes.
 OpenAPI retains their `application/json` schema and marks the operation with
 `x-agent-access-request-body-kind: "raw_json"`. They are excluded from the JSON
@@ -1436,12 +1440,12 @@ Microsoft mapping and established-method operations are:
 Pending enrollment uses
 `/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment`:
 
-| Method | Body | Result |
+| Method | Request input | Result |
 | --- | --- | --- |
 | `GET` | None | Pending record or `null`. |
-| `POST` | `{"email":"morgan@example.test"}` | New pending record; create-only. |
-| `PATCH` | `{"enrollmentId":"<UUID>","expectedRevision":1,"email":"morgan.new@example.test"}` | Updated record. |
-| `DELETE` | `{"enrollmentId":"<UUID>","expectedRevision":2}` | `{"cancelled":true}`. |
+| `POST` | JSON body `{"email":"morgan@example.test"}` | New pending record; create-only. |
+| `PATCH` | JSON body `{"enrollmentId":"<UUID>","expectedRevision":1,"email":"morgan.new@example.test"}` | Updated record. |
+| `DELETE` | Required query parameters `?enrollmentId=<UUID>&expectedRevision=2`; no JSON body. | `{"cancelled":true}`. |
 
 The record contains `enrollmentId`, `principalId`, `tenantId`, `matchEmail`,
 `revision`, `createdAt`, `updatedAt`, `createdBy`, and `updatedBy`. The server
@@ -3731,7 +3735,9 @@ next succeeds, or `null`.
 managed identity and reconciled Microsoft provider state permit administrative
 preparation, including while sign-in is paused. Otherwise it is
 `{"available":false,"tenantId":null}`. This administrative metadata is separate
-from anonymous/session login availability.
+from anonymous/session login availability. If its advisory provider-state read
+fails, config status still returns the active snapshot's status with
+`microsoftEnrollment` set to `{"available":false,"tenantId":null}`.
 
 Successful HTTP reload requests append `providerAudit.admin` audit records; a
 successful config status request is an [unaudited read](#management-audit).

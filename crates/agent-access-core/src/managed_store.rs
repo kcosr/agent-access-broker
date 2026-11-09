@@ -3327,7 +3327,7 @@ impl ManagedStore {
             if principal.status != "active" {
                 tx.commit().map_err(sql_unavailable)?;
                 return Ok(OidcCompletionOutcome::Denied {
-                    reason: "login_method_disabled".into(),
+                    reason: "pending_enrollment_owner_disabled".into(),
                 });
             }
             if oidc_login_method_for_principal(&tx, &pending.principal_id)?.is_some() {

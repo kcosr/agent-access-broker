@@ -51,9 +51,6 @@ fn write_body(operation: &str) -> &'static str {
         "admin.principals.login_methods.oidc.microsoft.enrollment.update" => {
             r#"{"enrollmentId":"00000000-0000-4000-8000-000000000001","expectedRevision":1,"email":"ada@example.test"}"#
         }
-        "admin.principals.login_methods.oidc.microsoft.enrollment.cancel" => {
-            r#"{"enrollmentId":"00000000-0000-4000-8000-000000000001","expectedRevision":1}"#
-        }
         "admin.principals.login_methods.oidc.microsoft.link" => {
             r#"{"userObjectId":"00000000-0000-4000-8000-000000000001"}"#
         }
@@ -136,7 +133,10 @@ async fn auditor_all_admin_reads_and_safe_previews_are_admitted_but_every_write_
                 | RouteAccess::PolicyWrite
         )
     }) {
-        let uri = concrete_route(&route.route, &ids);
+        let mut uri = concrete_route(&route.route, &ids);
+        if route.operation == "admin.principals.login_methods.oidc.microsoft.enrollment.cancel" {
+            uri.push_str("?enrollmentId=00000000-0000-4000-8000-000000000001&expectedRevision=1");
+        }
         let method = Method::from_bytes(route.method.as_bytes()).unwrap();
         let write = matches!(
             route.access,

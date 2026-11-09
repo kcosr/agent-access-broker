@@ -814,7 +814,9 @@ commands described below. All `admin` subcommands reject `--token-value`.
 - `admin principals login-methods oidc enrollment update <principal> --enrollment-id <UUID> --expected-revision <N> --email <EMAIL>`
   changes the pending match email using the current ID and positive revision.
 - `admin principals login-methods oidc enrollment cancel <principal> --enrollment-id <UUID> --expected-revision <N>`
-  releases the reservation and retains account setup. Stale edits/cancellations
+  sends the required ID and revision as DELETE query parameters, without a JSON
+  body, and releases the reservation while retaining account setup. Stale
+  edits/cancellations
   return a conflict, including after login has consumed enrollment. Cancel does
   not ban ordinary JIT sign-in. Paused reconciled providers permit preparation.
   Profile `update --email` never changes the enrollment address. See

@@ -140,8 +140,11 @@ async fn microsoft_enrollment_crud_paused_provider_versions_and_safe_audit() {
             .request(
                 Method::DELETE,
                 &fixture.admin,
-                ENROLLMENT,
-                Some(&original.to_string()),
+                &format!(
+                    "{ENROLLMENT}?enrollmentId={}&expectedRevision=1",
+                    record["enrollmentId"].as_str().unwrap()
+                ),
+                None,
                 "ms-enrollment-stale",
             )
             .await;
@@ -156,13 +159,15 @@ async fn microsoft_enrollment_crud_paused_provider_versions_and_safe_audit() {
             )
             .await;
         assert_eq!(status, StatusCode::CONFLICT, "{linked}");
-        let current = json!({"enrollmentId":record["enrollmentId"],"expectedRevision":2});
         let (status, cancelled) = fixture
             .request(
                 Method::DELETE,
                 &fixture.admin,
-                ENROLLMENT,
-                Some(&current.to_string()),
+                &format!(
+                    "{ENROLLMENT}?enrollmentId={}&expectedRevision=2",
+                    record["enrollmentId"].as_str().unwrap()
+                ),
+                None,
                 "ms-enrollment-cancel",
             )
             .await;
@@ -289,14 +294,23 @@ async fn microsoft_enrollment_admin_cookie_mutations_require_csrf() {
             json!({"enrollmentId":"00000000-0000-4000-8000-000000000001","expectedRevision":1}),
         ),
     ] {
+        let path = if method == Method::DELETE {
+            format!(
+                "{ENROLLMENT}?enrollmentId={}&expectedRevision=1",
+                body["enrollmentId"].as_str().unwrap()
+            )
+        } else {
+            ENROLLMENT.into()
+        };
+        let body = (method != Method::DELETE).then(|| body.to_string());
         let response = authed_json_request(
             fixture.app.clone(),
             method,
-            ENROLLMENT,
+            path,
             "ms-csrf-denied",
             "Cookie",
             fixture.cookie.clone(),
-            Some(&body.to_string()),
+            body.as_deref(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -509,4 +523,103 @@ async fn microsoft_enrollment_mutation_rejects_superseded_snapshot_before_write(
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn microsoft_enrollment_cancellation_requires_query_fences_without_body_fallback() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let store = store(&fixture);
+    paused_provider(&store);
+    let (_, created) = fixture
+        .request(
+            Method::POST,
+            &fixture.admin,
+            ENROLLMENT,
+            Some(r#"{"email":"ada@example.test"}"#),
+            "ms-query-create",
+        )
+        .await;
+    let enrollment_id = created["result"]["enrollmentId"].as_str().unwrap();
+    for path in [
+        ENROLLMENT.to_string(),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}"),
+        format!("{ENROLLMENT}?expectedRevision=1"),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=invalid"),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=1&unexpected=1"),
+    ] {
+        let body = json!({"enrollmentId":enrollment_id,"expectedRevision":1}).to_string();
+        let response = authed_json_request(
+            fixture.app.clone(),
+            Method::DELETE,
+            path,
+            "ms-query-required",
+            "Authorization",
+            format!("Bearer {}", fixture.admin),
+            Some(&body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(store.microsoft_enrollment("alice").unwrap().is_some());
+    }
+    let (status, result) = fixture
+        .request(
+            Method::DELETE,
+            &fixture.admin,
+            &format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=1"),
+            None,
+            "ms-query-cancel",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert!(store.microsoft_enrollment("alice").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn config_status_retains_snapshot_when_enrollment_provider_metadata_cannot_be_read() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let store = store(&fixture);
+    paused_provider(&store);
+    let snapshot = fixture.state.current();
+    let connection = rusqlite::Connection::open(
+        &snapshot
+            .runtime
+            .config()
+            .managed_store
+            .as_ref()
+            .unwrap()
+            .path,
+    )
+    .unwrap();
+    // Corrupt only a field used by the optional metadata read; identity/group
+    // admission still uses the intact provider columns.
+    connection
+        .execute(
+            "UPDATE oidc_provider_state SET config_fingerprint = X'00'",
+            [],
+        )
+        .unwrap();
+    assert!(store.oidc_provider_state().is_err());
+    let (status, result) = fixture
+        .request(
+            Method::GET,
+            &fixture.admin,
+            "/v1/admin/config/status",
+            None,
+            "ms-status-metadata-failure",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["result"]["generation"], snapshot.generation);
+    assert_eq!(result["result"]["configHash"], snapshot.config_hash);
+    assert_eq!(result["result"]["identityAuthority"], "managed");
+    assert_eq!(
+        result["result"]["microsoftEnrollment"],
+        json!({"available":false,"tenantId":null})
+    );
+    connection
+        .execute(
+            "UPDATE oidc_provider_state SET config_fingerprint = 'enrollment-test'",
+            [],
+        )
+        .unwrap();
 }

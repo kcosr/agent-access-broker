@@ -2078,7 +2078,7 @@ pub(crate) async fn management_context_error_response(
     management_audited_response(context, status, envelope).await
 }
 
-pub(crate) async fn management_store_error_response(
+pub(super) async fn management_store_error_response(
     context: &ManagementContext,
     operation: &str,
     target: Option<Value>,
