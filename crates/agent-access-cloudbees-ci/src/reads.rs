@@ -715,6 +715,71 @@ mod tests {
         }
     }
 
+    /// `projected()` copies any scalar a controller returns for an unchecked
+    /// field; such values reach the caller unchanged and conform.
+    #[tokio::test]
+    async fn unchecked_scalar_fields_are_forwarded_and_conform() {
+        let server = MockServer::start().await;
+        let stage = json!({"id":"6","name":"Build","status":"SUCCESS","startTimeMillis":"1700",
+            "durationMillis":0.5,"pauseDurationMillis":false,"error":{"message":42,"type":null}});
+        for (route, body) in [
+            (
+                "/team-ci/job/payments/job/build-api/42/wfapi/describe",
+                json!({"id":"1700","name":42,
+                "status":"SUCCESS","startTimeMillis":true,"endTimeMillis":"1701","durationMillis":0.5,
+                "pauseDurationMillis":null,"stages":[stage.clone()]}),
+            ),
+            (
+                "/team-ci/job/payments/job/build-api/42/execution/node/6/wfapi/describe",
+                {
+                    let mut node = stage.clone();
+                    node["stageFlowNodes"] = json!([{"id":"7","name":"sh","status":"FAILED",
+                    "startTimeMillis":1.5,"error":{"message":true,"type":7},"parentNodes":["6"]}]);
+                    node
+                },
+            ),
+            (
+                "/team-ci/job/payments/job/build-api/42/testReport/api/json",
+                json!({"totalCount":"2",
+                "failCount":1.5,"skipCount":null,"passCount":true,"duration":"0.5","suites":[{"name":"suite",
+                "cases":[{"name":"a","className":5,"status":"FAILED","duration":"0.1","age":1.5,
+                "failedSince":"3","errorDetails":false,"errorStackTrace":7,"skippedMessage":null,
+                "stdout":1,"stderr":true}]}]}),
+            ),
+        ] {
+            Mock::given(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        let ci = provider(&server);
+        let pipeline = ci
+            .checked_invoke(invocation("build.pipeline.view", inputs()))
+            .await
+            .unwrap()
+            .result;
+        assert_eq!(pipeline["pipeline"]["durationMillis"], 0.5);
+        assert_eq!(pipeline["pipeline"]["stages"][0], stage);
+        let node = ci
+            .checked_invoke(invocation("build.pipeline.node.view", node_inputs()))
+            .await
+            .unwrap()
+            .result;
+        assert_eq!(node["node"]["stageFlowNodes"][0]["startTimeMillis"], 1.5);
+        assert_eq!(
+            node["node"]["stageFlowNodes"][0]["error"],
+            json!({"message":true,"type":7})
+        );
+        let details = ci
+            .checked_invoke(invocation("build.tests.details", inputs()))
+            .await
+            .unwrap()
+            .result;
+        assert_eq!(details["report"]["totalCount"], "2");
+        assert_eq!(details["report"]["cases"][0]["age"], 1.5);
+        assert_eq!(details["report"]["cases"][0]["stderr"], true);
+    }
+
     #[tokio::test]
     async fn node_logs_preserve_plugin_truncation_and_reject_oversize() {
         for length in [10, LOG_LIMIT as usize + 1] {

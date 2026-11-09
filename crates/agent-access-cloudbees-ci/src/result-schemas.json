@@ -11,16 +11,22 @@
       "description": "resource_not_found: the job has no build for this permalink"
     },
     "webUrl": {"type": "string", "description": "Present only when verified against the controller"},
-    "nullableString": {"type": ["string", "null"]},
-    "nullableBoolean": {"type": ["boolean", "null"]},
-    "nullableInteger": {"type": ["integer", "null"]},
-    "epochMillis": {"type": ["integer", "null"], "description": "Epoch milliseconds"},
-    "millis": {"type": ["integer", "null"], "description": "Milliseconds"},
-    "seconds": {"type": ["number", "null"], "description": "Seconds"},
+    "jenkinsString": {"description": "Jenkins value, usually a string or null"},
+    "jenkinsBoolean": {"description": "Jenkins value, usually a boolean or null"},
+    "jenkinsInteger": {"description": "Jenkins value, usually an integer or null"},
+    "jenkinsEpochMillis": {"description": "Jenkins value, usually epoch milliseconds"},
+    "jenkinsMillis": {"description": "Jenkins value, usually milliseconds"},
+    "jenkinsSeconds": {"description": "Jenkins value, usually seconds"},
+    "jenkinsResult": {"description": "Jenkins value, usually a string; null while building"},
+    "scalarString": {"type": ["string", "number", "boolean", "null"], "description": "Usually a string"},
+    "scalarInteger": {"type": ["string", "number", "boolean", "null"], "description": "Usually an integer"},
+    "scalarEpochMillis": {"type": ["string", "number", "boolean", "null"], "description": "Usually epoch milliseconds"},
+    "scalarMillis": {"type": ["string", "number", "boolean", "null"], "description": "Usually milliseconds"},
+    "scalarSeconds": {"type": ["string", "number", "boolean", "null"], "description": "Usually seconds"},
     "downloadSize": {"type": ["integer", "null"], "description": "Content-Length; null when the controller sent none"},
     "nodeError": {
       "type": "object",
-      "properties": {"message": {"$ref": "#/definitions/nullableString"}, "type": {"$ref": "#/definitions/nullableString"}}
+      "properties": {"message": {"$ref": "#/definitions/scalarString"}, "type": {"$ref": "#/definitions/scalarString"}}
     },
     "nodeIds": {"type": "array", "items": {"type": "string"}},
     "pipelineNode": {
@@ -29,9 +35,9 @@
         "id": {"type": "string"},
         "name": {"type": "string"},
         "status": {"type": "string"},
-        "startTimeMillis": {"$ref": "#/definitions/nullableInteger"},
-        "durationMillis": {"$ref": "#/definitions/nullableInteger"},
-        "pauseDurationMillis": {"$ref": "#/definitions/nullableInteger"},
+        "startTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+        "durationMillis": {"$ref": "#/definitions/scalarMillis"},
+        "pauseDurationMillis": {"$ref": "#/definitions/scalarMillis"},
         "error": {"$ref": "#/definitions/nodeError"},
         "parentNodes": {"$ref": "#/definitions/nodeIds"}
       },
@@ -42,16 +48,16 @@
       "properties": {
         "name": {"type": "string"},
         "suite": {"type": "string"},
-        "className": {"$ref": "#/definitions/nullableString"},
-        "status": {"$ref": "#/definitions/nullableString"},
-        "duration": {"$ref": "#/definitions/seconds"},
-        "age": {"$ref": "#/definitions/nullableInteger"},
-        "failedSince": {"$ref": "#/definitions/nullableInteger"},
-        "errorDetails": {"$ref": "#/definitions/nullableString"},
-        "errorStackTrace": {"$ref": "#/definitions/nullableString"},
-        "skippedMessage": {"$ref": "#/definitions/nullableString"},
-        "stdout": {"$ref": "#/definitions/nullableString"},
-        "stderr": {"$ref": "#/definitions/nullableString"}
+        "className": {"$ref": "#/definitions/scalarString"},
+        "status": {"$ref": "#/definitions/scalarString"},
+        "duration": {"$ref": "#/definitions/scalarSeconds"},
+        "age": {"$ref": "#/definitions/scalarInteger"},
+        "failedSince": {"$ref": "#/definitions/scalarInteger"},
+        "errorDetails": {"$ref": "#/definitions/scalarString"},
+        "errorStackTrace": {"$ref": "#/definitions/scalarString"},
+        "skippedMessage": {"$ref": "#/definitions/scalarString"},
+        "stdout": {"$ref": "#/definitions/scalarString"},
+        "stderr": {"$ref": "#/definitions/scalarString"}
       },
       "required": ["name", "suite"]
     },
@@ -88,17 +94,17 @@
         "properties": {
           "controller": {"type": "string"},
           "job": {"type": "string"},
-          "kind": {"type": ["string", "null"], "description": "Jenkins class"},
-          "displayName": {"$ref": "#/definitions/nullableString"},
-          "description": {"$ref": "#/definitions/nullableString"},
-          "buildable": {"$ref": "#/definitions/nullableBoolean"},
-          "inQueue": {"$ref": "#/definitions/nullableBoolean"},
-          "lastBuild": {"type": ["integer", "null"], "description": "Last build number; null when none"},
+          "kind": {"description": "Jenkins value, usually the class name"},
+          "displayName": {"$ref": "#/definitions/jenkinsString"},
+          "description": {"$ref": "#/definitions/jenkinsString"},
+          "buildable": {"$ref": "#/definitions/jenkinsBoolean"},
+          "inQueue": {"$ref": "#/definitions/jenkinsBoolean"},
+          "lastBuild": {"description": "Jenkins value, usually the last build number; null when none"},
           "parameters": {
             "type": "array",
             "items": {
               "type": "object",
-              "properties": {"name": {"$ref": "#/definitions/nullableString"}, "type": {"$ref": "#/definitions/nullableString"}},
+              "properties": {"name": {"$ref": "#/definitions/jenkinsString"}, "type": {"$ref": "#/definitions/jenkinsString"}},
               "required": ["name", "type"]
             }
           },
@@ -157,11 +163,11 @@
             "items": {
               "type": "object",
               "properties": {
-                "number": {"$ref": "#/definitions/nullableInteger"},
-                "result": {"type": ["string", "null"], "description": "Null while building"},
-                "building": {"$ref": "#/definitions/nullableBoolean"},
-                "timestamp": {"$ref": "#/definitions/epochMillis"},
-                "duration": {"$ref": "#/definitions/millis"},
+                "number": {"$ref": "#/definitions/jenkinsInteger"},
+                "result": {"$ref": "#/definitions/jenkinsResult"},
+                "building": {"$ref": "#/definitions/jenkinsBoolean"},
+                "timestamp": {"$ref": "#/definitions/jenkinsEpochMillis"},
+                "duration": {"$ref": "#/definitions/jenkinsMillis"},
                 "url": {"$ref": "#/definitions/webUrl"}
               },
               "required": ["number", "result", "building", "timestamp", "duration"]
@@ -181,12 +187,12 @@
           "number": {"type": "integer"},
           "buildNumber": {"type": "integer"},
           "buildSelector": {"$ref": "#/definitions/buildSelector"},
-          "displayName": {"$ref": "#/definitions/nullableString"},
-          "result": {"type": ["string", "null"], "description": "Null while building"},
-          "building": {"$ref": "#/definitions/nullableBoolean"},
-          "timestamp": {"$ref": "#/definitions/epochMillis"},
-          "duration": {"$ref": "#/definitions/millis"},
-          "estimatedDuration": {"$ref": "#/definitions/millis"},
+          "displayName": {"$ref": "#/definitions/jenkinsString"},
+          "result": {"$ref": "#/definitions/jenkinsResult"},
+          "building": {"$ref": "#/definitions/jenkinsBoolean"},
+          "timestamp": {"$ref": "#/definitions/jenkinsEpochMillis"},
+          "duration": {"$ref": "#/definitions/jenkinsMillis"},
+          "estimatedDuration": {"$ref": "#/definitions/jenkinsMillis"},
           "url": {"$ref": "#/definitions/webUrl"}
         },
         "required": ["controller", "job", "number", "buildNumber", "displayName", "result", "building", "timestamp", "duration", "estimatedDuration"]
@@ -309,11 +315,11 @@
           "buildNumber": {"type": "integer"},
           "buildSelector": {"$ref": "#/definitions/buildSelector"},
           "reportAvailable": {"type": "boolean", "description": "false: the build has no test report; the counts are present only when true, null when the report omits one"},
-          "totalCount": {"$ref": "#/definitions/nullableInteger"},
-          "failCount": {"$ref": "#/definitions/nullableInteger"},
-          "skipCount": {"$ref": "#/definitions/nullableInteger"},
-          "passCount": {"$ref": "#/definitions/nullableInteger"},
-          "duration": {"$ref": "#/definitions/seconds"}
+          "totalCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "failCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "skipCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "passCount": {"$ref": "#/definitions/jenkinsInteger"},
+          "duration": {"$ref": "#/definitions/jenkinsSeconds"}
         },
         "required": ["controller", "job", "buildNumber", "reportAvailable"]
       },
@@ -330,11 +336,11 @@
           "report": {
             "type": "object",
             "properties": {
-              "totalCount": {"$ref": "#/definitions/nullableInteger"},
-              "failCount": {"$ref": "#/definitions/nullableInteger"},
-              "skipCount": {"$ref": "#/definitions/nullableInteger"},
-              "passCount": {"$ref": "#/definitions/nullableInteger"},
-              "duration": {"$ref": "#/definitions/seconds"},
+              "totalCount": {"$ref": "#/definitions/scalarInteger"},
+              "failCount": {"$ref": "#/definitions/scalarInteger"},
+              "skipCount": {"$ref": "#/definitions/scalarInteger"},
+              "passCount": {"$ref": "#/definitions/scalarInteger"},
+              "duration": {"$ref": "#/definitions/scalarSeconds"},
               "truncated": {"type": "boolean", "description": "Cases were omitted beyond maxResults"},
               "returnedCount": {"type": "integer"},
               "returnedFailedCount": {"type": "integer"},
@@ -384,12 +390,12 @@
             "type": "object",
             "properties": {
               "id": {"type": "string", "description": "Run ID; not necessarily the build number"},
-              "name": {"$ref": "#/definitions/nullableString"},
+              "name": {"$ref": "#/definitions/scalarString"},
               "status": {"type": "string"},
-              "startTimeMillis": {"$ref": "#/definitions/nullableInteger"},
-              "endTimeMillis": {"$ref": "#/definitions/nullableInteger"},
-              "durationMillis": {"$ref": "#/definitions/nullableInteger"},
-              "pauseDurationMillis": {"$ref": "#/definitions/nullableInteger"},
+              "startTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+              "endTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+              "durationMillis": {"$ref": "#/definitions/scalarMillis"},
+              "pauseDurationMillis": {"$ref": "#/definitions/scalarMillis"},
               "stages": {"type": "array", "items": {"$ref": "#/definitions/pipelineNode"}}
             },
             "required": ["id", "status", "stages"]
@@ -413,9 +419,9 @@
               "id": {"type": "string"},
               "name": {"type": "string"},
               "status": {"type": "string"},
-              "startTimeMillis": {"$ref": "#/definitions/nullableInteger"},
-              "durationMillis": {"$ref": "#/definitions/nullableInteger"},
-              "pauseDurationMillis": {"$ref": "#/definitions/nullableInteger"},
+              "startTimeMillis": {"$ref": "#/definitions/scalarEpochMillis"},
+              "durationMillis": {"$ref": "#/definitions/scalarMillis"},
+              "pauseDurationMillis": {"$ref": "#/definitions/scalarMillis"},
               "error": {"$ref": "#/definitions/nodeError"},
               "parentNodes": {"$ref": "#/definitions/nodeIds"},
               "stageFlowNodes": {"type": "array", "items": {"$ref": "#/definitions/pipelineNode"}}
@@ -479,12 +485,12 @@
           "controller": {"type": "string"},
           "job": {"type": "string"},
           "queueId": {"type": "integer"},
-          "blocked": {"$ref": "#/definitions/nullableBoolean"},
-          "buildable": {"$ref": "#/definitions/nullableBoolean"},
-          "cancelled": {"$ref": "#/definitions/nullableBoolean"},
-          "stuck": {"$ref": "#/definitions/nullableBoolean"},
-          "why": {"$ref": "#/definitions/nullableString"},
-          "buildNumber": {"type": ["integer", "null"], "description": "Started build; null until it starts"}
+          "blocked": {"$ref": "#/definitions/jenkinsBoolean"},
+          "buildable": {"$ref": "#/definitions/jenkinsBoolean"},
+          "cancelled": {"$ref": "#/definitions/jenkinsBoolean"},
+          "stuck": {"$ref": "#/definitions/jenkinsBoolean"},
+          "why": {"$ref": "#/definitions/jenkinsString"},
+          "buildNumber": {"description": "Jenkins value, usually the started build number; null until it starts"}
         },
         "required": ["controller", "job", "queueId", "blocked", "buildable", "cancelled", "stuck", "why", "buildNumber"]
       },

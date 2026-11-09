@@ -2474,6 +2474,81 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
+    /// Job, build, test-summary and queue reads copy these Jenkins values
+    /// without checking their type; any JSON reaches the caller unchanged and
+    /// conforms.
+    #[tokio::test]
+    async fn unchecked_jenkins_values_are_forwarded_and_conform() {
+        const JOB: &str = "/team-ci/job/payments/job/build-api";
+        let odd_job = json!({"fullName":"payments/build-api","_class":7,"displayName":{"text":"x"},
+            "description":["a"],"buildable":"yes","inQueue":1,"lastBuild":{"number":"42"},
+            "property":[{"parameterDefinitions":[{"name":5,"type":{"k":"v"}}]}],
+            "builds":[{"number":"42","result":5,"building":"no","timestamp":1.5,"duration":{"ms":1}}]});
+        let cases = [
+            (
+                "job.view",
+                format!("{JOB}/api/json"),
+                odd_job.clone(),
+                json!({}),
+                json!({"kind":7,"displayName":{"text":"x"},"description":["a"],"buildable":"yes",
+                    "inQueue":1,"lastBuild":"42","parameters":[{"name":5,"type":{"k":"v"}}]}),
+            ),
+            (
+                "build.list",
+                format!("{JOB}/api/json"),
+                odd_job,
+                json!({}),
+                json!({"builds":[{"number":"42","result":5,"building":"no","timestamp":1.5,"duration":{"ms":1}}]}),
+            ),
+            (
+                "build.view",
+                format!("{JOB}/42/api/json"),
+                json!({"number":42,"displayName":1,"result":{"a":1},"building":"x","timestamp":"1700",
+                    "duration":2.5,"estimatedDuration":[1]}),
+                json!({"buildNumber":42}),
+                json!({"displayName":1,"result":{"a":1},"building":"x","timestamp":"1700","duration":2.5,
+                    "estimatedDuration":[1]}),
+            ),
+            (
+                "build.tests.view",
+                format!("{JOB}/42/testReport/api/json"),
+                json!({"totalCount":"5","failCount":1.5,"skipCount":true,"passCount":{"n":1},"duration":"1.0"}),
+                json!({"buildNumber":42}),
+                json!({"totalCount":"5","failCount":1.5,"skipCount":true,"passCount":{"n":1},"duration":"1.0"}),
+            ),
+            (
+                "queue.view",
+                "/team-ci/queue/item/51/api/json".to_owned(),
+                json!({"id":51,"task":{"fullName":"payments/build-api"},"blocked":"no","buildable":0,
+                    "cancelled":null,"stuck":[],"why":{"text":"x"},"executable":{"number":"42"}}),
+                json!({"queueId":51}),
+                json!({"blocked":"no","buildable":0,"cancelled":null,"stuck":[],"why":{"text":"x"},
+                    "buildNumber":"42"}),
+            ),
+        ];
+        for (action, route, body, extra, expected) in cases {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+            let mut inputs = json!({"controller":"team-ci","job":"payments/build-api"});
+            inputs
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let result = provider(&server)
+                .checked_invoke(invocation(action, inputs))
+                .await
+                .unwrap()
+                .result;
+            for (key, value) in expected.as_object().unwrap() {
+                assert_eq!(&result[key], value, "{action} {key}");
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_summary_reports_counts_and_nulls_counts_the_report_omits() {
         // A JUnit report exports no totalCount; an aggregated report exports

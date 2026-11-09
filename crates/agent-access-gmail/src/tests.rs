@@ -1212,3 +1212,85 @@ async fn read_and_mutation_results_conform_to_their_result_schemas() {
         json!([{"id":"a123","labelIds":["IMPORTANT"]}])
     );
 }
+
+/// Gmail values the projection copies without checking their type reach the
+/// caller unchanged and conform: a numeric `internalDate`, a string
+/// `sizeEstimate`, non-array `labelIds`, odd label fields, and messages on a
+/// message mutation.
+#[tokio::test]
+async fn unchecked_gmail_values_are_forwarded_and_conform() {
+    let server = MockServer::start().await;
+    let mut odd = message();
+    odd["labelIds"] = json!("INBOX");
+    odd["snippet"] = json!(7);
+    odd["internalDate"] = json!(1_700_000_000_000_u64);
+    odd["sizeEstimate"] = json!("2048");
+    odd["payload"] = json!({"mimeType":"multipart/mixed","parts":[
+        {"mimeType":"application/pdf","filename":"a.pdf","body":{"attachmentId":"att-1","size":"512"}}]});
+    for (route, body) in [
+        (
+            "/gmail/v1/users/me/profile",
+            json!({"emailAddress":"alice@example.test","messagesTotal":"10","threadsTotal":1.5,"historyId":123}),
+        ),
+        (
+            "/gmail/v1/users/me/labels",
+            json!({"labels":[{"id":5,"name":null,"type":true,
+            "messageListVisibility":{"x":1},"labelListVisibility":["a"]},"INBOX"]}),
+        ),
+        (
+            "/gmail/v1/users/me/messages",
+            json!({"messages":[{"id":"a123"}],"resultSizeEstimate":"3"}),
+        ),
+        ("/gmail/v1/users/me/messages/a123", odd.clone()),
+        (
+            "/gmail/v1/users/me/threads/b456",
+            json!({"id":"b456","historyId":99,"messages":[odd]}),
+        ),
+        (
+            "/gmail/v1/users/me/messages/a123/trash",
+            json!({"id":"a123","labelIds":"TRASH","messages":[{"id":5,"labelIds":"X"}]}),
+        ),
+        (
+            "/gmail/v1/users/me/threads/b456/modify",
+            json!({"id":"b456","labelIds":7,"messages":[{"id":5,"labelIds":"X"},"unexpected"]}),
+        ),
+    ] {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    let p = provider(&server);
+    let result = |action: &'static str, inputs: Value| {
+        let p = &p;
+        async move {
+            p.checked_invoke(invocation(action, inputs))
+                .await
+                .unwrap()
+                .result
+        }
+    };
+    let account = result("account.view", json!({})).await;
+    assert_eq!(account["historyId"], 123);
+    assert_eq!(account["threadsTotal"], 1.5);
+    let labels = result("label.list", json!({})).await;
+    assert_eq!(labels["labels"][0]["type"], true);
+    assert_eq!(labels["labels"][1]["id"], Value::Null);
+    let viewed = result("message.view", json!({"id":"a123"})).await;
+    assert_eq!(viewed["internalDate"], 1_700_000_000_000_u64);
+    assert_eq!(viewed["labelIds"], "INBOX");
+    assert_eq!(viewed["attachments"][0]["size"], "512");
+    let found = result("message.search", json!({})).await;
+    assert_eq!(found["resultSizeEstimate"], "3");
+    assert_eq!(found["messages"][0]["sizeEstimate"], "2048");
+    let thread = result("thread.view", json!({"id":"b456"})).await;
+    assert_eq!(thread["historyId"], 99);
+    let trashed = result("message.trash", json!({"id":"a123"})).await;
+    assert_eq!(trashed["messages"], json!([{"id":5,"labelIds":"X"}]));
+    let archived = result("thread.archive", json!({"id":"b456"})).await;
+    assert_eq!(archived["labelIds"], 7);
+    assert_eq!(
+        archived["messages"],
+        json!([{"id":5,"labelIds":"X"},{"id":null,"labelIds":null}])
+    );
+}
