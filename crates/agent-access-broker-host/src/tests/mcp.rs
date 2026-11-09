@@ -4,6 +4,7 @@ use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
 pub(super) mod names;
+pub(super) mod output_schemas;
 mod rate_wait;
 mod trusted_user;
 
@@ -18,6 +19,8 @@ pub(super) struct Fixture {
     token_path: PathBuf,
     state: Arc<ReloadableState>,
     pub(super) audit_path: PathBuf,
+    /// Tool definitions from this fixture's `tools/list` responses, by name.
+    listed_tools: std::sync::Mutex<BTreeMap<String, Value>>,
     _directory: tempfile::TempDir,
 }
 
@@ -97,6 +100,7 @@ impl Fixture {
             state,
             token_path,
             audit_path,
+            listed_tools: Default::default(),
             _directory: directory,
         }
     }
@@ -161,13 +165,55 @@ impl Fixture {
                 Method::POST,
                 Some(TOKEN_A),
                 Some(session),
-                Some(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})),
+                Some(json!({"jsonrpc":"2.0","id":id,"method":method,"params":&params})),
             ))
             .await;
         assert_eq!(response.status(), StatusCode::OK, "method {method}");
         let body = rpc_body(response).await;
         assert_eq!(body["id"], id);
+        match method {
+            "tools/list" => {
+                let tools = body["result"]["tools"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                output_schemas::capture_tools("http", &tools);
+                let mut listed = self.listed_tools.lock().unwrap();
+                for tool in tools {
+                    if let Some(name) = tool["name"].as_str() {
+                        listed.insert(name.to_owned(), tool);
+                    }
+                }
+            }
+            "tools/call" => {
+                let name = params["name"].as_str().unwrap_or_default();
+                let tool = self.advertised_tool(name);
+                output_schemas::check_call("http", name, tool.as_ref(), &body);
+            }
+            _ => {}
+        }
         body
+    }
+
+    /// The definition this fixture's caller was last listed for `name`, or,
+    /// before any listing, the one the current runtime's aggregate HTTP
+    /// registry advertises for it.
+    fn advertised_tool(&self, name: &str) -> Option<Value> {
+        if let Some(tool) = self.listed_tools.lock().unwrap().get(name) {
+            return Some(tool.clone());
+        }
+        let mut catalog = agent_access_core::empty_catalog(json!({}));
+        catalog.services = self.state.current().runtime.api_services_all();
+        agent_access_core::mcp::ToolRegistry::build(
+            &catalog,
+            &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::ProjectionMode::Http,
+            agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
+        )
+        .ok()?
+        .definitions()
+        .into_iter()
+        .find(|tool| tool["name"] == name)
     }
 
     pub(super) async fn call(&self, session: &str, id: u64, name: &str, arguments: Value) -> Value {
@@ -1171,7 +1217,8 @@ async fn mcp_cancellation_before_dispatch_skips_provider_and_finalizes_audit() {
 struct CatalogProvider;
 impl agent_access_provider::test_support::DescribedProvider for CatalogProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        let mut descriptor = agent_access_fake::fake_descriptor();
+        // Calibrated to the page budget without an output schema.
+        let mut descriptor = super::untyped_fake_descriptor();
         // A valid action whose large description forces response-byte pagination
         // without inventing actions outside the Broker's canonical catalog.
         descriptor.actions[0].description = "x".repeat(55_600);

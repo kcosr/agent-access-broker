@@ -447,6 +447,8 @@ impl agent_access_provider::test_support::DescribedProvider for ScopedCatalogPro
             descriptor.actions.push(hidden);
         }
         if self.revision > 0 {
+            // Calibrated to the page budget without an output schema.
+            descriptor.actions[0].result_schemas = None;
             descriptor.actions[0].description = "x".repeat(55_600);
             descriptor.actions[0].input_schema =
                 json!({"type":"object","properties":{"revision":{"const":self.revision}}});

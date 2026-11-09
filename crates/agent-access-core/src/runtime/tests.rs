@@ -8813,7 +8813,9 @@ impl Provider for UntypedFakeProvider {
         &self,
         request: ScopeRequest<'_>,
     ) -> Result<ScopeResolution, ProviderError> {
-        agent_access_fake::FakeProvider.resolve_scopes(request).await
+        agent_access_fake::FakeProvider
+            .resolve_scopes(request)
+            .await
     }
 
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {

@@ -291,7 +291,7 @@ pub fn helper_result_schema(helper: HelperKind) -> Value {
                 "service": string(),
                 "sensitiveInputPointers": strings(),
                 "sensitiveOutputPointers": strings(),
-                "io": {"type": "object", "properties": {"type": string()}, "required": ["type"]},
+                "io": {"type": "object", "description": "Input and output kind: json, multipart_upload with its plan, or raw_download with its metadata header."},
                 "responseKind": string(),
                 "exitPolicy": string(),
                 "readContentFormats": strings(),
