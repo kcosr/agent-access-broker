@@ -22,8 +22,9 @@ impl StdioMcp {
                 command.env_remove(key);
             }
         }
+        // Explicitly advertise output schemas so every result is checked.
         let mut child = command
-            .args(["mcp", "serve"])
+            .args(["mcp", "serve", "--output-schemas", "on"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -45,7 +46,10 @@ impl StdioMcp {
             stdin,
             responses,
             next_id: 1,
-            tools: Default::default(),
+            tools: mcp_output::AdvertisedTools::new(
+                Some(agent_access_core::mcp::OutputSchemas::On),
+                None,
+            ),
         }
     }
 

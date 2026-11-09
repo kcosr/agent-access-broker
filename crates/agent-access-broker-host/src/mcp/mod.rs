@@ -11,7 +11,8 @@ use crate::{
 };
 use agent_access_core::{
     AttestedIdentityProof, BrokerTokenClass, ExecutionContext, IdentityContext, IdentityFailure,
-    IngressAdmission, InvocationControl, mcp::McpView,
+    IngressAdmission, InvocationControl,
+    mcp::{McpView, OutputSchemas},
 };
 use axum::{
     Extension,
@@ -119,6 +120,8 @@ struct EndpointState {
 #[derive(Clone)]
 struct Admitted {
     view: McpView,
+    /// This request's own selection: never session state, never authority.
+    output_schemas: OutputSchemas,
     snapshot: Arc<RuntimeSnapshot>,
     http_span: tracing::Span,
     cancellation: Arc<ExplicitCancellation>,
@@ -388,7 +391,7 @@ fn security_headers(
             ));
         }
     }
-    if uri.query().is_some()
+    if endpoint_query(uri.query()).is_none()
         || headers.contains_key("content-encoding")
         || headers.contains_key("last-event-id")
     {
@@ -443,25 +446,50 @@ fn security_headers(
     Ok(Some(token.to_owned()))
 }
 
-// Parse the original, undecoded path. Axum's path parameters are intentionally
-// not used: percent encodings must never create aliases for a service connection.
-fn request_view(request: &Request<Body>) -> Option<McpView> {
+/// The one parser of an MCP endpoint's raw query: none, or exactly
+/// `outputSchemas=on` or `outputSchemas=off`. Every other form is refused:
+/// a bare or empty `?`, a repeated, empty, encoded or unknown parameter, or
+/// any other separator. A new parameter is added here explicitly. The value
+/// selects presentation only, never identity, context or authorization.
+fn endpoint_query(query: Option<&str>) -> Option<OutputSchemas> {
+    let Some(query) = query else {
+        return Some(OutputSchemas::CONNECTION_DEFAULT);
+    };
+    OutputSchemas::parse(query.strip_prefix("outputSchemas=")?)
+}
+
+enum EndpointRejection {
+    Path,
+    Query,
+}
+
+// Parse the original, undecoded path and query. Axum's path parameters are
+// intentionally not used: percent encodings must never create aliases for a
+// service connection.
+fn request_view(request: &Request<Body>) -> Result<(McpView, OutputSchemas), EndpointRejection> {
     let original = request
         .extensions()
         .get::<OriginalUri>()
         .map(|uri| &uri.0)
         .unwrap_or_else(|| request.uri());
-    if original.query().is_some()
-        || request.uri().query().is_some()
-        || original.path() != request.uri().path()
-    {
-        return None;
+    if original.path() != request.uri().path() {
+        return Err(EndpointRejection::Path);
     }
-    if original.path() == "/mcp" {
-        return Some(McpView::Aggregate);
+    let view = if original.path() == "/mcp" {
+        McpView::Aggregate
+    } else {
+        let service = original
+            .path()
+            .strip_prefix("/mcp/")
+            .filter(|service| agent_access_provider::is_service_name(service))
+            .ok_or(EndpointRejection::Path)?;
+        McpView::Service(service.to_owned())
+    };
+    if original.query() != request.uri().query() {
+        return Err(EndpointRejection::Query);
     }
-    let service = original.path().strip_prefix("/mcp/")?;
-    agent_access_provider::is_service_name(service).then(|| McpView::Service(service.to_owned()))
+    let output_schemas = endpoint_query(original.query()).ok_or(EndpointRejection::Query)?;
+    Ok((view, output_schemas))
 }
 
 pub(crate) async fn handle(
@@ -485,18 +513,29 @@ pub(crate) async fn handle(
     if !config.enabled {
         return failure(StatusCode::NOT_FOUND, "MCP endpoint is disabled");
     }
-    let Some(view) = request_view(&request) else {
-        if ingress.is_username() {
-            return crate::router::admission_failure_response(
-                &state,
-                snapshot,
-                request.headers(),
-                Some(remote),
-                IdentityFailure::AssertionInvalid,
-            )
-            .await;
+    let (view, output_schemas) = match request_view(&request) {
+        Ok(selection) => selection,
+        Err(rejection) => {
+            if ingress.is_username() {
+                return crate::router::admission_failure_response(
+                    &state,
+                    snapshot,
+                    request.headers(),
+                    Some(remote),
+                    IdentityFailure::AssertionInvalid,
+                )
+                .await;
+            }
+            return failure(
+                StatusCode::BAD_REQUEST,
+                match rejection {
+                    EndpointRejection::Path => "Invalid MCP endpoint path",
+                    EndpointRejection::Query => {
+                        "Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"
+                    }
+                },
+            );
         }
-        return failure(StatusCode::BAD_REQUEST, "Invalid MCP endpoint path");
     };
     if request.headers().contains_key("trailer") {
         return if ingress.is_username() {
@@ -952,6 +991,7 @@ pub(crate) async fn handle(
     );
     let mut admitted = Admitted {
         view,
+        output_schemas,
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),
@@ -1393,4 +1433,41 @@ fn failure_response(error: agent_access_core::IdentityFailure) -> Response {
         StatusCode::from_u16(error.reason_code().http_status()).unwrap(),
         error.message(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_query_accepts_only_no_query_or_one_exact_selection() {
+        assert_eq!(endpoint_query(None), Some(OutputSchemas::Off));
+        assert_eq!(
+            endpoint_query(Some("outputSchemas=on")),
+            Some(OutputSchemas::On)
+        );
+        assert_eq!(
+            endpoint_query(Some("outputSchemas=off")),
+            Some(OutputSchemas::Off)
+        );
+        for rejected in [
+            "",
+            "outputSchemas",
+            "outputSchemas=",
+            "outputSchemas=ON",
+            "outputSchemas=o%6E",
+            "outputSchemas=on&outputSchemas=on",
+            "outputSchemas=off&outputSchemas=on",
+            "outputSchemas=on&",
+            "&outputSchemas=on",
+            "outputSchemas=on;other=1",
+            "outputSchemas=on&other=1",
+            "other=1",
+            "outputschemas=on",
+            " outputSchemas=on",
+            "outputSchemas=on ",
+        ] {
+            assert_eq!(endpoint_query(Some(rejected)), None, "{rejected:?}");
+        }
+    }
 }

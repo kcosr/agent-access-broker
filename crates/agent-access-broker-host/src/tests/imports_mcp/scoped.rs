@@ -297,6 +297,101 @@ async fn scoped_imports_same_raw_name_uses_selected_service_current_credentials_
 }
 
 #[tokio::test]
+async fn scoped_imports_advertise_wrapper_schemas_only_when_selected_with_identical_results() {
+    use agent_access_core::mcp::OutputSchemas;
+    let fixture = fixture_http().await;
+    let session = initialize(&fixture, "alice", "one").await;
+    let selected = |selection: Option<OutputSchemas>, id: u64, method: &str, params: Value| {
+        let mut request = wire(
+            &fixture,
+            "alice",
+            "one",
+            Some(&session),
+            json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+        );
+        *request.uri_mut() = mcp::endpoint("/mcp/one", selection).parse().unwrap();
+        let app = fixture.app.clone();
+        async move {
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            mcp::rpc_body(response).await
+        }
+    };
+    let mut results = Vec::new();
+    for (id, selection) in
+        (2..)
+            .step_by(3)
+            .zip([Some(OutputSchemas::On), Some(OutputSchemas::Off), None])
+    {
+        let listing = selected(selection, id, "tools/list", json!({})).await;
+        let tools = listing["result"]["tools"].as_array().unwrap();
+        let read = tools
+            .iter()
+            .find(|tool| tool["name"] == "read_item")
+            .unwrap();
+        let on = selection == Some(OutputSchemas::On);
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool.get("outputSchema").is_some() == on)
+        );
+        if on {
+            // The MCP adapter's wrapper, whatever the upstream declared.
+            mcp::output_schemas::check_definition(OutputSchemas::On, read);
+            assert!(read["outputSchema"].to_string().contains("upstreamMcp"));
+        }
+        let detail = selected(
+            selection,
+            id + 1,
+            "tools/call",
+            json!({"name":"actions_describe","arguments":{"service":"one","action":"inspect"}}),
+        )
+        .await;
+        let detail = mcp::structured(&detail);
+        assert_eq!(detail["mcpTool"]["name"], "read_item");
+        assert!(detail.get("resultSchemas").is_none(), "{detail}");
+        assert_eq!(
+            detail["mcpTool"].get("outputSchema"),
+            on.then(|| &read["outputSchema"])
+        );
+        let called = selected(
+            selection,
+            id + 2,
+            "tools/call",
+            json!({"name":"read_item","arguments":{"inputs":{"message":"selected call"}}}),
+        )
+        .await;
+        if on {
+            mcp::output_schemas::check_structured(
+                "read_item",
+                &read["outputSchema"],
+                mcp::structured(&called),
+            );
+        }
+        let mut result = mcp::structured(&called).clone();
+        assert_eq!(result["decision"], "allow", "{called}");
+        for id in ["agentRequestId", "brokerRequestId"] {
+            result.as_object_mut().unwrap().remove(id);
+        }
+        results.push(result);
+    }
+    assert_eq!(results[0], results[1]);
+    assert_eq!(results[1], results[2]);
+    // One upstream dispatch per call, in every selection.
+    assert_eq!(
+        fixture
+            .upstream
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, _, request)| request["method"] == "tools/call")
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
 async fn scoped_imports_refresh_quarantine_same_id_review_and_replacement_recheck_grants() {
     let fixture = fixture_http().await;
     let admin = admin_token(&fixture);

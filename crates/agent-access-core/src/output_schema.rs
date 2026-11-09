@@ -2,7 +2,9 @@
 //! MCP transports, action details, OpenAPI responses and the test-support
 //! runtime check. It reads only [`ApiActionSpec`], so the stdio adapter
 //! composes from the catalog JSON exactly as HTTP MCP composes from its
-//! runtime catalog.
+//! runtime catalog. These composers are unconditional; the MCP registry calls
+//! them only for a connection whose [`crate::mcp::OutputSchemas`] selection
+//! advertises them.
 //!
 //! The result payload of an action is the union of complete object branches:
 //! its success schema with the optional `renderedBody` at each declared body

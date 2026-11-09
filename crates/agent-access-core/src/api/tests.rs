@@ -254,6 +254,7 @@ fn extended_action_documentation_flows_to_specs_but_not_tool_definitions() {
                 &catalog,
                 &view,
                 mode,
+                crate::mcp::OutputSchemas::On,
                 crate::mcp::STDIO_MAX_CATALOG_BYTES,
             )
             .unwrap();

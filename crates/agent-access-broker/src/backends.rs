@@ -69,7 +69,8 @@ mod tests {
     use agent_access_broker_host::BrokerApplication;
     use agent_access_core::McpConfig;
     use agent_access_core::mcp::{
-        McpView, ProjectionMode, ToolRegistry, action_eligible, evaluate_scoped_mcp_readiness,
+        McpView, OutputSchemas, ProjectionMode, ToolRegistry, action_eligible,
+        evaluate_scoped_mcp_readiness,
     };
     use std::collections::BTreeSet;
 
@@ -192,21 +193,44 @@ mod tests {
             assert!(service.actions.iter().all(|action| action.scoped_mcp_name.as_deref() == Some(action.action.as_str())));
             catalog.services.push(service);
             for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
-                ToolRegistry::build(
-                    &catalog,
-                    &McpView::Service(descriptor.service.clone()),
-                    mode,
-                    max_catalog_bytes,
-                )
-                .unwrap();
+                for output_schemas in [OutputSchemas::On, OutputSchemas::Off] {
+                    ToolRegistry::build(
+                        &catalog,
+                        &McpView::Service(descriptor.service.clone()),
+                        mode,
+                        output_schemas,
+                        max_catalog_bytes,
+                    )
+                    .unwrap();
+                }
             }
             combined.services.extend(catalog.services);
             tested.insert(descriptor.service);
         }
         for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
-            let registry =
-                ToolRegistry::build(&combined, &McpView::Aggregate, mode, max_catalog_bytes)
-                    .unwrap();
+            let registry = ToolRegistry::build(
+                &combined,
+                &McpView::Aggregate,
+                mode,
+                OutputSchemas::On,
+                max_catalog_bytes,
+            )
+            .unwrap();
+            // Without advertisement, the same tools carry no output schema.
+            let schema_free = ToolRegistry::build(
+                &combined,
+                &McpView::Aggregate,
+                mode,
+                OutputSchemas::Off,
+                max_catalog_bytes,
+            )
+            .unwrap()
+            .definitions();
+            assert!(
+                schema_free
+                    .iter()
+                    .all(|tool| tool.get("outputSchema").is_none())
+            );
             let expected = combined
                 .services
                 .iter()
@@ -215,6 +239,21 @@ mod tests {
                 .count();
             let definitions = registry.definitions();
             assert_eq!(definitions.len(), expected + 5, "{mode:?}");
+            assert_eq!(
+                schema_free
+                    .iter()
+                    .map(|tool| &tool["name"])
+                    .collect::<Vec<_>>(),
+                definitions
+                    .iter()
+                    .map(|tool| &tool["name"])
+                    .collect::<Vec<_>>()
+            );
+            assert!(
+                definitions
+                    .iter()
+                    .all(|tool| tool.get("outputSchema").is_some())
+            );
             // Every advertised output schema is self-contained and within the
             // per-tool budget.
             for tool in &definitions {

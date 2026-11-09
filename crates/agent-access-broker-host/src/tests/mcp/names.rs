@@ -77,7 +77,7 @@ impl Provider for NamingBackend {
     }
 }
 
-fn configure(config: &mut BrokerConfig, collision: bool) {
+pub(super) fn configure(config: &mut BrokerConfig, collision: bool) {
     let backend = NamingBackend { collision };
     config.policy.grants[0].actions = backend
         .descriptor()

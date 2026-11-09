@@ -864,7 +864,9 @@ fn native_schemas() -> Vec<NativeSchemaCase> {
 
 #[test]
 fn native_documentation_preserves_every_spec_and_tool_projection() {
-    use crate::mcp::{McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry};
+    use crate::mcp::{
+        McpView, OutputSchemas, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry,
+    };
     use crate::{api_service_spec, empty_catalog, openapi_from_catalog, send_schema_from_catalog};
     // Separate from the larger pure projection budget: the CLI's JSON reader
     // bounds the whole response before selecting a service or projecting tools.
@@ -944,11 +946,19 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
                 McpView::Aggregate,
                 McpView::Service(service.service.clone()),
             ] {
-                let registry =
-                    ToolRegistry::build(&catalog, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                let registry = ToolRegistry::build(
+                    &catalog,
+                    &view,
+                    mode,
+                    OutputSchemas::On,
+                    STDIO_MAX_CATALOG_BYTES,
+                )
+                .unwrap();
                 let definitions = registry.definitions();
                 let bytes = serde_json::to_vec(&definitions).unwrap();
-                let expanded = ToolRegistry::build(&changed, &view, mode, bytes.len()).unwrap();
+                let expanded =
+                    ToolRegistry::build(&changed, &view, mode, OutputSchemas::On, bytes.len())
+                        .unwrap();
                 assert_eq!(
                     expanded.definitions(),
                     definitions,
@@ -968,13 +978,48 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
                         .filter(|action| crate::mcp::action_eligible(action, mode))
                         .count()
                 );
+                // Without advertisement every definition is the same one minus
+                // its outputSchema, and the projection is charged only for that.
+                let off = ToolRegistry::build(
+                    &catalog,
+                    &view,
+                    mode,
+                    OutputSchemas::Off,
+                    STDIO_MAX_CATALOG_BYTES,
+                )
+                .unwrap();
+                let off_definitions = off.definitions();
+                let stripped = definitions
+                    .iter()
+                    .map(|definition| {
+                        let mut definition = definition.clone();
+                        definition.as_object_mut().unwrap().remove("outputSchema");
+                        definition
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    off_definitions, stripped,
+                    "{configuration} {mode:?} {view:?}"
+                );
+                let off_bytes = serde_json::to_vec(&off_definitions).unwrap().len();
+                assert!(
+                    ToolRegistry::build(&catalog, &view, mode, OutputSchemas::Off, off_bytes)
+                        .is_ok()
+                );
+                assert!(
+                    ToolRegistry::build(&catalog, &view, mode, OutputSchemas::On, off_bytes)
+                        .is_err()
+                );
                 for action in &service.actions {
                     let detail = registry.action_detail(&service.service, &action.action);
                     assert_eq!(detail.is_some(), crate::mcp::action_eligible(action, mode));
-                    let mut described = serde_json::to_value(action).unwrap();
-                    described.as_object_mut().unwrap().remove("scopedMcpName");
-                    described["service"] = json!(service.service);
-                    if let Some(detail) = detail {
+                    let catalog_detail = serde_json::to_value(action).unwrap();
+                    let described =
+                        registry.describe_action(&service.service, action, catalog_detail.clone());
+                    let mut expected = catalog_detail.clone();
+                    expected.as_object_mut().unwrap().remove("scopedMcpName");
+                    expected["service"] = json!(service.service);
+                    if let Some(detail) = &detail {
                         // name, inputSchema and, when the action declares
                         // result schemas, the outputSchema composed from them,
                         // which replaces the detail's resultSchemas.
@@ -987,9 +1032,24 @@ fn native_documentation_preserves_every_spec_and_tool_projection() {
                             2 + usize::from(action.result_schemas.is_some())
                         );
                         assert!(detail.get("documentation").is_none());
-                        described.as_object_mut().unwrap().remove("resultSchemas");
-                        described["mcpTool"] = detail;
+                        expected.as_object_mut().unwrap().remove("resultSchemas");
+                        expected["mcpTool"] = detail.clone();
                     }
+                    assert_eq!(described, expected);
+                    // Off omits all MCP output-schema metadata, including the
+                    // resultSchemas of an action without a tool here.
+                    let off_described =
+                        off.describe_action(&service.service, action, catalog_detail);
+                    let mut off_expected = expected.clone();
+                    off_expected
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("resultSchemas");
+                    if let Some(tool) = off_expected.get_mut("mcpTool") {
+                        tool.as_object_mut().unwrap().remove("outputSchema");
+                    }
+                    assert_eq!(off_described, off_expected);
+                    assert!(!off_described.to_string().contains("\"outputSchema\""));
                     // The host's output::result reserves 8192 bytes for HTTP
                     // framing. Its exact-boundary test checks that reserve and
                     // SDK serialization; this matrix guards every native action
