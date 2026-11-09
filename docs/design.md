@@ -1250,21 +1250,40 @@ Existing explicitly linked principals may sign in with no mapped groups and keep
 any independent local membership. Microsoft group mappings never assign the
 managed `admin` role.
 
+Explicit pending Microsoft enrollment reserves `(tenant_id, match_email)` for
+one human principal, including disabled accounts. It is separate from profile
+email and cannot coexist with a Microsoft login method. The configured tenant
+is captured at creation; pending rows also pin provider tenant reconciliation.
+For an unknown immutable subject, a validated token email may consume that
+reservation before JIT admission. This is administrator-authorized linking to
+the prepared principal, with no additional approval, JIT gate or mapped-group
+requirement. Existing immutable bindings take precedence, including disabled
+refusals. Missing or unusable email follows ordinary JIT rules without merging
+accounts. Administrator edits/cancellation compare enrollment ID and revision;
+binding, consumption and session creation share the immediate transaction.
+
 Administrators may opt each managed group into automatic local membership for
 new Microsoft users with the database-owned
-`auto_enroll_new_microsoft_users` flag (default false). JIT first applies its
-existing admission check, then selects all active opted-in groups and adds
-ordinary local membership in the principal/login/session creation transaction.
+`auto_enroll_new_microsoft_users` flag (default false). A successful Microsoft
+sign-in with `microsoft_group_enrollment_processed = false` selects all active
+opted-in groups, inserts missing local memberships and sets the marker true in
+the login transaction, even when no groups qualify. New principals start false;
+migration marks all existing principals true without backfill. Prepared,
+Object-ID-linked and JIT accounts created after migration qualify at their first
+Microsoft sign-in, regardless of earlier local-password use.
 These memberships are persistent and independent of Microsoft evidence,
 including when a group has both local and Microsoft contributions. Existing
-linked accounts and subsequent sign-ins do not trigger enrollment; removed
-memberships are never restored automatically. Disabled groups retain the flag
-and resume enrollment for future new accounts when re-enabled, with no backfill.
-Concurrent group edits serialize with account creation. The creation commit is
-the once-only boundary, even if later audit or cookie delivery fails.
+memberships retain their attribution. Subsequent sign-ins, unlink/relink and
+new enrollment never repeat assignment; removed memberships stay removed.
+Disabled groups retain the flag and resume assignment for future first sign-ins
+when re-enabled, with no backfill. Concurrent group edits serialize with login.
+The login commit is the once-only boundary, even if later audit or cookie
+delivery fails. Local login and membership renewal do not trigger assignment.
 
 The transaction returns the enrolled IDs for the successful login audit's
-`autoEnrolledGroupIds`. Group flag changes use mandatory audit preflight plus a
+`autoEnrolledGroupIds`, plus `jitCreated`, consumed `enrollmentId` when present,
+and `displayNameUpdated` for changes to an existing principal. Group flag changes
+use mandatory audit preflight plus a
 supplemental `success` record under the existing group operation, with old/new
 values captured in the mutation transaction. Audit is a separate store;
 completion emission is not crash-atomic with the managed write, and a completion
@@ -2013,6 +2032,10 @@ The durable tables are:
   for managed principals. Local passwords use Argon2id PHC hashes over peppered
   password digests. A Microsoft method is uniquely and immutably bound to the
   configured tenant ID plus Microsoft user object ID.
+- `pending_microsoft_enrollments` - explicit tenant/email reservations for a
+  human principal's first matching Microsoft sign-in, with immutable ID,
+  revision and administrative attribution. These are separate from established
+  methods and ordinary profile email.
 - `local_password_failures` - failed local-password verifications and lockouts
   counted per `(principal, source)`, where the source is the client IPv4
   address or IPv6 /64 prefix (IPv4-mapped and `64:ff9b::/96` NAT64 addresses
@@ -2089,13 +2112,20 @@ The broker persists encrypted, expiring authorization-flow state, binds it to a
 separate HttpOnly browser cookie, and claims it once before completing the code
 exchange; replay, mismatched state/cookie, and stale callbacks fail closed. ID
 token validation pins the configured tenant, client audience, issuer, signature,
-nonce, and immutable `tid` plus `oid` identity. Email, preferred username, and
-display name are attributes only: they never identify or merge a principal and
-only initialize a newly created principal's profile. The broker does not query
-Microsoft Graph.
+nonce, and immutable `tid` plus `oid` identity. Only explicit tenant-scoped
+pending enrollment permits a one-time token-email match; ordinary profile email,
+preferred username, UPN and aliases never match or merge accounts. The shared
+email canonicalizer trims whitespace, lowercases ASCII letters and accepts only
+an email-shaped value with a dotted domain, no control characters and at most
+320 UTF-8 bytes. It never truncates into a match. Every successful Microsoft
+sign-in refreshes the name from sanitized `name`, `preferred_username`, then
+token `email`, keeping the current name when none is usable. Profile email is
+unchanged; failed/superseded callbacks and renewal never update the name. The
+Broker does not query Microsoft Graph.
 
 An administrator can link a principal directly to a Microsoft user object ID or
-unlink that method. Otherwise, a first successful login creates a principal only
+unlink that method, or prepare an account through pending email enrollment.
+For an unmatched subject, a first successful login creates a principal only
 when at least one claimed Microsoft group has an active mapping to an active
 managed group. An existing binding may log in with a complete empty or unmapped
 group list. Successful callbacks atomically refresh Microsoft-derived group

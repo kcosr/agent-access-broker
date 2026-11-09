@@ -515,9 +515,62 @@ assign fresh administrative credentials after a promotion. See [roles](roles.md)
 
 The operator configures single-tenant Microsoft sign-in and a recovery local login
 method first; see [OIDC operation](operator-guide.md#microsoft-entra-oidc-setup-and-operation).
-Then map immutable Entra security-group Object IDs to existing broker groups. These
-mappings never grant the admin role. JIT creates a new opaque broker principal only
-when an eligible active group mapping exists.
+Prepare the normal human account with an explicit pending Microsoft email:
+
+```bash
+agent-access admin principals create morgan --kind user \
+  --display-name "Morgan Demo User" --email morgan@example.test \
+  --microsoft-enrollment-email morgan@example.test
+```
+
+Assign its groups, grants and account settings using the existing operations.
+Creating the account and enrollment is the approval; there is no further approval
+step at login. They commit together, so invalid or duplicate enrollment leaves
+no new account. Later group/grant setup failures retain the account for completion.
+This does not create a local password, attach upstream credentials, issue or
+distribute Broker tokens, or configure trusted username access.
+
+The first validated Microsoft sign-in with the reserved tenant and token `email`
+binds the immutable tenant/Object ID to this same principal, consumes enrollment,
+and preserves prepared access and identity inventory. The token's email can differ
+from the sign-in name. Matching trims surrounding whitespace and lowercases ASCII
+letters; it requires an email-shaped value with a dotted domain, no control
+characters, and at most 320 UTF-8 bytes. There is no preferred-username, UPN or
+alias fallback. Ordinary profile email never enrolls an account, and changing it
+does not change the pending match email. A missing, unusable or different token
+email leaves the prepared account pending and follows normal unmatched JIT rules.
+
+In **Overview > Sign-in methods**, **Awaiting first Microsoft sign-in** shows the
+pending email and tenant separately from profile email. Inspect, edit or cancel
+it there, or use:
+
+```bash
+agent-access admin principals login-methods oidc enrollment inspect morgan
+agent-access admin principals login-methods oidc enrollment create morgan \
+  --email morgan@example.test
+agent-access admin principals login-methods oidc enrollment update morgan \
+  --enrollment-id <enrollment-UUID> --expected-revision 1 --email morgan.new@example.test
+agent-access admin principals login-methods oidc enrollment cancel morgan \
+  --enrollment-id <enrollment-UUID> --expected-revision 2
+```
+
+Create is only for an account with neither pending enrollment nor a Microsoft
+method. Use the current ID and revision returned by inspect for updates or
+cancellation; stale requests conflict. A disabled account keeps its reservation
+and refuses matching login. Cancellation releases the reservation and preserves
+prepared access, but does not ban ordinary JIT sign-in. A paused reconciled
+Microsoft provider permits preparation and pauses authentication. Pending rows,
+Microsoft methods and external group mappings prevent changing the configured
+tenant until explicitly removed.
+
+Administrators can also link an existing account directly by Microsoft Object ID.
+Cancel pending enrollment before linking; unlinking never restores email matching.
+Existing immutable bindings always take precedence, even when their account or
+method is disabled. Explicit email preparation and Object-ID linking permit
+sign-in without JIT enablement or mapped-group admission. For unmatched users,
+JIT creates a new opaque principal only when enabled and an eligible active
+group mapping exists. Map immutable Entra security-group Object IDs to existing
+Broker groups; these mappings never grant an account role.
 
 ```bash
 agent-access admin groups external-group-bindings create agent-users \
@@ -527,8 +580,17 @@ agent-access admin principals login-methods oidc link alice \
 ```
 
 Use real tenant Object IDs, not the example UUIDs, email addresses, or group names.
-Link an existing principal before its first Microsoft login if that identity must
-retain existing credentials/grants. The broker does not merge accounts by email.
+The Broker does not merge accounts. If a different token email created a separate
+JIT account, inspect that account's Microsoft Object ID, disable the duplicate,
+unlink its Microsoft method, cancel the prepared account's pending enrollment,
+then Object-ID link the prepared account before retrying sign-in. This transfers
+no account data or independently issued tokens.
+
+Every successful Microsoft sign-in refreshes the display name from the first
+usable sanitized `name`, `preferred_username`, or token `email`; with none it
+keeps the current name. An administrator's name edit may be replaced at the next
+sign-in. Profile email remains unchanged. Failed or superseded callbacks and
+membership renewal do not refresh the name.
 
 To give newly created Microsoft users a local baseline membership, enable
 **Automatically add new Microsoft users** on each desired group's **Overview**
@@ -541,29 +603,32 @@ agent-access admin groups create baseline-users --display-name "Baseline users" 
 agent-access admin groups update baseline-users --auto-enroll-new-microsoft-users true
 ```
 
-This setting is stored with the group in the database and takes effect without
-a configuration reload. The existing mapped-group admission check still applies.
-After admission, JIT adds ordinary local membership in every selected active
-group in the same transaction as the new account and browser session. The
-membership records identify the Microsoft sign-in source as their creator.
+This database setting takes effect without a configuration reload and does not
+change sign-in eligibility. At the first successful Microsoft sign-in for a
+principal created after migration `036_microsoft_enrollments`, Broker inserts
+missing local memberships in every selected active group. Prepared, Object-ID-linked
+and JIT-created accounts qualify, including an established local account's first
+Microsoft sign-in. Existing memberships keep their attribution; new ones identify
+Microsoft sign-in as their creator. Assignment and a durable processed marker
+commit with the login, even when no groups qualify.
 
-Only account creation triggers enrollment. An administrator-linked account's
-first Microsoft sign-in does not qualify. A local-only account that signs in
-through Microsoft without being linked follows normal JIT behavior: Broker may
-create a separate account, and that new account qualifies. Existing accounts
-are never backfilled, and later sign-ins never restore memberships removed by
-an administrator. Setting the option to `false` affects future enrollment only.
-Disabling a group preserves its setting and pauses enrollment; re-enabling it
-resumes enrollment for future accounts without adding users created during the
-pause.
+Accounts that existed at migration are marked processed without backfill.
+Later sign-ins, unlink/relink and replacement enrollment never restore removed
+memberships or add subsequently selected groups. Local login and membership
+renewal do not trigger assignment. Disabling a group preserves its setting and
+pauses assignment; re-enabling it affects accounts whose first Microsoft sign-in
+is still ahead, without backfilling users who signed in during the pause. Turning
+the setting off leaves existing memberships intact.
 
 These local memberships persist after Microsoft evidence expires or the user
 loses an Entra group. A group that is both mapped and selected for enrollment
 initially reports `local_and_microsoft`; its local membership continues to
 provide access when the Microsoft contribution ends. Review that consequence
 when selecting groups. Membership grants no account role or service management
-assignment. Successful login audit details include `autoEnrolledGroupIds`, and
-group setting changes have supplemental success audit records.
+assignment. Successful login audit details include `jitCreated`, `enrollmentId`
+when a pending row was consumed, `displayNameUpdated` for an existing name change,
+and `autoEnrolledGroupIds` for actual inserts. No name or raw claim is recorded.
+Enrollment changes and group setting changes have supplemental success records.
 
 Group evidence comes from a successful Microsoft login and expires at the
 configured TTL. When the operator enables

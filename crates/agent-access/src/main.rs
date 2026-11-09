@@ -1139,6 +1139,9 @@ enum AdminPrincipalsCommand {
         display_name: Option<String>,
         #[arg(long)]
         email: Option<String>,
+        /// Prepare Microsoft sign-in using this email, independently of profile --email.
+        #[arg(long)]
+        microsoft_enrollment_email: Option<String>,
         #[arg(long)]
         external_subject: Option<String>,
         #[arg(long, default_value = "user", value_parser = ["user", "auditor", "service_policy_manager", "admin"])]
@@ -1352,7 +1355,7 @@ enum AdminGroupsCommand {
         display_name: Option<String>,
         #[arg(long)]
         description: Option<String>,
-        /// Add newly created Microsoft accounts to this group after admission.
+        /// Add eligible accounts to this group at their first Microsoft sign-in.
         #[arg(long)]
         auto_enroll_new_microsoft_users: bool,
         /// This group's contribution to personal agent token issuance permission.
@@ -1378,7 +1381,7 @@ enum AdminGroupsCommand {
         description: Option<String>,
         #[arg(long)]
         clear_description: bool,
-        /// Enable or disable automatic local membership for new Microsoft accounts.
+        /// Enable or disable once-only local membership at first Microsoft sign-in.
         #[arg(long, action = clap::ArgAction::Set)]
         auto_enroll_new_microsoft_users: Option<bool>,
         /// This group's contribution to personal agent token issuance permission.
@@ -1494,6 +1497,39 @@ enum AdminPrincipalOidcCommand {
     },
     Unlink {
         principal: String,
+    },
+    /// Prepare or manage email matching for the first Microsoft sign-in.
+    Enrollment {
+        #[command(subcommand)]
+        command: AdminMicrosoftEnrollmentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdminMicrosoftEnrollmentCommand {
+    Inspect {
+        principal: String,
+    },
+    Create {
+        principal: String,
+        #[arg(long)]
+        email: String,
+    },
+    Update {
+        principal: String,
+        #[arg(long, value_parser = parse_uuid)]
+        enrollment_id: Uuid,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_revision: i64,
+        #[arg(long)]
+        email: String,
+    },
+    Cancel {
+        principal: String,
+        #[arg(long, value_parser = parse_uuid)]
+        enrollment_id: Uuid,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_revision: i64,
     },
 }
 
@@ -12674,6 +12710,7 @@ async fn run_admin_principals_command(
             kind,
             display_name,
             email,
+            microsoft_enrollment_email,
             external_subject,
             role,
             self_service_enabled,
@@ -12689,6 +12726,9 @@ async fn run_admin_principals_command(
                     "role": role,
                     "selfServiceEnabled": self_service_enabled.unwrap_or(kind != "service_account"),
             });
+            if let Some(email) = microsoft_enrollment_email {
+                body["microsoftEnrollment"] = serde_json::json!({ "email": email });
+            }
             if let Some(setting) = require_cli_input(agent_token_issuance_body(
                 *agent_token_issuance,
                 agent_token_issuance_contexts,
@@ -12840,6 +12880,9 @@ async fn run_admin_principals_command(
                     )
                     .await
                 }
+                AdminPrincipalOidcCommand::Enrollment { command } => {
+                    run_admin_microsoft_enrollment(ctx, command).await
+                }
             },
         },
         AdminPrincipalsCommand::Password { command } => match command {
@@ -12916,6 +12959,70 @@ async fn run_admin_principals_command(
                 .await
             }
         },
+    }
+}
+
+async fn run_admin_microsoft_enrollment(
+    ctx: &CliContext<'_>,
+    command: &AdminMicrosoftEnrollmentCommand,
+) -> Result<()> {
+    let principal = match command {
+        AdminMicrosoftEnrollmentCommand::Inspect { principal }
+        | AdminMicrosoftEnrollmentCommand::Create { principal, .. }
+        | AdminMicrosoftEnrollmentCommand::Update { principal, .. }
+        | AdminMicrosoftEnrollmentCommand::Cancel { principal, .. } => principal,
+    };
+    let path = format!(
+        "/v1/admin/principals/{}/login-methods/oidc/microsoft/enrollment",
+        encoded_path_segment(principal)
+    );
+    match command {
+        AdminMicrosoftEnrollmentCommand::Inspect { .. } => {
+            run_broker_get(ctx, &path, ResponseShape::Object).await
+        }
+        AdminMicrosoftEnrollmentCommand::Create { email, .. } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::POST,
+                &path,
+                Some(serde_json::json!({ "email": email })),
+            )
+            .await
+        }
+        AdminMicrosoftEnrollmentCommand::Update {
+            enrollment_id,
+            expected_revision,
+            email,
+            ..
+        } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::PATCH,
+                &path,
+                Some(serde_json::json!({
+                    "enrollmentId": enrollment_id.to_string(),
+                    "expectedRevision": expected_revision,
+                    "email": email,
+                })),
+            )
+            .await
+        }
+        AdminMicrosoftEnrollmentCommand::Cancel {
+            enrollment_id,
+            expected_revision,
+            ..
+        } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::DELETE,
+                &path,
+                Some(serde_json::json!({
+                    "enrollmentId": enrollment_id.to_string(),
+                    "expectedRevision": expected_revision,
+                })),
+            )
+            .await
+        }
     }
 }
 

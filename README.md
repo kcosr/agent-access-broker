@@ -49,10 +49,14 @@ blocks writes. Changing issuance permission leaves existing tokens unchanged.
 The portal supports local account sign-in or optional
 [Microsoft Entra ID sign-in](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation)
 through OpenID Connect (OIDC), with Entra group mappings for access management.
-Administrators can also [automatically add newly created Microsoft users to local
-groups](docs/administrator-guide.md#microsoft-onboarding). These memberships
-persist independently of Microsoft group evidence; the mapped-group admission
-requirement still applies.
+Administrators can [prepare a user by Microsoft email before first sign-in](docs/administrator-guide.md#microsoft-onboarding),
+including account settings, groups and grants. The first matching validated
+Microsoft sign-in uses that same account without a further approval step or an
+Object ID lookup. Explicit enrollment is separate from profile email. Microsoft
+sign-in refreshes the display name and applies configured initial local groups
+once for accounts created after the enrollment migration. These memberships
+persist independently of Microsoft group evidence; unmatched JIT creation still
+requires an eligible mapped group.
 Optional [membership renewal](docs/operator-guide.md#microsoft-membership-renewal)
 keeps group-derived access working after one sign-in while people and their
 agents use the Broker.

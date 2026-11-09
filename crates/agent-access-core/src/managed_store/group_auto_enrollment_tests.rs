@@ -145,7 +145,7 @@ fn group_auto_enrollment_never_bypasses_admission_and_zero_defaults_work() {
 }
 
 #[test]
-fn group_auto_enrollment_excludes_local_login_and_admin_linked_accounts() {
+fn group_auto_enrollment_waits_for_first_microsoft_login_of_admin_linked_accounts() {
     let temp = TempDir::new().unwrap();
     let store = ManagedStore::open(&store_config(&temp.path().join("store.sqlite")), &test_execution_contexts(), ManagedStoreOpenMode::Startup).unwrap();
     let provider = enrollment_fixture(&store);
@@ -160,9 +160,9 @@ fn group_auto_enrollment_excludes_local_login_and_admin_linked_accounts() {
     let result = enrollment_succeeded(store.complete_oidc_login(&hasher, test_oidc_completion_request(
         1, provider.config_generation, TEST_OIDC_USER, "unused", &[TEST_EXTERNAL_GROUP_A], &normalized_now_string(),
     )).unwrap(), false);
-    assert!(result.auto_enrolled_group_ids.is_empty());
-    assert_eq!(result.membership.groups, ["mapped"]);
-    assert!(store.group_members("default").unwrap().is_empty());
+    assert_eq!(result.auto_enrolled_group_ids, ["default"]);
+    assert_eq!(result.membership.groups, ["default", "mapped"]);
+    assert_eq!(store.group_members("default").unwrap().len(), 1);
 }
 
 #[test]

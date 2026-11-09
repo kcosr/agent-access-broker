@@ -662,20 +662,38 @@ An explicit group overage marker, a claim with more than 200 group entries, or a
 malformed group claim returns `oidc_group_claims_incomplete`; it is not
 interpreted as an empty group set. An absent groups claim with no overage marker
 is a valid, authoritative empty set.
-For an already-bound principal, a complete empty or unmapped set still permits
-login and removes prior Microsoft-derived contributions; local memberships,
-roles, and direct grants remain. An unbound subject can be JIT-created only when
-JIT is enabled and at least one claimed Microsoft group has an active binding
-to an active broker group. After this admission check, account creation adds
-ordinary local membership in every active managed group with
-`autoEnrollNewMicrosoftUsers = true`, in the same transaction as the principal
-and browser session. Existing accounts, including previously linked accounts
-on their first Microsoft login, are not enrolled. Later sign-ins never restore
-removed local memberships. The successful Microsoft login audit includes
-`autoEnrolledGroupIds`, a sorted array of the groups enrolled by that
-transaction, beside `jitCreated`; the array is empty when no groups were
-enrolled, including logins of existing accounts. These local memberships
-persist independently of Microsoft evidence expiry or removal.
+For an already-bound or matching email-prepared principal, a complete empty or
+unmapped set still permits login and removes prior Microsoft-derived
+contributions; local memberships, roles, and direct grants remain. The immutable
+subject is resolved first;
+disabled bindings/accounts refuse login without trying pending enrollment.
+For an unknown subject, a matching pending tenant/email enrollment binds and
+consumes the reservation on the existing principal without JIT or mapped-group
+admission. A disabled pending owner refuses login. Missing, unusable or unmatched
+token email leaves pending accounts unchanged. An unmatched subject can be
+JIT-created only when JIT is enabled and at least one claimed Microsoft group has
+an active binding to an active broker group.
+
+Every successful Microsoft sign-in refreshes the display name from sanitized
+`name`, `preferred_username`, then token `email`; no usable value leaves it
+unchanged. Profile email is never refreshed. When the durable initial-assignment
+marker is false, login inserts missing memberships in active groups with
+`autoEnrollNewMicrosoftUsers = true` and sets the marker true, even for zero
+groups. This covers prepared, Object-ID-linked and JIT principals created after
+migration `036_microsoft_enrollments`; all pre-existing principals are marked
+processed at migration without backfill. Existing memberships retain their attribution.
+Later sign-ins, unlink/relink and replacement enrollment never restore removed
+memberships. Local login and membership renewal do not perform either initial
+assignment or name refresh. Binding, enrollment consumption, name refresh,
+memberships, marker and browser session share one login transaction.
+
+Successful login audit includes `jitCreated` (true only for a new principal),
+`enrollmentId` and `tenantId` only when pending enrollment was consumed,
+`displayNameUpdated` (true only for a changed existing principal name, false for
+JIT initialization),
+and sorted `autoEnrolledGroupIds` containing only memberships actually inserted.
+It records no name or raw claim. Local memberships persist independently of
+Microsoft evidence expiry or removal.
 OIDC logout is broker-local: `/v1/auth/logout`
 revokes the broker session but does not end the user's Microsoft SSO session.
 
@@ -1168,6 +1186,7 @@ Admin management (also on the public listener):
 | `GET` | `/v1/admin/principals/{principal}/login-methods` |
 | `PUT` | `/v1/admin/principals/{principal}/login-methods/oidc/microsoft` |
 | `DELETE` | `/v1/admin/principals/{principal}/login-methods/oidc/microsoft` |
+| `GET` `POST` `PATCH` `DELETE` | `/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment` |
 | `PUT` `DELETE` | `/v1/admin/principals/{principal}/login-methods/local-password` |
 | `POST` | `/v1/admin/principals/{principal}/login-methods/local-password/enable` |
 | `POST` | `/v1/admin/principals/{principal}/login-methods/local-password/unlock` |
@@ -1274,6 +1293,12 @@ services, credential, policy, and `agent-tokens` routes remain available to
 global administrators. Management-class tokens owned by service accounts fail
 with `broker_token_class_denied` at resolution and cannot enable login.
 
+Human principal creation accepts optional `microsoftEnrollment: {"email":
+"morgan@example.test"}`, independently of profile `email`. The principal and
+pending enrollment commit together; invalid or duplicate enrollment creates
+neither. Principal reads include nullable `microsoftEnrollment` with the pending
+record described below; established authenticators remain in login methods.
+
 Principal create accepts optional `agentTokenIssuance` as a complete object:
 
 ```json
@@ -1374,7 +1399,7 @@ not change it. OIDC methods always report `locked = false`.
 remove a principal's service invocation limit overrides under managed identity
 authority; see [per-principal overrides](#per-principal-overrides).
 
-The six Microsoft management operations are:
+Microsoft mapping and established-method operations are:
 
 - `GET /v1/admin/groups/{group}/external-group-bindings` returns the group's
   bindings as an array. Each record contains `bindingId`, `externalGroupId`,
@@ -1397,7 +1422,8 @@ The six Microsoft management operations are:
   structured login-method record. The server supplies the configured tenant.
   One Microsoft object can belong to only one broker principal, and a principal
   can have only one Microsoft login method; a conflicting link returns
-  `oidc_login_method_conflict`. Repeating the link for the identity already
+  `oidc_login_method_conflict`. A pending enrollment also conflicts; cancel it
+  first. Repeating the link for the identity already
   linked succeeds and keeps the method's renewal record, whose status the
   response reports as the listing below does.
 - `DELETE /v1/admin/principals/{principal}/login-methods/oidc/microsoft` accepts
@@ -1407,6 +1433,45 @@ The six Microsoft management operations are:
   not remove local passwords, local group membership, roles, credentials, or
   independently issued broker tokens.
 
+Pending enrollment uses
+`/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment`:
+
+| Method | Body | Result |
+| --- | --- | --- |
+| `GET` | None | Pending record or `null`. |
+| `POST` | `{"email":"morgan@example.test"}` | New pending record; create-only. |
+| `PATCH` | `{"enrollmentId":"<UUID>","expectedRevision":1,"email":"morgan.new@example.test"}` | Updated record. |
+| `DELETE` | `{"enrollmentId":"<UUID>","expectedRevision":2}` | `{"cancelled":true}`. |
+
+The record contains `enrollmentId`, `principalId`, `tenantId`, `matchEmail`,
+`revision`, `createdAt`, `updatedAt`, `createdBy`, and `updatedBy`. The server
+captures the tenant; updates cannot change it. Actual email changes advance
+revision; a canonical-email no-op preserves revision and update attribution.
+Enrollment requires a human principal without any Microsoft method, including
+disabled methods, and reserves the unique tenant/email even while the account
+is disabled. The shared admin and
+token-email canonicalizer trims surrounding whitespace, lowercases ASCII letters,
+requires an email-shaped value with a dotted domain, rejects controls, and caps
+the value at 320 UTF-8 bytes without truncation. It never uses UPN,
+`preferred_username`, aliases, display name or ordinary profile email to match.
+
+Create/edit require managed identity and reconciled Microsoft provider state;
+paused providers permit preparation. Inspect/cancel do not require provider
+enablement. ID/revision conflicts, duplicate reservations, consumed enrollment
+and conflicting methods return HTTP 409 `oidc_login_method_conflict`. A stale
+edit cannot recreate consumed enrollment. Disabling an account retains its
+reservation and blocks binding; cancellation releases it without changing
+prepared access or banning ordinary JIT. Unlinking a method never recreates
+enrollment. Pending rows join methods and group bindings in the tenant-change
+guard. Profile email updates are independent.
+
+The catalog operation IDs are
+`admin.principals.login_methods.oidc.microsoft.enrollment.inspect`, `.create`,
+`.update`, and `.cancel`. Mutations retain mandatory preflight and emit completion
+audit from transaction-captured principal/provider/tenant/enrollment identifiers
+and revision, without match email or claims. Audit and managed stores are
+separate; completion emission is not crash-atomic with the mutation.
+
 These routes require a managed store and normal admin authorization, audit, and
 management envelopes. OIDC enablement is separately restricted to managed
 identity authority. Linking also requires reconciled Microsoft provider state
@@ -1414,7 +1479,7 @@ so the server can supply the tenant. All writes require the browser CSRF header
 when cookie-authenticated. External group and user Object IDs must use canonical
 lowercase hyphenated UUID form. Binding paths should use the lowercase ID
 returned by the create/list API. There is no provider-management API, tenant
-override, account lookup by email, or automatic account merge.
+override, directory lookup by email, or automatic account merge.
 
 Malformed UUIDs and unsupported status values return `input_invalid`; a missing
 managed store returns `managed_store_unavailable`. Missing groups or bindings
@@ -1622,11 +1687,14 @@ list, detail, and mutation responses; TOML-owned groups report `false`.
 Disabled groups remain visible and keep memberships but do not satisfy policy
 grants.
 
-`autoEnrollNewMicrosoftUsers` selects the group for local membership when
-Microsoft JIT creates an account, after the existing mapped-group admission
-check. It has no effect on existing accounts, account roles, or later logins.
+`autoEnrollNewMicrosoftUsers` selects the group for initial local membership at
+the first successful Microsoft sign-in of principals created after migration
+`036_microsoft_enrollments`, including prepared and Object-ID-linked accounts.
+It has no effect on account roles or sign-in admission. Migration marks existing
+principals processed without backfill; the first login consumes assignment even
+when no groups qualify, and later logins never repeat it.
 Disabled groups retain the flag but skip enrollment; re-enabling resumes it
-for future accounts without backfill. Clearing the flag leaves prior local
+for future first sign-ins without backfill. Clearing the flag leaves prior local
 memberships intact. If the group is also mapped from Microsoft, an enrolled
 user has `local_and_microsoft` provenance while both contributions are current
 and keeps local membership when Microsoft evidence expires or is removed.
@@ -3649,7 +3717,7 @@ terminal management response, in which case the response uses
 
 ```text
 nodeId, audit, generation, policyGeneration, configHash, loadedAt, identityAuthority,
-policyAuthority, bodyHardCapBytes, reloadTimeoutMs, shutdownTimeoutMs, lastReloadAttempt
+policyAuthority, microsoftEnrollment, bodyHardCapBytes, reloadTimeoutMs, shutdownTimeoutMs, lastReloadAttempt
 ```
 
 `nodeId` is the broker's effective node ID. `audit` describes the audit store
@@ -3658,6 +3726,12 @@ disabled, `{"type": "jsonl"}`, or `{"type": "sqlite", "maintenanceFailure":
 ...}`, where `maintenanceFailure` is the most recent failure of an optional
 SQLite maintenance slice, `{"slice", "errorCode", "at"}`, kept until that slice
 next succeeds, or `null`.
+
+`microsoftEnrollment` is `{"available":true,"tenantId":"<tenant-UUID>"}` when
+managed identity and reconciled Microsoft provider state permit administrative
+preparation, including while sign-in is paused. Otherwise it is
+`{"available":false,"tenantId":null}`. This administrative metadata is separate
+from anonymous/session login availability.
 
 Successful HTTP reload requests append `providerAudit.admin` audit records; a
 successful config status request is an [unaudited read](#management-audit).

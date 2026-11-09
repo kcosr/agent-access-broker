@@ -62,8 +62,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `027_command_imports`, `028_oauth_revocations`,
 `029_identity_access_path_controls`, `030_group_auto_enrollment`,
 `031_oidc_membership_renewal`, `032_imported_source_documents`,
-`033_agent_token_issuance`, `034_agent_token_issuance_contexts`, and
-`035_imported_gateway_routes` in order. The
+`033_agent_token_issuance`, `034_agent_token_issuance_contexts`,
+`035_imported_gateway_routes`, and `036_microsoft_enrollments` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -115,7 +115,7 @@ erDiagram
 | Table | Purpose | Important fields |
 | --- | --- | --- |
 | `schema_migrations` | Append-only catalog migration ledger. | `version`, per-migration `checksum`, `applied_at` |
-| `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `agent_token_issuance`, `status`, `display_name`, `email`, `external_subject`, timestamps |
+| `principals` | Managed identities that can own tokens, rights, and credentials. `kind = service_account` is noninteractive and agent-token-only. | `principal_id`, `kind`, `role`, `self_service_enabled`, `agent_token_issuance`, `status`, `display_name`, `email`, `external_subject`, `microsoft_group_enrollment_processed`, timestamps |
 | `principal_agent_token_issuance_contexts` | Explicit issuance contexts paired with the principal's mode; cascades on principal deletion. | `principal_id`, `execution_context` (composite primary key) |
 | `group_agent_token_issuance_contexts` | Explicit issuance contexts paired with the group's mode; cascades on group deletion. | `group_id`, `execution_context` (composite primary key) |
 | `groups` | First-class managed groups used as policy subjects. | `group_id`, `display_name`, `description`, `status`, `auto_enroll_new_microsoft_users`, `agent_token_issuance`, timestamps, actor metadata |
@@ -125,6 +125,7 @@ erDiagram
 | `credentials` | Managed credential metadata and lifecycle. A credential connection's token rows have its ID in `service` and `default` in `name`. | `credential_id`, owner tuple, `service`, `name`, `profile`, `credential_kind`, `metadata_json`, `secret_ref`, `material_version`, `last_verification_attempt_at`, `last_verified_at`, `verification_status`, `last_verification_error_code` |
 | `credential_secret_material` | Encrypted credential secret bytes. | `secret_ref`, `credential_id`, `secret_ciphertext`, `secret_nonce`, `key_id` |
 | `principal_login_methods` | Browser-login methods for managed principals. | `login_method_id`, `principal_id`, `method`, external subject fields, `status`, password hash metadata |
+| `pending_microsoft_enrollments` | Explicit tenant/email reservations for first Microsoft sign-in, separate from profile email and established methods. | `enrollment_id`, unique `principal_id`, unique (`tenant_id`, `match_email`), `revision`, create/update timestamps and actors |
 | `local_password_failures` | Failed local-password verifications and lockouts per principal and client source. | `principal_id`, `source`, `failed_attempts`, `last_failed_at`, `locked_until` |
 | `browser_sessions` | Browser cookie sessions backed by `user_manage` broker tokens. | `token_id`, `principal_id`, `login_method`, `login_method_id`, `auth_time` |
 | `resources` | Typed selector entries shared by grants and tokens. | `resource_id`, `resource_type`, `selector_kind`, `selector_value`, `display_name`, `allowed_execution_contexts_json`, `enabled`, `version`, actor metadata |
@@ -413,11 +414,12 @@ the virtual unauthenticated subject. `display_name` and `description` are
 metadata only; they never affect authorization.
 
 `auto_enroll_new_microsoft_users` is a non-null 0/1 column, checked by SQLite
-and defaulted to 0. When set to 1 on an active group, new Microsoft JIT
-principals receive ordinary local membership during account creation, after
-the existing mapped-group admission check. The setting is owned by the group
+and defaulted to 0. When set to 1 on an active group, principals whose
+`microsoft_group_enrollment_processed` marker is false receive missing ordinary
+local memberships at successful Microsoft sign-in. The marker becomes true in
+that transaction, even when no groups qualify. The setting is owned by the group
 row and is not projected from TOML. A disabled group keeps the flag but is
-excluded from enrollment; re-enabling resumes enrollment for future accounts.
+excluded from enrollment; re-enabling resumes enrollment for future first sign-ins.
 Neither changing the flag nor re-enabling a group backfills existing accounts.
 A flag-only update to the existing value writes nothing, including updater
 metadata. Group mutations capture actual flag changes inside the transaction
@@ -540,8 +542,9 @@ membership evidence accepted from a newer flow.
 Provider state binds all durable OIDC objects to the configured Microsoft tenant
 and client. Reconciliation advances `config_generation` when effective OIDC
 configuration or secret material changes, invalidating older pending flows.
-Existing OIDC login methods or external group bindings prevent silently adopting
-a different tenant. Changing the client or disabling the provider additionally
+Existing pending Microsoft enrollments, OIDC login methods or external group
+bindings prevent silently adopting a different tenant. Changing the client or
+disabling the provider additionally
 expires Microsoft membership contributions, revokes Microsoft browser-session
 tokens and deletes every membership-renewal record. Reducing the configured
 membership TTL clamps existing evidence to the shorter window; other
@@ -591,34 +594,52 @@ under a new `token_version`; a success also records `last_renewed_at`.
 including the one that ends renewal. An ending deletes the payload. State-only
 updates keep the `token_version` and do not re-encrypt.
 
+`pending_microsoft_enrollments` holds one explicit reservation per human
+principal and a unique canonical `(tenant_id, match_email)`, including disabled
+owners. Rows cascade on owner deletion and cannot coexist with any Microsoft
+method. The immutable enrollment ID and positive revision fence edits and
+cancellation; the server captures tenant identity from reconciled provider state.
+Paused providers permit preparation, while login still requires enablement.
+No migration creates reservations from profile email. Login first resolves the
+immutable `entra:v1:<tenant-id>:<object-id>` subject, including disabled refusals.
+Only an unknown subject can consume a matching validated token-email reservation;
+its disabled owner refuses login without JIT fallback. Consumption binds that
+existing principal and shares the immediate login transaction. Cancellation
+releases the reservation without altering prepared access or banning JIT;
+unlinking a method never recreates one.
+
 JIT creation requires at least one claimed Microsoft group mapped through an
 active binding to an active managed group. Once a login method is explicitly
-bound, Microsoft membership is not itself a login prerequisite. Direct admin
+bound, or when a pending email reservation matches, Microsoft membership and JIT
+enablement are not themselves login prerequisites. Direct admin
 linking uses the tenant's Microsoft user object ID and reactivates an exact
-disabled link; conflicting subject or principal links are rejected. Unlinking
+disabled link; conflicting subject, principal or pending enrollment is rejected. Unlinking
 revokes browser sessions backed by that OIDC login method and deletes its
 refresh-state, Microsoft-group and membership-renewal rows, while leaving local
 group membership, the role, direct grants, and unrelated broker tokens intact.
 
-New JIT account creation also selects all active groups whose
-`auto_enroll_new_microsoft_users` flag is set and inserts local
-`principal_groups` rows. Their creation time is the callback time and their
-creator is the Microsoft sign-in source used for the principal. These are
-ordinary local memberships, with the same provenance and lifecycle as local
-memberships added by administrators. Later sign-ins do not enroll the account
-again, including after manual membership removal. Already-linked accounts,
-local-password login and account creation through administration do not run
-this step.
+Every successful Microsoft sign-in refreshes the display name from the existing
+sanitized claim projection, keeping it when no usable value exists; profile email
+is unchanged. Initial local-group assignment then selects all active groups
+whose `auto_enroll_new_microsoft_users` flag is set when the principal's durable
+processed marker is false. New principals start false; migration marks all
+existing principals true. This includes post-migration email-prepared,
+Object-ID-linked and JIT-created accounts, even an established local account's
+first Microsoft sign-in. Inserts preserve existing membership attribution and
+stamp new rows with callback time and Microsoft sign-in source. The marker
+becomes true even for zero inserts. Later sign-ins, unlink/relink and new pending
+enrollment never repeat assignment. Local login and renewal perform neither
+assignment nor display-name refresh.
 
-The flag selection, local inserts, principal, login method, Microsoft evidence,
-subject watermark, browser session and, with `membership_renewal` enabled, the
-login method's renewal record all commit in the same immediate transaction. Concurrent group edits serialize before or after that transaction;
-a failed local insert rolls it back in full. The commit is the once-only
-enrollment boundary even if later audit emission or cookie delivery fails.
-The store returns the sorted IDs actually enrolled from that transaction for
-the login audit's `autoEnrolledGroupIds`, including an empty array when no
-groups were enrolled. Audit records live in a separate store and are not
-crash-atomic with these writes.
+Enrollment consumption, name refresh, group selection/inserts and marker,
+principal/login method, Microsoft evidence, subject watermark, browser session
+and optional renewal record commit in the same immediate transaction.
+Concurrent group edits serialize before or after it; a failure rolls it back in
+full. The commit is the once-only boundary even if later audit or cookie delivery
+fails. Login audit receives the sorted actual `autoEnrolledGroupIds`, `jitCreated`,
+consumed `enrollmentId` when present and `displayNameUpdated` for an existing
+principal's changed name, without name or raw claim values. Audit records live
+in a separate store and are not crash-atomic with these writes.
 
 Effective membership is the deduplicated union of local `principal_groups` and
 unexpired Microsoft contributions whose provider, login method, and binding are
@@ -988,6 +1009,15 @@ failures reject store startup.
 An older binary refuses the unknown `035` migration ledger. Roll back using the
 matching pre-upgrade database backup, configuration, keys, binary and portal.
 Do not delete the route table or edit the ledger to attempt an in-place downgrade.
+
+Migration `036_microsoft_enrollments` adds `pending_microsoft_enrollments` and
+the non-null Boolean `principals.microsoft_group_enrollment_processed`. All
+existing principals are marked processed atomically, including accounts with
+unused Microsoft links; new principals default to unprocessed. No profile email
+becomes a pending reservation and no group membership is backfilled. Existing
+identity, credential and policy records are preserved. Apply through normal
+startup migration admission after a backup. Rollback requires that matching
+pre-migration database and binary, since older binaries reject the newer ledger.
 
 ### Identity-token inventory
 

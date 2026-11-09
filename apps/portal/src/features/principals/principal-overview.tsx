@@ -37,6 +37,7 @@ import { FormError } from "../../components/form";
 import { useActionRunner } from "../../app/actions";
 import { useSession } from "../../app/session";
 import { usePrincipalActions } from "../../mutations/principals";
+import { MicrosoftEnrollmentControls } from "./microsoft-enrollment";
 import { IdentityTokenSection } from "./identity-token";
 import { IdentityAccessSection } from "./identity-access";
 
@@ -108,10 +109,10 @@ function ProfileSection({ principal }: { principal: PrincipalDetail }) {
         <SettingsRow label="Principal ID" help="The stable identifier; it cannot change.">
           <span className="wb-num">{principal.principalId}</span>
         </SettingsRow>
-        <SettingsRow label="Display name">
+        <SettingsRow label="Display name" help={principal.kind === "user" ? "Successful Microsoft sign-in refreshes this name from Microsoft and may replace administrator edits." : undefined}>
           <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className="flex-1" />
         </SettingsRow>
-        <SettingsRow label="Email">
+        <SettingsRow label="Email" help={principal.microsoftEnrollment ? "Profile email is separate from the pending Microsoft match email. Editing this field does not change enrollment." : undefined}>
           <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="flex-1" />
         </SettingsRow>
         <SettingsRow label="History">
@@ -264,6 +265,7 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
   const toast = useToast();
   const localPassword = loginMethods.find((method) => method.method === "local_password");
   const microsoft = loginMethods.find((method) => method.method === "oidc" && method.oidc?.provider === "microsoft");
+  const enrollment = principal.microsoftEnrollment;
   const control = microsoftLoginControl(microsoft?.status, Boolean(session.loginOptions?.microsoft?.enabled));
   const renewal = microsoftRenewalStatus(microsoft?.oidc?.membershipRenewal);
   const [objectId, setObjectId] = useState("");
@@ -282,7 +284,7 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
     setConfirmId("");
     setAcknowledged(false);
   }, [principal.principalId]);
-  const canLink = groupWritesEnabled && objectId.trim() && confirmId === principal.principalId && acknowledged;
+  const canLink = !enrollment && groupWritesEnabled && objectId.trim() && confirmId === principal.principalId && acknowledged;
   return (
     <SettingsSection title="Sign-in methods" description="Enrollment is separate from user status and broker-wide sign-in availability.">
       {session.loginOptions?.localPassword?.enabled === false ? <p className="pt-prose">Local password sign-in is disabled for this broker. Enrolled methods are retained.</p> : null}
@@ -348,7 +350,7 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
       <SettingsRow label="Microsoft" alignTop help={control === "disabled" ? "Microsoft sign-in is not enabled for this broker." : session.loginOptions?.microsoft?.available === false ? "Microsoft sign-in is temporarily unavailable. Enrolled methods are retained." : undefined}>
         <div className="flex flex-1 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={microsoft?.status === "active" ? "success" : "neutral"}>{microsoft?.status ?? "not linked"}</Badge>
+            <Badge tone={microsoft?.status === "active" ? "success" : "neutral"}>{enrollment ? "Awaiting first Microsoft sign-in" : microsoft?.status ?? "not linked"}</Badge>
             {microsoft?.oidc ? (
               <>
                 <span className="wb-small">
@@ -375,7 +377,8 @@ function SignInSection({ principal, loginMethods, groupWritesEnabled }: { princi
             ) : null}
           </div>
           {renewal ? <StateCell label={renewal.text} tone={renewal.tone} /> : null}
-          {control === "link" ? (
+          {!microsoft && principal.kind === "user" ? <MicrosoftEnrollmentControls principal={principal} /> : null}
+          {control === "link" && !enrollment ? (
             <AdminForm
               className="wb-form-stack"
               onSubmit={async (event) => {

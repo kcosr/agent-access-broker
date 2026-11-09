@@ -10,11 +10,12 @@ export function signInCategory(methods: SignInMethods): "microsoft" | "local" | 
   return local ? microsoft ? "both" : "local" : microsoft ? "microsoft" : "none";
 }
 
-export function SignInMethodBadges({ methods }: { methods: SignInMethods }) {
+export function SignInMethodBadges({ methods, awaitingMicrosoft = false }: { methods: SignInMethods; awaitingMicrosoft?: boolean }) {
   const category = signInCategory(methods);
   return <span className="flex flex-wrap gap-1" aria-label="Sign-in methods">
+    {awaitingMicrosoft ? <Badge tone="info">Awaiting first Microsoft sign-in</Badge> : null}
     {methods.microsoft === "active" ? <Badge>Microsoft</Badge> : null}
     {methods.localPassword === "active" ? <Badge tone={category === "both" ? "warning" : "neutral"}>Local password{category === "both" ? " (independent)" : ""}</Badge> : null}
-    {category === "none" ? <span className="wb-muted">No active methods</span> : null}
+    {category === "none" && !awaitingMicrosoft ? <span className="wb-muted">No active methods</span> : null}
   </span>;
 }

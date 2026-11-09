@@ -19,7 +19,8 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
   const title = serviceAccount ? "Create service account" : "Create user";
   const principals = usePrincipalActions();
   const groups = useAdminGroups().data ?? [];
-  const { groupWritesEnabled, identityAuthority } = writeAuthorities(useConfigStatus().data);
+  const config = useConfigStatus().data;
+  const { groupWritesEnabled, identityAuthority } = writeAuthorities(config);
   const [principalId, setPrincipalId] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -27,6 +28,9 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
   const [role, setRole] = useState<PrincipalRole>("user");
   const [agentTokenIssuance, setAgentTokenIssuance] = useState<PrincipalAgentTokenIssuanceSetting>({ mode: "inherit", allowedExecutionContexts: [] });
   const [selfServiceEnabled, setSelfServiceEnabled] = useState(!serviceAccount);
+  const [enrollMicrosoft, setEnrollMicrosoft] = useState(false);
+  const microsoftAvailable = groupWritesEnabled && Boolean(config?.microsoftEnrollment?.available);
+  const microsoftBlocked = enrollMicrosoft && (!microsoftAvailable || !email.trim());
   const [enableLocalPassword, setEnableLocalPassword] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const registry = useIssuanceRegistry();
@@ -35,11 +39,11 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
   const [error, setError] = useState<string | null>(null);
 
   async function submit() {
-    if (!principalId.trim() || policyError || (enableLocalPassword && !acknowledged)) return;
+    if (!principalId.trim() || policyError || microsoftBlocked || (enableLocalPassword && !acknowledged)) return;
     setPending(true);
     setError(null);
     try {
-      await principals.create({ kind, principalId, displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, agentTokenIssuance, enableLocalPassword });
+      await principals.create({ kind, principalId, displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, agentTokenIssuance, enableLocalPassword, enrollMicrosoft });
     } catch (failure) {
       setError(errorMessage(failure));
       void registry.query.refetch();
@@ -54,7 +58,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
       description={
         serviceAccount
           ? "Service accounts are noninteractive: no passwords, Microsoft login, browser sessions, setup tokens, or admin tokens."
-          : "Create a user, then link Microsoft on Overview. Email alone does not link an account. Local password sign-in is optional."
+          : "Prepare a user and their access before first sign-in. Choose Microsoft email enrollment to authorize their first matching Microsoft sign-in. Local password sign-in is optional."
       }
       onClose={onClose}
       dismissible={!pending}
@@ -64,7 +68,7 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
           <Button onClick={onClose} disabled={pending}>
             Cancel
           </Button>
-          <AdminButton type="submit" variant="primary" disabled={!principalId.trim() || Boolean(policyError) || (enableLocalPassword && !acknowledged)} pending={pending}>
+          <AdminButton type="submit" variant="primary" disabled={!principalId.trim() || Boolean(policyError) || microsoftBlocked || (enableLocalPassword && !acknowledged)} pending={pending}>
             {title}
           </AdminButton>
         </>
@@ -74,12 +78,20 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
         <Field label="Principal ID" hint="The stable identifier, for example an email address. It cannot be changed later.">
           <Input mono value={principalId} onChange={(event) => setPrincipalId(event.target.value)} required autoFocus autoComplete="off" spellCheck={false} />
         </Field>
-        <Field label="Display name" optional>
+        <Field label="Display name" optional hint={!serviceAccount ? "Microsoft sign-in refreshes this name from the Microsoft account." : undefined}>
           <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
         </Field>
-        <Field label="Email" optional>
-          <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        {!serviceAccount ? <Checkbox
+          label="Prepare Microsoft sign-in by email"
+          description={microsoftAvailable ? "The first validated Microsoft sign-in with this email joins this prepared account. Creating the account approves that sign-in; no later approval is needed." : "Microsoft enrollment requires managed identity and a configured Microsoft tenant."}
+          checked={enrollMicrosoft}
+          onChange={(event) => setEnrollMicrosoft(event.target.checked)}
+          disabled={!microsoftAvailable && !enrollMicrosoft}
+        /> : null}
+        <Field label={enrollMicrosoft ? "Microsoft email" : "Email"} optional={!enrollMicrosoft} hint={enrollMicrosoft ? "Saved as profile email and pending match email initially. You can edit them separately after creation." : "Profile email alone does not authorize Microsoft enrollment."}>
+          <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required={enrollMicrosoft} />
         </Field>
+        {enrollMicrosoft ? <p className="pt-prose">Tenant: <span className="wb-num">{config?.microsoftEnrollment?.tenantId}</span>. A paused Microsoft provider permits preparation; sign-in requires it enabled. Initial automatic local groups apply once at the first successful Microsoft sign-in.</p> : null}
         <Field label="Groups" optional hint={groupWritesEnabled ? undefined : `Group changes are unavailable while identity authority is ${identityAuthority}.`}>
           <Combobox
             multiple

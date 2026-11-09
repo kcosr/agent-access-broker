@@ -370,12 +370,10 @@ fn issuance_context_migration_seeds_once_from_registry_without_touching_owner_or
         );
     }
     let tables = ["principals", "groups", "broker_tokens", "principal_groups"];
-    let before: Vec<_> = {
+    let (before, prior_columns) = {
         let conn = old.connection.lock().unwrap();
-        tables
-            .iter()
-            .map(|table| issuance_table_rows(&conn, table))
-            .collect()
+        (tables.map(|table| issuance_table_rows(&conn, table)),
+         tables.map(|table| issuance_table_columns(&conn, table)))
     };
     drop(old);
     let registry = context_registry(&["internal", "external"]);
@@ -405,8 +403,8 @@ fn issuance_context_migration_seeds_once_from_registry_without_touching_owner_or
             .contains(MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION)
     );
     let conn = store.connection.lock().unwrap();
-    for (table, before) in tables.into_iter().zip(before) {
-        assert_eq!(issuance_table_rows(&conn, table), before, "{table}");
+    for ((table, before), columns) in tables.into_iter().zip(before).zip(prior_columns) {
+        assert_eq!(issuance_projected_rows(&conn, table, &columns), before, "{table}");
     }
     for (is_principal, owner, expected) in [
         (true, "alice", vec!["external", "internal"]),

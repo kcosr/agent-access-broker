@@ -479,7 +479,7 @@ function MicrosoftTab(props: TabProps) {
         </Banner>
         {group.autoEnrollNewMicrosoftUsers && rows.length > 0 ? (
           <Banner tone="warning" slim>
-            Automatic enrollment also gives newly created Microsoft accounts local membership in this group. That local membership survives loss or expiry of Microsoft group membership.
+            Automatic enrollment also gives eligible accounts local membership in this group once at their first successful Microsoft sign-in, including prepared accounts. That local membership survives loss or expiry of Microsoft group membership.
           </Banner>
         ) : null}
       </div>

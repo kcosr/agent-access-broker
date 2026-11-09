@@ -451,7 +451,30 @@ pub(crate) async fn admin_config_status(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let result = state.reloadable.status_result(&context.snapshot);
+    let mut result = state.reloadable.status_result(&context.snapshot);
+    let provider = if context.snapshot.runtime.config().identity.authority == "managed"
+        && context.snapshot.runtime.managed_store().is_some()
+    {
+        match context
+            .snapshot
+            .managed_store_call(|store| store.oidc_provider_state())
+            .await
+        {
+            Ok(provider) => provider,
+            Err(error) => {
+                return crate::handlers::management::common::management_store_error_response(
+                    &context, operation, None, error,
+                )
+                .await;
+            }
+        }
+    } else {
+        None
+    };
+    result["microsoftEnrollment"] = json!({
+        "available": provider.is_some(),
+        "tenantId": provider.map(|provider| provider.tenant_id),
+    });
     management_success_response(&context, operation, None, result).await
 }
 

@@ -2407,6 +2407,38 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             ExitPolicy::ManagementOk,
         ),
         get_management_route(
+            "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment",
+            "admin.principals.login_methods.oidc.microsoft.enrollment.inspect",
+            RouteAccess::AdminRead,
+        ),
+        body_route(
+            "POST",
+            "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment",
+            "admin.principals.login_methods.oidc.microsoft.enrollment.create",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+            Vec::new(),
+        ),
+        body_route(
+            "PATCH",
+            "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment",
+            "admin.principals.login_methods.oidc.microsoft.enrollment.update",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+            Vec::new(),
+        ),
+        body_route(
+            "DELETE",
+            "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment",
+            "admin.principals.login_methods.oidc.microsoft.enrollment.cancel",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+            Vec::new(),
+        ),
+        get_management_route(
             "/v1/admin/principals/{principal}/services",
             "admin.principals.services",
             RouteAccess::AdminRead,
@@ -2499,6 +2531,17 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             }
             "admin.groups.create" | "admin.groups.patch" => Some(group_record_schema(false)),
             "admin.groups.inspect" => Some(group_record_schema(true)),
+            "admin.principals.login_methods.oidc.microsoft.enrollment.inspect" => Some(json!({
+                "anyOf": [microsoft_enrollment_record_schema(), {"type":"null"}]
+            })),
+            "admin.principals.login_methods.oidc.microsoft.enrollment.create"
+            | "admin.principals.login_methods.oidc.microsoft.enrollment.update" => {
+                Some(microsoft_enrollment_record_schema())
+            }
+            "admin.principals.login_methods.oidc.microsoft.enrollment.cancel" => Some(json!({
+                "type":"object", "additionalProperties":false,
+                "required":["cancelled"], "properties":{"cancelled":{"const":true}}
+            })),
             "admin.principals.identity_access.inspect"
             | "admin.principals.identity_access.patch" => Some(identity_access_schema()),
             "admin.principals.identity_bindings.list" => Some(json!({
@@ -2550,6 +2593,14 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         "/v1/admin/principals/{principal}/login-methods/oidc/microsoft",
         microsoft_oidc_link_body_schema(),
     );
+    for method in ["POST", "PATCH", "DELETE"] {
+        set_request_body_schema(
+            &mut routes,
+            method,
+            "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment",
+            microsoft_enrollment_body_schema(method),
+        );
+    }
     set_request_body_schema(
         &mut routes,
         "PUT",
@@ -2585,7 +2636,8 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             "displayName":{"type":["string","null"]}, "email":{"type":["string","null"]},
             "externalSubject":{"type":["string","null"]},
             "role":role_schema, "selfServiceEnabled":{"type":"boolean"},
-            "agentTokenIssuance":principal_agent_token_issuance_schema()
+            "agentTokenIssuance":principal_agent_token_issuance_schema(),
+            "microsoftEnrollment":microsoft_enrollment_body_schema("POST")
         }}),
     );
     routes
@@ -2628,7 +2680,7 @@ fn configured_agent_token_issuance_schema(principal: bool) -> Value {
 }
 
 fn group_auto_enrollment_schema() -> Value {
-    json!({"type":"boolean", "description":"Automatically add newly created Microsoft accounts to this enabled group with persistent local membership after existing Microsoft admission checks. Applies once at account creation; clearing the setting does not remove memberships."})
+    json!({"type":"boolean", "description":"Automatically add missing persistent local membership in this enabled group at the first successful Microsoft sign-in of a principal created after the enrollment migration, including email-precreated, Object-ID-linked and JIT accounts. Existing principals are migration-marked processed without backfill. Later sign-ins and unlink/re-enrollment never re-add removed membership; clearing the setting does not remove memberships."})
 }
 
 fn group_write_body_schema(patch: bool) -> Value {
@@ -2800,6 +2852,44 @@ fn external_group_binding_patch_body_schema() -> Value {
         "required": ["status"],
         "properties": {
             "status": { "enum": ["active", "disabled"] }
+        }
+    })
+}
+
+fn microsoft_enrollment_body_schema(method: &str) -> Value {
+    let mut properties = serde_json::Map::new();
+    let mut required = Vec::new();
+    if method != "POST" {
+        properties.insert(
+            "enrollmentId".into(),
+            json!({"type":"string", "format":"uuid"}),
+        );
+        properties.insert(
+            "expectedRevision".into(),
+            json!({"type":"integer", "minimum":1}),
+        );
+        required.extend(["enrollmentId", "expectedRevision"]);
+    }
+    if method != "DELETE" {
+        properties.insert("email".into(), json!({
+            "type":"string", "minLength":1,
+            "description":"Pending Microsoft token email to match. Surrounding whitespace is trimmed and ASCII letters are lowercased. Must be email-shaped with a dotted domain, contain no control characters, and fit 320 UTF-8 bytes. Independent of profile email; no UPN fallback."
+        }));
+        required.push("email");
+    }
+    json!({"type":"object", "additionalProperties":false, "required":required, "properties":properties})
+}
+
+fn microsoft_enrollment_record_schema() -> Value {
+    json!({
+        "type":"object", "additionalProperties":false,
+        "required":["enrollmentId","principalId","tenantId","matchEmail","revision","createdAt","updatedAt","createdBy","updatedBy"],
+        "properties":{
+            "enrollmentId":{"type":"string","format":"uuid"},
+            "principalId":{"type":"string"}, "tenantId":{"type":"string","format":"uuid"},
+            "matchEmail":{"type":"string"}, "revision":{"type":"integer","minimum":1},
+            "createdAt":{"type":"string","format":"date-time"}, "updatedAt":{"type":"string","format":"date-time"},
+            "createdBy":{"type":"string"}, "updatedBy":{"type":"string"}
         }
     })
 }
@@ -3785,6 +3875,9 @@ fn http_send_variant(route: &HttpRouteSpec) -> Value {
         );
     }
     if route.body_allowed {
+        if route.request_body_schema.is_some() {
+            required.push("body");
+        }
         properties.insert(
             "body".to_string(),
             route
@@ -4157,6 +4250,77 @@ mod managed_identity_contract_tests {
         assert_eq!(patch.method, "PATCH");
         assert!(patch.sensitive_request_pointers.is_empty());
         assert!(patch.sensitive_response_pointers.is_empty());
+    }
+
+    #[test]
+    fn microsoft_enrollment_contract_projects_fences_into_openapi_and_send() {
+        let mut catalog = empty_catalog(json!({}));
+        catalog.routes = principal_group_admin_routes();
+        let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
+        let send = send_schema_from_catalog(&catalog);
+        let path = "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment";
+        for (method, body) in [
+            ("POST", json!({"email":"ada@example.test"})),
+            (
+                "PATCH",
+                json!({"enrollmentId":"00000000-0000-4000-8000-000000000001","expectedRevision":1,"email":"ada@example.test"}),
+            ),
+            (
+                "DELETE",
+                json!({"enrollmentId":"00000000-0000-4000-8000-000000000001","expectedRevision":1}),
+            ),
+        ] {
+            let operation = &openapi["paths"][path][method.to_ascii_lowercase()];
+            let schema = &operation["requestBody"]["content"]["application/json"]["schema"];
+            let validator = jsonschema::validator_for(schema).unwrap();
+            assert!(validator.is_valid(&body));
+            assert!(!validator.is_valid(&json!({})));
+            let mut unknown = body.clone();
+            unknown["tenantId"] = json!("administrator-cannot-select-tenant");
+            assert!(!validator.is_valid(&unknown));
+            if method != "POST" {
+                let mut missing = body.clone();
+                missing.as_object_mut().unwrap().remove("enrollmentId");
+                assert!(!validator.is_valid(&missing));
+                let mut stale_shape = body.clone();
+                stale_shape["expectedRevision"] = json!(0);
+                assert!(!validator.is_valid(&stale_shape));
+            }
+            let variant = send["oneOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| {
+                    v["properties"]["route"]["const"] == path
+                        && v["properties"]["method"]["const"] == method
+                })
+                .unwrap();
+            assert_eq!(variant["properties"]["body"], *schema);
+            let send_validator = jsonschema::validator_for(variant).unwrap();
+            let mut request = json!({
+                "version": SEND_SCHEMA_VERSION,
+                "kind": "http",
+                "method": method,
+                "route": path,
+                "pathParams": {"principal": "prepared"},
+                "body": body,
+            });
+            assert!(send_validator.is_valid(&request));
+            request.as_object_mut().unwrap().remove("body");
+            assert!(!send_validator.is_valid(&request));
+        }
+        let create = &openapi["paths"]["/v1/admin/principals"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"];
+        let validator = jsonschema::validator_for(create).unwrap();
+        assert!(validator.is_valid(
+            &json!({"principalId":"prepared","microsoftEnrollment":{"email":"ada@example.test"}})
+        ));
+        assert!(!validator.is_valid(&json!({"principalId":"prepared","microsoftEnrollment":null})));
+        assert!(
+            openapi["paths"][path]["get"]["responses"]["200"]
+                .to_string()
+                .contains("matchEmail")
+        );
     }
 
     #[test]

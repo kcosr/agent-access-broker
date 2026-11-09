@@ -1483,6 +1483,17 @@ requires restoring the matching pre-upgrade database, configuration, keys,
 binary and portal together; do not remove the table or edit migration history.
 See [gateway route persistence](database.md#imported-service-records).
 
+Migration `036_microsoft_enrollments` adds explicit pending tenant/email
+reservations and the principal's durable Microsoft initial-group-assignment
+marker. It creates no enrollment from existing profile email and marks every
+existing principal processed, including never-used Microsoft links, without
+backfilling groups. New principals start unprocessed and receive then-current
+defaults at their first successful Microsoft sign-in, including prepared and
+Object-ID-linked accounts. Back up before startup with `auto_migrate = true` and
+upgrade Broker, CLI and portal together. Older binaries reject the newer ledger;
+rollback requires the matching pre-migration database, configuration, keys and
+binary. Do not drop the new table/column or edit migration history.
+
 Accepted HTTP gateway response declarations containing `*/*` or `type/*` require
 a Broker with [response media range support](http-gateway-setup.md#response-media-declarations),
 without another database migration. Older binaries cannot load any retained
@@ -1952,8 +1963,8 @@ thresholds; raising invocation limits does not raise login budgets.
 | `oidc_provider_denied` | Review the Entra sign-in result, user/application assignment, consent, and tenant policy. Provider error details are intentionally not echoed as identity data. In an `oidc.membership.renewal_failed` record it means Microsoft rejected the renewal request itself (`request_rejected`); the service log's `error` and `errorCodes` identify the rejection. |
 | `oidc_identity_invalid` | Check the configured tenant/client IDs, exact redirect URI, app registration, and Entra signing-key availability. A token with the wrong issuer, tenant, audience, nonce, subject, signature, or time window is rejected. |
 | `oidc_group_claims_incomplete` | The ID token indicated group overage/distributed claims or contained malformed group IDs. Reduce the user's app-visible security-group memberships or adjust Entra assignment/claim configuration; the broker does not query Graph. |
-| `oidc_admission_denied` | For a first/JIT login, create an active mapping from one claimed Entra group Object ID to an active broker group, assign the user appropriately in Entra, or explicitly link the existing principal. Empty/unmapped claims are allowed only for an already linked identity. |
-| `oidc_login_method_conflict` | The Entra user Object ID is already linked elsewhere, the principal already has another Microsoft identity, or a tenant change conflicts with durable Microsoft bindings/login methods. Inspect and deliberately unlink or remove the conflicting object. |
+| `oidc_admission_denied` | For an unmatched first/JIT login, create an active mapping from a claimed Entra group Object ID to an active Broker group and assign the user in Entra, or explicitly prepare/link an existing principal. A matching pending email or existing link permits complete empty/unmapped groups. |
+| `oidc_login_method_conflict` | A Microsoft object or pending tenant/email is reserved elsewhere, the principal has a conflicting method/enrollment, the enrollment ID/revision is stale, or a tenant change conflicts with durable pending enrollments, bindings or methods. Inspect current state and deliberately edit, cancel, unlink or remove the conflicting object. |
 | `oidc.membership.renewal_failed` audit records | A [membership renewal](#microsoft-membership-renewal) failed; `providerAudit.oidc.classification` says why. `oidc_sign_in_required` means Microsoft no longer honours the person's refresh token (inactivity, revoked sessions, a disabled account, removed consent): renewal ended and the person signs in again. `oidc_client_rejected` means Microsoft rejected the client ID or secret: correct `client_secret_ref` and reload; a blocked renewal is eligible again at least one hour after its failure (later for a longer `Retry-After` or a provider-wide 429 pause), when a request next needs it, so recovery can take longer than an hour. `oidc_unavailable`, `oidc_identity_invalid` and `oidc_group_claims_incomplete` keep renewal and retry as described there. |
 | Microsoft sign-in asks for consent after enabling `membership_renewal` | Users cannot consent to `offline_access` in this tenant. Have an Entra administrator grant admin consent for it (see [Microsoft membership renewal](#microsoft-membership-renewal)), or turn `membership_renewal` off and reload. |
 | `external_group_binding_conflict` | The Entra group Object ID already has a binding, or deletion was attempted while the binding was active. Reuse the existing mapping, or disable it before deleting it. |
@@ -1991,8 +2002,9 @@ Create one Microsoft Entra app registration for this broker deployment:
 directory memberships for Entra to emit an overage or distributed-claim marker
 cannot complete broker login, because the broker intentionally does not query
 Graph. The broker also rejects a complete claim containing more than 200 group
-entries. A complete empty group list remains valid for an already linked user
-and simply removes any prior Microsoft-derived broker-group contribution.
+entries. A complete empty group list remains valid for an already linked or
+matching email-prepared user and simply removes any prior Microsoft-derived
+Broker-group contribution.
 
 ### Enable the broker
 
@@ -2057,24 +2069,36 @@ to publish fresh group evidence immediately; otherwise the change reaches the
 Broker at the person's next renewal or sign-in. Disabling a mapping takes effect
 immediately.
 
-With JIT enabled, a first login creates an opaque broker principal only when at
-least one active mapping reaches an active broker group. The initial display
-name uses the first available bounded value from Microsoft `name`,
-`preferred_username`, then `email`; email is stored separately when present.
-These values initialize a JIT principal but are not identity keys and later
-logins do not overwrite them.
+Administrators can prepare an ordinary user and its groups/grants before first
+sign-in with explicit pending email enrollment, without directory lookup or an
+Object ID. The matching validated tenant/token email consumes the reservation
+and binds the immutable identity to that same account. Creation is approval;
+there is no later approval gate. Profile email alone never authorizes matching.
+Prepared and Object-ID-linked users do not require JIT or mapped-group admission.
+With JIT enabled, an unmatched first login creates an opaque Broker principal
+only when at least one active mapping reaches an active Broker group. See
+[Microsoft onboarding](administrator-guide.md#microsoft-onboarding) for creation,
+edit/cancel, disabled reservations and duplicate-account recovery.
+
+Every successful Microsoft sign-in refreshes display name from the first usable
+bounded `name`, `preferred_username`, then token `email`; no usable value keeps
+the current name. This can replace administrator name edits. Profile email stays
+unchanged for existing accounts; JIT initializes it when present. Failed or
+superseded callbacks and membership renewal never update names.
 
 Administrators may enable **Automatically add new Microsoft users** on one or
 more managed groups, or use
 `agent-access admin groups update <group> --auto-enroll-new-microsoft-users true`.
-This database setting takes effect without reload and does not change the
-mapped-group admission requirement. JIT adds persistent local membership in
-each selected active group atomically with a new account. Existing accounts,
-including administrator-linked accounts on their first Microsoft sign-in, are
-not enrolled. Later sign-ins never restore removed local memberships. Disabled
-groups retain the setting but pause enrollment until re-enabled; users created
-during that pause are not backfilled. Clearing the setting affects only future
-account creation.
+This database setting takes effect without reload and does not change sign-in
+eligibility. For principals created after migration `036`, the first successful
+Microsoft sign-in adds missing persistent local memberships in selected active
+groups, including prepared and Object-ID-linked users. A durable marker is set
+even when no groups qualify. Existing memberships retain attribution; principals
+present at migration receive no backfill. Later sign-ins, unlink/relink and new
+enrollment never restore removed memberships or repeat assignment. Disabled
+groups retain the setting but pause assignment; re-enabling affects future first
+Microsoft sign-ins without backfill. Clearing the setting leaves existing local
+memberships intact.
 
 Local memberships survive Microsoft membership expiry, removal, and provider
 disable. This also applies when the selected group has an Entra mapping: the
@@ -2089,6 +2113,8 @@ agent-access admin principals login-methods oidc unlink alice
 ```
 
 Use the immutable Entra user Object ID, not an email address or display name.
+Cancel any pending email enrollment before Object-ID linking. Unlinking never
+recreates pending enrollment.
 Unlinking revokes that login method's browser sessions and removes its cached
 Microsoft group contributions and any stored Microsoft refresh token; it leaves
 local passwords, local groups, roles, direct grants, and non-browser broker
@@ -2116,8 +2142,9 @@ secret reference without changing its resolved value does not. Changing
 `client_id` also expires cached Microsoft membership, revokes Microsoft browser
 sessions and deletes stored Microsoft refresh tokens. Reducing
 `external_membership_ttl` clamps existing evidence to the shorter lifetime.
-Changing `tenant_id` is rejected after a Microsoft login method or external
-group binding exists; use a fresh managed store or remove those durable objects
+Changing `tenant_id` is rejected while a pending Microsoft enrollment, Microsoft
+login method or external group binding exists; use a fresh managed store or
+explicitly remove those durable objects
 before intentionally moving to another tenant.
 
 For an emergency local disable, set
@@ -2126,7 +2153,9 @@ does not resolve its Microsoft secrets or contact Microsoft. The disable expires
 Microsoft-derived membership, revokes Microsoft browser sessions and deletes
 stored Microsoft refresh tokens, while local login and local authorization
 remain available. Re-enabling requires a new Microsoft login to restore current
-group evidence and renewal.
+group evidence and renewal. Pending email reservations remain intact, and a
+paused reconciled provider still permits administrative preparation; they are
+never retargeted automatically to another tenant.
 
 ### Microsoft membership renewal
 

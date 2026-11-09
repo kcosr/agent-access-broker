@@ -366,7 +366,20 @@ export type PrincipalRole = "user" | "auditor" | "service_policy_manager" | "adm
 
 export type PrincipalKind = "user" | "service_account" | "system";
 
+export type MicrosoftEnrollment = {
+  enrollmentId: string;
+  principalId: string;
+  tenantId: string;
+  matchEmail: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
+};
+
 export type PrincipalRecord = {
+  microsoftEnrollment: MicrosoftEnrollment | null;
   signInMethods: SignInMethods;
   principalId: string;
   kind: PrincipalKind;
@@ -589,6 +602,7 @@ export type ConfigReloadAttempt = {
 };
 
 export type ConfigStatusResult = {
+  microsoftEnrollment: { available: boolean; tenantId: string | null };
   generation: number;
   configHash: string;
   loadedAt: string;

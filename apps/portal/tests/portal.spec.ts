@@ -973,7 +973,7 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(enrollment).toBeChecked();
     await page.reload();
     await expect(enrollment).toBeChecked();
-    await expect(enrollment).toHaveAccessibleDescription(/does not authorize sign-in or change Microsoft admission requirements.*new accounts still require membership in an active mapped Microsoft group.*local and persists after Microsoft membership expires.*later sign-ins do not restore removed memberships/);
+    await expect(enrollment).toHaveAccessibleDescription(/first successful Microsoft sign-in.*prepared accounts and Object-ID links.*does not authorize sign-in or change Microsoft admission requirements.*local and persists after Microsoft membership expires.*Later sign-ins do not restore removed memberships/);
 
     await page.getByLabel("Display name").fill("User Access");
     await page.getByLabel("Description").fill("Principals with Jira access");

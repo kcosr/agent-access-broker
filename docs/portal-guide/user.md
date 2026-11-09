@@ -45,8 +45,12 @@ also shows **Microsoft groups**: whether your Microsoft groups renew
 automatically or need a new Microsoft sign-in, and when the current ones
 expire. See the [end-user guide](../end-user-guide.md#sign-in-and-check-access).
 
-If sign-in opens an unexpected Microsoft-linked account, contact your
-administrator. If **My access** is missing, your account may have self-service
+If your administrator prepared Microsoft sign-in by email, your first matching
+sign-in opens that account with its prepared access. The match uses the token's
+email, which can differ from your sign-in name. Microsoft sign-in refreshes your
+display name but leaves Broker profile email unchanged. If sign-in opens an
+unexpected Microsoft-linked account, contact your administrator. If **My access**
+is missing, your account may have self-service
 disabled; **Account** and password settings remain available. Self-service is
 independent of your administrative role and invocation grants.
 

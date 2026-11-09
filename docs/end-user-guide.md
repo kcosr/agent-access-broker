@@ -21,9 +21,12 @@ control every call.
 
 Open `https://<broker-host>/ui`. Sign in with the local username/password your
 administrator supplied or choose Microsoft sign-in when available. Change a
-temporary local password before continuing. Microsoft linking uses the immutable
-directory identity, not email matching; contact your administrator if it opens an
-unexpected account.
+temporary local password before continuing. An administrator may prepare your
+account by the email carried in your validated Microsoft token; the first match
+binds your immutable directory identity and keeps prepared access. That email
+can differ from your sign-in name. Contact your administrator if sign-in opens
+an unexpected account. Successful Microsoft sign-in refreshes your display name
+from Microsoft without changing your Broker profile email.
 
 In **My access > Access**, review your services, actions, resources, and contexts.
 Select an action for its complete resource alternatives and exclusions. Filters

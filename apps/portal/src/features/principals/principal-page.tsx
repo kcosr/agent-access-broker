@@ -155,7 +155,7 @@ function PrincipalFrame({
           <Badge tone={active ? "success" : "muted"} variant="dot">
             {principal.status}
           </Badge>
-          {!serviceAccount ? <SignInMethodBadges methods={principal.signInMethods} /> : null}
+          {!serviceAccount ? <SignInMethodBadges methods={principal.signInMethods} awaitingMicrosoft={Boolean(principal.microsoftEnrollment)} /> : null}
           <span className="wb-num">{principal.principalId}</span>
           {principal.email ? (
             <>

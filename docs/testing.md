@@ -1082,6 +1082,24 @@ request. Portal Vitest tests cover the Microsoft login/link-control helper, and
 the Playwright suite covers Microsoft login availability, provider-outage
 presentation, sanitized return paths, and start redirects.
 
+Microsoft precreation tests use these same deterministic fixtures. Core
+`managed_store/microsoft_enrollment_tests.rs` covers the `035` to `036` upgrade
+without email/group backfill, canonical matching, CRUD/version conflicts,
+disabled reservations, atomic creation and login rollback, preserved account
+state, display-name refresh, initial-group assignment and competing identities.
+`group_auto_enrollment_tests.rs` covers the first-Microsoft-sign-in rule for
+Object-ID-linked accounts and accounts previously used through local login.
+Host `tests/microsoft_enrollments.rs` covers management authorization/CSRF,
+paused-provider preparation, configuration metadata, audit boundaries and
+conflicts. The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
+validated-email binding, claim fallback and refusals, immutable precedence,
+callback/admin/reload races and session rollback; no live Microsoft tenant is
+used. CLI `tests/microsoft_enrollment_admin.rs` exercises the distinct creation
+option, canonical routes/bodies, required revision fences and real local Broker
+CRUD with a paused provider. Portal `tests/microsoft-enrollment.spec.ts` exercises
+creation, pending display, edit/cancel, stale conflicts and paused preparation
+using mocked management contracts. It does not authenticate a Microsoft user.
+
 Microsoft membership renewal coverage is also deterministic and does not
 contact Microsoft. Core store tests
 (`managed_store/oidc_membership_renewal_tests.rs`) upgrade a `030` store to
