@@ -2078,7 +2078,12 @@ immediately.
 
 Administrators can prepare an ordinary user and its groups/grants before first
 sign-in with explicit pending email enrollment, without directory lookup or an
-Object ID. The matching validated tenant/token email consumes the reservation
+Object ID. New-account enrollment requires the client to omit the principal ID;
+the Broker generates `usr-<UUIDv4>` and returns it for later operations. Existing
+IDs and enrollment attached to existing accounts remain unchanged. The portal
+defaults to Microsoft enrollment and requires an explicit local-account choice
+when local creation is intended, including when Microsoft is unavailable.
+The matching validated tenant/token email consumes the reservation
 and binds the immutable identity to that same account. Creation is approval;
 there is no later approval gate. Profile email alone never authorizes matching.
 Prepared and Object-ID-linked users do not require JIT or mapped-group admission.

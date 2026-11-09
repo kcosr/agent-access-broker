@@ -28,22 +28,30 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
   const [role, setRole] = useState<PrincipalRole>("user");
   const [agentTokenIssuance, setAgentTokenIssuance] = useState<PrincipalAgentTokenIssuanceSetting>({ mode: "inherit", allowedExecutionContexts: [] });
   const [selfServiceEnabled, setSelfServiceEnabled] = useState(!serviceAccount);
-  const [enrollMicrosoft, setEnrollMicrosoft] = useState(false);
+  const [localAccount, setLocalAccount] = useState(false);
+  const enrollMicrosoft = !serviceAccount && !localAccount;
   const microsoftAvailable = groupWritesEnabled && Boolean(config?.microsoftEnrollment?.available);
   const microsoftBlocked = enrollMicrosoft && (!microsoftAvailable || !email.trim());
-  const [enableLocalPassword, setEnableLocalPassword] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const registry = useIssuanceRegistry();
   const policyError = issuanceSettingBlocker(agentTokenIssuance, registry.contexts);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const blocked = Boolean(policyError) || microsoftBlocked || (!enrollMicrosoft && !principalId.trim()) || (localAccount && !acknowledged);
 
   async function submit() {
-    if (!principalId.trim() || policyError || microsoftBlocked || (enableLocalPassword && !acknowledged)) return;
+    if (blocked || pending) return;
     setPending(true);
     setError(null);
     try {
-      await principals.create({ kind, principalId, displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, agentTokenIssuance, enableLocalPassword, enrollMicrosoft });
+      await principals.create({
+        ...(serviceAccount
+          ? { kind: "service_account", principalId } as const
+          : localAccount
+            ? { kind: "user", signIn: "local", principalId } as const
+            : { kind: "user", signIn: "microsoft" } as const),
+        displayName, email, groups: groupWritesEnabled ? memberOf : [], role, selfServiceEnabled, agentTokenIssuance
+      });
     } catch (failure) {
       setError(errorMessage(failure));
       void registry.query.refetch();
@@ -58,7 +66,9 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
       description={
         serviceAccount
           ? "Service accounts are noninteractive: no passwords, Microsoft login, browser sessions, setup tokens, or admin tokens."
-          : "Prepare a user and their access before first sign-in. Choose Microsoft email enrollment to authorize their first matching Microsoft sign-in. Local password sign-in is optional."
+          : localAccount
+            ? "Create a user with a separate broker username and temporary password."
+            : "Prepare access for a user before their first Microsoft sign-in. Creating the account approves their first matching sign-in."
       }
       onClose={onClose}
       dismissible={!pending}
@@ -68,30 +78,32 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
           <Button onClick={onClose} disabled={pending}>
             Cancel
           </Button>
-          <AdminButton type="submit" variant="primary" disabled={!principalId.trim() || Boolean(policyError) || microsoftBlocked || (enableLocalPassword && !acknowledged)} pending={pending}>
+          <AdminButton type="submit" variant="primary" disabled={blocked} pending={pending}>
             {title}
           </AdminButton>
         </>
       }
     >
       <div className="wb-form-stack">
-        <Field label="Principal ID" hint="The stable identifier, for example an email address. It cannot be changed later.">
+        {!serviceAccount ? <Checkbox
+          label="Create a local account instead"
+          checked={localAccount}
+          onChange={(event) => { setLocalAccount(event.target.checked); setAcknowledged(false); setError(null); }}
+        /> : null}
+        {enrollMicrosoft ? <>
+          {!microsoftAvailable ? <Banner tone="warning" slim>Microsoft account creation requires managed identity and a configured Microsoft tenant. You can explicitly choose a local account instead.</Banner> : null}
+          <Field label="Microsoft email" hint="Use the email address on the user's Microsoft account.">
+            <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required autoFocus />
+          </Field>
+        </> : <Field label={serviceAccount ? "Principal ID" : "Username"} hint={serviceAccount ? "The stable identifier. It cannot be changed later." : "Used for local sign-in. It cannot be changed later."}>
           <Input mono value={principalId} onChange={(event) => setPrincipalId(event.target.value)} required autoFocus autoComplete="off" spellCheck={false} />
-        </Field>
-        <Field label="Display name" optional hint={!serviceAccount ? "Microsoft sign-in refreshes this name from the Microsoft account." : undefined}>
+        </Field>}
+        <Field label="Display name" optional hint={enrollMicrosoft ? "Microsoft sign-in refreshes this name from the Microsoft account." : undefined}>
           <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
         </Field>
-        {!serviceAccount ? <Checkbox
-          label="Prepare Microsoft sign-in by email"
-          description={microsoftAvailable ? "The first validated Microsoft sign-in with this email joins this prepared account. Creating the account approves that sign-in; no later approval is needed." : "Microsoft enrollment requires managed identity and a configured Microsoft tenant."}
-          checked={enrollMicrosoft}
-          onChange={(event) => setEnrollMicrosoft(event.target.checked)}
-          disabled={!microsoftAvailable && !enrollMicrosoft}
-        /> : null}
-        <Field label={enrollMicrosoft ? "Microsoft email" : "Email"} optional={!enrollMicrosoft} hint={enrollMicrosoft ? "Saved as profile email and pending match email initially. You can edit them separately after creation." : "Profile email alone does not authorize Microsoft enrollment."}>
-          <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required={enrollMicrosoft} />
-        </Field>
-        {enrollMicrosoft ? <p className="pt-prose">Tenant: <span className="wb-num">{config?.microsoftEnrollment?.tenantId}</span>. A paused Microsoft provider permits preparation; sign-in requires it enabled. Initial automatic local groups apply once at the first successful Microsoft sign-in.</p> : null}
+        {!enrollMicrosoft ? <Field label="Email" optional>
+          <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        </Field> : null}
         <Field label="Groups" optional hint={groupWritesEnabled ? undefined : `Group changes are unavailable while identity authority is ${identityAuthority}.`}>
           <Combobox
             multiple
@@ -102,12 +114,9 @@ export function CreatePrincipalModal({ kind, onClose }: { kind: "user" | "servic
             options={groups.filter((group) => group.status === "active").map((group) => ({ value: group.groupId, label: formatGroupOption(group) }))}
           />
         </Field>
-        {!serviceAccount ? <>
-          <Checkbox label="Enable local password sign-in" checked={enableLocalPassword} onChange={(event) => { setEnableLocalPassword(event.target.checked); setAcknowledged(false); }} />
-          {enableLocalPassword ? <>
-            <p className="pt-prose">{LOCAL_SIGN_IN_EXPLANATION} A fresh temporary password will be shown once.</p>
-            <Checkbox label={LOCAL_SIGN_IN_ACKNOWLEDGMENT} checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
-          </> : null}
+        {!serviceAccount && localAccount ? <>
+          <p className="pt-prose">{LOCAL_SIGN_IN_EXPLANATION} A fresh temporary password will be shown once.</p>
+          <Checkbox label={LOCAL_SIGN_IN_ACKNOWLEDGMENT} checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
         </> : null}
         {!serviceAccount ? (
           <>

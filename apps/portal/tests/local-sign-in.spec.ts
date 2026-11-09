@@ -138,30 +138,6 @@ test("enrollment filters distinguish Microsoft, local, both and no active method
   }
 });
 
-test("create user defaults to no local method and directs the administrator to linking", async ({ page }) => {
-  const row = principal("new-user", "absent", "absent");
-  await mockAdmin(page, [row]);
-  await page.route("**/v1/admin/principals/new-user/login-methods", (route) => route.fulfill({ json: envelope([]) }));
-  let created = false;
-  let passwordRequests = 0;
-  await page.route("**/v1/admin/principals/new-user/login-methods/local-password/**", (route) => { passwordRequests++; return route.fulfill({ status: 500 }); });
-  await page.route("**/v1/admin/principals", (route) => {
-    if (route.request().method() === "POST") created = true;
-    return route.fulfill({ json: envelope(route.request().method() === "POST" ? row : []) });
-  });
-  await page.goto(`${baseUrl}/ui/admin/principals`);
-  await page.getByRole("button", { name: "Create user", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
-  await dialog.getByLabel("Principal ID", { exact: true }).fill("new-user");
-  await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).not.toBeChecked();
-  await dialog.getByRole("button", { name: "Create user", exact: true }).click();
-  await expect.poll(() => created).toBe(true);
-  await expect(page).toHaveURL(/principals\/new-user$/);
-  await expect(page.getByRole("button", { name: "Enable local password sign-in", exact: true })).toBeVisible();
-  await expect(page.getByText("User has no sign-in methods.", { exact: false })).toBeVisible();
-  expect(passwordRequests).toBe(0);
-});
-
 test("active local reset is separate from enrollment and source lockout does not remove its badge", async ({ page }) => {
   const row = principal("target", "active");
   row.status = "disabled";
@@ -193,7 +169,13 @@ test("create local user requires fresh consent and reveals the generated passwor
   const row = principal("new-user", "active", "absent");
   await mockAdmin(page, [row]);
   await page.route("**/v1/admin/principals/new-user/login-methods", (route) => route.fulfill({ json: envelope([{ method: "local_password", status: "active" }]) }));
-  await page.route("**/v1/admin/principals", (route) => route.fulfill({ json: envelope(route.request().method() === "POST" ? row : []) }));
+  await page.route("**/v1/admin/principals", (route) => {
+    if (route.request().method() === "POST") {
+      expect(route.request().postDataJSON()).toMatchObject({ principalId: "new-user", kind: "user" });
+      expect(route.request().postDataJSON()).not.toHaveProperty("microsoftEnrollment");
+    }
+    return route.fulfill({ json: envelope(route.request().method() === "POST" ? row : []) });
+  });
   let generated = "";
   await page.route("**/v1/admin/principals/new-user/login-methods/local-password/enable", (route) => {
     const body = route.request().postDataJSON();
@@ -204,13 +186,19 @@ test("create local user requires fresh consent and reveals the generated passwor
   await page.goto(`${baseUrl}/ui/admin/principals`);
   await page.getByRole("button", { name: "Create user", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
-  await dialog.getByLabel("Principal ID", { exact: true }).fill("new-user");
-  const optIn = dialog.getByLabel("Enable local password sign-in", { exact: true });
+  const optIn = dialog.getByLabel("Create a local account instead", { exact: true });
+  await expect(optIn).not.toBeChecked();
   await optIn.check();
+  await dialog.getByLabel("Username", { exact: true }).fill("new-user");
+  await expect(dialog.getByLabel("Microsoft email", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
   await dialog.getByLabel(acknowledgment, { exact: true }).check();
   await optIn.uncheck();
+  await expect(dialog.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel("Microsoft email", { exact: true })).toBeVisible();
   await optIn.check();
+  await expect(dialog.getByLabel("Username", { exact: true })).toHaveValue("new-user");
   await expect(dialog.getByLabel(acknowledgment, { exact: true })).not.toBeChecked();
   await dialog.getByLabel(acknowledgment, { exact: true }).check();
   await dialog.getByRole("button", { name: "Create user", exact: true }).click();
@@ -237,13 +225,19 @@ test("partial user creation with enrollment failure preserves the user and does 
   const row = principal("new-user", "absent", "absent");
   await mockAdmin(page, [row]);
   await page.route("**/v1/admin/principals/new-user/login-methods", (route) => route.fulfill({ json: envelope([]) }));
-  await page.route("**/v1/admin/principals", (route) => route.fulfill({ json: envelope(route.request().method() === "POST" ? row : []) }));
+  await page.route("**/v1/admin/principals", (route) => {
+    if (route.request().method() === "POST") {
+      expect(route.request().postDataJSON()).toMatchObject({ principalId: "new-user", kind: "user" });
+      expect(route.request().postDataJSON()).not.toHaveProperty("microsoftEnrollment");
+    }
+    return route.fulfill({ json: envelope(route.request().method() === "POST" ? row : []) });
+  });
   await page.route("**/v1/admin/principals/new-user/login-methods/local-password/enable", (route) => route.fulfill({ status: 503, json: { ok: false, error: { message: "Hasher unavailable" } } }));
   await page.goto(`${baseUrl}/ui/admin/principals`);
   await page.getByRole("button", { name: "Create user", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
-  await dialog.getByLabel("Principal ID", { exact: true }).fill("new-user");
-  await dialog.getByLabel("Enable local password sign-in", { exact: true }).check();
+  await dialog.getByLabel("Create a local account instead", { exact: true }).check();
+  await dialog.getByLabel("Username", { exact: true }).fill("new-user");
   await dialog.getByLabel(acknowledgment, { exact: true }).check();
   await dialog.getByRole("button", { name: "Create user", exact: true }).click();
   await expect(page).toHaveURL(/principals\/new-user$/);

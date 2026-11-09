@@ -1056,7 +1056,10 @@ test("local browser login supports administration, self-service credentials, tok
     await page.getByRole("button", { name: "Create user", exact: true }).click();
     dialog = page.getByRole("dialog", { name: "Create user", exact: true });
     await expectDialogWithinViewport(dialog);
-    const principalInput = dialog.getByLabel("Principal ID");
+    await expect(dialog.getByLabel("Create a local account instead", { exact: true })).not.toBeChecked();
+    await expect(dialog.getByLabel("Principal ID", { exact: true })).toHaveCount(0);
+    await dialog.getByLabel("Create a local account instead", { exact: true }).check();
+    const principalInput = dialog.getByLabel("Username", { exact: true });
     await principalInput.pressSequentially(principalId);
     await expect(principalInput).toBeFocused();
     await dialog.getByLabel("Display name").fill("Alice Portal");
@@ -1064,8 +1067,6 @@ test("local browser login supports administration, self-service credentials, tok
     await expect(dialog.getByLabel("Agent token issuance", { exact: true })).toHaveValue("inherit");
     await dialog.getByLabel("Agent token issuance", { exact: true }).selectOption("write_capable");
     for (const context of ["default", "internal", "external"]) await dialog.getByRole("group", { name: "Permitted issuance contexts", exact: true }).getByLabel(context, { exact: true }).check();
-    await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).not.toBeChecked();
-    await dialog.getByLabel("Enable local password sign-in", { exact: true }).check();
     await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
     await dialog.getByLabel("I authorize local password sign-in for this user independently of Microsoft sign-in.", { exact: true }).check();
     await expect(dialog.getByLabel("Temporary password")).toHaveCount(0);

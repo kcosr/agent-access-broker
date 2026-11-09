@@ -37,6 +37,7 @@ import type {
   PolicyStatusResult,
   PolicyValidationResult,
   PrincipalRecord,
+  PrincipalCreateBody,
   PrincipalRole,
   PrincipalDetail,
   ResourceTypeMetadata,
@@ -433,7 +434,7 @@ export const brokerApi = {
     managementRequest<PrincipalDetail>(`/v1/admin/principals/${enc(principalId)}`, {}, session),
   adminCreatePrincipal: (
     session: Session,
-    body: { principalId: string; microsoftEnrollment?: { email: string }; kind?: "user" | "service_account"; displayName?: string; email?: string; role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }
+    body: PrincipalCreateBody
   ) =>
     managementRequest<PrincipalRecord>(
       "/v1/admin/principals",

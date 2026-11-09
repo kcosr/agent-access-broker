@@ -2,10 +2,10 @@
 // Capture an already configured, synthetic demo. Never issue tokens or save forms.
 // Guide verification outcomes are browser-only fixtures, labeled in the manifest.
 // Install portal dependencies and Playwright Chromium before running this script.
-// Required: AAB_DEMO_ALICE_PRINCIPAL/PASSWORD; the full section also requires
-// AAB_DEMO_ADMIN_PRINCIPAL/PASSWORD.
+// The tokens section requires AAB_DEMO_ALICE_PRINCIPAL/PASSWORD; users requires
+// AAB_DEMO_ADMIN_PRINCIPAL/PASSWORD; the full section requires both.
 // Optional: AAB_DEMO_URL, AAB_CAPTURE_OUTPUT, AAB_CAPTURE_STREAM (all/showcase/guide),
-// AAB_CAPTURE_SECTION (all/tokens), AAB_CAPTURE_REQUEST_ID, AAB_CAPTURE_GRANT_ID,
+// AAB_CAPTURE_SECTION (all/tokens/users), AAB_CAPTURE_REQUEST_ID, AAB_CAPTURE_GRANT_ID,
 // AAB_CAPTURE_AUDIT_SEARCH,
 // AAB_GUIDE_ACCOUNT_FILE (private file from demo/seed-guide-accounts.mjs),
 // AAB_CHROMIUM_EXECUTABLE_PATH. Captures default to ignored .scratch output;
@@ -19,15 +19,15 @@ const origin = new URL(process.env.AAB_DEMO_URL ?? 'http://127.0.0.1:18787').ori
 const output = path.resolve(process.env.AAB_CAPTURE_OUTPUT ?? '.scratch/portal-captures');
 const stream = process.env.AAB_CAPTURE_STREAM ?? 'all';
 const section = process.env.AAB_CAPTURE_SECTION ?? 'all';
-if (!['all', 'tokens'].includes(section)) throw new Error('AAB_CAPTURE_SECTION must be all or tokens');
+if (!['all', 'tokens', 'users'].includes(section)) throw new Error('AAB_CAPTURE_SECTION must be all, tokens, or users');
 if (!['all', 'showcase', 'guide'].includes(stream)) throw new Error('AAB_CAPTURE_STREAM must be all, showcase, or guide');
+if (section === 'users' && stream === 'showcase') throw new Error('The users section requires the guide or all stream');
 const grantId = process.env.AAB_CAPTURE_GRANT_ID ?? 'jira-demo-work';
 const auditSearch = process.env.AAB_CAPTURE_AUDIT_SEARCH ?? 'demo-showcase';
 const auditBase = `/ui/admin/audit?range=7d&q=${encodeURIComponent(auditSearch)}`;
-const accounts = {
-  alice: [process.env.AAB_DEMO_ALICE_PRINCIPAL, process.env.AAB_DEMO_ALICE_PASSWORD],
-};
-if (section === 'all') accounts.admin = [process.env.AAB_DEMO_ADMIN_PRINCIPAL, process.env.AAB_DEMO_ADMIN_PASSWORD];
+const accounts = {};
+if (section !== 'users') accounts.alice = [process.env.AAB_DEMO_ALICE_PRINCIPAL, process.env.AAB_DEMO_ALICE_PASSWORD];
+if (section !== 'tokens') accounts.admin = [process.env.AAB_DEMO_ADMIN_PRINCIPAL, process.env.AAB_DEMO_ADMIN_PASSWORD];
 if (section === 'all' && (stream === 'all' || stream === 'guide')) {
   const guideAccounts = JSON.parse(await readFile(process.env.AAB_GUIDE_ACCOUNT_FILE ?? path.join(process.env.AAB_DEMO_BASE ?? '/tmp/agent-access-broker-demo', 'guide-accounts.json'), 'utf8'));
   if (guideAccounts.origin !== origin) throw new Error('Guide account origin differs from the capture origin');
@@ -102,7 +102,8 @@ async function capture(page, destination, name, theme, description) {
   const dir = path.join(output, destination);
   await mkdir(dir, { recursive: true });
   await page.screenshot({ path: path.join(dir, `${name}.png`), animations: 'disabled' });
-  manifest.push({ file: `${destination}/${name}.png`, theme, viewport: '1440x960', description });
+  const viewport = page.viewportSize();
+  manifest.push({ file: `${destination}/${name}.png`, theme, viewport: `${viewport.width}x${viewport.height}`, description });
   console.log(`Captured ${destination}/${name}.png (${theme})`);
 }
 
@@ -168,29 +169,58 @@ async function grant(page, destination, theme) {
   await capture(page, destination, `admin-grant-${theme}`, theme, 'Grant boundary and effective access for a service');
 }
 
-async function adminDialogs(page) {
-  await visit(page, '/ui/admin/principals', '/v1/admin/principals');
-  await page.getByRole('button', { name: 'Create user', exact: true }).click();
-  let dialog = page.getByRole('dialog', { name: 'Create user', exact: true });
-  await dialog.getByLabel('Principal ID', { exact: true }).fill('morgan@example.test');
-  await dialog.getByLabel('Display name').fill('Morgan Demo User');
-  await dialog.getByLabel('Email').fill('morgan@example.test');
-  await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('inherit');
-  await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
-  await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'default', exact: true }).check();
-  await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'internal', exact: true }).check();
-  await dialog.getByRole('combobox', { name: /^Groups/ }).fill('jira-users');
-  await page.getByRole('option', { name: /^jira-users - Jira Users/ }).click();
-  await dialog.getByRole('combobox', { name: /^Groups/ }).press('Escape');
-  await dialog.getByRole('checkbox', { name: 'Enable local password sign-in', exact: true }).check();
-  await dialog.getByRole('checkbox', { name: 'I authorize local password sign-in for this user independently of Microsoft sign-in.', exact: true }).check();
-  await dialog.getByRole('checkbox', { name: 'Self-service enabled', exact: true }).scrollIntoViewIfNeeded();
-  await capture(page, 'guide', 'admin-create-user-light', 'light', 'Draft user enrollment with read-only token issuance in default and internal contexts, group selection, independent local password sign-in, and self-service');
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+async function userCreation(page) {
+  // Only the availability projection is simulated. No tenant is contacted and
+  // both forms remain unsubmitted against the real managed demo.
+  const providerStatus = '**/v1/admin/config/status';
+  const viewport = page.viewportSize();
+  await page.route(providerStatus, async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (!response.ok() || body.ok === false) throw new Error('Cannot load demo configuration status');
+    body.result.microsoftEnrollment = { available: true, tenantId: '11111111-1111-4111-8111-111111111111' };
+    await route.fulfill({ response, json: body });
+  });
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  try {
+    await visit(page, '/ui/admin/principals', '/v1/admin/principals');
+    await page.getByRole('button', { name: 'Create user', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Create user', exact: true });
+    await expect(dialog.getByRole('checkbox', { name: 'Create a local account instead', exact: true })).not.toBeChecked();
+    await expect(dialog.getByRole('textbox', { name: 'Principal ID', exact: true })).toHaveCount(0);
+    await dialog.getByRole('textbox', { name: 'Microsoft email', exact: true }).fill('morgan@example.test');
+    await dialog.getByLabel('Display name').fill('Morgan Demo User');
+    await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('inherit');
+    await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
+    await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'default', exact: true }).check();
+    await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'internal', exact: true }).check();
+    await dialog.getByRole('combobox', { name: /^Groups/ }).fill('jira-users');
+    await page.getByRole('option', { name: /^jira-users - Jira Users/ }).click();
+    await dialog.getByRole('combobox', { name: /^Groups/ }).press('Escape');
+    await expect(dialog.getByRole('button', { name: 'Create user', exact: true })).toBeEnabled();
+    await dialog.getByRole('heading', { name: 'Create user', exact: true }).click();
+    expect(await dialog.locator('.wb-modal-body').evaluate(body => body.scrollHeight <= body.clientHeight)).toBe(true);
+    await capture(page, 'guide', 'admin-create-microsoft-user-light', 'light', 'SIMULATED Microsoft enrollment availability using a browser-only response fixture. Unsubmitted Morgan Demo User draft with Jira Users membership and read-only token issuance in default and internal contexts; no Microsoft sign-in or account creation occurs.');
+    await dialog.getByRole('checkbox', { name: 'Create a local account instead', exact: true }).check();
+    await dialog.getByRole('textbox', { name: 'Username', exact: true }).fill('morgan');
+    await expect(dialog.getByRole('textbox', { name: 'Email (optional)', exact: true })).toHaveValue('morgan@example.test');
+    await dialog.getByRole('checkbox', { name: 'I authorize local password sign-in for this user independently of Microsoft sign-in.', exact: true }).check();
+    await dialog.getByRole('heading', { name: 'Create user', exact: true }).click();
+    expect(await dialog.locator('.wb-modal-body').evaluate(body => body.scrollHeight <= body.clientHeight)).toBe(true);
+    await expect(dialog.getByRole('button', { name: 'Create user', exact: true })).toBeEnabled();
+    await capture(page, 'guide', 'admin-create-local-user-light', 'light', 'Explicit unsubmitted local-account draft with username, read-only token issuance in default and internal contexts, group selection, local password acknowledgement, and self-service');
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  } finally {
+    await page.unroute(providerStatus);
+    await page.setViewportSize(viewport);
+  }
+}
 
+async function adminDialogs(page) {
+  await userCreation(page);
   await visit(page, '/ui/admin/principals?kind=groups', '/v1/admin/groups');
   await page.getByRole('button', { name: 'Create group', exact: true }).click();
-  dialog = page.getByRole('dialog', { name: 'Create group', exact: true });
+  let dialog = page.getByRole('dialog', { name: 'Create group', exact: true });
   await dialog.getByLabel('Group ID', { exact: true }).fill('project-readers');
   await dialog.getByLabel('Display name').fill('Project Readers');
   await dialog.getByLabel('Description').fill('People and workloads allowed to read the demo project.');
@@ -420,7 +450,9 @@ async function selfService(page, destination, theme) {
 }
 
 try {
-  if (section === 'tokens') {
+  if (section === 'users') {
+    await session('admin', 'light', userCreation);
+  } else if (section === 'tokens') {
     if (stream === 'all' || stream === 'showcase') {
       await session('alice', 'light', page => tokenCreation(page, 'showcase', 'light'));
       await session('alice', 'dark', page => tokenCreation(page, 'showcase', 'dark'));
@@ -453,8 +485,8 @@ try {
     await session('auditor', 'light', page => audit(page, 'guide', 'light', 'auditor'));
     await session('alice', 'light', page => selfService(page, 'guide', 'light'));
   }
-  // A partial refresh retains unrelated captures. Token-page captures replace
-  // the obsolete review-step image as well as the corresponding current images.
+  // A partial refresh retains unrelated captures. Token-page and user-creation
+  // captures also replace the obsolete versions of their corresponding images.
   let retained = [];
   if (stream !== 'all' || section !== 'all') {
     try {
@@ -462,6 +494,7 @@ try {
         .filter(entry => {
           if (stream !== 'all' && !entry.file.startsWith(`${stream}/`)) return true;
           if (section === 'all') return false;
+          if (section === 'users') return !/^guide\/admin-create-(?:(?:microsoft|local)-)?user-light\.png$/.test(entry.file);
           return !/^\w+\/user-(?:tokens|token-(?:details|access|resources|review|boundary))-(?:light|dark)\.png$/.test(entry.file);
         });
     } catch (error) {

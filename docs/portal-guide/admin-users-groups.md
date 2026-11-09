@@ -3,8 +3,7 @@
 Create an account, give it a sign-in method, and place it in a group before
 configuring its service access. This walkthrough uses the demo's **Jira Users**
 group (`jira-users`), which already contains Alice. Morgan and Project Readers
-are examples shown in unsaved forms; the screenshots do not show completed
-account or group creation.
+are synthetic examples. Screenshots of creation forms show unsaved drafts.
 
 Start from [Sign in and choose a workflow](index.md). These steps require an
 administrator and managed identity. Auditors can inspect account metadata but
@@ -14,11 +13,13 @@ an administrator. See [account roles](../roles.md).
 
 ## Onboard a human user
 
-1. Select **Admin > Principals > Users**, then **Create user**.
-2. Enter a stable **Principal ID**, such as `morgan@example.test`, and a clear
-   **Display name**, such as `Morgan Demo User`. An **Email** is optional.
-   In **Groups**, select **Jira Users** if the account should receive that
-   group's invocation grants. Create the group first if it does not exist.
+1. Select **Admin > Principals > Users**, then **Create user**. Microsoft
+   enrollment is selected by default; leave **Create a local account instead**
+   unchecked.
+2. Enter **Microsoft email**, such as `morgan@example.test`, and optionally a
+   **Display name**, such as `Morgan Demo User`. The Broker generates the
+   principal ID. In **Groups**, select **Jira Users** if the account should
+   receive that group's invocation grants. Create the group first if needed.
 3. Keep **Role** set to **User** for an ordinary user and select
    **Self-service enabled** so they can manage their own credentials, tokens,
    connections, and activity. A role and the self-service setting do not grant
@@ -29,27 +30,42 @@ an administrator. See [account roles](../roles.md).
    The default, **Inherit from groups**, permits no issuance until an active
    group contributes permission for a context. An explicit user setting
    replaces every group contribution.
-4. Choose the sign-in method. For the local-password example, select
-   **Enable local password sign-in** and its acknowledgement. Then select
-   **Create user**. The portal displays a fresh temporary password once;
-   deliver it securely and have the user change it on first sign-in.
+4. Select **Create user**. The portal opens the new account using its generated
+   principal ID. Its **Overview > Sign-in methods** shows **Awaiting first
+   Microsoft sign-in**, **Pending match email**, **Tenant**, **Enrollment ID**
+   and **Revision**.
 
-![Draft Morgan user with Jira group membership, local sign-in acknowledgement, and self-service enabled](../images/portal/guide-annotated/admin-create-user-light.png)
+![Microsoft user creation draft](../images/portal/guide/admin-create-microsoft-user-light.png)
 
-*The populated form is a draft, with Read-only issuance selected for `default`
-and `internal`. Local sign-in creates an independent broker password; it does
-not authenticate through Microsoft or evaluate Microsoft MFA and Conditional
-Access.*
+*Unsubmitted Morgan Demo User draft with Jira Users membership and Read-only
+token issuance in default and internal contexts. Microsoft enrollment availability
+is simulated in the browser; this capture performs no Microsoft sign-in or
+account creation.*
 
-For Microsoft onboarding, select **Prepare Microsoft sign-in by email** in
-**Create user** and enter **Microsoft email**. The portal initially uses it for
-both profile email and pending enrollment; subsequent edits are independent.
-The account's **Overview > Sign-in methods** shows **Awaiting first Microsoft
-sign-in**, **Pending match email**, **Tenant**, **Enrollment ID** and **Revision**.
-Creating the account is the approval. Its first matching validated Microsoft
-sign-in binds that same account with prepared access intact, without another
-approval step or an Object ID lookup. No password, upstream credential or
-Broker token is distributed by this flow.
+The portal initially uses Microsoft email for both profile email and pending
+enrollment; subsequent edits are independent. Creating the account is the
+approval. Its first matching validated Microsoft sign-in binds that same account
+with prepared access intact, without another approval step or an Object ID lookup.
+No password, upstream credential or Broker token is distributed by this flow.
+
+For a local account, select **Create a local account instead**. Enter its
+**Username**, which becomes its principal ID, and optionally a display name and
+profile email. Acknowledge the separate local-password sign-in, then select
+**Create user**. Deliver the displayed temporary password securely and have the
+user change it at first sign-in. Local creation does not prepare Microsoft
+enrollment. Local sign-in creates an independent Broker password and does not
+evaluate Microsoft MFA or Conditional Access.
+
+![Local user creation draft](../images/portal/guide/admin-create-local-user-light.png)
+
+*The same unsubmitted draft after explicitly choosing local creation. Username
+and local-password acknowledgement replace Microsoft enrollment; no password is
+created or shown in this capture.*
+
+If Microsoft enrollment is unavailable, the form explains the limitation and
+keeps Microsoft creation disabled. Select **Create a local account instead** only
+when a local account is intended. A paused, configured provider can still permit
+preparation; the provider must be enabled for the user's actual sign-in.
 
 For an existing user without a Microsoft method, select **Prepare Microsoft
 sign-in** and enter **Microsoft match email**. Use **Edit Microsoft enrollment**

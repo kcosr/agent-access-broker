@@ -13,6 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ENROLLMENT_ID: &str = "9a430808-cdb6-4cec-ab3b-36e2b5e5b951";
 const TENANT_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+const GENERATED_PRINCIPAL_ID: &str = "usr-9c9c0b4a-8c52-4ab8-b66a-8abbe45a61fb";
 
 fn cli(url: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
@@ -117,39 +118,62 @@ async fn microsoft_enrollment_commands_preserve_identity_and_revision_fences() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn principal_creation_keeps_profile_email_and_microsoft_enrollment_explicit() {
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/admin/principals"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok":true,"result":{}})))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let output = command(&server.uri())
-        .args([
-            "create",
-            "alice",
-            "--email",
-            "profile@example.test",
-            "--microsoft-enrollment-email",
-            "sign-in@example.test",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let output = command(&server.uri())
-        .args(["create", "bob", "--email", "profile@example.test"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for (args, body, principal_id) in [
+        (
+            vec![
+                "create",
+                "--email",
+                "profile@example.test",
+                "--microsoft-enrollment-email",
+                "sign-in@example.test",
+            ],
+            json!({
+                "kind":"user", "displayName":null, "email":"profile@example.test",
+                "externalSubject":null, "role":"user", "selfServiceEnabled":true,
+                "microsoftEnrollment":{"email":"sign-in@example.test"}
+            }),
+            GENERATED_PRINCIPAL_ID,
+        ),
+        (
+            vec!["create", "bob", "--email", "profile@example.test"],
+            json!({
+                "principalId":"bob", "kind":"user", "displayName":null,
+                "email":"profile@example.test", "externalSubject":null,
+                "role":"user", "selfServiceEnabled":true
+            }),
+            "bob",
+        ),
+        (
+            vec!["create", "automation", "--kind", "service_account"],
+            json!({
+                "principalId":"automation", "kind":"service_account", "displayName":null,
+                "email":null, "externalSubject":null, "role":"user", "selfServiceEnabled":false
+            }),
+            "automation",
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/principals"))
+            .and(body_json(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "ok":true,"result":{"principalId":principal_id}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let output = command(&server.uri()).args(&args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(response["result"]["principalId"], principal_id);
+    }
     let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
     let enrolled: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(enrolled.get("principalId").is_none());
     assert_eq!(enrolled["email"], "profile@example.test");
     assert_eq!(
         enrolled["microsoftEnrollment"],
@@ -158,6 +182,86 @@ async fn principal_creation_keeps_profile_email_and_microsoft_enrollment_explici
     let ordinary: Value = serde_json::from_slice(&requests[1].body).unwrap();
     assert_eq!(ordinary["email"], "profile@example.test");
     assert!(ordinary.get("microsoftEnrollment").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn principal_creation_rejects_invalid_id_forms_without_sending_requests() {
+    let server = MockServer::start().await;
+    for args in [
+        vec!["create"],
+        vec!["create", "--email", "profile@example.test"],
+        vec!["create", "--kind", "service_account"],
+        vec![
+            "create",
+            "alice",
+            "--microsoft-enrollment-email",
+            "alice@example.test",
+        ],
+        vec![
+            "create",
+            "--microsoft-enrollment-email",
+            "alice@example.test",
+            "alice",
+        ],
+    ] {
+        let output = command(&server.uri()).args(&args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("PRINCIPAL"));
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generic_send_preserves_generated_principal_creation_and_response() {
+    let server = MockServer::start().await;
+    let types = agent_access_provider::ResourceTypeRegistry::new([]).unwrap();
+    let routes = agent_access_core::http_route_specs(&types)
+        .into_iter()
+        .filter(|route| route.operation == "admin.principals.create")
+        .collect::<Vec<_>>();
+    assert_eq!(routes.len(), 1);
+    Mock::given(method("GET"))
+        .and(path("/v1/spec/catalog"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "version":"agent-access.catalog.v2", "identity":{}, "services":[], "routes":routes,
+            "send":{"version":"agent-access.send.v1", "catalogRequired":true}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let body = json!({"microsoftEnrollment":{"email":"alice@example.test"}});
+    Mock::given(method("POST"))
+        .and(path("/v1/admin/principals"))
+        .and(body_json(body.clone()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "requestId":"create", "brokerRequestId":"create", "decision":"allow",
+            "result":{"principalId":GENERATED_PRINCIPAL_ID}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let request = json!({
+        "version":"agent-access.send.v1", "kind":"http", "method":"POST",
+        "route":"/v1/admin/principals", "body":body
+    });
+    let output = cli(&server.uri())
+        .args(["send", "--request-json", &request.to_string()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["result"]["principalId"], GENERATED_PRINCIPAL_ID);
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }
 
 #[test]
@@ -497,9 +601,9 @@ fn seed_paused_provider_and_admin(directory: &FixtureDir, key: &Path) -> String 
         .token
 }
 
-/// The real binary and HTTP contract agree about optional enrollment, canonical
-/// matching, revisions, cancellation and Object-ID linking, including preparation
-/// while the reconciled provider is paused. No Microsoft requests are made.
+/// The real binary and HTTP contract agree about generated principal IDs,
+/// canonical matching, revisions, cancellation and Object-ID linking, including
+/// preparation while the reconciled provider is paused. No Microsoft requests are made.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
     let application = IsolatedBroker::new(
@@ -516,12 +620,12 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
     let token_path = directory.secret_file("admin.token", token).unwrap();
     let broker = application.config_document(document).start().await.unwrap();
     let url = broker.public_url();
-    let run = |args: &[&str], expected_success: bool| {
+    let run_output = |args: &[&str]| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         for (key, _) in std::env::vars().filter(|(key, _)| key.starts_with("AGENT_ACCESS_")) {
             command.env_remove(key);
         }
-        let output = command
+        command
             .env("AGENT_ACCESS_CONFIG", "/dev/null")
             .args(["--url", &url, "--token-file"])
             .arg(&token_path)
@@ -535,7 +639,10 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
             ])
             .args(args)
             .output()
-            .unwrap();
+            .unwrap()
+    };
+    let run = |args: &[&str], expected_success: bool| {
+        let output = run_output(args);
         let response: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
                 "{args:?}: invalid JSON {error}; stderr={}",
@@ -560,9 +667,25 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         assert_eq!(run(args, false)["reasonCode"], "oidc_login_method_conflict");
     };
 
+    let before_invalid = ok(&["list"]);
+    for args in [
+        vec!["create"],
+        vec!["create", "--kind", "service_account"],
+        vec![
+            "create",
+            "alice",
+            "--microsoft-enrollment-email",
+            "alice@example.test",
+        ],
+    ] {
+        let output = run_output(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty());
+    }
+    assert_eq!(ok(&["list"]), before_invalid);
+
     let created = ok(&[
         "create",
-        "alice",
         "--email",
         "profile@example.test",
         "--microsoft-enrollment-email",
@@ -572,7 +695,10 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         "--agent-token-issuance",
         "disabled",
     ]);
-    assert_eq!(created["principalId"], "alice");
+    let principal_id = created["principalId"].as_str().unwrap();
+    let generated_uuid = uuid::Uuid::parse_str(principal_id.strip_prefix("usr-").unwrap()).unwrap();
+    assert_eq!(generated_uuid.get_version_num(), 4);
+    assert_eq!(generated_uuid.get_variant(), uuid::Variant::RFC4122);
     assert_eq!(created["email"], "profile@example.test");
     assert_eq!(created["role"], "auditor");
     assert_eq!(created["microsoftEnrollment"]["tenantId"], TENANT_ID);
@@ -585,30 +711,29 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         .as_str()
         .unwrap();
     assert_eq!(
-        enrollment(&["inspect", "alice"], true)["result"],
+        enrollment(&["inspect", principal_id], true)["result"],
         created["microsoftEnrollment"]
     );
 
-    ok(&["update", "alice", "--email", "new-profile@example.test"]);
-    ok(&["disable", "alice"]);
+    ok(&[
+        "update",
+        principal_id,
+        "--email",
+        "new-profile@example.test",
+    ]);
+    ok(&["disable", principal_id]);
+    let before_collision = ok(&["list"]);
     conflict(&[
         "create",
-        "collision",
         "--microsoft-enrollment-email",
         "alice@example.test",
     ]);
-    assert!(
-        !ok(&["list"])
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|principal| principal["principalId"] == "collision")
-    );
-    ok(&["enable", "alice"]);
+    assert_eq!(ok(&["list"]), before_collision);
+    ok(&["enable", principal_id]);
     let no_op = enrollment(
         &[
             "update",
-            "alice",
+            principal_id,
             "--enrollment-id",
             id,
             "--expected-revision",
@@ -622,7 +747,7 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
     let changed = enrollment(
         &[
             "update",
-            "alice",
+            principal_id,
             "--enrollment-id",
             id,
             "--expected-revision",
@@ -637,7 +762,7 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         enrollment(
             &[
                 "cancel",
-                "alice",
+                principal_id,
                 "--enrollment-id",
                 id,
                 "--expected-revision",
@@ -651,7 +776,7 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         "login-methods",
         "oidc",
         "link",
-        "alice",
+        principal_id,
         "--user-object-id",
         "cccccccc-cccc-4ccc-8ccc-ccccccccccc3",
     ]);
@@ -659,7 +784,7 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         enrollment(
             &[
                 "cancel",
-                "alice",
+                principal_id,
                 "--enrollment-id",
                 id,
                 "--expected-revision",
@@ -669,20 +794,23 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         )["result"],
         json!({"cancelled":true})
     );
-    assert!(enrollment(&["inspect", "alice"], true)["result"].is_null());
-    let retained = ok(&["inspect", "alice"]);
+    assert!(enrollment(&["inspect", principal_id], true)["result"].is_null());
+    let retained = ok(&["inspect", principal_id]);
     assert_eq!(retained["email"], "new-profile@example.test");
     assert_eq!(retained["role"], "auditor");
     assert_eq!(retained["agentTokenIssuance"]["mode"], "disabled");
     assert!(retained["microsoftEnrollment"].is_null());
 
-    let replacement = enrollment(&["create", "alice", "--email", "alice@example.test"], true);
+    let replacement = enrollment(
+        &["create", principal_id, "--email", "alice@example.test"],
+        true,
+    );
     assert_ne!(replacement["result"]["enrollmentId"], id);
     assert_eq!(
         enrollment(
             &[
                 "cancel",
-                "alice",
+                principal_id,
                 "--enrollment-id",
                 id,
                 "--expected-revision",
@@ -693,8 +821,14 @@ async fn enrollment_commands_drive_a_real_broker_with_a_paused_provider() {
         "oidc_login_method_conflict"
     );
     let ordinary = ok(&["create", "bob", "--email", "alice@example.test"]);
+    assert_eq!(ordinary["principalId"], "bob");
     assert!(ordinary["microsoftEnrollment"].is_null());
     assert!(enrollment(&["inspect", "bob"], true)["result"].is_null());
+    let service = ok(&["create", "automation", "--kind", "service_account"]);
+    assert_eq!(service["principalId"], "automation");
+    assert_eq!(service["kind"], "service_account");
+    assert_eq!(service["selfServiceEnabled"], false);
+    assert!(service["microsoftEnrollment"].is_null());
 
     broker.shutdown();
     broker.join().await.unwrap();

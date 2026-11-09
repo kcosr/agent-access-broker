@@ -1250,6 +1250,12 @@ Existing explicitly linked principals may sign in with no mapped groups and keep
 any independent local membership. Microsoft group mappings never assign the
 managed `admin` role.
 
+New Microsoft-enrolled humans receive server-generated `usr-<UUIDv4>` principal
+IDs. Creation with enrollment omits the ID; creation without enrollment requires
+an explicit ID. Account creation and enrollment commit atomically. Existing IDs
+and enrollment attached to existing accounts are unchanged, with no migration.
+The ID is independent of profile email, enrollment email and display name.
+
 Explicit pending Microsoft enrollment reserves `(tenant_id, match_email)` for
 one human principal, including disabled accounts. It is separate from profile
 email and cannot coexist with a Microsoft login method. The configured tenant

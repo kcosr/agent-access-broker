@@ -1,7 +1,7 @@
 {
   "method": "built-in imagegen unless an annotation declares its own method",
   "originalsPreserved": true,
-  "count": 39,
+  "count": 38,
   "annotations": [
     {
       "file": "admin-account-access-light.png",
@@ -94,17 +94,6 @@
       "height": 1024,
       "description": "Review a noninteractive workload identity before creating the account.",
       "reviewed": true
-    },
-    {
-      "file": "admin-create-user-light.png",
-      "original": "../guide/admin-create-user-light.png",
-      "sourceSha256": "66acac5b4bd0479b285d2320451b8d3c9c3ce3d79d7b14794833ee2a9fe6430c",
-      "outputSha256": "deb4343696368795c846950b4d1889eeecc908a23d5a4fcc029e9f2f7238eebd",
-      "width": 1440,
-      "height": 960,
-      "description": "Synthetic unsubmitted user draft with Read-only personal token issuance in explicitly selected default and internal contexts, group selection, independent local password sign-in and self-service.",
-      "reviewed": true,
-      "method": "Deterministic SVG overlay; source pixels outside annotations are unchanged"
     },
     {
       "file": "admin-disable-user-light.png",
