@@ -299,7 +299,10 @@ async fn issue_moved_out_of_the_admitted_project_is_denied_before_any_upstream_c
                 UPLOAD.to_vec(),
             )]);
         }
-        let error = provider.invoke(invocation.build()).await.unwrap_err();
+        let error = provider
+            .invoke_checked(invocation.build())
+            .await
+            .unwrap_err();
 
         assert_eq!(
             error.reason_code(),

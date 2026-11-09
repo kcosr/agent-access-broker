@@ -128,7 +128,10 @@ async fn finite_search_scope_still_rejects_unauthorized_underscore_projects() {
             .build()
     };
     let token = continuation_for(&provider, &backend, finite(None), "next-page-fixture").await;
-    let error = provider.invoke(finite(Some(&token))).await.unwrap_err();
+    let error = provider
+        .invoke_checked(finite(Some(&token)))
+        .await
+        .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.internal_diagnostic_code,
@@ -173,7 +176,7 @@ async fn continuation_for(
     first_page.next_page_token = Some(upstream.to_string());
     first_page.is_last = Some(false);
     let next_page = backend.search_page.lock().unwrap().replace(first_page);
-    let first = provider.invoke(request).await.unwrap();
+    let first = provider.invoke_checked(request).await.unwrap();
     *backend.search_page.lock().unwrap() = next_page;
     let token = first.result["nextPageToken"].as_str().unwrap();
     assert_ne!(token, upstream);
@@ -224,7 +227,10 @@ async fn unrestricted_paginated_search_accepts_underscore_issue_on_continuation(
     });
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-    let first = provider.invoke(search_request(vec![], None)).await.unwrap();
+    let first = provider
+        .invoke_checked(search_request(vec![], None))
+        .await
+        .unwrap();
     assert_eq!(first.result["issues"].as_array().unwrap().len(), 50);
     assert_eq!(first.result["isLast"], false);
     // The caller receives a sealed continuation, never Jira's token.
@@ -246,7 +252,7 @@ async fn unrestricted_paginated_search_accepts_underscore_issue_on_continuation(
         Some(search_page_with_issue("OPS_TOOLS", "OPS_TOOLS-12345"));
 
     let second = provider
-        .invoke(search_request(vec![], Some(token)))
+        .invoke_checked(search_request(vec![], Some(token)))
         .await
         .unwrap();
     assert_eq!(second.result["issues"].as_array().unwrap().len(), 50);
@@ -313,7 +319,7 @@ async fn underscore_search_results_still_require_matching_and_authorized_project
         )
         .await;
         let error = provider
-            .invoke(search_request(excluded.clone(), Some(&token)))
+            .invoke_checked(search_request(excluded.clone(), Some(&token)))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);

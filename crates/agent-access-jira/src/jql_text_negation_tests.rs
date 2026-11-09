@@ -162,7 +162,7 @@ async fn text_negation_search_uses_only_execution_search_and_redacts_diagnostics
     let inputs = json!({"query":{"type":"jql","value":query}});
     assert!(provider.local_scopes("search", &inputs).unwrap()["project"].is_empty());
     let response = provider
-        .invoke(static_search(
+        .invoke_checked(static_search(
             inputs,
             SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()]),
         ))
@@ -231,7 +231,7 @@ async fn incompatible_text_searchers_preserve_http_error_mapping_without_discove
         let query = format!("cf[12345] {operator} 'privateSearchMarker'");
         let error = agent_access_provider::host::with_correlation_context(
             crate::CorrelationContext::for_tests(),
-            provider.invoke(static_search(
+            provider.invoke_checked(static_search(
                 json!({"query":{"type":"jql","value":query}}),
                 SearchAuthorizationScope::from_exact_values(vec!["PROJ".into()]),
             )),

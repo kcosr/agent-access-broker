@@ -35,7 +35,7 @@ async fn body_pages_share_default_order_and_count_without_comment_fanout() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let issue = provider
-        .invoke(body_invocation(
+        .invoke_checked(body_invocation(
             "issue.view",
             json!({"issue":"PROJ-1", "includeComments":true}),
         ))
@@ -83,7 +83,7 @@ async fn body_pages_share_default_order_and_count_without_comment_fanout() {
 
     backend.credential_observations.lock().unwrap().clear();
     let list = provider
-        .invoke(body_invocation(
+        .invoke_checked(body_invocation(
             "comment.list",
             json!({"issue":"PROJ-1", "includeBodies":true}),
         ))
@@ -119,7 +119,7 @@ async fn body_pages_share_default_order_and_count_without_comment_fanout() {
     );
 
     let next = provider
-        .invoke(body_invocation(
+        .invoke_checked(body_invocation(
             "comment.list",
             json!({"issue":"PROJ-1", "includeBodies":true, "startAt":20}),
         ))
@@ -142,7 +142,7 @@ async fn omitted_and_false_body_flags_keep_primary_reads_usable() {
     ] {
         backend.credential_observations.lock().unwrap().clear();
         let result = provider
-            .invoke(per_user_invocation("issue.view", inputs, vec![]))
+            .invoke_checked(per_user_invocation("issue.view", inputs, vec![]))
             .await
             .unwrap();
         assert!(result.result.get("commentPage").is_none());
@@ -159,7 +159,7 @@ async fn omitted_and_false_body_flags_keep_primary_reads_usable() {
         json!({"issue":"PROJ-1", "includeBodies":false}),
     ] {
         let result = provider
-            .invoke(per_user_invocation("comment.list", inputs, vec![]))
+            .invoke_checked(per_user_invocation("comment.list", inputs, vec![]))
             .await
             .unwrap();
         assert_eq!(result.result["includeBodies"], false);
@@ -178,7 +178,7 @@ async fn body_flags_require_host_proof_before_provider_confirmation() {
         ("comment.list", "includeBodies"),
     ] {
         let error = provider
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 action,
                 json!({"issue":"PROJ-1", flag:true}),
                 vec![],
@@ -470,7 +470,7 @@ async fn empty_zero_sized_upstream_pages_preserve_completion_in_all_collection_r
             ),
         ] {
             let result = provider
-                .invoke(body_invocation(action, inputs))
+                .invoke_checked(body_invocation(action, inputs))
                 .await
                 .unwrap();
             let page = if action == "issue.view" {
@@ -519,7 +519,7 @@ async fn nonempty_zero_sized_upstream_pages_are_still_rejected_in_all_collection
         ),
     ] {
         let error = provider
-            .invoke(body_invocation(action, inputs))
+            .invoke_checked(body_invocation(action, inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -546,7 +546,7 @@ async fn comment_list_schema_and_dispatch_allow_larger_requests_and_clamp_upstre
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
     for include_bodies in [false, true] {
         let result = provider
-            .invoke(body_invocation(
+            .invoke_checked(body_invocation(
                 "comment.list",
                 json!({
                     "issue":"PROJ-1", "includeBodies":include_bodies, "maxResults":1000,

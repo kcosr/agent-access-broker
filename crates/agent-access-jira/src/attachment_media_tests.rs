@@ -219,7 +219,7 @@ async fn download_media_policy_checks_both_declarations_before_reading_bytes() {
         let backend = Arc::new(backend);
         let provider =
             JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
-        let result = provider.invoke(download_request()).await;
+        let result = provider.invoke_checked(download_request()).await;
         assert_eq!(result.is_ok(), case.allowed, "{}: {result:?}", case.name);
         match result {
             Ok(result) => {

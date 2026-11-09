@@ -197,3 +197,27 @@ fn documentation_upload_locators_accept_adapter_metadata_and_body_parts() {
         prepare_attachment_uploads(&parsed.attachments, &[part], &config.attachments).unwrap();
     }
 }
+
+#[test]
+fn every_published_action_declares_bundled_result_schemas() {
+    let mut published = BTreeSet::new();
+    for config in configurations() {
+        let descriptor = jira_descriptor(&config);
+        descriptor.validate().unwrap();
+        for action in &descriptor.actions {
+            assert!(
+                action.result_schemas.is_some(),
+                "{} declares no result schemas",
+                action.action
+            );
+            published.insert(action.action.clone());
+        }
+    }
+    // Comment writes appear only with ADF comment bodies; the bundle covers
+    // every configuration's actions and declares no other.
+    assert_eq!(published.len(), 24);
+    assert_eq!(
+        RESULT_SCHEMAS.actions(),
+        published.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+}
