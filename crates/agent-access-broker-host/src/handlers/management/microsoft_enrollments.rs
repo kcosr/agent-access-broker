@@ -10,7 +10,7 @@ use agent_access_core::{
     MicrosoftEnrollmentCreateRequest, MicrosoftEnrollmentRecord, MicrosoftEnrollmentUpdateRequest,
 };
 use axum::Json;
-use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use serde::Deserialize;
@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::Instrument;
 use tracing::instrument::WithSubscriber;
+use url::form_urlencoded;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,9 +29,7 @@ pub(crate) struct UpdateBody {
     email: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct CancelBody {
+struct CancelQuery {
     enrollment_id: String,
     expected_revision: u64,
 }
@@ -80,7 +79,7 @@ pub(crate) async fn inspect(
 enum Mutation {
     Create(MicrosoftEnrollmentCreate),
     Update(UpdateBody),
-    Cancel(CancelBody),
+    Cancel(CancelQuery),
 }
 
 impl Mutation {
@@ -118,9 +117,72 @@ pub(crate) async fn cancel(
     Path(principal): Path<String>,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Query(body): Query<CancelBody>,
+    RawQuery(query): RawQuery,
 ) -> Response {
-    write(state, principal, remote, headers, Mutation::Cancel(body)).await
+    let operation = "admin.principals.login_methods.oidc.microsoft.enrollment.cancel";
+    let context = match management_context(
+        &state,
+        remote,
+        &headers,
+        operation,
+        ManagementAccess::AdminWrite,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let target = Some(json!({"principal": principal, "provider": "microsoft"}));
+    if let Err(response) =
+        management_write_audit_preflight(&context, operation, target.clone()).await
+    {
+        return *response;
+    }
+    let query = match cancel_query(query.as_deref()) {
+        Ok(query) => query,
+        Err(error) => {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    };
+    write_admitted(state, context, principal, target, Mutation::Cancel(query)).await
+}
+
+fn cancel_query(raw_query: Option<&str>) -> Result<CancelQuery, ManagedStoreError> {
+    let invalid = || {
+        ManagedStoreError::InputInvalid(
+            "query requires exactly one enrollmentId UUID and one positive expectedRevision".into(),
+        )
+    };
+    let mut enrollment_id = None;
+    let mut expected_revision = None;
+    for (key, value) in form_urlencoded::parse(raw_query.unwrap_or_default().as_bytes()) {
+        match key.as_ref() {
+            "enrollmentId" if enrollment_id.is_none() => {
+                let id = uuid::Uuid::parse_str(&value).map_err(|_| invalid())?;
+                if id.to_string() != value.as_ref() {
+                    return Err(invalid());
+                }
+                enrollment_id = Some(value.into_owned());
+            }
+            "expectedRevision" if expected_revision.is_none() => {
+                if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(invalid());
+                }
+                expected_revision = Some(
+                    value
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|revision| *revision > 0)
+                        .ok_or_else(invalid)?,
+                );
+            }
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(CancelQuery {
+        enrollment_id: enrollment_id.ok_or_else(invalid)?,
+        expected_revision: expected_revision.ok_or_else(invalid)?,
+    })
 }
 
 async fn write(
@@ -150,6 +212,17 @@ async fn write(
     {
         return *response;
     }
+    write_admitted(state, context, principal, target, mutation).await
+}
+
+async fn write_admitted(
+    state: AppState,
+    context: ManagementContext,
+    principal: String,
+    target: Option<Value>,
+    mutation: Mutation,
+) -> Response {
+    let operation = mutation.operation();
     let actor = context.identity.principal.clone();
     let cancelled = matches!(mutation, Mutation::Cancel(_));
     committed_mutation(

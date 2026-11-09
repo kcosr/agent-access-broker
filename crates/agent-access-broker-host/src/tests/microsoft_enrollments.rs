@@ -540,27 +540,60 @@ async fn microsoft_enrollment_cancellation_requires_query_fences_without_body_fa
         )
         .await;
     let enrollment_id = created["result"]["enrollmentId"].as_str().unwrap();
-    for path in [
+    for (index, path) in [
         ENROLLMENT.to_string(),
         format!("{ENROLLMENT}?enrollmentId={enrollment_id}"),
         format!("{ENROLLMENT}?expectedRevision=1"),
         format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=invalid"),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=0"),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=-1"),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=18446744073709551616"),
+        format!("{ENROLLMENT}?enrollmentId=invalid&expectedRevision=1"),
         format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=1&unexpected=1"),
-    ] {
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&enrollmentId={enrollment_id}&expectedRevision=1"),
+        format!("{ENROLLMENT}?enrollmentId={enrollment_id}&expectedRevision=1&expectedRevision=1"),
+    ].into_iter().enumerate() {
+        // A JSON body never supplies missing query fields or repairs invalid ones.
         let body = json!({"enrollmentId":enrollment_id,"expectedRevision":1}).to_string();
-        let response = authed_json_request(
-            fixture.app.clone(),
-            Method::DELETE,
-            path,
-            "ms-query-required",
-            "Authorization",
-            format!("Bearer {}", fixture.admin),
-            Some(&body),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let request_id = format!("ms-query-required-{index}");
+        let (status, result) = fixture.request(Method::DELETE, &fixture.admin, &path, Some(&body), &request_id).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{result}");
+        assert_eq!(result["reasonCode"], "input_invalid");
+        assert_eq!(result["requestId"], request_id);
+        assert!(result["brokerRequestId"].as_str().is_some_and(|id| !id.is_empty()));
+        assert_eq!(result["operation"], "admin.principals.login_methods.oidc.microsoft.enrollment.cancel");
         assert!(store.microsoft_enrollment("alice").unwrap().is_some());
+        let audit: Vec<_> = fixture.records().into_iter().filter(|record| record["agentRequestId"] == request_id).collect();
+        assert_eq!(audit.len(), 2, "{audit:?}");
+        assert_eq!(audit[0]["providerAudit"]["management"]["phase"], "preflight");
+        assert_eq!(audit[1]["decision"], "deny");
+        assert_eq!(audit[1]["reasonCode"], "input_invalid");
+        assert_eq!(audit[1]["brokerRequestId"], result["brokerRequestId"]);
+        assert_eq!(audit[1]["providerAudit"]["management"]["target"], json!({"principal":"alice","provider":"microsoft"}));
     }
+    let response = fixture
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::DELETE)
+                .uri(format!(
+                    "{ENROLLMENT}?expectedRevision=invalid&unexpected=1"
+                ))
+                .extension(ConnectInfo(
+                    "127.0.0.1:43100".parse::<SocketAddr>().unwrap(),
+                ))
+                .header(REQUEST_ID_HEADER, "ms-query-unauthenticated")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let result = response_json(response).await;
+    assert_eq!(result["requestId"], "ms-query-unauthenticated");
+    assert_ne!(result["reasonCode"], "input_invalid");
+    assert!(store.microsoft_enrollment("alice").unwrap().is_some());
     let (status, result) = fixture
         .request(
             Method::DELETE,

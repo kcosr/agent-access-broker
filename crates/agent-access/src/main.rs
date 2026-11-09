@@ -11455,7 +11455,8 @@ async fn run_send_http(
             route_spec.route
         )));
     }
-    let path = resolve_route_path(&route_spec, path_params, query)?;
+    let path =
+        resolve_route_path(&route_spec, path_params, query).map_err(DeferredCliError::input)?;
     let method = reqwest::Method::from_bytes(route_spec.method.as_bytes())
         .map_err(|error| anyhow::anyhow!("catalog method is invalid: {error}"))?;
     let response_shape = response_shape_for_route(&route_spec);
@@ -11562,6 +11563,16 @@ fn resolve_route_path(
             anyhow::bail!("route {} has no query parameter {key}", route.route);
         }
     }
+    for param in route.query_params.iter().filter(|param| param.required) {
+        if !query.get(&param.name).is_some_and(query_value_is_present) {
+            anyhow::bail!(
+                "route {} {} requires query parameter {}",
+                route.method,
+                route.route,
+                param.name
+            );
+        }
+    }
     if query.is_empty() {
         return Ok(path);
     }
@@ -11571,6 +11582,14 @@ fn resolve_route_path(
     }
     let query = serializer.finish();
     Ok(format!("{path}?{query}"))
+}
+
+fn query_value_is_present(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values.iter().any(query_value_is_present),
+        serde_json::Value::Null | serde_json::Value::Object(_) => false,
+        _ => true,
+    }
 }
 
 fn append_query_value(

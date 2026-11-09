@@ -315,6 +315,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::RouteFeatu
 pub struct agent_access_core::api::HttpRouteSpec
 pub agent_access_core::api::HttpRouteSpec::access: agent_access_core::api::RouteAccess
 pub agent_access_core::api::HttpRouteSpec::body_allowed: bool
+pub agent_access_core::api::HttpRouteSpec::body_required: bool
 pub agent_access_core::api::HttpRouteSpec::exit_policy: agent_access_core::api::ExitPolicy
 pub agent_access_core::api::HttpRouteSpec::method: alloc::string::String
 pub agent_access_core::api::HttpRouteSpec::null_body_allowed: bool

@@ -226,7 +226,7 @@ async fn stale_enrollment_mutation_surfaces_conflict_without_retrying() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies() {
+async fn generic_send_honors_required_queries_and_required_or_optional_bodies() {
     let server = MockServer::start().await;
     let types = agent_access_provider::ResourceTypeRegistry::new([]).unwrap();
     let routes = agent_access_core::http_route_specs(&types)
@@ -236,6 +236,7 @@ async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies(
                 .operation
                 .starts_with("admin.principals.login_methods.oidc.microsoft.enrollment.")
                 || route.operation == "credentials.verify"
+                || route.operation == "admin.policy.grants.list"
         })
         .collect::<Vec<_>>();
     Mock::given(method("GET"))
@@ -244,7 +245,7 @@ async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies(
             "version":"agent-access.catalog.v2", "identity":{}, "services":[], "routes":routes,
             "send":{"version":"agent-access.send.v1", "catalogRequired":true}
         })))
-        .expect(4)
+        .expect(10)
         .mount(&server)
         .await;
     let route = "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment";
@@ -266,6 +267,14 @@ async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies(
         .expect(1)
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/admin/policy/grants"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "requestId":"grants", "brokerRequestId":"grants", "decision":"allow", "result":[]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
     let cancel = json!({
         "version":"agent-access.send.v1", "kind":"http", "method":"DELETE", "route":route,
         "pathParams":{"principal":"alice"}, "query":{"enrollmentId":ENROLLMENT_ID,"expectedRevision":3}
@@ -282,6 +291,36 @@ async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies(
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    for (query, missing) in [
+        (Some(json!({"expectedRevision":3})), "enrollmentId"),
+        (
+            Some(json!({"enrollmentId":ENROLLMENT_ID})),
+            "expectedRevision",
+        ),
+        (None, "enrollmentId"),
+        (
+            Some(json!({"enrollmentId":ENROLLMENT_ID,"expectedRevision":[[]]})),
+            "expectedRevision",
+        ),
+    ] {
+        let mut request = cancel.clone();
+        if let Some(query) = query {
+            request["query"] = query;
+        } else {
+            request.as_object_mut().unwrap().remove("query");
+        }
+        request["pathParams"]["principal"] = json!("private-principal-value");
+        let output = run(&request);
+        assert_eq!(output.status.code(), Some(3));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("requires query parameter {missing}")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("private-principal-value"));
+        assert!(!stderr.contains(ENROLLMENT_ID));
+        assert!(output.stdout.is_empty());
+    }
     let mut old_body = cancel.clone();
     let fences = old_body.as_object_mut().unwrap().remove("query").unwrap();
     old_body["body"] = fences;
@@ -306,7 +345,29 @@ async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies(
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let mut optional_query = json!({
+        "version":"agent-access.send.v1", "kind":"http", "method":"GET",
+        "route":"/v1/admin/policy/grants"
+    });
+    for query in [None, Some(json!({"service":"example"}))] {
+        if let Some(query) = query {
+            optional_query["query"] = query;
+        }
+        let output = run(&optional_query);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let requests = server.received_requests().await.unwrap();
+    let filtered_reads = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/admin/policy/grants")
+        .collect::<Vec<_>>();
+    assert_eq!(filtered_reads.len(), 2);
+    assert!(filtered_reads[0].url.query().is_none());
+    assert_eq!(filtered_reads[1].url.query(), Some("service=example"));
     let mutations = requests
         .iter()
         .filter(|request| request.method.as_str() != "GET")
@@ -314,7 +375,7 @@ async fn generic_send_honors_query_cancellation_and_required_or_optional_bodies(
     assert_eq!(
         mutations.len(),
         2,
-        "rejected bodies must not dispatch a mutation"
+        "rejected bodies or missing query fences must not dispatch a mutation"
     );
     assert!(mutations.iter().all(|request| request.body.is_empty()));
 }
