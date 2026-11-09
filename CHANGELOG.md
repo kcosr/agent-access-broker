@@ -176,19 +176,26 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **MCP tools advertise output schemas.** Native and imported action tools and
-  the five discovery helpers publish an `outputSchema` describing the
-  `structuredContent` they already return, including denials, failures, stdio
-  file receipts and HTTP MCP delivery failures. The action payload is
-  `structuredContent.result`. Tool names, inputs, results and the catalog
-  version are unchanged. See [output schemas](docs/mcp.md#output-schemas).
+- **MCP connections can advertise output schemas.** The choice is made per
+  connection and is off by default: HTTP MCP accepts `outputSchemas=on|off` as
+  the only query on `/mcp` and `/mcp/{service}`, evaluated on every request,
+  and stdio takes `agent-access mcp serve --output-schemas on|off`. With `on`,
+  native and imported action tools and the five discovery helpers publish an
+  `outputSchema` describing the `structuredContent` they already return,
+  including denials, failures, stdio file receipts and HTTP MCP delivery
+  failures; the action payload is `structuredContent.result`. With `off`, MCP
+  output-schema metadata is omitted. Tool names, inputs, results and the
+  catalog version are the same either way. See
+  [output schemas](docs/mcp.md#output-schemas).
   ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
 
 - **Catalog result schemas and typed OpenAPI responses.** Catalog actions add
   optional `resultSchemas` (`success`, optional `error`), and OpenAPI invoke
   operations type the envelope's `result` with a `default` error response.
-  Action detail returns `mcpTool.outputSchema` instead when the action is an
-  MCP tool. See [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
+  On an MCP connection that advertises output schemas, action detail returns
+  `mcpTool.outputSchema` in their place for an action that is a tool there; a
+  connection that omits output schemas returns neither. See
+  [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
   ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
 
 - **Provider SDK result schemas.** Providers declare payload schemas with

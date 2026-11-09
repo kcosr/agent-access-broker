@@ -100,8 +100,12 @@ uploads, downloads and environment/file secret sources.
 
 `/mcp/{service}` selects one canonical service ID and exposes raw provider names.
 All routes share the same endpoint, quotas and admission machinery. Paths must
-use the exact canonical spelling: encoded aliases, query strings, trailing
-slashes and extra segments are rejected without redirects. Unknown, hidden,
+use the exact canonical spelling: encoded aliases, trailing slashes and extra
+segments are rejected without redirects. The only accepted query is one
+`outputSchemas=on` or `outputSchemas=off`, evaluated on every request without
+session state; it selects [MCP output-schema advertisement](mcp.md#output-schemas),
+off when omitted, and never affects identity, context or authorization. Any other
+query is rejected with 400 before dispatch. Unknown, hidden,
 disabled, unready and gateway targets receive the same unavailable diagnostic
 after authentication. Session bindings include the selected view; cross-view
 POST/cancellation/DELETE cannot use or close the original session. Existing
@@ -3229,9 +3233,10 @@ fields it does not declare. The field is omitted for actions that declare none;
 every built-in provider action and imported action declares it. The catalog
 version remains
 `agent-access.catalog.v2`, and service capabilities from `/v1/services` and
-service detail do not include it. MCP action detail replaces it with the
-composed [`mcpTool.outputSchema`](mcp.md#output-schemas) when the action is a
-tool on that connection.
+service detail do not include it. On an MCP connection that selects output
+schemas, action detail replaces it with the composed
+[`mcpTool.outputSchema`](mcp.md#output-schemas) when the action is a tool on that
+connection; a connection that omits them returns neither.
 
 For an action with result schemas, `GET /v1/spec/openapi.json` types the invoke
 operation's JSON `200` envelope. Its `result` is the union of the success

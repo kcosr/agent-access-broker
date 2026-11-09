@@ -245,7 +245,9 @@ max_control_requests_per_principal = 8
 
 These are defaults, except `public_url`, which must be supplied when enabled.
 The URL must use HTTPS and exact path `/mcp`, without credentials, query or
-fragment. Loopback HTTP is permitted only in development/test deployments.
+fragment. Clients append the per-connection
+[`outputSchemas`](mcp.md#output-schemas) query to their own endpoint URLs.
+Loopback HTTP is permitted only in development/test deployments.
 Enable an `Authorization` identity source with canonical `scheme = "Bearer"` and
 type `static_principals` or `broker_tokens`, or a named trusted caller with
 `username_namespace` or `allow_forwarded_identity = true`. The caller options

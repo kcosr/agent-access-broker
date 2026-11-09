@@ -16,8 +16,10 @@ resolves and holds all upstream secret material on its side.
 
 `mcp serve` runs a local stdio MCP adapter using this client's broker settings.
 Add `--service monitoring` to expose only that canonical service ID, using raw
-provider names. The selection is immutable for the subprocess, including after
-configuration/token rotation. One service is accepted; repeated values, wildcards,
+provider names. Add `--output-schemas on` to advertise
+[MCP output schemas](mcp.md#output-schemas); the option requires `on` or `off`
+and defaults to `off`, which omits MCP output-schema metadata. Both selections
+are immutable for the subprocess, including after configuration/token rotation. One service is accepted; repeated values, wildcards,
 comma-separated lists and display names are rejected. Initialization does not
 probe the broker; listing and calls require current visibility and readiness.
 The full caller catalog must fit the existing 16 MiB decode limit, even for a
@@ -379,7 +381,8 @@ with `service` added. A fresh caller-visible runtime catalog
 supplies IO, presentation, and sensitive-field metadata. Actions with an available
 aggregate MCP name also include `mcpTool` containing the exact name and argument
 schema, plus the stdio [`outputSchema`](mcp.md#output-schemas) in place of the
-catalog's `resultSchemas` when the action declares result schemas. The top-level `inputSchema` describes
+catalog's `resultSchemas` when the action declares result schemas, independently
+of any MCP connection's output-schema selection. The top-level `inputSchema` describes
 raw broker inputs; `mcpTool.inputSchema` describes the local MCP wrapper.
 Invoke actions with an unavailable aggregate name omit `mcpTool` and include
 `mcpToolUnavailable`: `name_conflict`, `name_too_long`, or `reserved_name`.

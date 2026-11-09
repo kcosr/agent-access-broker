@@ -426,8 +426,9 @@ the provider's final JSON before presentation and before the Broker envelope:
 never the upstream API model, MCP wrappers, `renderedBody` companions or
 whole-result Markdown, which the host adds. The host composes them with the
 action's presentation, the shared failure fields and each transport's delivery
-shapes into the action's [MCP output schema](mcp.md#output-schemas), its
-catalog `resultSchemas` and its typed
+shapes into the action's [MCP output schema](mcp.md#output-schemas), which
+MCP connections advertise when they select output schemas, its catalog
+`resultSchemas` and its typed
 [OpenAPI responses](http-api.md#result-schemas-and-typed-responses). They are
 optional: an action without them publishes no output schema. Every shipped
 native action declares them, and a new provider should.
