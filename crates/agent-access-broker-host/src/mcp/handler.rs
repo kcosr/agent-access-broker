@@ -79,6 +79,7 @@ impl Handler {
             catalog,
             &request.view,
             ProjectionMode::Http,
+            request.output_schemas,
             request.snapshot.runtime.config().mcp.max_catalog_bytes,
         )
         .map_err(|_| {
@@ -214,12 +215,15 @@ impl Handler {
         let invalid = || {
             ErrorData::invalid_params("Invalid or stale catalog cursor; restart tools/list", None)
         };
-        // Bind cursors to authority without exporting the credential fingerprint.
+        // Bind cursors to authority without exporting the credential
+        // fingerprint, and to this request's projection: its view and its
+        // output-schema selection, so a cursor never crosses modes.
         let signature_input = |bytes: &[u8]| {
             serde_json::to_vec(&(
                 &request.owner,
                 request.context.as_str(),
                 &request.view,
+                request.output_schemas,
                 bytes,
             ))
             .unwrap()
@@ -373,24 +377,9 @@ impl Handler {
                 if &common != action {
                     return Err("Discovery changed; retry discovery");
                 }
-                let mut detail =
+                let detail =
                     serde_json::to_value(spec).map_err(|_| "Cannot encode action schema")?;
-                if let Some(object) = detail.as_object_mut() {
-                    object.remove("scopedMcpName");
-                }
-                if let Some(tool) = registry.action_detail(service, name) {
-                    // The tool's outputSchema composes the payload schemas.
-                    if let Some(object) = detail.as_object_mut() {
-                        object.remove("resultSchemas");
-                    }
-                    detail["mcpTool"] = tool;
-                } else if mcp::action_eligible(spec, ProjectionMode::Http)
-                    && let Some(issue) = registry.action_unavailable(service, name)
-                {
-                    detail["mcpToolUnavailable"] = json!(issue.code.as_str());
-                }
-                detail["service"] = json!(service);
-                Ok(detail)
+                Ok(registry.describe_action(service, spec, detail))
             }
             _ => Err("Unknown discovery helper"),
         }

@@ -426,8 +426,9 @@ the provider's final JSON before presentation and before the Broker envelope:
 never the upstream API model, MCP wrappers, `renderedBody` companions or
 whole-result Markdown, which the host adds. The host composes them with the
 action's presentation, the shared failure fields and each transport's delivery
-shapes into the action's [MCP output schema](mcp.md#output-schemas), its
-catalog `resultSchemas` and its typed
+shapes into the action's [MCP output schema](mcp.md#output-schemas), which
+MCP connections advertise when they select output schemas, its catalog
+`resultSchemas` and its typed
 [OpenAPI responses](http-api.md#result-schemas-and-typed-responses). They are
 optional: an action without them publishes no output schema. Every shipped
 native action declares them, and a new provider should.
@@ -2242,8 +2243,8 @@ capability with its default `true` preserves existing policy behavior.
 `0.2.0` is the first released baseline of the
 [public API inventory](../api/README.md). Release review compares the
 inventory with the previous release on the same line; a compile-surface diff
-does not replace descriptor, lifecycle and feature behavior checks. The tested toolchain is the repository's pinned Rust toolchain;
-no wider minimum supported Rust version is implied.
+does not replace descriptor, lifecycle and feature behavior checks. The crates declare
+`rust-version = "1.99"`; the tested toolchain is the repository's pinned Rust toolchain.
 
 ## Worked example
 

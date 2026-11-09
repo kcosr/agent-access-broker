@@ -2,6 +2,7 @@
 //! No transport, credentials, filesystem access, or policy decisions belong here.
 use crate::{ApiActionSpec, ApiCatalog};
 use agent_access_provider::ActionIo;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 mod registry;
 pub use registry::*;
@@ -10,6 +11,44 @@ pub use registry::*;
 pub enum ProjectionMode {
     Stdio,
     Http,
+}
+
+/// Whether one connection's MCP projection advertises output-schema
+/// metadata: each tool's `outputSchema`, and the action-detail
+/// `mcpTool.outputSchema` and `resultSchemas`. It is a projection dimension
+/// beside [`ProjectionMode`] and [`McpView`]; every caller states it.
+/// [`OutputSchemas::Off`] composes no schema at all. Neither value changes
+/// tool names, inputs, dispatch, invocation results, the caller catalog's
+/// `resultSchemas` or OpenAPI responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputSchemas {
+    /// MCP output-schema metadata is omitted.
+    Off,
+    /// Tools and action details advertise the composed output schemas.
+    On,
+}
+
+impl OutputSchemas {
+    /// The selection of a connection that requests none.
+    pub const CONNECTION_DEFAULT: Self = Self::Off;
+
+    /// The exact `on`/`off` spelling of the HTTP `outputSchemas` query
+    /// parameter and the stdio `--output-schemas` option.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -133,18 +172,26 @@ fn helper_description<'a>(name: &str, local: &'a str, mode: ProjectionMode) -> &
 pub fn project_catalog(
     catalog: &ApiCatalog,
     mode: ProjectionMode,
+    output_schemas: OutputSchemas,
 ) -> Result<Vec<Value>, ProjectionError> {
-    project_catalog_bounded(catalog, mode, STDIO_MAX_CATALOG_BYTES)
+    project_catalog_bounded(catalog, mode, output_schemas, STDIO_MAX_CATALOG_BYTES)
 }
 
 /// Bound the complete definition projection, including tools not in the first page.
 pub fn project_catalog_bounded(
     catalog: &ApiCatalog,
     mode: ProjectionMode,
+    output_schemas: OutputSchemas,
     max_bytes: usize,
 ) -> Result<Vec<Value>, ProjectionError> {
-    ToolRegistry::build(catalog, &McpView::Aggregate, mode, max_bytes)
-        .map(|registry| registry.definitions())
+    ToolRegistry::build(
+        catalog,
+        &McpView::Aggregate,
+        mode,
+        output_schemas,
+        max_bytes,
+    )
+    .map(|registry| registry.definitions())
 }
 
 pub fn validate_catalog_action(
@@ -338,7 +385,23 @@ fn json_output_path_schema() -> Value {
     json!({"type":"string","minLength":1,"description":"Absolute local path for the complete successful JSON response. Atomically replaces the file and returns a compact receipt. Read limits and pagination still apply."})
 }
 
-pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
+/// The five discovery helpers on the `mode` transport, with their output
+/// schemas only when `output_schemas` advertises them.
+pub fn helper_definitions(mode: ProjectionMode, output_schemas: OutputSchemas) -> Vec<Value> {
+    let mut definitions = helper_contracts(mode);
+    if output_schemas == OutputSchemas::On {
+        for definition in &mut definitions {
+            let helper = HelperKind::from_name(definition["name"].as_str().expect("static name"))
+                .expect("static helper kind");
+            definition["outputSchema"] = crate::output_schema::helper_output_schema(helper, mode);
+        }
+    }
+    definitions
+}
+
+/// Helper names, descriptions, input schemas and annotations: everything but
+/// the output schema, which argument validation never needs.
+fn helper_contracts(mode: ProjectionMode) -> Vec<Value> {
     let string =
         |description: &str| json!({"type":"string","minLength":1,"description":description});
     let service = string("Canonical configured service ID from discovery.");
@@ -378,11 +441,9 @@ pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
         if mode == ProjectionMode::Stdio {
             properties["outputPath"] = json_output_path_schema();
         }
-        let helper = HelperKind::from_name(name).expect("static helper kind");
         json!({
             "name":name,"description":helper_description(name, description, mode),
             "inputSchema":{"type":"object","additionalProperties":false,"properties":properties,"required":required},
-            "outputSchema":crate::output_schema::helper_output_schema(helper, mode),
             // Stdio callers may overwrite a local file through outputPath. Tool hints
             // cover every supported argument combination, including that side effect.
             "annotations":{"readOnlyHint":mode == ProjectionMode::Http,"destructiveHint":mode == ProjectionMode::Stdio,"idempotentHint":true,"openWorldHint":false}
@@ -390,8 +451,12 @@ pub fn helper_definitions(mode: ProjectionMode) -> Vec<Value> {
     }).collect()
 }
 
-pub fn helper_definitions_for_view(mode: ProjectionMode, view: &McpView) -> Vec<Value> {
-    let mut definitions = helper_definitions(mode);
+pub fn helper_definitions_for_view(
+    mode: ProjectionMode,
+    view: &McpView,
+    output_schemas: OutputSchemas,
+) -> Vec<Value> {
+    let mut definitions = helper_definitions(mode, output_schemas);
     if let McpView::Service(service) = view {
         for definition in &mut definitions {
             let description = definition["description"]
@@ -431,7 +496,7 @@ pub fn validate_helper_arguments(
     arguments: &Map<String, Value>,
     mode: ProjectionMode,
 ) -> Result<(), ArgumentError> {
-    let definition = helper_definitions(mode)
+    let definition = helper_contracts(mode)
         .into_iter()
         .find(|tool| tool["name"] == name)
         .ok_or(ProjectionError("unknown discovery helper"))?;
@@ -658,14 +723,15 @@ mod tests {
         gateway.service = "git".into();
         gateway.surface = "gateway".into();
         catalog.services.push(gateway);
-        let http = project_catalog(&catalog, ProjectionMode::Http).unwrap();
-        let local = project_catalog(&catalog, ProjectionMode::Stdio).unwrap();
+        let http = project_catalog(&catalog, ProjectionMode::Http, OutputSchemas::On).unwrap();
+        let local = project_catalog(&catalog, ProjectionMode::Stdio, OutputSchemas::On).unwrap();
         assert_eq!(http.len(), 6);
         assert_eq!(local.len(), 8);
         let http_registry = ToolRegistry::build(
             &catalog,
             &McpView::Aggregate,
             ProjectionMode::Http,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -673,6 +739,7 @@ mod tests {
             &catalog,
             &McpView::Aggregate,
             ProjectionMode::Stdio,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -704,7 +771,7 @@ mod tests {
             );
         }
         catalog.services.push(catalog.services[0].clone());
-        assert!(project_catalog(&catalog, ProjectionMode::Http).is_err());
+        assert!(project_catalog(&catalog, ProjectionMode::Http, OutputSchemas::On).is_err());
     }
 
     #[test]
@@ -744,7 +811,7 @@ mod tests {
             ),
         ];
         for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
-            let definitions = helper_definitions(mode);
+            let definitions = helper_definitions(mode, OutputSchemas::On);
             assert_eq!(definitions.len(), expected.len());
             for (tool, (name, properties, required)) in definitions.iter().zip(&expected) {
                 let mut expected_properties = properties.clone();
@@ -776,7 +843,11 @@ mod tests {
             }
             for service in ["synthetic-service".to_owned(), "s".repeat(63)] {
                 assert!(agent_access_provider::is_service_name(&service));
-                let scoped = helper_definitions_for_view(mode, &McpView::Service(service.clone()));
+                let scoped = helper_definitions_for_view(
+                    mode,
+                    &McpView::Service(service.clone()),
+                    OutputSchemas::On,
+                );
                 for (original, selected) in definitions.iter().zip(&scoped) {
                     assert!(selected["description"].as_str().unwrap().ends_with(&format!("This connection is limited to service {service}; discovery action IDs remain canonical Broker IDs.")));
                     let mut expected = original.clone();
@@ -804,8 +875,8 @@ mod tests {
 
     #[test]
     fn helper_contracts_are_shared_with_transport_specific_execution_guidance() {
-        let http = helper_definitions(ProjectionMode::Http);
-        let local = helper_definitions(ProjectionMode::Stdio);
+        let http = helper_definitions(ProjectionMode::Http, OutputSchemas::On);
+        let local = helper_definitions(ProjectionMode::Stdio, OutputSchemas::On);
         assert!(!is_helper("resources_list"));
         assert!(!http.iter().any(|helper| helper["name"] == "resources_list"));
         for (http, local) in http.iter().zip(&local) {

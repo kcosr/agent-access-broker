@@ -112,7 +112,12 @@ async fn jira_issue_type_discovery_surfaces_paging_authorization_and_create() {
         agent_access_core::mcp::ProjectionMode::Http,
         agent_access_core::mcp::ProjectionMode::Stdio,
     ] {
-        let tools = agent_access_core::mcp::project_catalog(&typed_catalog, mode).unwrap();
+        let tools = agent_access_core::mcp::project_catalog(
+            &typed_catalog,
+            mode,
+            agent_access_core::mcp::OutputSchemas::On,
+        )
+        .unwrap();
         let name = agent_access_core::mcp::tool_name("jira", "issue_type.list");
         let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
         assert_eq!(tool["_meta"]["agent-access/action"], "issue_type.list");

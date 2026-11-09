@@ -3,6 +3,7 @@ name = "agent-access-conformance"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 publish = false
 description = "Test-only backend that exercises every extension point of the backend contract"
 

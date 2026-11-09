@@ -1,5 +1,5 @@
 //! Fixed discovery helpers. These describe broker capabilities; they do not execute actions.
-use agent_access_core::mcp::McpView;
+use agent_access_core::mcp::{McpView, OutputSchemas};
 use anyhow::{Context, Result};
 use rmcp::model::CallToolResult;
 use serde_json::{Map, Value};
@@ -7,6 +7,7 @@ use serde_json::{Map, Value};
 pub(super) async fn call(
     settings: &crate::ResolvedCliSettings,
     view: &McpView,
+    output_schemas: OutputSchemas,
     name: &str,
     arguments: Map<String, Value>,
 ) -> Result<CallToolResult> {
@@ -53,6 +54,7 @@ pub(super) async fn call(
             crate::discovery::action_describe(
                 settings,
                 view,
+                output_schemas,
                 text("service").unwrap(),
                 text("action").unwrap(),
             )

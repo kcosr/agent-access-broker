@@ -397,7 +397,7 @@ fn composed_schemas_are_compact_and_reported() {
 
 #[test]
 fn catalog_tools_details_and_openapi_share_one_composition() {
-    use crate::mcp::{McpView, STDIO_MAX_CATALOG_BYTES, ToolRegistry, is_helper};
+    use crate::mcp::{McpView, OutputSchemas, STDIO_MAX_CATALOG_BYTES, ToolRegistry, is_helper};
     let descriptor = agent_access_fake::fake_descriptor();
     let declared = descriptor.actions[0].result_schemas.clone().unwrap();
     let service = crate::api_service_spec(&descriptor, true).unwrap();
@@ -434,8 +434,14 @@ fn catalog_tools_details_and_openapi_share_one_composition() {
     catalog.services.push(service.clone());
     for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
         for view in [McpView::Aggregate, McpView::Service("fake".into())] {
-            let registry =
-                ToolRegistry::build(&catalog, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+            let registry = ToolRegistry::build(
+                &catalog,
+                &view,
+                mode,
+                OutputSchemas::On,
+                STDIO_MAX_CATALOG_BYTES,
+            )
+            .unwrap();
             let definitions = registry.definitions();
             let tool = definitions
                 .iter()
@@ -474,6 +480,7 @@ fn catalog_tools_details_and_openapi_share_one_composition() {
         &plain_catalog,
         &McpView::Aggregate,
         ProjectionMode::Http,
+        OutputSchemas::On,
         STDIO_MAX_CATALOG_BYTES,
     )
     .unwrap();
@@ -528,4 +535,180 @@ fn catalog_tools_details_and_openapi_share_one_composition() {
             .get("application/octet-stream")
             .is_some()
     );
+}
+
+#[test]
+fn advertisement_is_an_explicit_projection_dimension_and_off_composes_nothing() {
+    use crate::mcp::{
+        McpView, OutputSchemas, STDIO_MAX_CATALOG_BYTES, ToolRegistry,
+        evaluate_scoped_mcp_readiness, helper_definitions_for_view, is_helper,
+    };
+    for (value, expected) in [("on", OutputSchemas::On), ("off", OutputSchemas::Off)] {
+        assert_eq!(OutputSchemas::parse(value), Some(expected));
+        assert_eq!(expected.as_str(), value);
+        assert_eq!(serde_json::to_value(expected).unwrap(), json!(value));
+    }
+    for invalid in ["", "ON", "Off", "true", "1", " on", "on ", "yes"] {
+        assert_eq!(OutputSchemas::parse(invalid), None, "{invalid:?}");
+    }
+    assert_eq!(OutputSchemas::CONNECTION_DEFAULT, OutputSchemas::Off);
+
+    // One executable JSON action, one download HTTP excludes, and two JSON
+    // actions whose aggregate names conflict but whose scoped names do not.
+    let descriptor = agent_access_fake::fake_descriptor();
+    let mut service = crate::api_service_spec(&descriptor, true).unwrap();
+    let echo = service.actions[0].clone();
+    let mut download = download_action();
+    download.action = "file.download".into();
+    download.scoped_mcp_name = Some("file.download".into());
+    let mut clash_dot = echo.clone();
+    clash_dot.action = "name.clash".into();
+    clash_dot.scoped_mcp_name = Some("name.clash".into());
+    let mut clash_underscore = echo.clone();
+    clash_underscore.action = "name_clash".into();
+    clash_underscore.scoped_mcp_name = Some("name_clash".into());
+    service.actions = vec![echo, download, clash_dot, clash_underscore];
+    let mut catalog = crate::empty_catalog(json!({}));
+    catalog.services.push(service.clone());
+
+    for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+        for view in [McpView::Aggregate, McpView::Service("fake".into())] {
+            let build = |output_schemas| {
+                ToolRegistry::build(
+                    &catalog,
+                    &view,
+                    mode,
+                    output_schemas,
+                    STDIO_MAX_CATALOG_BYTES,
+                )
+                .unwrap()
+            };
+            let on = build(OutputSchemas::On);
+            let off = build(OutputSchemas::Off);
+            let on_definitions = on.definitions();
+            let off_definitions = off.definitions();
+            assert_eq!(on_definitions.len(), off_definitions.len());
+            for (with, without) in on_definitions.iter().zip(&off_definitions) {
+                assert!(without.get("outputSchema").is_none(), "{without}");
+                assert!(with.get("outputSchema").is_some(), "{with}");
+                let mut stripped = with.clone();
+                stripped.as_object_mut().unwrap().remove("outputSchema");
+                assert_eq!(&stripped, without);
+                let name = with["name"].as_str().unwrap();
+                assert_eq!(on.resolve(name), off.resolve(name));
+                if is_helper(name) {
+                    let kind = HelperKind::from_name(name).unwrap();
+                    assert_eq!(with["outputSchema"], helper_output_schema(kind, mode));
+                }
+            }
+            for helper in helper_definitions_for_view(mode, &view, OutputSchemas::Off) {
+                assert!(helper.get("outputSchema").is_none());
+            }
+            // Charging only what is advertised: the smallest budget of the
+            // schema-free projection, which also charges the aggregate's
+            // omitted conflicting definitions, is too small with schemas.
+            let fits = |output_schemas, bytes| {
+                ToolRegistry::build(&catalog, &view, mode, output_schemas, bytes).is_ok()
+            };
+            let (mut low, mut high) = (0, STDIO_MAX_CATALOG_BYTES);
+            while low < high {
+                let middle = (low + high) / 2;
+                if fits(OutputSchemas::Off, middle) {
+                    high = middle;
+                } else {
+                    low = middle + 1;
+                }
+            }
+            assert!(low >= serde_json::to_vec(&off_definitions).unwrap().len());
+            assert!(fits(OutputSchemas::Off, low));
+            assert!(!fits(OutputSchemas::On, low));
+
+            for spec in &service.actions {
+                let catalog_detail = serde_json::to_value(spec).unwrap();
+                assert!(catalog_detail.get("resultSchemas").is_some());
+                let with = on.describe_action("fake", spec, catalog_detail.clone());
+                let without = off.describe_action("fake", spec, catalog_detail);
+                for detail in [&with, &without] {
+                    assert_eq!(detail["service"], "fake");
+                    assert!(detail.get("scopedMcpName").is_none());
+                }
+                assert!(without.get("resultSchemas").is_none(), "{without}");
+                assert!(
+                    !without.to_string().contains("\"outputSchema\""),
+                    "{without}"
+                );
+                let executable = crate::mcp::action_eligible(spec, mode)
+                    && !(view == McpView::Aggregate && spec.action.starts_with("name"));
+                match (executable, &with["mcpTool"]) {
+                    (true, tool) => {
+                        assert_eq!(
+                            tool["outputSchema"],
+                            action_output_schema(spec, mode).unwrap()
+                        );
+                        assert!(with.get("resultSchemas").is_none());
+                        let mut tool = tool.clone();
+                        tool.as_object_mut().unwrap().remove("outputSchema");
+                        assert_eq!(without["mcpTool"], tool);
+                    }
+                    (false, tool) => {
+                        assert!(tool.is_null());
+                        assert!(without.get("mcpTool").is_none());
+                        // On keeps the payload schemas of an action without
+                        // a tool here; off omits them too.
+                        assert_eq!(
+                            with["resultSchemas"],
+                            serde_json::to_value(spec).unwrap()["resultSchemas"]
+                        );
+                    }
+                }
+                let unavailable = (view == McpView::Aggregate && spec.action.starts_with("name"))
+                    .then_some(json!("name_conflict"));
+                for detail in [&with, &without] {
+                    assert_eq!(detail.get("mcpToolUnavailable"), unavailable.as_ref());
+                }
+                let mut stripped = with.clone();
+                let object = stripped.as_object_mut().unwrap();
+                object.remove("resultSchemas");
+                if let Some(tool) = object.get_mut("mcpTool") {
+                    tool.as_object_mut().unwrap().remove("outputSchema");
+                }
+                assert_eq!(stripped, without);
+            }
+        }
+    }
+
+    // Readiness keeps validating the schema-bearing projection of both
+    // transports: a budget the schema-free projection fits is not enough.
+    let mut ready = descriptor.clone();
+    ready.actions.truncate(1);
+    let mut scoped = crate::empty_catalog(json!({}));
+    scoped
+        .services
+        .push(crate::api_service_spec(&ready, true).unwrap());
+    let view = McpView::Service("fake".into());
+    let schema_free = [ProjectionMode::Http, ProjectionMode::Stdio]
+        .into_iter()
+        .map(|mode| {
+            let registry = ToolRegistry::build(
+                &scoped,
+                &view,
+                mode,
+                OutputSchemas::Off,
+                STDIO_MAX_CATALOG_BYTES,
+            )
+            .unwrap();
+            serde_json::to_vec(&registry.definitions()).unwrap().len()
+        })
+        .max()
+        .unwrap();
+    for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
+        assert!(ToolRegistry::build(&scoped, &view, mode, OutputSchemas::Off, schema_free).is_ok());
+    }
+    let readiness = evaluate_scoped_mcp_readiness(&ready, schema_free);
+    assert!(!readiness.ready);
+    assert_eq!(
+        readiness.issues[0].code,
+        crate::mcp::ScopedMcpIssueCode::ProjectionBudget
+    );
+    assert!(evaluate_scoped_mcp_readiness(&ready, STDIO_MAX_CATALOG_BYTES).ready);
 }

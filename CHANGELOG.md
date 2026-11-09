@@ -176,20 +176,29 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **MCP tools advertise output schemas.** Native and imported action tools and
-  the five discovery helpers publish an `outputSchema` describing the
-  `structuredContent` they already return, including denials, failures, stdio
-  file receipts and HTTP MCP delivery failures. The action payload is
-  `structuredContent.result`. Tool names, inputs, results and the catalog
-  version are unchanged. See [output schemas](docs/mcp.md#output-schemas).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
+- **MCP connections can advertise output schemas.** The choice is made per
+  connection and is off by default: HTTP MCP accepts `outputSchemas=on|off` as
+  the only query on `/mcp` and `/mcp/{service}`, evaluated on every request,
+  and stdio takes `agent-access mcp serve --output-schemas on|off`. With `on`,
+  native and imported action tools and the five discovery helpers publish an
+  `outputSchema` describing the `structuredContent` they already return,
+  including denials, failures, stdio file receipts and HTTP MCP delivery
+  failures; the action payload is `structuredContent.result`. With `off`, MCP
+  output-schema metadata is omitted. Tool names, inputs, results and the
+  catalog version are the same either way. See
+  [output schemas](docs/mcp.md#output-schemas).
+  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
+  [#112](https://github.com/kcosr/agent-access-broker/pull/112))
 
 - **Catalog result schemas and typed OpenAPI responses.** Catalog actions add
   optional `resultSchemas` (`success`, optional `error`), and OpenAPI invoke
   operations type the envelope's `result` with a `default` error response.
-  Action detail returns `mcpTool.outputSchema` instead when the action is an
-  MCP tool. See [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
+  On an MCP connection that advertises output schemas, action detail returns
+  `mcpTool.outputSchema` in their place for an action that is a tool there; a
+  connection that omits output schemas returns neither. See
+  [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
+  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
+  [#112](https://github.com/kcosr/agent-access-broker/pull/112))
 
 - **Provider SDK result schemas.** Providers declare payload schemas with
   `ActionDescriptor::result_schemas`, `ActionResultSchemas` and bundled
@@ -408,6 +417,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Building from source requires Rust 1.99 or newer.** Workspace crates declare
+  `rust-version = "1.99"` and the repository pins Rust 1.99.1, so downstream
+  providers and assemblies that pin these crates need Rust 1.99.
+  ([#110](https://github.com/kcosr/agent-access-broker/pull/110))
+
 - **Unlinked import adapters preserve configuration validity.** Syntactically
   valid `imports.allowed_kinds` entries may name adapters absent from the selected
   assembly. Startup and reload warn about each missing adapter; its imports
@@ -517,6 +531,13 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- Dependency updates clear RustSec advisories in `crypto-bigint` (through
+  `openidconnect`, now 4.1.0), `h2`, `pulldown-cmark`, `quinn-proto`, `rustls`,
+  `rustls-webpki`, `webpki-roots`, `anyhow` and Tokio. RUSTSEC-2023-0071
+  (`rsa` 0.9, through `openidconnect`) remains open until an `openidconnect`
+  release moves to `rsa` 0.10.
+  ([#110](https://github.com/kcosr/agent-access-broker/pull/110))
 
 - HTTP route metadata declares whether a request body is required, keeping send
   schemas and OpenAPI aligned with handlers while preserving optional credential

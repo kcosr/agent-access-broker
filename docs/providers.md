@@ -196,7 +196,8 @@ reloads, token class, policy grants, service/action caveats, and management
 rights. Finite token resource restrictions remain request-time checks and do
 not change provider schemas. Every built-in provider action also publishes
 catalog `resultSchemas` for its `result` payloads, which type its OpenAPI
-responses and MCP [output schemas](mcp.md#output-schemas); they cover every
+responses and the MCP [output schemas](mcp.md#output-schemas) connections can
+select; they cover every
 supported configuration, so a declared field can be absent.
 
 ## Gmail

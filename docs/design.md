@@ -49,9 +49,13 @@ names; transport mode independently determines local-file capabilities. Pure
 adapter naming hooks derive imported names from accepted metadata. Readiness is
 computed before caller filtering and published with the immutable runtime,
 without a name table, extra discovery or credential lookup. HTTP routes share
-one endpoint and bind sessions to the view. A tool whose action declares result
-schemas advertises an `outputSchema` that core composes from the catalog entry
-for its transport; helpers carry core-owned schemas. Current authorization, credential
+one endpoint and bind sessions to the view. Output-schema advertisement is a
+third, per-connection projection dimension, off by default (HTTP `outputSchemas`
+query evaluated per request, stdio `--output-schemas`): when selected, a tool
+whose action declares result schemas advertises an `outputSchema` that core
+composes from the catalog entry for its transport and helpers carry core-owned
+schemas; otherwise none is composed. Readiness and publication budgets measure
+the schema-bearing projection. Current authorization, credential
 selection, revision fences, limits and audit remain in their existing owners.
 See the [MCP contract](mcp.md) for connection setup, naming, readiness and transport
 boundaries.
@@ -679,8 +683,9 @@ An action may also declare result schemas: the provider's success and failure
 supersets across configurations and inputs. Core owns composition
 (`output_schema.rs`): it adds the presentation's `renderedBody` companions and
 whole-result Markdown, the shared failure fields and each transport's delivery
-shapes, producing the MCP `outputSchema` of every tool, the catalog's
-`resultSchemas` and typed OpenAPI invoke responses from the one catalog entry.
+shapes, producing the MCP `outputSchema` of every tool (advertised to MCP
+connections that select it), the catalog's `resultSchemas` and typed OpenAPI
+invoke responses from the one catalog entry.
 Production never validates results against these schemas; test-support builds
 check every invocation strictly (see
 [result schema conformance](testing.md#result-schema-conformance)).

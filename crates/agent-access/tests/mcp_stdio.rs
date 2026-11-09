@@ -1,5 +1,7 @@
 //! Exercise the published stdio command through a real broker, including its
 //! caller-filtered catalog and resource authorization (not a mock MCP handler).
+#[path = "mcp_stdio/advertisement.rs"]
+mod advertisement;
 #[path = "mcp_stdio/documentation.rs"]
 mod documentation;
 #[path = "mcp_stdio/imported_oauth.rs"]
@@ -14,6 +16,7 @@ mod names;
 mod rate_wait;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
+use agent_access_core::mcp::OutputSchemas;
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
 use serde_json::{Value, json};
 use std::fmt::Display;
@@ -37,6 +40,8 @@ struct McpProcess {
 }
 
 impl McpProcess {
+    /// The aggregate view, explicitly advertising output schemas so every
+    /// result is checked against them.
     fn start(config: &Path) -> Self {
         Self::start_view(config, None)
     }
@@ -46,6 +51,15 @@ impl McpProcess {
     }
 
     fn start_view(config: &Path, service: Option<&str>) -> Self {
+        Self::start_selecting(config, service, Some(OutputSchemas::On))
+    }
+
+    /// `selection` is the `--output-schemas` value; `None` omits the option.
+    fn start_selecting(
+        config: &Path,
+        service: Option<&str>,
+        selection: Option<OutputSchemas>,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         // A developer's ambient broker/token configuration must never change
         // the broker or identity exercised by this subprocess test.
@@ -58,6 +72,7 @@ impl McpProcess {
         if let Some(service) = service {
             command.args(["--service", service]);
         }
+        command.args(mcp_output::output_schema_arguments(selection));
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -90,7 +105,7 @@ impl McpProcess {
             stderr,
             next_id: 1,
             service: service.map(str::to_owned),
-            tools: Default::default(),
+            tools: mcp_output::AdvertisedTools::new(selection, service),
         }
     }
 

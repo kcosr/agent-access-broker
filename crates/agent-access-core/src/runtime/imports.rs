@@ -1177,18 +1177,25 @@ impl BrokerRuntime {
                     .flatten()
             })
             .collect();
+        // Publication bounds the schema-bearing projection of both transports,
+        // independently of any connection's output-schema selection.
         for mode in [
             crate::mcp::ProjectionMode::Http,
             crate::mcp::ProjectionMode::Stdio,
         ] {
-            crate::mcp::project_catalog_bounded(&catalog, mode, self.config.mcp.max_catalog_bytes)
-                .map_err(|error| {
-                    ManagedStoreError::InputInvalid(if error.0 == "catalog exceeds work limit" {
-                        "import would exceed the complete MCP catalog budget".into()
-                    } else {
-                        format!("import catalog cannot be projected: {error}")
-                    })
-                })?;
+            crate::mcp::project_catalog_bounded(
+                &catalog,
+                mode,
+                crate::mcp::OutputSchemas::On,
+                self.config.mcp.max_catalog_bytes,
+            )
+            .map_err(|error| {
+                ManagedStoreError::InputInvalid(if error.0 == "catalog exceeds work limit" {
+                    "import would exceed the complete MCP catalog budget".into()
+                } else {
+                    format!("import catalog cannot be projected: {error}")
+                })
+            })?;
         }
         struct BoundedWriter(usize);
         impl std::io::Write for BoundedWriter {

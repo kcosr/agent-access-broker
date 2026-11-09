@@ -107,6 +107,17 @@ actions and exposes typed wrappers for supported services.
   shared failure fields, envelopes, MCP `outputSchema`, catalog `resultSchemas`
   and OpenAPI responses; import adapters supply wrapper schemas with open
   upstream leaves.
+- MCP output-schema advertisement is a per-connection registry dimension
+  (`mcp::OutputSchemas`) beside transport mode and view, off by default with no
+  Broker setting: HTTP `outputSchemas=on|off` evaluated per request by the one
+  strict endpoint query parser (no session state; cursors bind it), stdio
+  `mcp serve --output-schemas on|off`. Off composes no schema and omits
+  `outputSchema`, `mcpTool.outputSchema` and `resultSchemas` from MCP
+  projections; results, the caller catalog, OpenAPI and non-MCP CLI details
+  never depend on it. Both describe paths share `ToolRegistry::describe_action`.
+  Readiness and publication budgets measure the schema-bearing projection. MCP
+  delivery tests state their selection explicitly and never skip validation or
+  borrow another selection's schema.
 - Caller discovery and native MCP lists expose only authority with locally usable
   selected execution and lookup credentials. Preserve grant precedence and hide
   unknown availability too. Discovery must not contact upstream services,
@@ -350,9 +361,10 @@ responses.
 ## Build Service
 
 Rust/Cargo commands work locally with the checked-in `rust-toolchain.toml` and
-`Cargo.lock`. The reproducible tested toolchain is Rust/Cargo 1.98.1 with rustfmt
-and Clippy. The tested portal toolchain is Node.js 24.18.0 and npm 11.16.0; these
-versions do not establish a minimum supported version.
+`Cargo.lock`. The reproducible tested toolchain is Rust/Cargo 1.99.1 with rustfmt
+and Clippy; workspace crates inherit `rust-version = "1.99"` from
+`[workspace.package]`. The tested portal toolchain is Node.js 24.18.0 and npm
+11.16.0; these versions do not establish a minimum supported version.
 
 The remote build service is optional. When it is configured and available, use
 it to offload Rust/Cargo work; it copies formatted sources plus debug/release

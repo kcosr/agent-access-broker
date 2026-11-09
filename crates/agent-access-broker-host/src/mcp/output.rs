@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn oauth_fixture_documentation_projects_within_the_minimum_response_budget() {
         use agent_access_core::mcp::{
-            McpView, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry,
+            McpView, OutputSchemas, ProjectionMode, STDIO_MAX_CATALOG_BYTES, ToolRegistry,
         };
         use agent_access_provider::BackendConfig;
         let descriptor = agent_access_fake::OAuthStubProviderConfig {
@@ -192,8 +192,14 @@ mod tests {
         let send = agent_access_core::send_schema_from_catalog(&catalog);
         for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
             for view in [McpView::Aggregate, McpView::Service("oauth_stub".into())] {
-                let registry =
-                    ToolRegistry::build(&catalog, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                let registry = ToolRegistry::build(
+                    &catalog,
+                    &view,
+                    mode,
+                    OutputSchemas::On,
+                    STDIO_MAX_CATALOG_BYTES,
+                )
+                .unwrap();
                 for action in &catalog.services[0].actions {
                     let documentation = action
                         .documentation
@@ -211,12 +217,12 @@ mod tests {
                         .find(|variant| variant["properties"]["action"]["const"] == action.action)
                         .unwrap();
                     assert_eq!(variant["x-agent-access-documentation"], *documentation);
-                    let mut detail = serde_json::to_value(action).unwrap();
-                    detail.as_object_mut().unwrap().remove("scopedMcpName");
-                    detail["service"] = json!("oauth_stub");
-                    detail["mcpTool"] = registry
-                        .action_detail("oauth_stub", &action.action)
-                        .unwrap();
+                    let detail = registry.describe_action(
+                        "oauth_stub",
+                        action,
+                        serde_json::to_value(action).unwrap(),
+                    );
+                    assert!(detail["mcpTool"].is_object());
                     assert!(detail["mcpTool"].get("documentation").is_none());
                     let response = result(detail.clone(), false, 65_536).unwrap();
                     assert_eq!(response.structured_content.as_ref(), Some(&detail));

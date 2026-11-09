@@ -171,8 +171,9 @@ listing explicitly after relevant grants or definitions change; no change
 notifications or background import refresh are added.
 
 Keep `mcp.public_url` at the canonical `/mcp` base. Scoped paths append exactly one
-canonical service ID. Encoded aliases, extra segments, trailing slashes and query
-strings are rejected without redirects. Allow both `/mcp` and `/mcp/<service>` in
+canonical service ID. Encoded aliases, extra segments and trailing slashes are
+rejected without redirects. The only accepted query is the per-request
+[`outputSchemas`](#output-schemas) selection. Allow both `/mcp` and `/mcp/<service>` in
 reverse-proxy rules using the same identity, context, Host and Origin protections.
 All connections share broker sessions, control concurrency, invocation limits and
 audit. Two clients with four service connections each consume the default eight
@@ -224,6 +225,9 @@ For Claude Code, use a client MCP JSON configuration:
   }
 }
 ```
+
+To advertise [output schemas](#output-schemas), append `?outputSchemas=on` to
+either URL; they are omitted by default.
 
 The client process must inherit the token environment variable. To read a token
 file, a launch wrapper can export `AGENT_ACCESS_TOKEN` from that file before
@@ -386,9 +390,14 @@ Presence of `X-Agent-Access-User` selects username mode before principal-token
 authentication. Duplicate/malformed names or bearer fields, both caller carriers,
 a fingerprint alongside a username, and alternate principal credential carriers
 are rejected. A wrong caller, wrong transport, missing capability or unknown/paused
-human never falls back to an ordinary token, cookie or fingerprint. Queries are
-rejected, including a bare `?` delimiter. Ordinary token precedence over fingerprint
-identity applies only without the user header.
+human never falls back to an ordinary token, cookie or fingerprint. The only
+accepted query is one [`outputSchemas`](#output-schemas) selection; every other
+query, including a bare `?` delimiter, is rejected before dispatch. For
+ordinary-token/fingerprint requests that is HTTP 400 JSON
+`{"error":"Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"}`;
+username mode returns the reserved `identity_assertion_invalid` admission
+envelope. The selection never identifies anyone. Ordinary token precedence over
+fingerprint identity applies only without the user header.
 
 Protected `Connection` nominations are rejected. Every MCP `Trailer` declaration
 and actual trailer frame, declared or not, is rejected; Broker consumes the full
@@ -468,6 +477,9 @@ the same resolver as CLI commands. Config and token files are read again for
 each list or call request. An environment variable is inherited when the
 subprocess starts; changing the parent's environment requires restarting it.
 
+Add `"--output-schemas", "on"` after `"serve"` to advertise
+[output schemas](#output-schemas); they are omitted by default.
+
 Other MCP clients should configure the same executable and arguments using their
 stdio server configuration. The process must run on a machine that can access
 both the broker and the local files named in tool calls. Paths inside a remote
@@ -527,8 +539,9 @@ resolves the actual requested resource and authorizes every invocation. The
 adapter never treats a tool listing as authorization to execute.
 
 Listings paginate at 100 tools, including the fixed helpers. Cursors bind the
-selected view, caller identity/context, and complete tool definitions; relevant
-changes require restarting without a cursor.
+selected view, the [output-schema selection](#output-schemas), caller
+identity/context, and complete tool definitions; relevant changes require
+restarting without a cursor.
 Native tool lists and calls fetch a fresh catalog. Discovery helpers fetch their
 own current broker capability sources. Service-specific helpers first validate
 the current selected catalog and readiness, then restrict results before saving
@@ -581,7 +594,7 @@ can rename, defer or filter helpers independently of the Broker's wire contract.
 | `services_list` | Optional `prefix` | `{services:[{service,displayName,surface,actions:[names]}]}` |
 | `resource_access_describe` | Required `service`; optional `action`, `resourceType`, `prefix`, `limit`, `cursor` | `{service,executionContext,availability,coverageSemantics:"single_target",access:[...],registeredResources:{source:"broker_configuration",items:[...],nextCursor},liveListings?:[{service,action,resourceType}]}` |
 | `actions_list` | Required `service`; optional `resource`, `resourceType`, `prefix` | `{service,resource?,actions:[names]}` |
-| `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool` with its [output schema](#output-schemas) |
+| `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool`, with its [output schema](#output-schemas) when selected |
 | `services_describe` | Required `service` | Complete service capabilities, action schemas and authenticated caller limits |
 
 `services_describe` includes [live service limits](http-api.md#live-service-limits)
@@ -848,13 +861,47 @@ Rate-limited tool errors are the one exception to the text copy; see
 
 ## Output schemas
 
-Every action tool whose action declares result schemas, and each of the five
-discovery helpers, advertises an MCP `outputSchema` describing the
-`structuredContent` that tool returns: successes, denials, failures and local
-file receipts. Every built-in provider action and imported action declares
-them; imported actions use their adapter's wrapper (below). A tool for an action
-without result schemas omits `outputSchema`. The schema is added metadata only;
-tool names, arguments and results are unchanged.
+MCP output-schema advertisement is selected per connection and is off by
+default. Off means MCP output-schema metadata is omitted: no action or helper
+tool in `tools/list` carries an `outputSchema`, and `actions_describe` returns
+neither `mcpTool.outputSchema` nor `resultSchemas`, including for actions that
+are not tools on that connection. Tool names, arguments, results, errors and
+receipts are identical either way, as are the caller catalog's
+[`resultSchemas`](http-api.md#result-schemas-and-typed-responses), typed OpenAPI
+responses and the non-MCP CLI `actions describe` output.
+
+| Transport | Advertise output schemas | Omit them (default) |
+| --- | --- | --- |
+| HTTP | `https://broker.example.com/mcp?outputSchemas=on`, likewise `/mcp/<service>?outputSchemas=on` | No query, or `outputSchemas=off` |
+| Stdio | `agent-access mcp serve --output-schemas on` | No option, or `--output-schemas off` |
+
+HTTP evaluates the parameter on every request and keeps no session state, so
+configure it in the client's endpoint URL, which repeats it on every request.
+The only accepted query is one `outputSchemas` parameter with the exact value
+`on` or `off`; a repeated, empty, encoded or unknown parameter and any other form
+is rejected with HTTP 400 before dispatch (see
+[request restrictions](#request-header-and-body-restrictions)). It applies alike
+to bearer, trusted username and fingerprint connections and never changes
+identity, execution context, grants or credentials. Keep `mcp.public_url` at
+the query-free `/mcp` base. Proxies must forward the query unchanged; a relay
+that caches tool definitions or pools upstream sessions must keep the
+selections apart. Tool-list cursors bind the selection, so a cursor is refused
+under the other selection; restart listing without a cursor. HTTP pages are
+byte-bounded, so their boundaries can differ between selections. The stdio
+option requires an explicit value and is fixed for the process lifetime,
+including across configuration and token rotation.
+
+Scoped readiness and import publication always measure the schema-bearing
+projection against `mcp.max_catalog_bytes`, so a catalog near that budget can
+be unavailable even to connections that omit output schemas.
+
+With output schemas selected, every action tool whose action declares result
+schemas, and each of the five discovery helpers, advertises an MCP
+`outputSchema` describing the `structuredContent` that tool returns:
+successes, denials, failures and local file receipts. Every built-in provider
+action and imported action declares them; imported actions use their adapter's
+wrapper (below). A tool for an action without result schemas omits
+`outputSchema`.
 
 The root is an object whose `anyOf` lists one complete alternative per
 delivery shape:
@@ -921,9 +968,10 @@ or refreshing an import does not change the advertised schema. See
 [OpenAPI](imported-openapi.md#results-and-execution) and
 [command](command-imports.md#the-response) results.
 
-`actions_describe` returns an executable action's schema as
-`mcpTool.outputSchema` and omits the catalog's duplicate `resultSchemas`; an
-action without a tool on that connection, such as a download on HTTP MCP, keeps
+With output schemas selected, `actions_describe` returns an executable action's
+schema as `mcpTool.outputSchema` and omits the catalog's duplicate
+`resultSchemas`; an action without a tool on that connection, such as a download
+on HTTP MCP, keeps
 [`resultSchemas`](http-api.md#result-schemas-and-typed-responses). Helper
 schemas type the discovery objects and leave schema-valued fields, such as
 `inputSchema`, `outputSchema`, `resultSchemas` and `documentation`, open.

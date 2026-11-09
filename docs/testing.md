@@ -363,8 +363,9 @@ Runtime construction loads the host CA store and performs local filesystem work,
 which can exceed a one-second deadline under parallel test load. Tests that
 exercise timeout validation keep explicit timeout values.
 
-Run these checks before submitting code changes with the pinned Rust/Cargo 1.98.1
-toolchain in `rust-toolchain.toml`. The tested portal toolchain is Node.js 24.18.0
+Run these checks before submitting code changes with the pinned Rust/Cargo 1.99.1
+toolchain in `rust-toolchain.toml`; the workspace crates declare
+`rust-version = "1.99"`. The tested portal toolchain is Node.js 24.18.0
 and npm 11.16.0; these pins record reproducible validation, not minimum supported
 versions. Commands below run locally. An available configured
 [build service](../AGENTS.md#build-service) can wrap the Cargo commands instead.
@@ -847,9 +848,22 @@ every emitted field must be declared. The advertised schemas stay open.
   tool's advertised `outputSchema`, as advertised rather than strictly: the host's
   HTTP MCP fixture (`tests::mcp`) and the stdio subprocess harnesses of the
   `mcp_stdio` test and the Jira, Confluence, GitLab and CloudBees CI smokes.
-  The HTTP MCP fixture also checks a successful discovery helper result strictly
-  against its typed schema. `crates/agent-access/src/output.rs` checks every
-  local receipt and save failure against the stdio schemas.
+  They select output schemas explicitly (`?outputSchemas=on`,
+  `--output-schemas on`), since connections omit them by default. Each check
+  states its connection's selection: with `on` every helper must advertise a
+  schema and a result for a tool the connection never listed or projected fails,
+  and with `off` no tool may advertise one; neither skips validation silently or
+  substitutes another selection's schema. Independently of the selection, the
+  HTTP MCP fixture checks a successful discovery helper result strictly against
+  its typed schema. `crates/agent-access/src/output.rs` checks every local
+  receipt and save failure against the stdio schemas.
+- The selection's own suites (`tests::mcp::advertisement`, the
+  `mcp_stdio` `advertisement` module and the core `output_schema` and native
+  projection matrix tests) cover on, off and the omitted default on both
+  transports and views, helpers, native and imported actions, the strict query
+  parser, concurrent connections with different selections, complete pagination
+  and cross-selection cursor refusal, action details and identical invocation
+  results.
 - Core `output_schema` tests cover composition, each transport's delivery
   shapes, helper schemas and the catalog, detail and OpenAPI projections. Each
   provider schema pair is at most 8,192 bytes (descriptor validation), and the
@@ -857,9 +871,12 @@ every emitted field must be declared. The advertised schemas stay open.
   most 16,384 bytes and free of `$ref`.
 
 Set `AGENT_ACCESS_TEST_MCP_CAPTURE` to an absolute file path to append every
-listed tool and every tool result from these MCP checks as JSON lines, each
-tagged with its test process ID, for checking advertised schemas with external
-MCP clients. Unset, nothing is captured.
+listed tool and every tool result from these MCP checks as JSON lines for
+checking advertised schemas with external MCP clients. Each record carries the
+test process ID, `transport`, `connection` (the HTTP session or one stdio
+process), `view`, the effective `outputSchemas` selection and, for tools,
+`outputSchemaAdvertised`; pair results with the tools of the same connection and
+selection. Unset, nothing is captured.
 
 ### Guide code blocks
 

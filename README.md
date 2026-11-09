@@ -222,9 +222,10 @@ permission model. Agents connect through typed CLI commands, JSON request files,
 HTTP, local stdio MCP, or authenticated HTTP MCP. Git clients use the Git smart
 HTTP gateway. MCP action tools publish their arguments as a plain object schema,
 and an unsupported argument is refused with an error that names it and lists the
-accepted ones; see [tool arguments](docs/mcp.md#tool-arguments). MCP tools also
-advertise an output schema for their structured results, and the runtime
-catalog and OpenAPI describe each action's `result`; see
+accepted ones; see [tool arguments](docs/mcp.md#tool-arguments). MCP connections
+can opt in to output schemas for their structured results (HTTP
+`?outputSchemas=on`, stdio `--output-schemas on`; off by default), and the
+runtime catalog and OpenAPI describe each action's `result`; see
 [output schemas](docs/mcp.md#output-schemas).
 
 Gateway addresses and authentication come from administrator-provided client
@@ -310,7 +311,7 @@ operation names remain readable.
 This loopback-only evaluation uses the offline fake provider. It does not require
 Jira, Confluence, or another live service. Install Rust through rustup; the
 checked-in [toolchain file](rust-toolchain.toml) selects the tested Rust/Cargo
-1.98.1 toolchain. The commands below build locally. A configured
+1.99.1 toolchain. The commands below build locally. A configured
 [build service](AGENTS.md#build-service) is optional.
 
 ```bash

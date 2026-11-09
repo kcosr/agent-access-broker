@@ -4920,6 +4920,11 @@ enum McpCommand {
         /// Expose one canonical service with its original tool names.
         #[arg(long, value_parser = mcp::parse_service)]
         service: Option<String>,
+        /// Advertise MCP output schemas: each tool's outputSchema and the
+        /// output schemas in action details. Off omits them; results are
+        /// identical either way. Fixed for this process.
+        #[arg(long, value_name = "MODE", default_value = "off", value_parser = mcp::output_schemas_parser())]
+        output_schemas: agent_access_core::mcp::OutputSchemas,
     },
 }
 
@@ -4929,14 +4934,18 @@ async fn main() -> Result<()> {
     require_cli_input(validate_output_command(&cli));
     let config = cli.config.clone().unwrap_or_else(default_config_path);
     if let Command::Mcp {
-        command: McpCommand::Serve { service },
+        command: McpCommand::Serve {
+            service,
+            output_schemas,
+        },
     } = &cli.command
     {
         let view = service
             .clone()
             .map(agent_access_core::mcp::McpView::Service)
             .unwrap_or_default();
-        return mcp::serve(cli, config, view).await;
+        let output_schemas = *output_schemas;
+        return mcp::serve(cli, config, view, output_schemas).await;
     }
     let result = match &cli.command {
         Command::Auth {
@@ -10217,11 +10226,14 @@ async fn run_actions_list(
 }
 
 async fn run_action_describe(ctx: &CliContext<'_>, service: &str, action: &str) -> Result<()> {
+    // CLI action details keep the schema-bearing stdio MCP projection; the
+    // MCP output-schema selection applies only to MCP connections.
     render_discovery(
         ctx,
         discovery::action_describe(
             ctx.settings,
             &agent_access_core::mcp::McpView::Aggregate,
+            agent_access_core::mcp::OutputSchemas::On,
             service,
             action,
         )

@@ -1026,6 +1026,12 @@ fn providers_value(providers: &ProvidersConfig) -> Value {
                     let super::mcp::names::NamingBackend { collision } = naming;
                     Fields::default().put("collision", *collision).value()
                 }
+                None if providers
+                    .get::<super::mcp::advertisement::PagedBackend>()
+                    .is_some() =>
+                {
+                    Value::Table(Table::new())
+                }
                 None => {
                     let FakeProviderConfig {} = providers.get::<FakeProviderConfig>().unwrap();
                     Value::Table(Table::new())

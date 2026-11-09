@@ -141,6 +141,7 @@ fn retained_overlength_import_survives_restart_and_supports_recovery() {
     let tools = agent_access_core::mcp::project_catalog(
         &catalog,
         agent_access_core::mcp::ProjectionMode::Stdio,
+        agent_access_core::mcp::OutputSchemas::On,
     )
     .unwrap();
     assert!(

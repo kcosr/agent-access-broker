@@ -132,28 +132,36 @@ struct ToolEntry {
     target: ToolTarget,
 }
 
-/// The one mapping used for listing, exact dispatch and action details.
+/// The one mapping used for listing, exact dispatch and action details of
+/// one connection projection: its transport mode, view and output-schema
+/// advertisement.
 #[derive(Debug)]
 pub struct ToolRegistry {
     entries: Vec<ToolEntry>,
     names: BTreeMap<String, usize>,
     unavailable: BTreeMap<(String, String), AggregateMcpNameIssue>,
+    mode: ProjectionMode,
+    output_schemas: OutputSchemas,
 }
 
 impl ToolRegistry {
+    /// `max_bytes` bounds the projection as built: with
+    /// [`OutputSchemas::Off`], no output schema is composed or charged.
     pub fn build(
         catalog: &ApiCatalog,
         view: &McpView,
         mode: ProjectionMode,
+        output_schemas: OutputSchemas,
         max_bytes: usize,
     ) -> Result<Self, ProjectionError> {
-        Self::build_inner(catalog, view, mode, max_bytes, true)
+        Self::build_inner(catalog, view, mode, output_schemas, max_bytes, true)
     }
 
     fn build_inner(
         catalog: &ApiCatalog,
         view: &McpView,
         mode: ProjectionMode,
+        output_schemas: OutputSchemas,
         max_bytes: usize,
         require_ready: bool,
     ) -> Result<Self, ProjectionError> {
@@ -214,9 +222,11 @@ impl ToolRegistry {
             } else {
                 BTreeMap::new()
             },
+            mode,
+            output_schemas,
         };
         let mut budget = ProjectionBudget::new(max_bytes)?;
-        for definition in helper_definitions_for_view(mode, view) {
+        for definition in helper_definitions_for_view(mode, view, output_schemas) {
             let name = definition["name"].as_str().expect("static helper name");
             let helper = HelperKind::from_name(name).expect("static helper kind");
             result.push(definition, ToolTarget::Helper(helper), &mut budget)?;
@@ -261,7 +271,9 @@ impl ToolRegistry {
                         "agent-access/sensitive-output-pointers": action.sensitive_output_pointers
                     }
                 });
-                if let Some(schema) = crate::output_schema::action_output_schema(action, mode) {
+                if output_schemas == OutputSchemas::On
+                    && let Some(schema) = crate::output_schema::action_output_schema(action, mode)
+                {
                     definition["outputSchema"] = schema;
                 }
                 let target = ToolTarget::Action {
@@ -327,6 +339,34 @@ impl ToolRegistry {
                 }
             _ => None,
         })
+    }
+
+    /// The `actions_describe` result of one caller-visible action, from its
+    /// caller catalog `detail` and canonical `spec`, shared by both
+    /// transports: `mcpTool` when the action is a tool here, otherwise
+    /// `mcpToolUnavailable` for a transport-eligible action whose name is
+    /// unavailable. With [`OutputSchemas::Off`], MCP output-schema metadata is
+    /// omitted: no `mcpTool.outputSchema` and no `resultSchemas`, even for
+    /// an action without a tool here. With [`OutputSchemas::On`], a tool's
+    /// `outputSchema` composes the payload schemas and replaces
+    /// `resultSchemas`; an action without a tool keeps them.
+    pub fn describe_action(&self, service: &str, spec: &ApiActionSpec, mut detail: Value) -> Value {
+        let tool = self.action_detail(service, &spec.action);
+        if let Some(object) = detail.as_object_mut() {
+            object.remove("scopedMcpName");
+            if self.output_schemas == OutputSchemas::Off || tool.is_some() {
+                object.remove("resultSchemas");
+            }
+        }
+        if let Some(tool) = tool {
+            detail["mcpTool"] = tool;
+        } else if action_eligible(spec, self.mode)
+            && let Some(issue) = self.action_unavailable(service, &spec.action)
+        {
+            detail["mcpToolUnavailable"] = json!(issue.code.as_str());
+        }
+        detail["service"] = json!(service);
+        detail
     }
 
     /// Naming diagnostics contain only this action's name and reason. Callers
@@ -452,6 +492,8 @@ impl ScopedMcpReadiness {
 
 /// `descriptor` must already contain all active actions before caller filtering.
 /// This is infallible: scoped incompatibility never blocks aggregate publication.
+/// The budget check uses the schema-bearing projection of both transports, so
+/// readiness never depends on a connection's output-schema selection.
 pub fn evaluate_scoped_mcp_readiness(
     descriptor: &agent_access_provider::ServiceDescriptor,
     max_bytes: usize,
@@ -482,7 +524,9 @@ pub fn evaluate_scoped_mcp_readiness(
         let mut catalog = crate::empty_catalog(json!({}));
         catalog.services.push(service);
         for mode in [ProjectionMode::Http, ProjectionMode::Stdio] {
-            if ToolRegistry::build_inner(&catalog, &view, mode, max_bytes, false).is_err() {
+            if ToolRegistry::build_inner(&catalog, &view, mode, OutputSchemas::On, max_bytes, false)
+                .is_err()
+            {
                 result.issue(ScopedMcpIssueCode::ProjectionBudget, &[]);
                 break;
             }
@@ -571,6 +615,7 @@ mod tests {
                 &catalog(&descriptor, false),
                 &McpView::Aggregate,
                 mode,
+                OutputSchemas::On,
                 STDIO_MAX_CATALOG_BYTES,
             )
             .unwrap();
@@ -597,6 +642,7 @@ mod tests {
             &catalog(&descriptor, false),
             &McpView::Aggregate,
             ProjectionMode::Http,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -626,6 +672,7 @@ mod tests {
             &catalog,
             &McpView::Aggregate,
             ProjectionMode::Http,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -643,6 +690,7 @@ mod tests {
                 &catalog,
                 &McpView::Aggregate,
                 ProjectionMode::Http,
+                OutputSchemas::On,
                 STDIO_MAX_CATALOG_BYTES
             )
             .is_err()
@@ -664,6 +712,7 @@ mod tests {
             &catalog,
             &McpView::Aggregate,
             ProjectionMode::Http,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -690,6 +739,7 @@ mod tests {
             &catalog,
             &McpView::Service("services".into()),
             ProjectionMode::Http,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -706,6 +756,7 @@ mod tests {
             &all,
             &McpView::Aggregate,
             ProjectionMode::Http,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -718,6 +769,7 @@ mod tests {
                 &catalog(&single, false),
                 &McpView::Aggregate,
                 ProjectionMode::Http,
+                OutputSchemas::On,
                 STDIO_MAX_CATALOG_BYTES,
             )
             .unwrap();
@@ -730,6 +782,7 @@ mod tests {
                 &all,
                 &McpView::Aggregate,
                 ProjectionMode::Http,
+                OutputSchemas::On,
                 complete_bytes
             )
             .is_ok()
@@ -739,6 +792,7 @@ mod tests {
                 &all,
                 &McpView::Aggregate,
                 ProjectionMode::Http,
+                OutputSchemas::On,
                 complete_bytes - 1
             )
             .is_err()
@@ -748,6 +802,7 @@ mod tests {
                 &all,
                 &McpView::Aggregate,
                 ProjectionMode::Http,
+                OutputSchemas::On,
                 visible_bytes
             )
             .is_err()
@@ -766,6 +821,7 @@ mod tests {
             &catalog,
             &view,
             ProjectionMode::Stdio,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
@@ -819,6 +875,7 @@ mod tests {
                 &catalog,
                 &view,
                 ProjectionMode::Stdio,
+                OutputSchemas::On,
                 STDIO_MAX_CATALOG_BYTES
             )
             .is_err()
@@ -828,6 +885,7 @@ mod tests {
                 &catalog,
                 &McpView::Aggregate,
                 ProjectionMode::Stdio,
+                OutputSchemas::On,
                 STDIO_MAX_CATALOG_BYTES
             )
             .is_ok()
@@ -856,6 +914,7 @@ mod tests {
                     &catalog(&descriptor, false),
                     &McpView::Aggregate,
                     ProjectionMode::Http,
+                    OutputSchemas::On,
                     STDIO_MAX_CATALOG_BYTES
                 )
                 .is_ok()
@@ -878,6 +937,7 @@ mod tests {
                 &catalog(&descriptor, true),
                 &McpView::Service("example".into()),
                 ProjectionMode::Http,
+                OutputSchemas::On,
                 STDIO_MAX_CATALOG_BYTES
             )
             .is_err()
@@ -893,12 +953,31 @@ mod tests {
             &catalog,
             &view,
             ProjectionMode::Stdio,
+            OutputSchemas::On,
             STDIO_MAX_CATALOG_BYTES,
         )
         .unwrap();
         let exact = serde_json::to_vec(&registry.definitions()).unwrap().len();
-        assert!(ToolRegistry::build(&catalog, &view, ProjectionMode::Stdio, exact).is_ok());
-        assert!(ToolRegistry::build(&catalog, &view, ProjectionMode::Stdio, exact - 1).is_err());
+        assert!(
+            ToolRegistry::build(
+                &catalog,
+                &view,
+                ProjectionMode::Stdio,
+                OutputSchemas::On,
+                exact
+            )
+            .is_ok()
+        );
+        assert!(
+            ToolRegistry::build(
+                &catalog,
+                &view,
+                ProjectionMode::Stdio,
+                OutputSchemas::On,
+                exact - 1
+            )
+            .is_err()
+        );
         assert_eq!(
             evaluate_scoped_mcp_readiness(&descriptor, 1).issues[0].code,
             ScopedMcpIssueCode::ProjectionBudget
@@ -917,13 +996,23 @@ mod tests {
         let expanded = catalog(&descriptor, true);
         for mode in [ProjectionMode::Stdio, ProjectionMode::Http] {
             for view in [McpView::Aggregate, McpView::Service("example".into())] {
-                let baseline =
-                    ToolRegistry::build(&original, &view, mode, STDIO_MAX_CATALOG_BYTES).unwrap();
+                let baseline = ToolRegistry::build(
+                    &original,
+                    &view,
+                    mode,
+                    OutputSchemas::On,
+                    STDIO_MAX_CATALOG_BYTES,
+                )
+                .unwrap();
                 let definitions = baseline.definitions();
                 let exact = serde_json::to_vec(&definitions).unwrap().len();
-                let current = ToolRegistry::build(&expanded, &view, mode, exact).unwrap();
+                let current =
+                    ToolRegistry::build(&expanded, &view, mode, OutputSchemas::On, exact).unwrap();
                 assert_eq!(current.definitions(), definitions);
-                assert!(ToolRegistry::build(&expanded, &view, mode, exact - 1).is_err());
+                assert!(
+                    ToolRegistry::build(&expanded, &view, mode, OutputSchemas::On, exact - 1)
+                        .is_err()
+                );
                 let tool = current.action_detail("example", "accepted.read").unwrap();
                 let expected_name = if matches!(view, McpView::Aggregate) {
                     "example_accepted_read"

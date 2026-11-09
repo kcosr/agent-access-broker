@@ -32,6 +32,7 @@ resolver = "3"
 edition = "2024"
 version = "0.2.0"
 license = "MIT"
+rust-version = "1.99"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -50,7 +51,7 @@ jsonschema = { version = "0.46.6", default-features = false }
 libc = "0.2"
 mime_guess = "2.0"
 markup5ever_rcdom = "0.35"
-openidconnect = { version = "4.0.1", default-features = false, features = ["reqwest", "rustls-tls"] }
+openidconnect = { version = "4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 percent-encoding = "2.3"
 pulldown-cmark = "0.13"
 regex = "1.11"

@@ -4940,20 +4940,19 @@ pub(crate) fn comment_bodies_from_value(
     let Some(body) = value.get("body").and_then(Value::as_object) else {
         return Ok(bodies);
     };
-    for format in ["storage"] {
-        if let Some(format_body) = body.get(format).and_then(Value::as_object) {
-            let representation = format_body
-                .get("representation")
-                .and_then(Value::as_str)
-                .unwrap_or(format);
-            if representation != format {
-                return Err(ConfluenceBackendError::Protocol(
-                    "comment body representation mismatched its format".to_string(),
-                ));
-            }
-            if let Some(content) = format_body.get("value").and_then(Value::as_str) {
-                bodies.insert(format.to_string(), content.to_string());
-            }
+    let format = "storage";
+    if let Some(format_body) = body.get(format).and_then(Value::as_object) {
+        let representation = format_body
+            .get("representation")
+            .and_then(Value::as_str)
+            .unwrap_or(format);
+        if representation != format {
+            return Err(ConfluenceBackendError::Protocol(
+                "comment body representation mismatched its format".to_string(),
+            ));
+        }
+        if let Some(content) = format_body.get("value").and_then(Value::as_str) {
+            bodies.insert(format.to_string(), content.to_string());
         }
     }
     if body.get("representation").and_then(Value::as_str) == Some("storage") {
