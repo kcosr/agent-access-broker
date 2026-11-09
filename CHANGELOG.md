@@ -7,8 +7,7 @@ All notable changes to this project are documented in this file.
 ### Breaking Changes
 
 - **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
-  Back up before migration 036 and
-  upgrade Broker, CLI and portal together; rollback across that migration requires
+  Back up first and upgrade Broker, CLI and portal together; rollback requires
   the matching pre-migration database and binary. Existing principals are marked
   processed without group backfill. For principals created after migration,
   initial local groups now apply once at the first Microsoft sign-in, including
@@ -184,16 +183,21 @@ All notable changes to this project are documented in this file.
   keeps explicit IDs. Unavailable Microsoft enrollment explains the limitation
   without selecting local creation. Administrators can prepare access before the
   first validated matching sign-in. The CLI adds `--microsoft-enrollment-email`
-  and `login-methods oidc enrollment` inspect/create/update/cancel operations;
-  the portal shows pending enrollment separately from profile email. Binding
+  and `login-methods oidc enrollment` inspect/create/update/cancel operations.
+  HTTP creation with `microsoftEnrollment` and CLI creation with
+  `--microsoft-enrollment-email` must omit the principal ID and use the generated
+  `result.principalId` for later operations. Creation without enrollment requires
+  an explicit ID. The portal shows pending enrollment separately from profile
+  email. Binding
   consumes the reservation and preserves the principal without a later approval,
-  directory lookup or automatic token distribution. Paused providers permit preparation. Login audit adds
+  directory lookup or automatic token distribution. Paused providers permit
+  preparation. Login audit adds
   `enrollmentId` and `tenantId` when pending enrollment is consumed, plus
   `displayNameUpdated`; it preserves `jitCreated` and records actual initial
   memberships in `autoEnrolledGroupIds`. `config.status` adds the
   `microsoftEnrollment` availability/tenant object for administrative preparation.
   See the [HTTP API](docs/http-api.md).
-  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108), [#109](https://github.com/kcosr/agent-access-broker/pull/109))
 
 - **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
   2.0 and OpenAPI 3.1 documents by URL or upload, choose immutable Actions/tools

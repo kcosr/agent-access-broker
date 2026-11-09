@@ -200,7 +200,7 @@ async function userCreation(page) {
     await expect(dialog.getByRole('button', { name: 'Create user', exact: true })).toBeEnabled();
     await dialog.getByRole('heading', { name: 'Create user', exact: true }).click();
     expect(await dialog.locator('.wb-modal-body').evaluate(body => body.scrollHeight <= body.clientHeight)).toBe(true);
-    await capture(page, 'guide', 'admin-create-microsoft-user-light', 'light', 'Unsubmitted Microsoft account draft for Morgan Demo User, with Jira Users membership and read-only token issuance in default and internal contexts. Microsoft enrollment availability is a browser-only fixture; no Microsoft sign-in or account creation occurs.');
+    await capture(page, 'guide', 'admin-create-microsoft-user-light', 'light', 'SIMULATED Microsoft enrollment availability using a browser-only response fixture. Unsubmitted Morgan Demo User draft with Jira Users membership and read-only token issuance in default and internal contexts; no Microsoft sign-in or account creation occurs.');
     await dialog.getByRole('checkbox', { name: 'Create a local account instead', exact: true }).check();
     await dialog.getByRole('textbox', { name: 'Username', exact: true }).fill('morgan');
     await expect(dialog.getByRole('textbox', { name: 'Email (optional)', exact: true })).toHaveValue('morgan@example.test');

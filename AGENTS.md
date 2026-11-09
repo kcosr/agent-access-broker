@@ -749,12 +749,14 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   (light-only) image streams from the populated demo. Keep raw captures under
   ignored `.scratch/` or outside the repository; ship reviewed images under
   `docs/images/portal/` with captions identifying synthetic data. Setup forms
-  remain unsubmitted; credential verification success/failure captures use
-  browser-only fixtures identified in the manifest, never real upstream tests.
+  remain unsubmitted; credential verification success/failure and Microsoft
+  enrollment-availability captures use browser-only fixtures identified in the
+  manifest, never real upstream tests.
   Keep guide annotations as separate assets under
   `docs/images/portal/guide-annotated/`; preserve the original guide captures.
   Review generated annotations for faithful UI text and accurate callouts before
-  updating guide image links.
+  updating guide image links. User-creation guide steps intentionally link the
+  unannotated originals so all form labels remain unobscured.
   `demo/seed-guide-accounts.mjs` adds an actual auditor and a temporary-password
   onboarding identity to the loopback demo for role-accurate captures; keep its
   private credential handoff in the disposable demo directory.
