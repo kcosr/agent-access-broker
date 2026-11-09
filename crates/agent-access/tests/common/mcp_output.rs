@@ -13,10 +13,13 @@ use std::io::Write;
 
 const CAPTURE_ENV: &str = "AGENT_ACCESS_TEST_MCP_CAPTURE";
 
-fn capture(record: Value) {
+fn capture(mut record: Value) {
     let Some(path) = std::env::var_os(CAPTURE_ENV) else {
         return;
     };
+    // Tools and results pair within one test process: different tests can
+    // serve different catalogs under the same tool name.
+    record["pid"] = json!(std::process::id());
     let path = std::path::PathBuf::from(path);
     assert!(
         path.is_absolute(),
