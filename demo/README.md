@@ -186,17 +186,28 @@ state files, and rejects unexpected mutation requests. Review selected images
 before placing them in `docs/images/portal/`; raw captures remain ignored under
 `.scratch/` by default.
 
+Set `AAB_CAPTURE_STREAM=guide AAB_CAPTURE_SECTION=users` to refresh just the
+Microsoft and local **Create user** drafts. This section requires only the demo
+administrator credentials, Jira Users group, and default/internal execution
+contexts. It uses a 1440x1200 viewport so both complete forms remain readable.
+The Microsoft enrollment availability response is a browser-only fixture; no
+Microsoft provider is contacted or configured. Both drafts remain unsubmitted,
+and the manifest identifies the simulated availability. The full guide capture
+uses this same path for these images.
+
 After an issuance UI change, capture against freshly built Broker and portal
 artifacts using the launcher with `AAB_DEMO_BROKER_BIN` set explicitly. Refresh
 `user-token-details-*`, `user-token-access-*`, guide `user-token-resources-light`,
 `user-token-boundary-light`, and `user-tokens-light`. A full guide capture also
-refreshes `admin-create-user-light`, `admin-create-group-light`, and
+refreshes `admin-create-microsoft-user-light`, `admin-create-local-user-light`,
+`admin-create-group-light`, and
 `admin-account-access-light` for their issuance controls. Review the originals,
 then refresh corresponding annotated copies and manifest checksums together.
 
-The published walkthroughs use annotated copies under
+Most published walkthrough images use annotated copies under
 `docs/images/portal/guide-annotated/`, with orange highlights and callouts for
-the current task. Preserve `guide/` originals when producing these overlays.
+the current task. User-creation steps use the original captures directly so
+their complete form labels remain unobscured. Preserve `guide/` originals when producing overlays.
 The capture script continues to write raw screenshots; annotations are a
 separate documentation step and are reviewed before their guide links change.
 

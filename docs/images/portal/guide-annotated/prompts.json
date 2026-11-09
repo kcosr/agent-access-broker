@@ -157,51 +157,6 @@
       "reviewed": true
     },
     {
-      "file": "admin-create-user-light.png",
-      "original": "../guide/admin-create-user-light.png",
-      "sourceSha256": "66acac5b4bd0479b285d2320451b8d3c9c3ce3d79d7b14794833ee2a9fe6430c",
-      "outputSha256": "deb4343696368795c846950b4d1889eeecc908a23d5a4fcc029e9f2f7238eebd",
-      "description": "Synthetic unsubmitted user draft with Read-only personal token issuance in explicitly selected default and internal contexts, group selection, independent local password sign-in and self-service.",
-      "prompt": "Add only orange vector annotation overlays to the exact 1440x960 source capture. Preserve source pixels outside the annotation alpha mask without resampling. Use unfilled rounded highlights, an orange arrow, and a white callout box with an orange border. Use Arial, 20px bold for the first line and 18px regular for subsequent lines. Keep text inside the callout and leave all UI controls readable.",
-      "tool": "Deterministic SVG overlay",
-      "reviewed": true,
-      "overlay": {
-        "highlights": [
-          [
-            451,
-            574,
-            538,
-            187
-          ]
-        ],
-        "box": [
-          1040,
-          602,
-          370,
-          126
-        ],
-        "lines": [
-          "Choose mode and contexts",
-          "This account override permits",
-          "Read-only in default and internal."
-        ],
-        "arrow": [
-          [
-            1040,
-            665
-          ],
-          [
-            1007,
-            665
-          ],
-          [
-            991,
-            665
-          ]
-        ]
-      }
-    },
-    {
       "file": "admin-disable-user-light.png",
       "original": "../guide/admin-disable-user-light.png",
       "sourceSha256": "e0ed099f3eff75756d2dbde151ef871e1e16b46fc7003e45ee414eec8ce725a6",
@@ -307,7 +262,7 @@
       "sourceSha256": "48d46b290988d4f05a5cbddd5046c9dc24b663bf4b24ce8e8d5027b3e6243529",
       "outputSha256": "6a0cd542fa447885ec3f560e1156c070f7b2f93bddf640eb59837b850e669e7f",
       "description": "Denied filter and reason-code inspection",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Outline sidebar selected Denied filter x=9,y=295,width=246,height=33 and first three reason-code cells x=785,y=178,width=307,height=100. Preserve all service_action_denied values, Denied labels, and counts 36 records and30records exactly. Put one white orange-border callout in appended strip at x=700,y=990,width=695,height=86. Exact two lines: 'Sample audit: read-only denial review' then 'Filter Denied and read the reason code'. Route arrow upward along far-right empty margin x=1430 then horizontally through empty row area to right edge of reason-code highlight; never cover data. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Outline sidebar selected Denied filter x=9,y=295,width=246,height=33 and first three reason-code cells x=785,y=178,width=307,height=100. Preserve all service_action_denied values, Denied labels, and counts 36 records and30records exactly. Put one white orange-border callout in appended strip at x=700,y=990,width=695,height=86. Exact two lines: 'Sample audit: read-only denial review' then 'Filter Denied and read the reason code'. Route arrow upward along far-right empty margin x=1430 then horizontally through empty row area to right edge of reason-code highlight; never cover data. Preserve Auditor \u00b7 read-only header and absence of My access navigation exactly.",
       "tool": "built-in imagegen",
       "reviewed": true
     },
@@ -317,7 +272,7 @@
       "sourceSha256": "472a399a17d846a7ed2b7bc1b0200f2242e4c2f43986790ad8ed575b6711b84d",
       "outputSha256": "fa2e5eed802d4e78dd9e1603384e8560ca0995ace8adec3d7411f2af9abd21c0",
       "description": "Summary request-correlation IDs",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight only Broker request ID and Agent request ID rows approximately x=914,y=617,width=499,height=56. Put one white orange-border callout in appended strip at x=715,y=989,width=660,height=86. Exact two lines: 'Sample audit: read-only correlation' then 'Use broker and agent request IDs'. Route arrow along empty outer-right margin x=1430 to right edge of IDs highlight, never across identity/request text. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight only Broker request ID and Agent request ID rows approximately x=914,y=617,width=499,height=56. Put one white orange-border callout in appended strip at x=715,y=989,width=660,height=86. Exact two lines: 'Sample audit: read-only correlation' then 'Use broker and agent request IDs'. Route arrow along empty outer-right margin x=1430 to right edge of IDs highlight, never across identity/request text. Preserve Auditor \u00b7 read-only header and absence of My access navigation exactly.",
       "tool": "built-in imagegen",
       "reviewed": true
     },
@@ -327,7 +282,7 @@
       "sourceSha256": "2a2898e5cb4a742085658fbee27735eb9ac1cc80ed882ec36c22acf700c81556",
       "outputSha256": "02421c8f8fd2e72dad270a1adce3b5317a05177940a5c309b459ad16a873fe08",
       "description": "Read-only global review filters",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append a white 160px annotation strip below the original 1440x960 screenshot without scaling or cropping original UI; output1440x1120. Highlight sidebar Decision/Service/Principal controls with one thin rounded rectangle approximately x=7,y=207,width=250,height=305. Also outline header badge Auditor · read-only approximately x=650,y=11,width=127,height=25. Put one white callout with orange border in appended strip at x=35,y=987,width=620,height=88. Exact two lines: 'Sample audit: read-only global review' then 'Filter by principal, service and decision'. Arrow goes up through empty sidebar right margin x=262 to right edge of control highlight near y=510; do not cover any UI text. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append a white 160px annotation strip below the original 1440x960 screenshot without scaling or cropping original UI; output1440x1120. Highlight sidebar Decision/Service/Principal controls with one thin rounded rectangle approximately x=7,y=207,width=250,height=305. Also outline header badge Auditor \u00b7 read-only approximately x=650,y=11,width=127,height=25. Put one white callout with orange border in appended strip at x=35,y=987,width=620,height=88. Exact two lines: 'Sample audit: read-only global review' then 'Filter by principal, service and decision'. Arrow goes up through empty sidebar right margin x=262 to right edge of control highlight near y=510; do not cover any UI text. Preserve Auditor \u00b7 read-only header and absence of My access navigation exactly.",
       "tool": "built-in imagegen",
       "reviewed": true
     },
@@ -337,7 +292,7 @@
       "sourceSha256": "a627542fbc0b26b248bdcdbaf25e5f2512640d407ac6e97ed1cf5daabce6e1c5",
       "outputSha256": "27a492e9c79f4acb1a30737a3b171a1e2e64d7eb2f0d714fb3a3dd4068a7fd3d",
       "description": "Preflight-to-success timeline",
-      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight both timeline entries together approximately x=926,y=325,width=496,height=111. Keep preflight, success, start, and +59 ms intact. Put one white orange-border callout in appended strip x=720,y=991,width=660,height=86. Exact two lines: 'Sample audit: read-only request timeline' then 'Preflight to success, in order'. Route arrow upward through empty drawer space below entries to bottom edge of highlight without covering timeline text. Preserve Auditor · read-only header and absence of My access navigation exactly.",
+      "prompt": "Use case: precise-object-edit. Asset type: annotated documentation screenshot. Input image 1 is the exact EDIT TARGET. Add only orange tutorial annotation overlays. Preserve ALL original UI text, layout, pixel positions, numbers, account roles, grant contents, controls, blank fields and original screenshot. Do not redraw, rewrite, crop, blur, recolor or move the underlying UI. Style: 3px orange rounded highlight rectangles with extremely light transparent orange tint, crisp dark sans-serif callout text, bold first line and regular second line, compact white callout box with orange border and subtle shadow; one orange arrow pointing to highlight. Maximum two highlights and one callout per image. No watermark or extra decoration. Arrow and callout must not obscure any UI text or controls. Append white160px strip below original1440x960 screenshot without scaling/cropping;output1440x1120. Highlight both timeline entries together approximately x=926,y=325,width=496,height=111. Keep preflight, success, start, and +59 ms intact. Put one white orange-border callout in appended strip x=720,y=991,width=660,height=86. Exact two lines: 'Sample audit: read-only request timeline' then 'Preflight to success, in order'. Route arrow upward through empty drawer space below entries to bottom edge of highlight without covering timeline text. Preserve Auditor \u00b7 read-only header and absence of My access navigation exactly.",
       "tool": "built-in imagegen",
       "reviewed": true
     },

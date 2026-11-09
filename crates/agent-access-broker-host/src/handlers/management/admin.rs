@@ -1630,6 +1630,7 @@ pub(crate) async fn admin_principals_create(
     let target = principal_id
         .as_ref()
         .ok()
+        .or_else(|| body.principal_id.as_ref().and_then(Option::as_ref))
         .map(|principal_id| json!({"principal": principal_id}));
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await

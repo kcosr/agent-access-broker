@@ -35,6 +35,13 @@ an administrator. See [account roles](../roles.md).
    Microsoft sign-in**, **Pending match email**, **Tenant**, **Enrollment ID**
    and **Revision**.
 
+![Microsoft user creation draft](../images/portal/guide/admin-create-microsoft-user-light.png)
+
+*Unsubmitted Morgan Demo User draft with Jira Users membership and Read-only
+token issuance in default and internal contexts. Microsoft enrollment availability
+is simulated in the browser; this capture performs no Microsoft sign-in or
+account creation.*
+
 The portal initially uses Microsoft email for both profile email and pending
 enrollment; subsequent edits are independent. Creating the account is the
 approval. Its first matching validated Microsoft sign-in binds that same account
@@ -48,6 +55,12 @@ profile email. Acknowledge the separate local-password sign-in, then select
 user change it at first sign-in. Local creation does not prepare Microsoft
 enrollment. Local sign-in creates an independent Broker password and does not
 evaluate Microsoft MFA or Conditional Access.
+
+![Local user creation draft](../images/portal/guide/admin-create-local-user-light.png)
+
+*The same unsubmitted draft after explicitly choosing local creation. Username
+and local-password acknowledgement replace Microsoft enrollment; no password is
+created or shown in this capture.*
 
 If Microsoft enrollment is unavailable, the form explains the limitation and
 keeps Microsoft creation disabled. Select **Create a local account instead** only

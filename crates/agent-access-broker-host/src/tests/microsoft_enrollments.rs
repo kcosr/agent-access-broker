@@ -337,7 +337,7 @@ async fn principal_creation_requires_explicit_id_only_without_microsoft_enrollme
     let store = store(&fixture);
     paused_provider(&store);
     let before = principal_ids(&store);
-    for body in [
+    for (index, body) in [
         json!({"principalId":"chosen-id","microsoftEnrollment":{"email":"ada@example.test"}}),
         json!({"principalId":"","microsoftEnrollment":{"email":"ada@example.test"}}),
         json!({"principalId":null,"microsoftEnrollment":{"email":"ada@example.test"}}),
@@ -346,19 +346,51 @@ async fn principal_creation_requires_explicit_id_only_without_microsoft_enrollme
         json!({"kind":"user","email":"profile@example.test"}),
         json!({"kind":"system"}),
         json!({"kind":"service_account"}),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request_id = format!("principal-create-id-invalid-{index}");
         let (status, result) = fixture
             .request(
                 Method::POST,
                 &fixture.admin,
                 "/v1/admin/principals",
                 Some(&body.to_string()),
-                "principal-create-id-invalid",
+                &request_id,
             )
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{result}");
         assert_eq!(result["reasonCode"], "input_invalid");
         assert_eq!(principal_ids(&store), before);
+        let audit: Vec<_> = fixture
+            .records()
+            .into_iter()
+            .filter(|event| event["agentRequestId"] == request_id)
+            .collect();
+        assert_eq!(audit.len(), 2, "{audit:?}");
+        assert_eq!(
+            audit[0]["providerAudit"]["management"]["phase"],
+            "preflight"
+        );
+        assert_eq!(audit[1]["decision"], "deny");
+        assert_eq!(audit[1]["reasonCode"], "input_invalid");
+        let expected_target = body["principalId"]
+            .as_str()
+            .map(|id| json!({"principal": id}))
+            .unwrap_or(Value::Null);
+        for event in &audit {
+            assert_eq!(event["brokerRequestId"], result["brokerRequestId"]);
+            assert_eq!(
+                event["providerAudit"]["management"]["target"],
+                expected_target
+            );
+        }
+        assert!(
+            !serde_json::to_string(&audit)
+                .unwrap()
+                .contains("example.test")
+        );
     }
     for (id, kind) in [
         ("local-user", "user"),

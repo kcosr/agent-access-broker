@@ -22,13 +22,6 @@
       "sha256": "b8880df7c8a754d9ab461e52f13aba1145ec23e6011f4777f238380291ff9284"
     },
     {
-      "file": "guide/admin-create-user-light.png",
-      "theme": "light",
-      "viewport": "1440x960",
-      "description": "Synthetic unsubmitted user draft with Read-only personal token issuance in explicitly selected default and internal contexts, group selection, independent local password sign-in and self-service.",
-      "sha256": "66acac5b4bd0479b285d2320451b8d3c9c3ce3d79d7b14794833ee2a9fe6430c"
-    },
-    {
       "file": "guide/admin-create-group-light.png",
       "theme": "light",
       "viewport": "1440x960",
@@ -272,6 +265,24 @@
       "viewport": "1440x960",
       "description": "Personal activity history limited to the signed-in user",
       "sha256": "58eb2a41c0a4858d8635a349389bb577be2a50ad57141110ce95c21b17b67365"
+    },
+    {
+      "file": "guide/admin-create-microsoft-user-light.png",
+      "theme": "light",
+      "viewport": "1440x1200",
+      "description": "Unsubmitted Microsoft account draft for Morgan Demo User, with Jira Users membership and read-only token issuance in default and internal contexts. Microsoft enrollment availability is a browser-only fixture; no Microsoft sign-in or account creation occurs.",
+      "sha256": "8c98ae0c01caad87baeae00828a64721c1ec71d6f3ab1a2c745436af13564efc",
+      "sourceScript": "scripts/capture-portal.mjs",
+      "captureSection": "users"
+    },
+    {
+      "file": "guide/admin-create-local-user-light.png",
+      "theme": "light",
+      "viewport": "1440x1200",
+      "description": "Explicit unsubmitted local-account draft with username, read-only token issuance in default and internal contexts, group selection, local password acknowledgement, and self-service",
+      "sha256": "622f9a7277b0001ec9cc73dc88d021d2239420a7e0acf3bba2cfb378ebaf041b",
+      "sourceScript": "scripts/capture-portal.mjs",
+      "captureSection": "users"
     }
   ]
 }

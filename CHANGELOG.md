@@ -7,13 +7,7 @@ All notable changes to this project are documented in this file.
 ### Breaking Changes
 
 - **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
-  New-account HTTP requests with `microsoftEnrollment` must omit `principalId`;
-  CLI creation with
-  `--microsoft-enrollment-email` must omit the positional principal ID. Supplying
-  both is rejected. Use the returned `result.principalId` for later operations.
-  Non-enrollment creation still requires an explicit ID; existing IDs and
-  existing-account enrollment routes are unchanged. This input-contract change
-  needs no additional database migration. Back up before migration 036 and
+  Back up before migration 036 and
   upgrade Broker, CLI and portal together; rollback across that migration requires
   the matching pre-migration database and binary. Existing principals are marked
   processed without group backfill. For principals created after migration,

@@ -160,12 +160,9 @@ test("unavailable Microsoft keeps the default visible and requires an explicit l
   expect(model.writes).toEqual([]);
 });
 
-test("switching between filled creation drafts preserves access and omits the local username from Microsoft creation", async ({ page }, testInfo) => {
+test("switching between filled creation drafts preserves access and omits the local username from Microsoft creation", async ({ page }) => {
   const model = await fixture(page, false);
   model.microsoftEnabled = true;
-  await page.setViewportSize({ width: 1360, height: 1200 });
-  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
-  await page.addInitScript(() => localStorage.setItem("aab.portal.theme", "light"));
   await page.goto(`${assets.baseUrl}/ui/admin/principals`);
   await page.getByRole("button", { name: "Create user", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
@@ -177,19 +174,12 @@ test("switching between filled creation drafts preserves access and omits the lo
   await page.keyboard.press("Escape");
   await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("user");
   await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeEnabled();
-  await page.evaluate(() => document.fonts.ready);
-  await dialog.getByRole("heading", { name: "Create user", exact: true }).click();
-  expect(await dialog.locator(".wb-modal-body").evaluate((body) => body.scrollHeight <= body.clientHeight)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("create-microsoft-user-light.png"), animations: "disabled" });
   await local.check();
   await dialog.getByLabel("Username", { exact: true }).fill("alice.local");
   await expect(dialog.getByLabel("Email (optional)", { exact: true })).toHaveValue("alice@example.test");
   await expect(dialog.getByLabel("Display name", { exact: false })).toHaveValue("Alice Example");
   await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("user");
   await dialog.getByLabel("I authorize local password sign-in for this user independently of Microsoft sign-in.", { exact: true }).check();
-  await dialog.getByRole("heading", { name: "Create user", exact: true }).click();
-  expect(await dialog.locator(".wb-modal-body").evaluate((body) => body.scrollHeight <= body.clientHeight)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("create-local-user-light.png"), animations: "disabled" });
   await dialog.getByLabel("Role", { exact: true }).selectOption("auditor");
   await local.uncheck();
   await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("auditor");
