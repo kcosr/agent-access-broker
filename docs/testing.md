@@ -815,6 +815,50 @@ proves that the matching gateway host receives the fixed `agent-access` username
 and fake token while a different host receives no credentials from the helper.
 That integration test requires a local `git` executable on `PATH`.
 
+### Result schema conformance
+
+Tests check result payloads strictly against the declared
+[result schemas](provider-sdk.md#result-schemas): an object schema that
+declares `properties` without `additionalProperties` is treated as closed, so
+every emitted field must be declared. The advertised schemas stay open.
+
+- Provider unit tests invoke through a local helper that calls the SDK
+  `test-support` `assert_result_conforms`, so stub-driven successes, receipts and
+  failures are checked. Each native provider's tests also require a bundle entry
+  for every action that any supported configuration publishes, and no other.
+- Core's `test-support` feature, which the host's enables, checks every
+  invocation of an action with result schemas twice: the provider outcome after
+  its hook contract check, and the final `result`, after presentation and the
+  host's failure details, against the composed payload union. A mismatch writes
+  the service, action, stage and validator locations to stderr and aborts the
+  process. Invocations run in tasks whose panics become ordinary failure
+  responses, so the abort fails the enclosing test whatever outcome it expected;
+  nextest runs each test in its own process, so only that test fails. Host
+  tests, isolated-broker acceptance tests and the CLI smokes are covered.
+  Release builds contain no check.
+- `runtime::result_conformance::tests::mismatches_abort_the_enclosing_test_process`
+  in `agent-access-core` proves the abort for both stages by re-running its test
+  binary on the ignored, guarded `conformance_abort_child`, which does nothing
+  unless the parent selects a stage. Never run the child directly or include
+  ignored tests broadly.
+- MCP delivery checks validate every `structuredContent` against the called
+  tool's advertised `outputSchema`, as advertised rather than strictly: the host's
+  HTTP MCP fixture (`tests::mcp`) and the stdio subprocess harnesses of the
+  `mcp_stdio` test and the Jira, Confluence, GitLab and CloudBees CI smokes.
+  The HTTP MCP fixture also checks a successful discovery helper result strictly
+  against its typed schema. `crates/agent-access/src/output.rs` checks every
+  local receipt and save failure against the stdio schemas.
+- Core `output_schema` tests cover composition, each transport's delivery
+  shapes, helper schemas and the catalog, detail and OpenAPI projections. Each
+  provider schema pair is at most 8,192 bytes (descriptor validation), and the
+  assembly projection test requires every advertised `outputSchema` to be at
+  most 16,384 bytes and free of `$ref`.
+
+Set `AGENT_ACCESS_TEST_MCP_CAPTURE` to an absolute file path to append every
+listed tool and every tool result from these MCP checks as JSON lines, each
+tagged with its test process ID, for checking advertised schemas with external
+MCP clients. Unset, nothing is captured.
+
 ### Guide code blocks
 
 The [provider SDK guide](provider-sdk.md) and the

@@ -581,7 +581,7 @@ can rename, defer or filter helpers independently of the Broker's wire contract.
 | `services_list` | Optional `prefix` | `{services:[{service,displayName,surface,actions:[names]}]}` |
 | `resource_access_describe` | Required `service`; optional `action`, `resourceType`, `prefix`, `limit`, `cursor` | `{service,executionContext,availability,coverageSemantics:"single_target",access:[...],registeredResources:{source:"broker_configuration",items:[...],nextCursor},liveListings?:[{service,action,resourceType}]}` |
 | `actions_list` | Required `service`; optional `resource`, `resourceType`, `prefix` | `{service,resource?,actions:[names]}` |
-| `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool` |
+| `actions_describe` | Required `service`, `action` | Full action definition; invoke actions include `mcpTool` with its [output schema](#output-schemas) |
 | `services_describe` | Required `service` | Complete service capabilities, action schemas and authenticated caller limits |
 
 `services_describe` includes [live service limits](http-api.md#live-service-limits)
@@ -845,6 +845,84 @@ formats are rejected. Responses retain the broker envelope in both MCP text and
 structured content, or in the saved JSON envelope when `outputPath` is used.
 Rate-limited tool errors are the one exception to the text copy; see
 [rate limits](#rate-limits).
+
+## Output schemas
+
+Every action tool whose action declares result schemas, and each of the five
+discovery helpers, advertises an MCP `outputSchema` describing the
+`structuredContent` that tool returns: successes, denials, failures and local
+file receipts. Every built-in provider action declares them, and imported
+actions advertise their adapter's wrapper layout (below). A tool for an action
+without result schemas omits `outputSchema`. The schema is added metadata only;
+tool names, arguments and results are unchanged.
+
+The root is an object whose `anyOf` lists one complete alternative per
+delivery shape:
+
+| Tool | `structuredContent` alternatives |
+| --- | --- |
+| HTTP MCP action | Broker envelope; HTTP MCP failure |
+| Stdio JSON or upload action | Broker envelope; local file receipt |
+| Stdio download action | Download receipt with the metadata `result`; Broker envelope |
+| HTTP MCP helper | Discovery result; HTTP MCP failure |
+| Stdio helper | Discovery result; local file receipt; Broker error envelope |
+
+- The Broker envelope requires `agentRequestId`, `brokerRequestId`, `decision`
+  (`allow`, `deny` or `error`), `service`, `action` and `resourceScopes`, with
+  optional `reasonCode`, `reason`, `result` and `error.message`. It carries
+  allowed results, denials and execution errors alike. The Broker's own
+  admission refusals use the reserved `broker` service without `result`.
+- An HTTP MCP failure has `error.message`, optional `error.code` and no action
+  result: a tool error (`mcp_tool_error`), an admission failure without a
+  Broker envelope, or an oversized
+  result (`mcp_response_too_large`) with correlation IDs, `brokerOutcome`,
+  `execution` and `retrySafe: false`; see [the HTTP endpoint](#http-endpoint).
+- A local file receipt reports a response saved through stdio `outputPath`, or a
+  failed save: `operationStatus`, request identifiers, the compact mutation
+  fields and `output`, as described in [tool arguments](#tool-arguments). A JSON
+  receipt never repeats `result`; a download receipt keeps the metadata
+  envelope's `result`.
+- Local stdio adapter errors, such as an invalid argument or an unreadable
+  request file, are text only with `isError: true` and have no
+  `structuredContent`.
+
+Read the action payload at `structuredContent.result`, after checking
+`isError`, `decision` and `error`: on `allow` it follows the action's success
+schema; a denial or error may omit it or carry failure details. The `result`
+schema is the union of:
+
+- the success payload, with an optional `renderedBody` (`{format, value}`) at
+  each declared body owner, present only when `readContentFormat` is `markdown`
+  or `text`;
+- the whole-result Markdown `{format: "markdown", value}` when the action
+  supports `responseFormat: "markdown"`;
+- the action's own failure payload, when it declares one, merged with the
+  shared failure fields;
+- the shared failure fields alone: mutation receipts (`mutationStatus`,
+  `retrySafe`, `verificationStage`, `safeLocators`), `executionState`,
+  `deadlineKind`, upstream rate-limit details (`limitScope`, `service`,
+  `retryAfterSeconds`, `retryAt`) and `hints.upstreamResourceOwnership`.
+
+Payload schemas cover every supported configuration and input of the action,
+so a declared field can be absent from a particular result; `required` lists
+only fields that are always present. Objects are open: validators accept fields
+the schema does not declare, and clients should tolerate them. Clients that
+validate `structuredContent` against `outputSchema`, including on `isError`
+results, accept every shape the Broker delivers. Refresh tool discovery after
+upgrading the Broker.
+
+Imported actions advertise their adapter's stable wrapper, such as
+`result.upstreamMcp`, `result.upstreamHttp` or `result.upstreamCommand` with
+the adapter's receipt fields, and leave the upstream content open even when
+the accepted definition has its own output schema, so accepting or refreshing
+an import does not change the advertised schema.
+
+`actions_describe` returns an executable action's schema as
+`mcpTool.outputSchema` and omits the catalog's duplicate `resultSchemas`; an
+action without a tool on that connection, such as a download on HTTP MCP, keeps
+[`resultSchemas`](http-api.md#result-schemas-and-typed-responses). Helper
+schemas type the discovery objects and leave schema-valued fields, such as
+`inputSchema`, `outputSchema`, `resultSchemas` and `documentation`, open.
 
 ## Sensitive data and errors
 

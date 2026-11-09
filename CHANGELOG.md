@@ -176,6 +176,25 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **MCP tools advertise output schemas.** Native and imported action tools and
+  the five discovery helpers publish an `outputSchema` describing the
+  `structuredContent` they already return, including denials, failures, stdio
+  file receipts and HTTP MCP delivery failures. The action payload is
+  `structuredContent.result`. Tool names, inputs, results and the catalog
+  version are unchanged. See [output schemas](docs/mcp.md#output-schemas).
+
+- **Catalog result schemas and typed OpenAPI responses.** Catalog actions add
+  optional `resultSchemas` (`success`, optional `error`), and OpenAPI invoke
+  operations type the envelope's `result` with a `default` error response.
+  Action detail returns `mcpTool.outputSchema` instead when the action is an
+  MCP tool. See [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
+
+- **Provider SDK result schemas.** Providers declare payload schemas with
+  `ActionDescriptor::result_schemas`, `ActionResultSchemas` and bundled
+  `ResultSchemaBundle` files; descriptor validation enforces an authoring
+  profile and an 8 KiB budget, and `test_support::assert_result_conforms`
+  checks outcomes strictly. See [result schemas](docs/provider-sdk.md#result-schemas).
+
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to
   required Microsoft email, optional display name and access settings, with a
   server-generated `usr-<UUIDv4>` principal ID. **Create a local account instead**

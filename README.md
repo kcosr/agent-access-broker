@@ -222,7 +222,10 @@ permission model. Agents connect through typed CLI commands, JSON request files,
 HTTP, local stdio MCP, or authenticated HTTP MCP. Git clients use the Git smart
 HTTP gateway. MCP action tools publish their arguments as a plain object schema,
 and an unsupported argument is refused with an error that names it and lists the
-accepted ones; see [tool arguments](docs/mcp.md#tool-arguments).
+accepted ones; see [tool arguments](docs/mcp.md#tool-arguments). MCP tools also
+advertise an output schema for their structured results, and the runtime
+catalog and OpenAPI describe each action's `result`; see
+[output schemas](docs/mcp.md#output-schemas).
 
 Gateway addresses and authentication come from administrator-provided client
 setup. Gateways are omitted from ordinary agent service/action discovery;

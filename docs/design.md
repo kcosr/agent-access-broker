@@ -49,7 +49,9 @@ names; transport mode independently determines local-file capabilities. Pure
 adapter naming hooks derive imported names from accepted metadata. Readiness is
 computed before caller filtering and published with the immutable runtime,
 without a name table, extra discovery or credential lookup. HTTP routes share
-one endpoint and bind sessions to the view. Current authorization, credential
+one endpoint and bind sessions to the view. A tool whose action declares result
+schemas advertises an `outputSchema` that core composes from the catalog entry
+for its transport; helpers carry core-owned schemas. Current authorization, credential
 selection, revision fences, limits and audit remain in their existing owners.
 See the [MCP contract](mcp.md) for connection setup, naming, readiness and transport
 boundaries.
@@ -651,8 +653,10 @@ validate`) when an action's input schema is not an object schema that compiles
 as JSON Schema, when an upload locator is not an input, when a sensitive output
 is not a JSON pointer into `/result`, when an action resolves its scope by
 lookup without declaring one, when a raw-download action declares a response
-presentation, or when a scope binds an unregistered resource type or offers a
-selector that type does not support.
+presentation, when an action's result schemas leave the authoring profile,
+exceed their size budget or do not resolve a presentation body owner, or when a
+scope binds an unregistered resource type or offers a selector that type does
+not support.
 
 An action's descriptor also carries its response presentation: the embedded
 upstream bodies that `readContentFormat` normalizes (an owner path and a body
@@ -663,12 +667,23 @@ the serialized result; each backend supplies its codecs and templates, and the
 rich-content format renderers live in `agent-access-content`. The catalog's
 advertised read and response formats derive from the same presentation.
 
+An action may also declare result schemas: the provider's success and failure
+`result` payloads before presentation and the envelope, as action-wide
+supersets across configurations and inputs. Core owns composition
+(`output_schema.rs`): it adds the presentation's `renderedBody` companions and
+whole-result Markdown, the shared failure fields and each transport's delivery
+shapes, producing the MCP `outputSchema` of every tool, the catalog's
+`resultSchemas` and typed OpenAPI invoke responses from the one catalog entry.
+Production never validates results against these schemas; test-support builds
+check every invocation strictly (see
+[result schema conformance](testing.md#result-schema-conformance)).
+
 A descriptor declares the service's resource scopes and the resource type each
 one authorizes, and for every action its input schema, resource scope (if any),
 credential modes, lookup requirement (none, execution-time only, or before
 policy to resolve scope), its optional native search enforcement mode, upstream resource
 ownership, JSON/multipart-upload/raw-download I/O, explicit `read_only`,
-sensitive output pointers, optional extended `documentation`,
+sensitive output pointers, optional result schemas, optional extended `documentation`,
 optional explicit `listingOf` enumeration metadata,
 attribution capability, and whether it issues durable handles that need a stable
 signing key. At service level it declares accepted service credential kinds,
