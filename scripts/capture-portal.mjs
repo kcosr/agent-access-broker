@@ -172,9 +172,10 @@ async function adminDialogs(page) {
   await visit(page, '/ui/admin/principals', '/v1/admin/principals');
   await page.getByRole('button', { name: 'Create user', exact: true }).click();
   let dialog = page.getByRole('dialog', { name: 'Create user', exact: true });
-  await dialog.getByLabel('Principal ID', { exact: true }).fill('morgan@example.test');
+  await dialog.getByRole('checkbox', { name: 'Create a local account instead', exact: true }).check();
+  await dialog.getByRole('textbox', { name: 'Username', exact: true }).fill('morgan');
   await dialog.getByLabel('Display name').fill('Morgan Demo User');
-  await dialog.getByLabel('Email').fill('morgan@example.test');
+  await dialog.getByRole('textbox', { name: 'Email (optional)', exact: true }).fill('morgan@example.test');
   await expect(dialog.getByLabel('Agent token issuance', { exact: true })).toHaveValue('inherit');
   await dialog.getByLabel('Agent token issuance', { exact: true }).selectOption('read_only');
   await dialog.getByRole('group', { name: 'Permitted issuance contexts', exact: true }).getByRole('checkbox', { name: 'default', exact: true }).check();
@@ -182,10 +183,9 @@ async function adminDialogs(page) {
   await dialog.getByRole('combobox', { name: /^Groups/ }).fill('jira-users');
   await page.getByRole('option', { name: /^jira-users - Jira Users/ }).click();
   await dialog.getByRole('combobox', { name: /^Groups/ }).press('Escape');
-  await dialog.getByRole('checkbox', { name: 'Enable local password sign-in', exact: true }).check();
   await dialog.getByRole('checkbox', { name: 'I authorize local password sign-in for this user independently of Microsoft sign-in.', exact: true }).check();
   await dialog.getByRole('checkbox', { name: 'Self-service enabled', exact: true }).scrollIntoViewIfNeeded();
-  await capture(page, 'guide', 'admin-create-user-light', 'light', 'Draft user enrollment with read-only token issuance in default and internal contexts, group selection, independent local password sign-in, and self-service');
+  await capture(page, 'guide', 'admin-create-local-user-light', 'light', 'Explicit unsubmitted local-account draft with username, read-only token issuance in default and internal contexts, group selection, local password acknowledgement, and self-service');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   await visit(page, '/ui/admin/principals?kind=groups', '/v1/admin/groups');

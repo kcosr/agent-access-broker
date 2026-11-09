@@ -179,9 +179,22 @@ an HTTP method or operation name never assigns that classification automatically
 
 ## Onboard a human user
 
-In **Admin > Principals > Users**, create the user with a stable principal ID and
-clear display name. Select a role, self-service setting, and **Agent token
-issuance** permission:
+In **Admin > Principals > Users**, select **Create user**. Microsoft enrollment
+is the default: enter the required **Microsoft email**, optionally enter a
+**Display name**, and choose access settings. The Broker generates the stable
+principal ID; there is no ID field in this form. The portal initially uses the
+Microsoft email for profile email and enrollment, which remain independent after
+creation. See [Microsoft onboarding](#microsoft-onboarding) for matching and
+first-sign-in behavior.
+
+For a local account, select **Create a local account instead**, enter its
+**Username**, and acknowledge the separate local-password sign-in. The username
+is the explicit principal ID; creation displays a temporary password once. This choice does not create Microsoft
+enrollment. If Microsoft enrollment is unavailable, the form explains why and
+requires an explicit local choice to proceed. Service accounts are created
+separately under **Service accounts**, with an explicit principal ID.
+
+Select a role, self-service setting, and **Agent token issuance** permission:
 
 | Role | Administrative authority |
 | --- | --- |
@@ -230,10 +243,11 @@ does not block administrative issuance, but valid lifetime/permission metadata
 and target options are required. Service accounts require this administrative
 path. See [issuance rules](roles.md#agent-token-issuance).
 
-Create a group before adding members. For local login, enable a temporary password
-in the user's **Overview > Sign-in methods**, deliver it securely, and require
-its first-use change. A user can instead sign in through configured Microsoft
-OIDC. Group mapping/JIT/linking details and expiry behavior are in
+Create a group before adding members. Deliver a local account's temporary
+password securely and require its first-use change. To add local-password
+sign-in to an existing account, use **Overview > Sign-in methods**. It is an
+independent sign-in method, including when added to a Microsoft account. Group mapping,
+JIT/linking details and expiry behavior are in
 [Microsoft onboarding](#microsoft-onboarding).
 
 For CLI administration, issue a short-lived `admin` management token from your
@@ -250,7 +264,9 @@ agent-access --url https://broker.example \
 The following examples assume your administrator CLI config selects that HTTPS
 URL, Authorization Bearer identity, and token file, and that `default` is a
 configured execution context. Management commands reject
-literal `--token-value`; use a file or environment source.
+literal `--token-value`; use a file or environment source. This example explicitly
+creates a local account with username `alice`; Microsoft creation omits the
+positional ID as shown under [Microsoft onboarding](#microsoft-onboarding).
 
 ```bash
 agent-access admin principals create alice \
@@ -515,18 +531,29 @@ assign fresh administrative credentials after a promotion. See [roles](roles.md)
 
 The operator configures single-tenant Microsoft sign-in and a recovery local login
 method first; see [OIDC operation](operator-guide.md#microsoft-entra-oidc-setup-and-operation).
-Prepare the normal human account with an explicit pending Microsoft email:
+Prepare the normal human account with an explicit pending Microsoft email and
+no positional principal ID:
 
 ```bash
-agent-access admin principals create morgan --kind user \
-  --display-name "Morgan Demo User" --email morgan@example.test \
-  --microsoft-enrollment-email morgan@example.test
+agent-access admin principals create \
+  --microsoft-enrollment-email morgan@example.test \
+  --display-name "Morgan Demo User" --email morgan@example.test
 ```
 
-Assign its groups, grants and account settings using the existing operations.
+The Broker generates a principal ID such as
+`usr-7be9a51d-14d2-4f30-8c56-939c76cb602a` and returns it in `result.principalId`.
+Use that returned ID for groups, grants and all later account operations; it is
+independent of the email and display name. The CLI rejects a positional ID with
+`--microsoft-enrollment-email`. Profile `--email` is optional and independent of
+the enrollment option. Local and service-account creation require explicit IDs.
+Existing principal IDs and enrollment attached to existing accounts stay unchanged.
+
+Assign groups, grants and account settings using the existing operations.
 Creating the account and enrollment is the approval; there is no further approval
 step at login. They commit together, so invalid or duplicate enrollment leaves
 no new account. Later group/grant setup failures retain the account for completion.
+If the creation response is lost, inspect the principal list and pending enrollment
+before trying again; loss of the response does not prove that creation failed.
 This does not create a local password, attach upstream credentials, issue or
 distribute Broker tokens, or configure trusted username access.
 
@@ -542,15 +569,17 @@ email leaves the prepared account pending and follows normal unmatched JIT rules
 
 In **Overview > Sign-in methods**, **Awaiting first Microsoft sign-in** shows the
 pending email and tenant separately from profile email. Inspect, edit or cancel
-it there, or use:
+it there, or use the following templates, replacing `PRINCIPAL_ID` with the
+returned ID (or an existing account's unchanged ID) and the enrollment placeholders
+with its current values:
 
 ```bash
-agent-access admin principals login-methods oidc enrollment inspect morgan
-agent-access admin principals login-methods oidc enrollment create morgan \
+agent-access admin principals login-methods oidc enrollment inspect PRINCIPAL_ID
+agent-access admin principals login-methods oidc enrollment create PRINCIPAL_ID \
   --email morgan@example.test
-agent-access admin principals login-methods oidc enrollment update morgan \
+agent-access admin principals login-methods oidc enrollment update PRINCIPAL_ID \
   --enrollment-id <enrollment-UUID> --expected-revision 1 --email morgan.new@example.test
-agent-access admin principals login-methods oidc enrollment cancel morgan \
+agent-access admin principals login-methods oidc enrollment cancel PRINCIPAL_ID \
   --enrollment-id <enrollment-UUID> --expected-revision 2
 ```
 

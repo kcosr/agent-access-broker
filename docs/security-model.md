@@ -523,9 +523,11 @@ security-relevant properties are:
   intersected before the upstream query. Boundary changes require a replacement
   token.
 - **Microsoft identity is object-based.** The configured tenant ID and the
-  token's immutable user object ID form the lasting login identity. An explicit
-  administrator-created pending enrollment permits one match of the validated
-  token's canonical email within the configured tenant, trusting that tenant's
+  token's immutable user object ID form the lasting login identity. New
+  Microsoft-enrolled accounts use a server-generated opaque Broker principal ID,
+  independent of email or display name; changing either does not rename the
+  principal. An explicit administrator-created pending enrollment permits one
+  match of the validated token's canonical email within the configured tenant, trusting that tenant's
   email attribute. Profile email, preferred username, UPN, aliases and display
   name never authorize matching. Existing immutable bindings always win,
   including disabled refusals; a disabled pending owner reserves its address

@@ -7,7 +7,14 @@ All notable changes to this project are documented in this file.
 ### Breaking Changes
 
 - **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
-  Back up first and upgrade Broker, CLI and portal together; rollback requires
+  New-account HTTP requests with `microsoftEnrollment` must omit `principalId`;
+  CLI creation with
+  `--microsoft-enrollment-email` must omit the positional principal ID. Supplying
+  both is rejected. Use the returned `result.principalId` for later operations.
+  Non-enrollment creation still requires an explicit ID; existing IDs and
+  existing-account enrollment routes are unchanged. This input-contract change
+  needs no additional database migration. Back up before migration 036 and
+  upgrade Broker, CLI and portal together; rollback across that migration requires
   the matching pre-migration database and binary. Existing principals are marked
   processed without group backfill. For principals created after migration,
   initial local groups now apply once at the first Microsoft sign-in, including
@@ -176,14 +183,17 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- **Prepare Microsoft users by email.** Administrators can create a normal human
-  account with explicit tenant-scoped `microsoftEnrollment`, then prepare access
-  before its first validated matching sign-in. The CLI adds
-  `--microsoft-enrollment-email` and `login-methods oidc enrollment`
-  inspect/create/update/cancel operations; the portal shows pending enrollment
-  separately from profile email. Binding consumes the reservation and preserves
-  the principal without a later approval, directory lookup or automatic token
-  distribution. Paused providers permit preparation. Login audit adds
+- **Prepare Microsoft users by email.** The portal's **Create user** defaults to
+  required Microsoft email, optional display name and access settings, with a
+  server-generated `usr-<UUIDv4>` principal ID. **Create a local account instead**
+  explicitly selects username and local-password setup; service-account creation
+  keeps explicit IDs. Unavailable Microsoft enrollment explains the limitation
+  without selecting local creation. Administrators can prepare access before the
+  first validated matching sign-in. The CLI adds `--microsoft-enrollment-email`
+  and `login-methods oidc enrollment` inspect/create/update/cancel operations;
+  the portal shows pending enrollment separately from profile email. Binding
+  consumes the reservation and preserves the principal without a later approval,
+  directory lookup or automatic token distribution. Paused providers permit preparation. Login audit adds
   `enrollmentId` and `tenantId` when pending enrollment is consumed, plus
   `displayNameUpdated`; it preserves `jitCreated` and records actual initial
   memberships in `autoEnrolledGroupIds`. `config.status` adds the

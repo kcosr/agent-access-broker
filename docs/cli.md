@@ -521,7 +521,11 @@ HTTP route envelope:
 The `route` field must match a route template from the fetched catalog. The CLI
 percent-encodes `pathParams`, encodes declared scalar/array query parameters,
 rejects unknown path/query keys, rejects `body: null`, and never accepts
-arbitrary external URLs.
+arbitrary external URLs. For `POST /v1/admin/principals`, a Microsoft-enrolled
+creation puts `microsoftEnrollment` in `body` and omits `body.principalId`;
+non-enrollment creation requires `body.principalId`. Use the returned
+`result.principalId` for later routes. See the [HTTP API](http-api.md) for the
+principal creation contract.
 Before sending, it rejects missing or empty required query parameters and a
 missing required body, using the catalog's required query metadata and
 `bodyRequired` flag. These route-input errors exit `3` without dispatching the
@@ -790,11 +794,18 @@ commands described below. All `admin` subcommands reject `--token-value`.
 - `admin store status` — `GET /v1/admin/store/status`.
 - `admin config status | reload` — `GET /v1/admin/config/status` or
   `POST /v1/admin/config/reload`.
-- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--microsoft-enrollment-email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
-  `create --kind` defaults to `user`. For a human, `--microsoft-enrollment-email`
-  creates explicit pending enrollment atomically with the account; it is
-  independent of profile `--email`. Issuance defaults to Inherit with an empty
-  context list on creation. Creating an existing principal returns HTTP 409.
+- `admin principals list | inspect <principal> | create [<principal>] [--kind <KIND>] [--display-name ...] [--email ...] [--microsoft-enrollment-email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
+  `create --kind` defaults to `user`. For a human, `create
+  --microsoft-enrollment-email morgan@example.test` creates the account and pending
+  enrollment atomically without a positional principal ID. The server generates
+  `usr-<UUIDv4>` and returns it in `result.principalId`; use that value in later
+  commands. The positional ID conflicts with `--microsoft-enrollment-email` and
+  is required when the enrollment option is absent, including local users and
+  service accounts. Profile `--email` remains independent and optional. Existing
+  IDs and the enrollment commands below are unchanged. If the response is lost,
+  inspect current principals/enrollment before retrying creation. Issuance defaults
+  to Inherit with an empty context list. Creating an existing explicit ID returns
+  HTTP 409.
   Change issuance with `access set --agent-token-issuance MODE`, adding repeatable
   `--agent-token-issuance-context CONTEXT` for an enabled mode. `read_only` and
   `write_capable` require at least one context; `inherit` and `disabled` reject

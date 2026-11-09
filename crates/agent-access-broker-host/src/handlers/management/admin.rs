@@ -39,11 +39,14 @@ use std::sync::Arc;
 use tracing::Instrument;
 use tracing::instrument::WithSubscriber;
 use url::form_urlencoded;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PrincipalCreateBody {
-    principal_id: String,
+    // Retain explicit null so Microsoft creation cannot treat it as omission.
+    #[serde(default, deserialize_with = "deserialize_present")]
+    principal_id: Option<Option<String>>,
     #[serde(default = "default_user_kind")]
     kind: String,
     display_name: Option<String>,
@@ -69,8 +72,8 @@ pub(crate) struct PrincipalAccessBody {
     agent_token_issuance: Option<agent_access_core::PrincipalAgentTokenIssuanceSetting>,
 }
 
-/// Reads an optional field that, when present, must hold a value: an
-/// explicit `null` is invalid rather than an omitted field.
+/// Reads an optional field while preserving its presence. Explicit `null` is
+/// rejected unless `T` itself accepts it.
 pub(super) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -1611,12 +1614,34 @@ pub(crate) async fn admin_principals_create(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let target = Some(json!({"principal": body.principal_id}));
+    let principal_id = match (&body.principal_id, &body.microsoft_enrollment) {
+        (None, Some(_)) => Ok(format!("usr-{}", Uuid::new_v4())),
+        (Some(Some(principal_id)), None) => Ok(principal_id.clone()),
+        (Some(_), Some(_)) => Err(ManagedStoreError::InputInvalid(
+            "principalId must be omitted with microsoftEnrollment".into(),
+        )),
+        (None, None) => Err(ManagedStoreError::InputInvalid(
+            "principalId is required without microsoftEnrollment".into(),
+        )),
+        (Some(None), None) => Err(ManagedStoreError::InputInvalid(
+            "principalId must be a non-empty string".into(),
+        )),
+    };
+    let target = principal_id
+        .as_ref()
+        .ok()
+        .map(|principal_id| json!({"principal": principal_id}));
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await
     {
         return *response;
     }
+    let principal_id = match principal_id {
+        Ok(principal_id) => principal_id,
+        Err(error) => {
+            return management_store_error_response(&context, operation, target, error).await;
+        }
+    };
     let actor = context.identity.principal.clone();
     let managed_identity = context.snapshot.runtime.config().identity.authority == "managed";
     committed_principal_mutation(
@@ -1642,7 +1667,7 @@ pub(crate) async fn admin_principals_create(
             };
             let principal = store.create_principal_with_microsoft_enrollment(
                 PrincipalWriteRequest {
-                    principal_id: body.principal_id,
+                    principal_id,
                     kind: body.kind,
                     display_name: body.display_name,
                     email: body.email,

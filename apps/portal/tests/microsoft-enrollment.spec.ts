@@ -9,6 +9,7 @@ test.beforeAll(async () => { assets = await servePortalAssets(); });
 test.afterAll(async () => { await assets.close(); });
 const stamp = { createdAt: "2026-11-09T00:00:00Z", updatedAt: "2026-11-09T00:00:00Z", createdBy: "admin", updatedBy: "admin" };
 const reservation = (): MicrosoftEnrollment => ({ enrollmentId: "enrollment-1", principalId: "prepared", tenantId: "11111111-1111-4111-8111-111111111111", matchEmail: "person@example.test", revision: 3, ...stamp });
+const returnedId = "usr-22222222-3333-4444-8555-666666666666";
 const endpoint = "/v1/admin/principals/prepared/login-methods/oidc/microsoft/enrollment";
 
 async function fixture(page: Page, pending = true) {
@@ -19,7 +20,7 @@ async function fixture(page: Page, pending = true) {
     groups: [], groupMemberships: [], activePolicyGroupSubjects: [], policyReferenceSections: [], signInMethods: { localPassword: "absent", microsoft: "absent" }, ...stamp
   };
   const model = {
-    principal, role: "admin", available: true, microsoftEnabled: false, linked: false, conflict: false, rejectCreate: false,
+    principal, role: "admin", available: true, microsoftEnabled: false, linked: false, conflict: false, rejectCreate: false, rejectGroup: false, retryGroup: false,
     writes: [] as { path: string; method: string; body: Record<string, unknown>; query?: Record<string, string> }[], errors: [] as string[]
   };
   page.on("pageerror", (error) => model.errors.push(error.message));
@@ -40,6 +41,15 @@ async function fixture(page: Page, pending = true) {
       await route.fulfill({ status: 409, json: { ok: false, error: { message: "Enrollment changed or email already reserved" } } });
       return;
     }
+    if (write && path.endsWith("/groups/readers")) {
+      if (model.rejectGroup || model.retryGroup) {
+        const retry = model.retryGroup;
+        model.retryGroup = false;
+        await route.fulfill({ status: retry ? 403 : 409, json: { ok: false, reasonCode: retry ? "csrf_invalid" : "group_changed", error: { message: "Group setup did not complete" } } });
+        return;
+      }
+      principal.groups.push("readers");
+    }
     let result: unknown = [];
     if (path === "/v1/auth/session") result = {
       authenticated: true, principal: "admin", role: model.role, selfServiceEnabled: false, csrfHeader: "x-csrf-token", csrfToken: "fixture",
@@ -48,11 +58,13 @@ async function fixture(page: Page, pending = true) {
     else if (path === "/v1/admin/config/status") result = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp.createdAt, configHash: "fixture", microsoftEnrollment: { available: model.available, tenantId: reservation().tenantId } };
     else if (path === "/v1/admin/principals") {
       if (write) {
+        principal.principalId = body.microsoftEnrollment ? returnedId : body.principalId as string;
+        principal.displayName = body.displayName as string;
         principal.email = body.email as string;
-        principal.microsoftEnrollment = body.microsoftEnrollment ? { ...reservation(), matchEmail: (body.microsoftEnrollment as { email: string }).email } : null;
+        principal.microsoftEnrollment = body.microsoftEnrollment ? { ...reservation(), principalId: principal.principalId, matchEmail: (body.microsoftEnrollment as { email: string }).email } : null;
       }
       result = write ? principal : [principal];
-    } else if (path === "/v1/admin/principals/prepared") {
+    } else if (path === `/v1/admin/principals/${principal.principalId}`) {
       if (write) Object.assign(principal, body);
       result = principal;
     } else if (path === endpoint) {
@@ -60,7 +72,8 @@ async function fixture(page: Page, pending = true) {
       if (method === "PATCH") principal.microsoftEnrollment = { ...principal.microsoftEnrollment!, matchEmail: body.email as string, revision: principal.microsoftEnrollment!.revision + 1 };
       if (method === "DELETE") principal.microsoftEnrollment = null;
       result = method === "DELETE" ? { cancelled: true } : principal.microsoftEnrollment;
-    } else if (path === "/v1/admin/principals/prepared/login-methods") result = model.linked ? [{ method: "oidc", status: "active", oidc: { provider: "microsoft", tenantId: reservation().tenantId, userObjectId: "22222222-2222-4222-8222-222222222222" } }] : [];
+    } else if (path === `/v1/admin/principals/${principal.principalId}/login-methods`) result = model.linked ? [{ method: "oidc", status: "active", oidc: { provider: "microsoft", tenantId: reservation().tenantId, userObjectId: "22222222-2222-4222-8222-222222222222" } }] : [];
+    else if (path === "/v1/admin/groups") result = [{ groupId: "readers", displayName: "Readers", status: "active", memberCount: 0, autoEnrollNewMicrosoftUsers: false, agentTokenIssuance: { mode: "disabled", allowedExecutionContexts: [] }, ...stamp }];
     else if (path === "/v1/admin/policy/catalog") result = { services: [], subjects: { users: [], groups: [], anonymous: false }, resources: [], resourceGroups: [], executionContexts: { allowedValues: ["default"], defaultContext: "default" } };
     else if (path.endsWith("/identity-token")) result = { principalId: principal.principalId, configured: false, enabled: true, readOnly: false, revision: 1, updatedAt: stamp.createdAt };
     else if (path.endsWith("/identity-access")) result = { principalId: principal.principalId, incarnation: "fixture", paused: false, version: 1, ...stamp };
@@ -72,25 +85,122 @@ async function fixture(page: Page, pending = true) {
 }
 const signIn = (page: Page) => page.getByRole("region", { name: "Sign-in methods", exact: true });
 
-test("Create user explicitly enrolls Microsoft email while the provider is paused", async ({ page }) => {
+for (const microsoftEnabled of [true, false]) {
+  test(`Create user defaults to Microsoft with the provider ${microsoftEnabled ? "enabled" : "paused"}`, async ({ page }) => {
+    const model = await fixture(page, false);
+    model.microsoftEnabled = microsoftEnabled;
+    await page.goto(`${assets.baseUrl}/ui/admin/principals`);
+    await page.getByRole("button", { name: "Create user", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
+    await expect(dialog.getByLabel("Create a local account instead", { exact: true })).not.toBeChecked();
+    await expect(dialog.getByLabel("Principal ID", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByLabel("Username", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByLabel("Prepare Microsoft sign-in by email", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
+    await dialog.getByLabel("Microsoft email", { exact: true }).fill("person@example.test");
+    await expect(dialog.getByLabel("Microsoft email", { exact: true })).toHaveAttribute("required", "");
+    await expect(dialog).toContainText("paused Microsoft provider permits preparation");
+    await dialog.getByRole("button", { name: "Create user", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`principals/${returnedId}$`));
+    await expect(signIn(page)).toContainText("Awaiting first Microsoft sign-in");
+    expect(model.writes).toHaveLength(1);
+    expect(model.writes[0]).toMatchObject({ path: "/v1/admin/principals", method: "POST", body: { kind: "user", email: "person@example.test", microsoftEnrollment: { email: "person@example.test" } } });
+    expect(model.writes[0].body).not.toHaveProperty("principalId");
+    expect(model.writes[0].body).not.toHaveProperty("displayName");
+    await expect(page.getByText("User has no sign-in methods.", { exact: false })).toHaveCount(0);
+    expect(model.errors).toEqual([]);
+  });
+}
+
+for (const rejectGroup of [false, true]) {
+  test(`Microsoft creation uses the returned ID after group setup ${rejectGroup ? "failure" : "CSRF retry"}`, async ({ page }) => {
+    const model = await fixture(page, false);
+    model.rejectGroup = rejectGroup;
+    model.retryGroup = !rejectGroup;
+    await page.goto(`${assets.baseUrl}/ui/admin/principals`);
+    await page.getByRole("button", { name: "Create user", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
+    await dialog.getByLabel("Microsoft email", { exact: true }).fill("person@example.test");
+    await dialog.getByRole("combobox", { name: "Groups (optional)", exact: true }).click();
+    await page.getByRole("option", { name: "readers - Readers", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: "Create user", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`principals/${returnedId}$`));
+    await expect(signIn(page)).toContainText("Awaiting first Microsoft sign-in");
+    expect(model.writes.filter((write) => write.path === "/v1/admin/principals")).toHaveLength(1);
+    expect(model.writes.slice(1)).toEqual(Array.from({ length: rejectGroup ? 1 : 2 }, () => ({ path: `/v1/admin/principals/${returnedId}/groups/readers`, method: "PUT", body: {} })));
+    if (rejectGroup) await expect(page.getByText("User created, but setup did not complete. Finish setup on Overview.", { exact: true })).toBeVisible();
+    else await expect(page.getByText("User created", { exact: true })).toBeVisible();
+    expect(model.errors).toEqual([]);
+  });
+}
+
+test("unavailable Microsoft keeps the default visible and requires an explicit local choice", async ({ page }) => {
   const model = await fixture(page, false);
+  model.available = false;
   await page.goto(`${assets.baseUrl}/ui/admin/principals`);
   await page.getByRole("button", { name: "Create user", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
-  await dialog.getByLabel("Principal ID", { exact: true }).fill("prepared");
-  await expect(dialog.getByLabel("Prepare Microsoft sign-in by email", { exact: true })).not.toBeChecked();
-  await dialog.getByLabel("Prepare Microsoft sign-in by email", { exact: true }).check();
-  await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
+  const local = dialog.getByLabel("Create a local account instead", { exact: true });
+  await expect(local).not.toBeChecked();
+  await expect(dialog).toContainText("Microsoft account creation requires managed identity and a configured Microsoft tenant.");
   await dialog.getByLabel("Microsoft email", { exact: true }).fill("person@example.test");
-  await expect(dialog).toContainText("paused Microsoft provider permits preparation");
-  await expect(dialog.getByLabel("Enable local password sign-in", { exact: true })).not.toBeChecked();
+  await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
+  await expect(dialog.getByLabel("Principal ID", { exact: true })).toHaveCount(0);
+  await local.check();
+  await expect(dialog.getByLabel("Microsoft email", { exact: true })).toHaveCount(0);
+  await dialog.getByLabel("Username", { exact: true }).fill("local-user");
+  await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
+  await dialog.getByLabel("I authorize local password sign-in for this user independently of Microsoft sign-in.", { exact: true }).check();
+  await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeEnabled();
+  await local.uncheck();
+  await expect(dialog.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeDisabled();
+  expect(model.writes).toEqual([]);
+});
+
+test("switching between filled creation drafts preserves access and omits the local username from Microsoft creation", async ({ page }, testInfo) => {
+  const model = await fixture(page, false);
+  model.microsoftEnabled = true;
+  await page.setViewportSize({ width: 1360, height: 1200 });
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+  await page.addInitScript(() => localStorage.setItem("aab.portal.theme", "light"));
+  await page.goto(`${assets.baseUrl}/ui/admin/principals`);
+  await page.getByRole("button", { name: "Create user", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
+  const local = dialog.getByLabel("Create a local account instead", { exact: true });
+  await dialog.getByLabel("Microsoft email", { exact: true }).fill("alice@example.test");
+  await dialog.getByLabel("Display name", { exact: false }).fill("Alice Example");
+  await dialog.getByRole("combobox", { name: "Groups (optional)", exact: true }).click();
+  await page.getByRole("option", { name: "readers - Readers", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("user");
+  await expect(dialog.getByRole("button", { name: "Create user", exact: true })).toBeEnabled();
+  await page.evaluate(() => document.fonts.ready);
+  await dialog.getByRole("heading", { name: "Create user", exact: true }).click();
+  expect(await dialog.locator(".wb-modal-body").evaluate((body) => body.scrollHeight <= body.clientHeight)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("create-microsoft-user-light.png"), animations: "disabled" });
+  await local.check();
+  await dialog.getByLabel("Username", { exact: true }).fill("alice.local");
+  await expect(dialog.getByLabel("Email (optional)", { exact: true })).toHaveValue("alice@example.test");
+  await expect(dialog.getByLabel("Display name", { exact: false })).toHaveValue("Alice Example");
+  await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("user");
+  await dialog.getByLabel("I authorize local password sign-in for this user independently of Microsoft sign-in.", { exact: true }).check();
+  await dialog.getByRole("heading", { name: "Create user", exact: true }).click();
+  expect(await dialog.locator(".wb-modal-body").evaluate((body) => body.scrollHeight <= body.clientHeight)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("create-local-user-light.png"), animations: "disabled" });
+  await dialog.getByLabel("Role", { exact: true }).selectOption("auditor");
+  await local.uncheck();
+  await expect(dialog.getByLabel("Role", { exact: true })).toHaveValue("auditor");
+  await expect(dialog.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel("Microsoft email", { exact: true })).toHaveValue("alice@example.test");
   await dialog.getByRole("button", { name: "Create user", exact: true }).click();
-  await expect(page).toHaveURL(/principals\/prepared$/);
-  await expect(signIn(page)).toContainText("Awaiting first Microsoft sign-in");
-  expect(model.writes).toHaveLength(1);
-  expect(model.writes[0]).toMatchObject({ path: "/v1/admin/principals", method: "POST", body: { email: "person@example.test", microsoftEnrollment: { email: "person@example.test" } } });
-  await expect(page.getByText("User has no sign-in methods.", { exact: false })).toHaveCount(0);
-  expect(model.errors).toEqual([]);
+  await expect(page).toHaveURL(new RegExp(`principals/${returnedId}$`));
+  expect(model.writes[0].body).toMatchObject({ role: "auditor", displayName: "Alice Example", microsoftEnrollment: { email: "alice@example.test" } });
+  expect(model.writes[0].body).not.toHaveProperty("principalId");
+  expect(model.writes[1]).toMatchObject({ path: `/v1/admin/principals/${returnedId}/groups/readers`, method: "PUT" });
+  expect(model.writes).toHaveLength(2);
 });
 
 test("duplicate enrollment creation leaves the populated form for correction", async ({ page }) => {
@@ -99,8 +209,6 @@ test("duplicate enrollment creation leaves the populated form for correction", a
   await page.goto(`${assets.baseUrl}/ui/admin/principals`);
   await page.getByRole("button", { name: "Create user", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Create user", exact: true });
-  await dialog.getByLabel("Principal ID", { exact: true }).fill("prepared");
-  await dialog.getByLabel("Prepare Microsoft sign-in by email", { exact: true }).check();
   await dialog.getByLabel("Microsoft email", { exact: true }).fill("person@example.test");
   await dialog.getByRole("button", { name: "Create user", exact: true }).click();
   await expect(dialog).toContainText("Enrollment changed or email already reserved");

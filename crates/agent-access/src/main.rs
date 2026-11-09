@@ -1132,14 +1132,19 @@ enum AdminPrincipalsCommand {
         principal: String,
     },
     Create {
-        principal: String,
+        /// Explicit principal ID for local/service creation; omit for Microsoft enrollment.
+        #[arg(
+            required_unless_present = "microsoft_enrollment_email",
+            conflicts_with = "microsoft_enrollment_email"
+        )]
+        principal: Option<String>,
         #[arg(long, default_value = "user")]
         kind: String,
         #[arg(long)]
         display_name: Option<String>,
         #[arg(long)]
         email: Option<String>,
-        /// Prepare Microsoft sign-in using this email, independently of profile --email.
+        /// Prepare Microsoft sign-in with a server-generated principal ID, independently of profile --email.
         #[arg(long)]
         microsoft_enrollment_email: Option<String>,
         #[arg(long)]
@@ -12744,7 +12749,6 @@ async fn run_admin_principals_command(
             agent_token_issuance_contexts,
         } => {
             let mut body = serde_json::json!({
-                "principalId": principal,
                 "kind": kind,
                 "displayName": display_name,
                 "email": email,
@@ -12752,6 +12756,9 @@ async fn run_admin_principals_command(
                     "role": role,
                     "selfServiceEnabled": self_service_enabled.unwrap_or(kind != "service_account"),
             });
+            if let Some(principal) = principal {
+                body["principalId"] = serde_json::json!(principal);
+            }
             if let Some(email) = microsoft_enrollment_email {
                 body["microsoftEnrollment"] = serde_json::json!({ "email": email });
             }

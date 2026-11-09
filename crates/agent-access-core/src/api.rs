@@ -2652,16 +2652,20 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
         &mut routes,
         "POST",
         "/v1/admin/principals",
-        json!({"type":"object", "additionalProperties":false, "required":["principalId"],
+        json!({"type":"object", "additionalProperties":false,
+        "description":"Create a principal. Microsoft enrollment creates a human user with a Broker-generated usr-UUIDv4 principalId, returned in the created principal record. Other accounts require an explicit principalId.",
         "properties":{
-            "principalId":{"type":"string","minLength":1},
+            "principalId":{"type":"string","minLength":1,"description":"Required without microsoftEnrollment; must be omitted with microsoftEnrollment."},
             "kind":{"type":"string","enum":["user","system","service_account"],"default":"user"},
             "displayName":{"type":["string","null"]}, "email":{"type":["string","null"]},
             "externalSubject":{"type":["string","null"]},
             "role":role_schema, "selfServiceEnabled":{"type":"boolean"},
             "agentTokenIssuance":principal_agent_token_issuance_schema(),
             "microsoftEnrollment":microsoft_enrollment_body_schema("POST")
-        }}),
+        },
+        "if":{"required":["microsoftEnrollment"]},
+        "then":{"not":{"required":["principalId"]},"properties":{"kind":{"const":"user"}}},
+        "else":{"required":["principalId"]}}),
     );
     routes
 }
@@ -4381,15 +4385,87 @@ mod managed_identity_contract_tests {
         let create = &openapi["paths"]["/v1/admin/principals"]["post"]["requestBody"]["content"]["application/json"]
             ["schema"];
         let validator = jsonschema::validator_for(create).unwrap();
-        assert!(validator.is_valid(
-            &json!({"principalId":"prepared","microsoftEnrollment":{"email":"ada@example.test"}})
-        ));
+        assert!(validator.is_valid(&json!({"microsoftEnrollment":{"email":"ada@example.test"}})));
         assert!(!validator.is_valid(&json!({"principalId":"prepared","microsoftEnrollment":null})));
         assert!(
             openapi["paths"][path]["get"]["responses"]["200"]
                 .to_string()
                 .contains("matchEmail")
         );
+    }
+
+    #[test]
+    fn principal_creation_id_contract_projects_into_catalog_openapi_and_send() {
+        let mut catalog = empty_catalog(json!({}));
+        catalog.routes = principal_group_admin_routes();
+        let route = catalog
+            .routes
+            .iter()
+            .find(|route| route.operation == "admin.principals.create")
+            .unwrap();
+        let schema = route.request_body_schema.as_ref().unwrap();
+        let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
+        let projected = &openapi["paths"]["/v1/admin/principals"]["post"]["requestBody"]["content"]
+            ["application/json"]["schema"];
+        assert_eq!(projected, schema);
+        let send = send_schema_from_catalog(&catalog);
+        let variant = send["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| {
+                variant["properties"]["route"]["const"] == "/v1/admin/principals"
+                    && variant["properties"]["method"]["const"] == "POST"
+            })
+            .unwrap();
+        assert_eq!(&variant["properties"]["body"], schema);
+        let validator = jsonschema::validator_for(schema).unwrap();
+        let send_validator = jsonschema::validator_for(variant).unwrap();
+        for (body, valid) in [
+            (
+                json!({"microsoftEnrollment":{"email":"ada@example.test"}}),
+                true,
+            ),
+            (
+                json!({"kind":"user","microsoftEnrollment":{"email":"ada@example.test"}}),
+                true,
+            ),
+            (json!({"principalId":"local-user"}), true),
+            (
+                json!({"principalId":"service","kind":"service_account"}),
+                true,
+            ),
+            (json!({"principalId":"system","kind":"system"}), true),
+            (
+                json!({"principalId":"chosen-id","microsoftEnrollment":{"email":"ada@example.test"}}),
+                false,
+            ),
+            (
+                json!({"principalId":null,"microsoftEnrollment":{"email":"ada@example.test"}}),
+                false,
+            ),
+            (
+                json!({"kind":"system","microsoftEnrollment":{"email":"ada@example.test"}}),
+                false,
+            ),
+            (
+                json!({"kind":"service_account","microsoftEnrollment":{"email":"ada@example.test"}}),
+                false,
+            ),
+            (json!({"microsoftEnrollment":null}), false),
+            (json!({"principalId":null}), false),
+            (json!({"principalId":""}), false),
+            (json!({"kind":"service_account"}), false),
+            (json!({"email":"profile@example.test"}), false),
+            (json!({}), false),
+        ] {
+            assert_eq!(validator.is_valid(&body), valid, "{body}");
+            let request = json!({
+                "version": SEND_SCHEMA_VERSION, "kind":"http", "method":"POST",
+                "route":"/v1/admin/principals", "body":body,
+            });
+            assert_eq!(send_validator.is_valid(&request), valid, "{request}");
+        }
     }
 
     #[test]

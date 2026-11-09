@@ -1091,14 +1091,28 @@ state, display-name refresh, initial-group assignment and competing identities.
 Object-ID-linked accounts and accounts previously used through local login.
 Host `tests/microsoft_enrollments.rs` covers management authorization/CSRF,
 paused-provider preparation, configuration metadata, audit boundaries and
-conflicts. The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
+conflicts. Principal creation tests require ID omission for Microsoft enrollment
+(including rejecting explicit null/empty IDs) and explicit IDs otherwise. They
+check UUIDv4 generation, response/store/audit ID agreement, identity rows,
+authorization/CSRF, rollback, preflight refusal and committed-state retention
+after completion-audit failure. The API test
+`principal_creation_id_contract_projects_into_catalog_openapi_and_send` checks
+the same conditional input contract across all three projections.
+The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
 validated-email binding, claim fallback and refusals, immutable precedence,
 callback/admin/reload races and session rollback; no live Microsoft tenant is
-used. CLI `tests/microsoft_enrollment_admin.rs` exercises the distinct creation
-option, canonical routes/bodies, required revision fences and real local Broker
-CRUD with a paused provider. Portal `tests/microsoft-enrollment.spec.ts` exercises
-creation, pending display, edit/cancel, stale conflicts and paused preparation
-using mocked management contracts. It does not authenticate a Microsoft user.
+used. CLI `tests/microsoft_enrollment_admin.rs` exercises ID omission with
+Microsoft creation, explicit IDs for local/service creation, invalid ID/option
+combinations rejected before dispatch, the generated ID in typed and generic
+`send` responses, canonical routes/bodies, required revision fences and real
+local Broker CRUD with a paused provider. Portal `tests/microsoft-enrollment.spec.ts`,
+`tests/local-sign-in.spec.ts` and `tests/portal.spec.ts` exercise Microsoft-first
+creation, explicit local creation, service-account creation,
+pending display, edit/cancel, stale conflicts and paused/unavailable preparation
+using mocked management contracts. Creation coverage checks omission of the
+Microsoft principal ID, use of the returned ID for groups, password setup and
+navigation, acknowledgement reset when switching modes, and group-only retry
+after a group CSRF failure. It does not authenticate a Microsoft user.
 
 Microsoft membership renewal coverage is also deterministic and does not
 contact Microsoft. Core store tests

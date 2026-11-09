@@ -1297,11 +1297,33 @@ services, credential, policy, and `agent-tokens` routes remain available to
 global administrators. Management-class tokens owned by service accounts fail
 with `broker_token_class_denied` at resolution and cannot enable login.
 
-Human principal creation accepts optional `microsoftEnrollment: {"email":
-"morgan@example.test"}`, independently of profile `email`. The principal and
-pending enrollment commit together; invalid or duplicate enrollment creates
-neither. Principal reads include nullable `microsoftEnrollment` with the pending
-record described below; established authenticators remain in login methods.
+Human principal creation with `microsoftEnrollment` must omit `principalId`.
+The server generates a stable opaque `usr-<UUIDv4>` ID and returns it as
+`result.principalId`; use that ID in subsequent account routes. Supplying an ID
+with enrollment, including an explicit `null` or empty value, is rejected with
+HTTP 400 `input_invalid`. Without enrollment, `principalId` is required, including
+local users, service accounts and system principals. Existing principal IDs and
+existing-account enrollment routes are unchanged.
+
+For example, create a Microsoft-enrolled human with:
+
+```json
+{
+  "kind": "user",
+  "displayName": "Morgan Demo User",
+  "email": "morgan@example.test",
+  "microsoftEnrollment": {"email": "morgan@example.test"}
+}
+```
+
+Profile `email` and `displayName` are optional; profile email never establishes
+enrollment. The principal and pending enrollment commit together; invalid or
+duplicate enrollment creates neither. Principal reads include nullable
+`microsoftEnrollment` with the pending record described below; established
+authenticators remain in login methods. The runtime catalog, OpenAPI and HTTP
+`send` schema describe these same creation modes. If the response is lost,
+inspect current principals and enrollment before retrying; a missing response
+does not establish that the transaction failed.
 
 Principal create accepts optional `agentTokenIssuance` as a complete object:
 

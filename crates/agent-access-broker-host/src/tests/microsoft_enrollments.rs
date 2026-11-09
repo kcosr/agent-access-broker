@@ -31,6 +31,24 @@ fn store(fixture: &AuditFixture) -> ManagedStore {
         .clone()
 }
 
+fn principal_ids(store: &ManagedStore) -> Vec<String> {
+    store
+        .list_principals()
+        .unwrap()
+        .into_iter()
+        .map(|principal| principal.principal_id)
+        .collect()
+}
+
+fn generated_principal_id(result: &Value) -> &str {
+    let principal_id = result["result"]["principalId"].as_str().unwrap();
+    let uuid = principal_id.strip_prefix("usr-").unwrap();
+    let parsed = uuid::Uuid::parse_str(uuid).unwrap();
+    assert_eq!(parsed.get_version_num(), 4);
+    assert_eq!(parsed.to_string(), uuid);
+    principal_id
+}
+
 #[tokio::test]
 async fn microsoft_enrollment_crud_paused_provider_versions_and_safe_audit() {
     for backend in [Backend::Sqlite, Backend::Jsonl] {
@@ -116,10 +134,20 @@ async fn microsoft_enrollment_crud_paused_provider_versions_and_safe_audit() {
                 .match_email,
             "ada@example.test"
         );
-        let (status, conflict) = fixture.request(Method::POST, &fixture.admin, "/v1/admin/principals", Some(r#"{"principalId":"duplicate","microsoftEnrollment":{"email":"ada@example.test"}}"#), "ms-enrollment-reserved").await;
+        let before = principal_ids(&store);
+        let (status, conflict) = fixture
+            .request(
+                Method::POST,
+                &fixture.admin,
+                "/v1/admin/principals",
+                Some(r#"{"microsoftEnrollment":{"email":"ada@example.test"}}"#),
+                "ms-enrollment-reserved",
+            )
+            .await;
         assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
-        assert!(
-            store.principal("duplicate").is_err(),
+        assert_eq!(
+            principal_ids(&store),
+            before,
             "creation rolls back with reservation conflict"
         );
         let mut edit = original.clone();
@@ -205,7 +233,9 @@ async fn microsoft_enrollment_crud_paused_provider_versions_and_safe_audit() {
 async fn microsoft_enrollment_creation_is_atomic_and_requires_provider() {
     let fixture = audit_fixture(Backend::Sqlite).await;
     let store = store(&fixture);
-    let body = r#"{"principalId":"prepared","email":"profile@example.test","microsoftEnrollment":{"email":"ada@example.test"}}"#;
+    let before = principal_ids(&store);
+    let body =
+        r#"{"email":"profile@example.test","microsoftEnrollment":{"email":"ada@example.test"}}"#;
     let (status, unavailable) = fixture
         .request(
             Method::POST,
@@ -216,7 +246,7 @@ async fn microsoft_enrollment_creation_is_atomic_and_requires_provider() {
         )
         .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{unavailable}");
-    assert!(store.principal("prepared").is_err());
+    assert_eq!(principal_ids(&store), before);
     paused_provider(&store);
     let (status, created) = fixture
         .request(
@@ -228,17 +258,64 @@ async fn microsoft_enrollment_creation_is_atomic_and_requires_provider() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{created}");
+    let principal_id = generated_principal_id(&created);
     assert_eq!(created["result"]["email"], "profile@example.test");
     assert_eq!(
         created["result"]["microsoftEnrollment"]["matchEmail"],
         "ada@example.test"
     );
-    assert!(store.list_login_methods("prepared").unwrap().is_empty());
-    for (id, kind, email) in [
-        ("invalid", "user", "bad"),
-        ("system", "system", "system@example.test"),
+    assert_eq!(created["result"]["kind"], "user");
+    assert_eq!(
+        created["result"],
+        serde_json::to_value(store.principal(principal_id).unwrap()).unwrap()
+    );
+    assert!(store.list_login_methods(principal_id).unwrap().is_empty());
+    assert!(store.identity_access(principal_id).is_ok());
+    assert!(store.identity_token_metadata(principal_id).is_ok());
+    let audit: Vec<_> = fixture
+        .records()
+        .into_iter()
+        .filter(|event| event["agentRequestId"] == "ms-create-atomic")
+        .collect();
+    assert_eq!(audit.len(), 2, "{audit:?}");
+    assert_eq!(
+        audit[0]["providerAudit"]["management"]["phase"],
+        "preflight"
+    );
+    assert_eq!(audit[1]["providerAudit"]["management"]["phase"], "success");
+    for event in &audit {
+        assert_eq!(
+            event["providerAudit"]["management"]["target"]["principal"],
+            principal_id
+        );
+    }
+    assert_eq!(
+        audit[1]["providerAudit"]["management"]["target"]["enrollmentId"],
+        created["result"]["microsoftEnrollment"]["enrollmentId"]
+    );
+    assert!(
+        !serde_json::to_string(&audit)
+            .unwrap()
+            .contains("example.test")
+    );
+    let (status, another) = fixture
+        .request(
+            Method::POST,
+            &fixture.admin,
+            "/v1/admin/principals",
+            Some(r#"{"microsoftEnrollment":{"email":"grace@example.test"}}"#),
+            "ms-create-another",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{another}");
+    assert_ne!(generated_principal_id(&another), principal_id);
+    let before_invalid = principal_ids(&store);
+    for (kind, email) in [
+        ("user", "bad"),
+        ("system", "system@example.test"),
+        ("service_account", "service@example.test"),
     ] {
-        let body = json!({"principalId":id,"kind":kind,"microsoftEnrollment":{"email":email}});
+        let body = json!({"kind":kind,"microsoftEnrollment":{"email":email}});
         let (status, result) = fixture
             .request(
                 Method::POST,
@@ -249,7 +326,96 @@ async fn microsoft_enrollment_creation_is_atomic_and_requires_provider() {
             )
             .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{result}");
-        assert!(store.principal(id).is_err());
+        assert_eq!(result["reasonCode"], "input_invalid");
+        assert_eq!(principal_ids(&store), before_invalid);
+    }
+}
+
+#[tokio::test]
+async fn principal_creation_requires_explicit_id_only_without_microsoft_enrollment() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let store = store(&fixture);
+    paused_provider(&store);
+    let before = principal_ids(&store);
+    for body in [
+        json!({"principalId":"chosen-id","microsoftEnrollment":{"email":"ada@example.test"}}),
+        json!({"principalId":"","microsoftEnrollment":{"email":"ada@example.test"}}),
+        json!({"principalId":null,"microsoftEnrollment":{"email":"ada@example.test"}}),
+        json!({"principalId":null}),
+        json!({}),
+        json!({"kind":"user","email":"profile@example.test"}),
+        json!({"kind":"system"}),
+        json!({"kind":"service_account"}),
+    ] {
+        let (status, result) = fixture
+            .request(
+                Method::POST,
+                &fixture.admin,
+                "/v1/admin/principals",
+                Some(&body.to_string()),
+                "principal-create-id-invalid",
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{result}");
+        assert_eq!(result["reasonCode"], "input_invalid");
+        assert_eq!(principal_ids(&store), before);
+    }
+    for (id, kind) in [
+        ("local-user", "user"),
+        ("service", "service_account"),
+        ("system", "system"),
+    ] {
+        let body = json!({"principalId":id,"kind":kind});
+        let (status, result) = fixture
+            .request(
+                Method::POST,
+                &fixture.admin,
+                "/v1/admin/principals",
+                Some(&body.to_string()),
+                "principal-create-explicit-id",
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{result}");
+        assert_eq!(result["result"]["principalId"], id);
+        assert!(store.microsoft_enrollment(id).unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn microsoft_principal_creation_requires_administrator_authority() {
+    let fixture = audit_fixture(Backend::Sqlite).await;
+    let store = store(&fixture);
+    paused_provider(&store);
+    store
+        .patch_principal_access(
+            agent_access_core::PrincipalAccessPatchRequest {
+                principal_id: "carol".into(),
+                role: Some(agent_access_core::PrincipalRole::Auditor),
+                self_service_enabled: None,
+                agent_token_issuance: None,
+                actor: "test".into(),
+            },
+            &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+        )
+        .unwrap();
+    let before = principal_ids(&store);
+    for token in [
+        &fixture.alice,
+        &fixture.alice_agent,
+        &fixture.bob,
+        &fixture.carol,
+    ] {
+        let (status, result) = fixture
+            .request(
+                Method::POST,
+                token,
+                "/v1/admin/principals",
+                Some(r#"{"microsoftEnrollment":{"email":"ada@example.test"}}"#),
+                "ms-create-forbidden",
+            )
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{result}");
+        assert_eq!(principal_ids(&store), before);
     }
 }
 
@@ -259,6 +425,38 @@ async fn microsoft_enrollment_admin_cookie_mutations_require_csrf() {
     let snapshot = fixture.state.current();
     let store = snapshot.runtime.managed_store().unwrap();
     paused_provider(store);
+    let before = principal_ids(store);
+    for role in [
+        agent_access_core::PrincipalRole::User,
+        agent_access_core::PrincipalRole::Auditor,
+        agent_access_core::PrincipalRole::ServicePolicyManager,
+    ] {
+        store
+            .patch_principal_access(
+                agent_access_core::PrincipalAccessPatchRequest {
+                    principal_id: "alice".into(),
+                    role: Some(role),
+                    self_service_enabled: None,
+                    agent_token_issuance: None,
+                    actor: "test".into(),
+                },
+                &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),
+            )
+            .unwrap();
+        let response = fixture
+            .browser_request(
+                Method::POST,
+                "/v1/admin/principals",
+                Some(json!({"microsoftEnrollment":{"email":"grace@example.test"}})),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response_json(response).await["reasonCode"],
+            "management_denied"
+        );
+        assert_eq!(principal_ids(store), before);
+    }
     store
         .patch_principal_access(
             agent_access_core::PrincipalAccessPatchRequest {
@@ -283,6 +481,35 @@ async fn microsoft_enrollment_admin_cookie_mutations_require_csrf() {
     .await;
     assert_eq!(inspected.status(), StatusCode::OK);
     assert_eq!(response_json(inspected).await["result"], Value::Null);
+    let before = principal_ids(store);
+    let response = authed_json_request(
+        fixture.app.clone(),
+        Method::POST,
+        "/v1/admin/principals",
+        "ms-create-csrf-denied",
+        "Cookie",
+        fixture.cookie.clone(),
+        Some(r#"{"microsoftEnrollment":{"email":"grace@example.test"}}"#),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response_json(response).await["reasonCode"], "csrf_invalid");
+    assert_eq!(principal_ids(store), before);
+    let response = fixture
+        .browser_request(
+            Method::POST,
+            "/v1/admin/principals",
+            Some(json!({"microsoftEnrollment":{"email":"grace@example.test"}})),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = response_json(response).await;
+    assert!(
+        store
+            .microsoft_enrollment(generated_principal_id(&created))
+            .unwrap()
+            .is_some()
+    );
     for (method, body) in [
         (Method::POST, json!({"email":"ada@example.test"})),
         (
@@ -329,6 +556,54 @@ async fn microsoft_enrollment_admin_cookie_mutations_require_csrf() {
         "{}",
         response_json(response).await
     );
+}
+
+#[tokio::test]
+async fn microsoft_principal_creation_keeps_audit_failure_contract() {
+    for phase in ["preflight", "success"] {
+        let fixture = audit_fixture(Backend::Sqlite).await;
+        let store = store(&fixture);
+        paused_provider(&store);
+        let before = principal_ids(&store);
+        let db = rusqlite::Connection::open(fixture.audit_path.as_ref().unwrap()).unwrap();
+        db.execute_batch(&format!("CREATE TRIGGER fail_ms_create_audit BEFORE INSERT ON audit_events WHEN NEW.phase = '{phase}' AND NEW.action = 'admin.principals.create' BEGIN SELECT RAISE(ABORT, 'injected-failure'); END;")).unwrap();
+        let (status, result) = fixture
+            .request(
+                Method::POST,
+                &fixture.admin,
+                "/v1/admin/principals",
+                Some(r#"{"microsoftEnrollment":{"email":"ada@example.test"}}"#),
+                "ms-create-audit-failure",
+            )
+            .await;
+        if phase == "preflight" {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{result}");
+            assert_eq!(principal_ids(&store), before);
+        } else {
+            assert_eq!(status, StatusCode::OK, "{result}");
+            let principal_id = generated_principal_id(&result);
+            assert_eq!(principal_ids(&store).len(), before.len() + 1);
+            assert_eq!(
+                serde_json::to_value(store.microsoft_enrollment(principal_id).unwrap().unwrap())
+                    .unwrap(),
+                result["result"]["microsoftEnrollment"]
+            );
+            let audit: Vec<_> = fixture
+                .records()
+                .into_iter()
+                .filter(|event| event["agentRequestId"] == "ms-create-audit-failure")
+                .collect();
+            assert_eq!(audit.len(), 1, "{audit:?}");
+            assert_eq!(
+                audit[0]["providerAudit"]["management"]["phase"],
+                "preflight"
+            );
+            assert_eq!(
+                audit[0]["providerAudit"]["management"]["target"]["principal"],
+                principal_id
+            );
+        }
+    }
 }
 
 #[tokio::test]

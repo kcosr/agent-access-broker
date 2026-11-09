@@ -240,6 +240,15 @@ late successor joins its family's revocation whenever its refresh reports,
 even after another process presumed it lost; each token keeps its own retry
 deadline.
 
+New Microsoft-enrolled humans omit `principalId` on principal POST and the
+positional principal ID on CLI create; the server assigns `usr-<UUIDv4>` and
+returns it for subsequent operations. Reject an explicitly supplied ID with
+enrollment. Non-enrollment creation requires an explicit ID; existing identities
+and attach-enrollment routes keep their IDs. The portal defaults to Microsoft
+email enrollment, with local username/password setup only after **Create a local
+account instead** is selected; provider unavailability never selects local mode.
+Keep service-account creation separate and catalog/OpenAPI/send contracts aligned.
+
 Microsoft pending enrollment explicitly reserves a canonical token email for a
 human principal in the configured tenant. Keep it separate from profile email
 and established login methods; immutable subject resolution always wins, including

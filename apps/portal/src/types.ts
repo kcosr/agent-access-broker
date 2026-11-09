@@ -366,6 +366,17 @@ export type PrincipalRole = "user" | "auditor" | "service_policy_manager" | "adm
 
 export type PrincipalKind = "user" | "service_account" | "system";
 
+export type PrincipalCreateBody = {
+  displayName?: string;
+  email?: string;
+  role?: PrincipalRole;
+  selfServiceEnabled?: boolean;
+  agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting;
+} & (
+  | { kind: "user"; microsoftEnrollment: { email: string }; principalId?: never }
+  | { kind: "user" | "service_account"; principalId: string; microsoftEnrollment?: never }
+);
+
 export type MicrosoftEnrollment = {
   enrollmentId: string;
   principalId: string;

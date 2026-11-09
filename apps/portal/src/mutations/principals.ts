@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { brokerApi } from "../api";
-import type { MicrosoftEnrollment, PrincipalRecord, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
+import type { MicrosoftEnrollment, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
 import { generateTemporaryPassword } from "../lib/helpers";
 import { useToast } from "../workbench";
 import { paths } from "../app/paths";
@@ -14,17 +14,17 @@ import { usePortalInvalidation } from "../data/invalidation";
 
 export type PrincipalPatch = { displayName?: string | null; email?: string | null; status?: string };
 export type NewPrincipal = {
-  kind: "user" | "service_account";
-  principalId: string;
   displayName: string;
   email: string;
   groups: string[];
   role: PrincipalRole;
   selfServiceEnabled: boolean;
   agentTokenIssuance: PrincipalAgentTokenIssuanceSetting;
-  enableLocalPassword: boolean;
-  enrollMicrosoft: boolean;
-};
+} & (
+  | { kind: "user"; signIn: "microsoft"; principalId?: never }
+  | { kind: "user"; signIn: "local"; principalId: string }
+  | { kind: "service_account"; principalId: string; signIn?: never }
+);
 
 export function usePrincipalActions() {
   const { attempt, session } = useSession();
@@ -42,37 +42,37 @@ export function usePrincipalActions() {
     }
 
     /**
-     * Creates the principal, then its temporary password, groups, and role.
+     * Creates the principal with its access settings, then its password and groups.
      * Rejects only when the principal itself was not created; a partial setup
      * opens the new page with a warning (and the password when one was set).
      */
     async function create(input: NewPrincipal) {
-      const principalId = input.principalId.trim();
       const interactiveUser = input.kind === "user";
-      const enrollLocal = interactiveUser && input.enableLocalPassword;
-      const generatedPassword = enrollLocal ? generateTemporaryPassword(principalId) : "";
-      let created: PrincipalRecord | null = null;
+      const enrollLocal = input.signIn === "local";
+      const created = await attempt((current) => brokerApi.adminCreatePrincipal(current, {
+        ...(input.signIn === "microsoft"
+          ? { kind: input.kind, microsoftEnrollment: { email: input.email.trim() } }
+          : { kind: input.kind, principalId: input.principalId.trim() }),
+        displayName: input.displayName.trim() || undefined,
+        email: input.email.trim() || undefined,
+        role: input.role,
+        selfServiceEnabled: input.selfServiceEnabled,
+        agentTokenIssuance: input.agentTokenIssuance
+      }));
+      if (typeof created?.principalId !== "string" || !created.principalId.trim()) {
+        throw new Error(`${interactiveUser ? "User" : "Service account"} may have been created, but the server did not return its identifier. Check ${interactiveUser ? "Users" : "Service accounts"} before trying again.`);
+      }
+      const principalId = created.principalId;
+      let generatedPassword = "";
       let passwordSet = false;
       try {
-        await attempt(async (current) => {
-          created = await brokerApi.adminCreatePrincipal(current, {
-            principalId,
-            kind: input.kind,
-            displayName: input.displayName.trim() || undefined,
-            email: input.email.trim() || undefined,
-            ...(interactiveUser && input.enrollMicrosoft ? { microsoftEnrollment: { email: input.email.trim() } } : {}),
-            role: input.role,
-            selfServiceEnabled: input.selfServiceEnabled,
-            agentTokenIssuance: input.agentTokenIssuance
-          });
-          if (enrollLocal) {
-            await brokerApi.adminEnableLocalPassword(current, principalId, generatedPassword, true);
-            passwordSet = true;
-          }
-          for (const group of input.groups) await brokerApi.adminAddGroup(current, principalId, group);
-        });
-      } catch (error) {
-        if (!created) throw error;
+        if (enrollLocal) {
+          generatedPassword = generateTemporaryPassword(principalId);
+          await attempt((current) => brokerApi.adminEnableLocalPassword(current, principalId, generatedPassword, true));
+          passwordSet = true;
+        }
+        for (const group of input.groups) await attempt((current) => brokerApi.adminAddGroup(current, principalId, group));
+      } catch {
         refreshMembership();
         navigate(paths.principal(principalId));
         if (!interactiveUser) {
@@ -90,7 +90,6 @@ export function usePrincipalActions() {
       toast(interactiveUser ? "User created" : "Service account created", { tone: "success" });
       refreshMembership();
       navigate(paths.principal(principalId));
-      if (interactiveUser && !enrollLocal && !input.enrollMicrosoft) toast("User has no sign-in methods. Link Microsoft or explicitly enable local password sign-in on Overview.", { duration: 10000 });
       setModal(enrollLocal ? { type: "passwordReveal", principalId, password: generatedPassword, action: "created" } : null);
     }
 

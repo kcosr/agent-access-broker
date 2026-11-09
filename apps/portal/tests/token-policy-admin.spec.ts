@@ -27,7 +27,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", authority = "m
     if (path === "/v1/auth/session") {
       model.sessionReads++;
       result = { authenticated: true, principal: "admin", role, selfServiceEnabled: false, csrfHeader: "x-csrf-token", csrfToken: "fixture", loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: {} };
-    } else if (path === "/v1/admin/config/status") result = { identityAuthority: model.authority, policyAuthority: model.policyAuthority, generation: 1, loadedAt: stamp.createdAt, configHash: "fixture" };
+    } else if (path === "/v1/admin/config/status") result = { identityAuthority: model.authority, policyAuthority: model.policyAuthority, generation: 1, loadedAt: stamp.createdAt, configHash: "fixture", microsoftEnrollment: { available: true, tenantId: "11111111-1111-4111-8111-111111111111" } };
     else if (path === "/v1/admin/principals/alice/access") {
       Object.assign(principal, body);
       principal.agentTokenIssuancePolicy = principal.agentTokenIssuance.mode === "inherit"
@@ -129,7 +129,8 @@ for (const kind of ["user", "group"] as const) {
     await page.getByRole("button", { name: kind === "group" ? "Create group" : "Create user", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: kind === "group" ? "Create group" : "Create user", exact: true });
     await expect(dialog.getByLabel("Agent token issuance", { exact: true })).toHaveValue(kind === "group" ? "disabled" : "inherit");
-    await dialog.getByLabel(kind === "group" ? "Group ID" : "Principal ID", { exact: true }).fill("new-record");
+    if (kind === "group") await dialog.getByLabel("Group ID", { exact: true }).fill("new-record");
+    else await dialog.getByLabel("Microsoft email", { exact: true }).fill("new-record@example.test");
     await dialog.getByRole("button", { name: kind === "group" ? "Create group" : "Create user", exact: true }).click();
     await expect.poll(() => model.writes.length).toBe(1);
     expect(model.writes[0].body.agentTokenIssuance).toEqual({ mode: kind === "group" ? "disabled" : "inherit", allowedExecutionContexts: [] });
