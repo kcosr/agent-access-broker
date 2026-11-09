@@ -313,7 +313,7 @@ function principalColumns(serviceAccounts: boolean): DataColumn<PrincipalRecord>
     ...(serviceAccounts
       ? []
       : [
-          { key: "signInMethods", header: "Sign-in methods", priority: 3, cell: (principal: PrincipalRecord) => <SignInMethodBadges methods={principal.signInMethods} /> } satisfies DataColumn<PrincipalRecord>,
+          { key: "signInMethods", header: "Sign-in methods", priority: 3, cell: (principal: PrincipalRecord) => <SignInMethodBadges methods={principal.signInMethods} awaitingMicrosoft={Boolean(principal.microsoftEnrollment)} /> } satisfies DataColumn<PrincipalRecord>,
           {
             key: "email",
             header: "Email",
@@ -423,7 +423,7 @@ function PrincipalDrawer({ principal, onClose, returnFocus }: { principal: Princ
         <>
           <StatePill tone={principal.status === "active" ? "success" : "neutral"}>{principal.status}</StatePill>
           {<Badge tone={principal.role === "admin" ? "info" : "neutral"}>{ROLE_LABELS[principal.role]}</Badge>}
-          {!serviceAccount ? <SignInMethodBadges methods={principal.signInMethods} /> : null}
+          {!serviceAccount ? <SignInMethodBadges methods={principal.signInMethods} awaitingMicrosoft={Boolean(principal.microsoftEnrollment)} /> : null}
           {principal.email ? <span>{principal.email}</span> : null}
         </>
       }

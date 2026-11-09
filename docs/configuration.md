@@ -927,7 +927,7 @@ secret references are not resolved.
 
 - `tenant_id` and `client_id` are required canonical lowercase, hyphenated
   UUIDs. The tenant is fixed once the managed store contains a Microsoft login
-  method or external-group binding.
+  method, pending Microsoft enrollment or external-group binding.
 - `client_secret_ref` is an `env:NAME` or `file:/absolute/path` reference whose
   trimmed runtime value is the nonempty Entra application client secret.
   `flow_key_ref` is a separate reference in the same syntax whose trimmed value
@@ -943,14 +943,18 @@ secret references are not resolved.
   and direct grants are independent.
 - `jit_provisioning = true` permits a new Microsoft user only when at least one
   group Object ID in the complete ID-token claim maps to an active broker group.
-  An existing explicitly linked user may log in with a complete empty or
-  unmapped group set; that authoritative set removes prior Microsoft-derived
+  An explicitly linked or matching email-prepared user may log in with a complete
+  empty or unmapped group set; that authoritative set removes prior Microsoft-derived
   contributions without affecting local access. Set `jit_provisioning = false`
-  to require administrators to link every Microsoft user Object ID first.
+  to require administrators to prepare every Microsoft user by explicit email
+  enrollment or Object-ID linking first. Profile email alone is not enrollment.
   Administrators can separately select managed groups with **Automatically add
   new Microsoft users** in the portal. This database setting adds persistent
-  local membership once, when JIT creates the account after admission succeeds;
-  it has no TOML option and does not change admission. See
+  local membership once at the first successful Microsoft sign-in of a principal
+  created after migration `036_microsoft_enrollments`, including prepared and
+  Object-ID-linked accounts. Existing principals are marked processed without
+  backfill; zero selected groups still consumes the one-time assignment. It has
+  no TOML option and does not change admission. See
   [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
 - `membership_renewal = true` makes sign-in also request `offline_access`, and
   the broker stores the Microsoft refresh token it returns, encrypted under the

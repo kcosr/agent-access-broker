@@ -24,6 +24,8 @@ pub use imported_resource_types::{
     DeletedResourceAttributes, ImportedTypeEffects, ImportedTypeTransaction,
 };
 mod local_password_failures;
+mod microsoft_enrollments;
+pub use microsoft_enrollments::*;
 pub(crate) mod oauth;
 pub(crate) mod oauth_revocation;
 mod oidc_membership_renewal;
@@ -87,7 +89,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION;
+const MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION: &str = "036_microsoft_enrollments";
 const MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION: &str = "035_imported_gateway_routes";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION: &str =
     "034_agent_token_issuance_contexts";
@@ -305,6 +308,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/imported_gateway_routes.sql"),
         seed: None,
         structural_validation: imported_gateway_routes::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION,
+        checksum: "8334a475fe25947937236dcc8befe3598f2d954da38f30d2db8b10c4b16435c2",
+        sql: include_str!("managed_store/microsoft_enrollments.sql"),
+        seed: None,
+        structural_validation: microsoft_enrollments::validate_structure,
     },
 ];
 
@@ -1904,6 +1914,16 @@ impl ManagedStore {
         request: PrincipalWriteRequest,
         registry: &ConfiguredExecutionContexts,
     ) -> Result<PrincipalRecord, ManagedStoreError> {
+        self.create_principal_with_microsoft_enrollment(request, None, None, registry)
+    }
+
+    pub fn create_principal_with_microsoft_enrollment(
+        &self,
+        request: PrincipalWriteRequest,
+        enrollment: Option<MicrosoftEnrollmentCreate>,
+        provider_generation: Option<u64>,
+        registry: &ConfiguredExecutionContexts,
+    ) -> Result<PrincipalRecord, ManagedStoreError> {
         let mut request = request;
         request.agent_token_issuance = request.agent_token_issuance.canonicalized(registry)?;
         validate_principal_write_request(&request)?;
@@ -1955,6 +1975,18 @@ impl ManagedStore {
             &request.agent_token_issuance.allowed_execution_contexts,
         )?;
         self.initialize_identity_token(&conn, &request.principal_id, &request.kind)?;
+        if let Some(enrollment) = enrollment {
+            microsoft_enrollments::create_tx(
+                &conn,
+                &MicrosoftEnrollmentCreateRequest {
+                    principal_id: request.principal_id.clone(),
+                    email: enrollment.email,
+                    provider_generation: provider_generation
+                        .ok_or(ManagedStoreError::OidcProviderUnavailable)?,
+                    actor: request.created_by.clone(),
+                },
+            )?;
+        }
         let principal = principal_by_id(&conn, &request.principal_id)?;
         conn.commit().map_err(sql_unavailable)?;
         Ok(principal)
@@ -2130,6 +2162,8 @@ impl ManagedStore {
                 .remove(&principal.principal_id)
                 .unwrap_or_default();
             principal.groups = principal_groups(&conn, &principal.principal_id)?;
+            principal.microsoft_enrollment =
+                microsoft_enrollments::read(&conn, &principal.principal_id)?;
         }
         drop(statement);
         conn.commit().map_err(sql_unavailable)?;
@@ -2786,7 +2820,8 @@ impl ManagedStore {
                 .query_row(
                     "SELECT
                        (SELECT COUNT(1) FROM principal_login_methods WHERE method = 'oidc') +
-                       (SELECT COUNT(1) FROM external_group_bindings)",
+                       (SELECT COUNT(1) FROM external_group_bindings) +
+                       (SELECT COUNT(1) FROM pending_microsoft_enrollments)",
                     [],
                     |row| row.get(0),
                 )
@@ -3088,6 +3123,9 @@ impl ManagedStore {
             .map_err(sql_unavailable)?;
         let principal = principal_by_id(&tx, &request.principal_id)?;
         require_interactive_principal(&principal)?;
+        if principal.microsoft_enrollment.is_some() {
+            return Err(ManagedStoreError::OidcLoginMethodConflict);
+        }
         let provider =
             oidc_provider_state(&tx)?.ok_or(ManagedStoreError::OidcProviderUnavailable)?;
         let external_subject =
@@ -3221,6 +3259,14 @@ impl ManagedStore {
             hook();
         }
         let provider = require_oidc_provider_generation(&tx, request.provider_generation)?;
+        if !request
+            .external_subject
+            .starts_with(&format!("entra:v1:{}:", provider.tenant_id))
+        {
+            return Err(input_invalid(
+                "OIDC subject tenant does not match the configured provider",
+            ));
+        }
         if !advance_oidc_subject_watermark_tx(
             &tx,
             &request.external_subject,
@@ -3268,8 +3314,28 @@ impl ManagedStore {
                 });
             }
         }
+        let pending = if method.is_none() {
+            microsoft_enrollments::find_match(&tx, &provider.tenant_id, request.email.as_deref())?
+        } else {
+            None
+        };
+        if let Some(pending) = pending.as_ref() {
+            let principal = principal_by_id_without_groups(&tx, &pending.principal_id)?;
+            if principal.kind != "user" {
+                return Err(ManagedStoreError::OidcLoginMethodConflict);
+            }
+            if principal.status != "active" {
+                tx.commit().map_err(sql_unavailable)?;
+                return Ok(OidcCompletionOutcome::Denied {
+                    reason: "pending_enrollment_owner_disabled".into(),
+                });
+            }
+            if oidc_login_method_for_principal(&tx, &pending.principal_id)?.is_some() {
+                return Err(ManagedStoreError::OidcLoginMethodConflict);
+            }
+        }
         let matched = matched_external_group_bindings(&tx, &request.external_group_ids)?;
-        let jit_created = method.is_none();
+        let jit_created = method.is_none() && pending.is_none();
         if jit_created && (!request.jit_provisioning || matched.is_empty()) {
             tx.commit().map_err(sql_unavailable)?;
             return Ok(OidcCompletionOutcome::Denied {
@@ -3281,23 +3347,37 @@ impl ManagedStore {
                 .to_string(),
             });
         }
-        let mut auto_enrolled_group_ids = Vec::new();
+        let enrollment_id = pending
+            .as_ref()
+            .map(|pending| pending.enrollment_id.clone());
         if method.is_none() {
-            tx.execute(
-                "INSERT INTO principals
-                 (principal_id, kind, display_name, email, external_subject, status,
-                  created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance)
-                 VALUES (?1, 'user', ?2, ?3, NULL, 'active', ?4, ?4, NULL, ?5, 'user', 1, 'inherit')",
-                params![
-                    request.jit_principal_id,
-                    normalized_optional_profile_value(request.display_name.as_deref()),
-                    normalized_optional_profile_value(request.email.as_deref()),
-                    callback_now,
-                    request.created_by
-                ],
-            )
-            .map_err(sql_unavailable)?;
-            self.initialize_identity_token(&tx, &request.jit_principal_id, "user")?;
+            let principal_id = if let Some(pending) = pending.as_ref() {
+                // Mutual-exclusion triggers require consumption before insertion.
+                // The transaction restores the reservation if any later work fails.
+                tx.execute(
+                    "DELETE FROM pending_microsoft_enrollments WHERE enrollment_id = ?1",
+                    [&pending.enrollment_id],
+                )
+                .map_err(sql_unavailable)?;
+                pending.principal_id.clone()
+            } else {
+                tx.execute(
+                    "INSERT INTO principals
+                     (principal_id, kind, display_name, email, external_subject, status,
+                      created_at, updated_at, disabled_at, created_by, role, self_service_enabled, agent_token_issuance)
+                     VALUES (?1, 'user', ?2, ?3, NULL, 'active', ?4, ?4, NULL, ?5, 'user', 1, 'inherit')",
+                    params![
+                        request.jit_principal_id,
+                        normalized_optional_profile_value(request.display_name.as_deref()),
+                        normalized_optional_profile_value(request.email.as_deref()),
+                        callback_now,
+                        request.created_by
+                    ],
+                )
+                .map_err(sql_unavailable)?;
+                self.initialize_identity_token(&tx, &request.jit_principal_id, "user")?;
+                request.jit_principal_id.clone()
+            };
             let login_method_id = Uuid::new_v4().to_string();
             tx.execute(
                 "INSERT INTO principal_login_methods
@@ -3308,7 +3388,7 @@ impl ManagedStore {
                          ?5)",
                 params![
                     login_method_id,
-                    request.jit_principal_id,
+                    principal_id,
                     request.external_subject,
                     callback_now,
                     request.created_by
@@ -3316,33 +3396,21 @@ impl ManagedStore {
             )
             .map_err(map_oidc_method_insert_error)?;
             method = Some(login_method_by_id(&tx, &login_method_id)?);
-            let mut statement = tx
-                .prepare(
-                    "SELECT group_id FROM groups
-                 WHERE status = 'active' AND auto_enroll_new_microsoft_users = 1
-                 ORDER BY group_id",
-                )
-                .map_err(sql_unavailable)?;
-            auto_enrolled_group_ids = collect_rows(
-                statement
-                    .query_map([], |row| row.get::<_, String>(0))
-                    .map_err(sql_unavailable)?,
-            )?;
-            for group_id in &auto_enrolled_group_ids {
-                tx.execute(
-                    "INSERT INTO principal_groups (principal_id, group_id, created_at, created_by)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        request.jit_principal_id,
-                        group_id,
-                        callback_now,
-                        request.created_by
-                    ],
-                )
-                .map_err(sql_unavailable)?;
-            }
         }
         let method = method.expect("OIDC method resolved or created");
+        let display_name_updated = !jit_created
+            && microsoft_enrollments::refresh_display_name(
+                &tx,
+                &method.principal_id,
+                request.display_name.as_deref(),
+                &callback_now,
+            )?;
+        let auto_enrolled_group_ids = microsoft_enrollments::enroll_initial_groups(
+            &tx,
+            &method.principal_id,
+            &callback_now,
+            &request.created_by,
+        )?;
         // With a renewal row, a second writer can replace the evidence, so
         // only a token strictly newer by Microsoft's raw `iat` than every
         // trusted observation replaces it. Without one, sign-in replaces it.
@@ -3400,6 +3468,8 @@ impl ManagedStore {
             session,
             membership,
             auto_enrolled_group_ids,
+            enrollment_id,
+            display_name_updated,
             membership_evidence,
         };
         tx.commit().map_err(sql_unavailable)?;
@@ -6103,6 +6173,7 @@ pub struct ManagedPolicySubjectCatalog {
 #[serde(rename_all = "camelCase")]
 pub struct PrincipalRecord {
     pub sign_in_methods: SignInMethods,
+    pub microsoft_enrollment: Option<MicrosoftEnrollmentRecord>,
     pub principal_id: String,
     pub kind: String,
     pub display_name: Option<String>,
@@ -6571,6 +6642,8 @@ pub struct OidcCompleteLoginResult {
     pub session: IssuedBrowserSession,
     pub membership: EffectiveMembershipRecord,
     pub auto_enrolled_group_ids: Vec<String>,
+    pub enrollment_id: Option<String>,
+    pub display_name_updated: bool,
     pub membership_evidence: OidcMembershipEvidence,
 }
 
@@ -7840,6 +7913,7 @@ fn principal_by_id_without_groups(
     principal.sign_in_methods = sign_in_methods_by_principal(conn, Some(principal_id))?
         .remove(principal_id)
         .unwrap_or_default();
+    principal.microsoft_enrollment = microsoft_enrollments::read(conn, principal_id)?;
     Ok(principal)
 }
 
@@ -7875,6 +7949,7 @@ fn hydrate_group_issuance(
 fn principal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PrincipalRecord> {
     Ok(PrincipalRecord {
         sign_in_methods: SignInMethods::default(),
+        microsoft_enrollment: None,
         principal_id: row.get(0)?,
         kind: row.get(1)?,
         display_name: row.get(2)?,
@@ -10013,6 +10088,7 @@ mod tests {
     include!("managed_store/principal_access_tests.rs");
     include!("managed_store/identity_access_tests.rs");
     include!("managed_store/group_auto_enrollment_tests.rs");
+    include!("managed_store/microsoft_enrollment_tests.rs");
     include!("managed_store/agent_token_issuance_tests.rs");
     include!("managed_store/agent_token_issuance_contexts_tests.rs");
     include!("managed_store/stored_credential_golden_tests.rs");

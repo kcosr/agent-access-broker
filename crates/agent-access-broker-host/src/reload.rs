@@ -451,7 +451,25 @@ pub(crate) async fn admin_config_status(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let result = state.reloadable.status_result(&context.snapshot);
+    let mut result = state.reloadable.status_result(&context.snapshot);
+    let provider = if context.snapshot.runtime.config().identity.authority == "managed"
+        && context.snapshot.runtime.managed_store().is_some()
+    {
+        // Enrollment preparation is optional status metadata. A failed read must
+        // not hide the active configuration or its reload/health diagnostics.
+        context
+            .snapshot
+            .managed_store_call(|store| store.oidc_provider_state())
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    result["microsoftEnrollment"] = json!({
+        "available": provider.is_some(),
+        "tenantId": provider.map(|provider| provider.tenant_id),
+    });
     management_success_response(&context, operation, None, result).await
 }
 

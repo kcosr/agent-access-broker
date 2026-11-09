@@ -523,10 +523,15 @@ security-relevant properties are:
   intersected before the upstream query. Boundary changes require a replacement
   token.
 - **Microsoft identity is object-based.** The configured tenant ID and the
-  token's immutable user object ID form the login identity. Email, display name,
-  and preferred username never match or merge accounts, and the broker does not
-  call Microsoft Graph. Administrators can explicitly link or unlink an object
-  ID when needed.
+  token's immutable user object ID form the lasting login identity. An explicit
+  administrator-created pending enrollment permits one match of the validated
+  token's canonical email within the configured tenant, trusting that tenant's
+  email attribute. Profile email, preferred username, UPN, aliases and display
+  name never authorize matching. Existing immutable bindings always win,
+  including disabled refusals; a disabled pending owner reserves its address
+  and denies binding. Enrollment is consumed atomically with login. The Broker
+  neither merges accounts nor calls Microsoft Graph. Administrators can also
+  link or unlink an Object ID; unlinking never restores email matching.
 - **OIDC flow state is bounded and single-use.** Authorization code flow uses
   PKCE and nonce validation plus encrypted, expiring state bound to a separate
   HttpOnly browser cookie. The callback claims the state once, preventing replay
@@ -539,14 +544,17 @@ security-relevant properties are:
   Effective groups combine current Microsoft evidence with explicit local
   memberships, but group mapping never assigns the DB `admin` role.
 - **Automatic local membership is durable.** Administrators may opt managed
-  groups into automatically adding new Microsoft JIT accounts after existing
-  mapped-group admission succeeds. This grants ordinary local membership, not
+  groups into assignment at the first Microsoft sign-in of principals created
+  after migration, including prepared, Object-ID-linked and JIT accounts. A
+  durable processed marker prevents repetition, even across unlink/re-enrollment;
+  migration marks existing accounts processed without backfill. This grants
+  ordinary local membership, not
   an account role, and never changes sign-in eligibility. A local contribution
   survives Entra removal and evidence expiry even when that same group is also
   mapped from Microsoft. Disabling enrollment affects future accounts; it does
   not remove existing membership. Use local membership removal or principal
   disable for the corresponding access removal, and review both contribution
-  sources. Enrollment is atomic with account creation; audited flag changes
+  sources. Assignment is atomic with successful login; audited flag changes
   and login records identify the setting and groups applied.
 - **Service policy management is bounded delegation.** With managed identity
   and policy authority, a global DB admin may assign an active account with role

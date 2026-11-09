@@ -522,6 +522,10 @@ The `route` field must match a route template from the fetched catalog. The CLI
 percent-encodes `pathParams`, encodes declared scalar/array query parameters,
 rejects unknown path/query keys, rejects `body: null`, and never accepts
 arbitrary external URLs.
+Before sending, it rejects missing or empty required query parameters and a
+missing required body, using the catalog's required query metadata and
+`bodyRequired` flag. These route-input errors exit `3` without dispatching the
+request.
 
 Routes marked `requestBodyKind: "raw_json"` require exact document bytes and are
 excluded from the generated `send` schema. Generic `send` rejects those routes.
@@ -786,8 +790,10 @@ commands described below. All `admin` subcommands reject `--token-value`.
 - `admin store status` — `GET /v1/admin/store/status`.
 - `admin config status | reload` — `GET /v1/admin/config/status` or
   `POST /v1/admin/config/reload`.
-- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
-  `create --kind` defaults to `user`; issuance defaults to Inherit with an empty
+- `admin principals list | inspect <principal> | create <principal> [--kind <KIND>] [--display-name ...] [--email ...] [--microsoft-enrollment-email ...] [--external-subject ...] [--role ...] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <principal> [--display-name ... | --clear-display-name] [--email ... | --clear-email] | enable <principal> | disable <principal> | access set <principal> [--role user|auditor|service_policy_manager|admin] [--self-service-enabled true|false] [--agent-token-issuance inherit|disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | groups add <principal> <group> | groups delete <principal> <group> | login-methods list <principal> | login-methods oidc link <principal> --user-object-id <UUID> | login-methods oidc unlink <principal>`.
+  `create --kind` defaults to `user`. For a human, `--microsoft-enrollment-email`
+  creates explicit pending enrollment atomically with the account; it is
+  independent of profile `--email`. Issuance defaults to Inherit with an empty
   context list on creation. Creating an existing principal returns HTTP 409.
   Change issuance with `access set --agent-token-issuance MODE`, adding repeatable
   `--agent-token-issuance-context CONTEXT` for an enabled mode. `read_only` and
@@ -802,7 +808,23 @@ commands described below. All `admin` subcommands reject `--token-value`.
   user Object ID, not an email, UPN, tenant ID, or encoded subject. Link returns
   the structured Microsoft login method; unlink revokes its browser sessions
   and external membership but leaves local identity state and independently
-  issued broker tokens intact.
+  issued broker tokens intact. Cancel pending enrollment before Object-ID linking;
+  unlinking never restores email matching.
+- `admin principals login-methods oidc enrollment inspect <principal>` reads the
+  pending record or `null`.
+- `admin principals login-methods oidc enrollment create <principal> --email <EMAIL>`
+  reserves an explicit token-email match in the configured tenant. It is
+  create-only and requires a human without a pending enrollment or Microsoft method.
+- `admin principals login-methods oidc enrollment update <principal> --enrollment-id <UUID> --expected-revision <N> --email <EMAIL>`
+  changes the pending match email using the current ID and positive revision.
+- `admin principals login-methods oidc enrollment cancel <principal> --enrollment-id <UUID> --expected-revision <N>`
+  sends the required ID and revision as DELETE query parameters, without a JSON
+  body, and releases the reservation while retaining account setup. Stale
+  edits/cancellations
+  return a conflict, including after login has consumed enrollment. Cancel does
+  not ban ordinary JIT sign-in. Paused reconciled providers permit preparation.
+  Profile `update --email` never changes the enrollment address. See
+  [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
 - `admin groups list | inspect <group> | create <group> [--display-name ...] [--description ...] [--auto-enroll-new-microsoft-users] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | update <group> [--display-name ... | --clear-display-name] [--description ... | --clear-description] [--auto-enroll-new-microsoft-users true|false] [--agent-token-issuance disabled|read_only|write_capable] [--agent-token-issuance-context <CONTEXT> ...] | enable <group> | disable <group> | members list <group> | members add <group> <principal> | members delete <group> <principal> | external-group-bindings list <group> | external-group-bindings create <group> --external-group-id <UUID> | external-group-bindings enable <group> <binding-id> | external-group-bindings disable <group> <binding-id> | external-group-bindings delete <group> <binding-id>`.
   Group issuance defaults to Disabled with an empty list. The same mode/context
   flag pairing and whole-object replacement rules apply; update omission preserves
@@ -817,17 +839,20 @@ commands described below. All `admin` subcommands reject `--token-value`.
   group Object IDs against existing managed broker groups. A binding must be
   disabled before deletion.
   `create --auto-enroll-new-microsoft-users` enables automatic local membership
-  for new Microsoft JIT accounts; it defaults to off. On `update`, supply an
-  explicit `true` or `false`; omitting the option preserves the setting. Only
-  active groups enroll new accounts, after existing mapped-group admission.
-  Disabling a group pauses enrollment without clearing the setting. Existing
-  accounts are never backfilled or re-added on sign-in, and clearing the setting
-  leaves their local memberships intact. See
+  at the first Microsoft sign-in of principals created after migration `036`,
+  including prepared and Object-ID-linked accounts; it defaults to off. On
+  `update`, supply an explicit `true` or `false`; omission preserves the setting.
+  Only active groups enroll users. A durable marker consumes assignment even
+  when no groups qualify; later sign-ins and unlink/re-enrollment never repeat it.
+  Disabling a group pauses assignment without clearing the setting. Principals
+  present at migration receive no backfill, and clearing the setting leaves
+  local memberships intact. See
   [Microsoft onboarding](administrator-guide.md#microsoft-onboarding).
 
-Microsoft user Object IDs, group Object IDs, and binding IDs are parsed as UUIDs
-by the CLI before any request is sent and are serialized as canonical lowercase
-UUID strings. Invalid values are rejected by Clap argument parsing (exit 2).
+Microsoft user Object IDs, group Object IDs, binding IDs and enrollment IDs are
+parsed as UUIDs by the CLI before any request is sent and are serialized as
+canonical lowercase UUID strings. Invalid values are rejected by Clap argument
+parsing (exit 2).
 The server still performs its own validation and conflict checks.
 
 The two local-membership delete forms print the management result containing
@@ -1381,7 +1406,8 @@ In addition to HTTP-derived codes:
   or Confluence `--content-format` values. CLI-local errors detected after
   argument parsing exit `3` (`exit_cli_input_error` / `require_cli_input`),
   including malformed native JSON, content-file read failures, schema
-  mismatches, and a non-existent explicit `--config` path.
+  mismatches, generic `send` path/query input errors or a missing required body,
+  and a non-existent explicit `--config` path.
 - Network errors, request timeouts, malformed broker responses, unexpected JSON
   shapes, and output-formatting failures exit `5` (`exit_network_error`,
   `exit_malformed_broker_response`, response-shape validation, and

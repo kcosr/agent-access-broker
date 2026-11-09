@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router";
 import { brokerApi } from "../api";
-import type { PrincipalRecord, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
+import type { MicrosoftEnrollment, PrincipalRecord, PrincipalRole, PrincipalAgentTokenIssuanceSetting } from "../types";
 import { generateTemporaryPassword } from "../lib/helpers";
 import { useToast } from "../workbench";
 import { paths } from "../app/paths";
@@ -23,6 +23,7 @@ export type NewPrincipal = {
   selfServiceEnabled: boolean;
   agentTokenIssuance: PrincipalAgentTokenIssuanceSetting;
   enableLocalPassword: boolean;
+  enrollMicrosoft: boolean;
 };
 
 export function usePrincipalActions() {
@@ -59,6 +60,7 @@ export function usePrincipalActions() {
             kind: input.kind,
             displayName: input.displayName.trim() || undefined,
             email: input.email.trim() || undefined,
+            ...(interactiveUser && input.enrollMicrosoft ? { microsoftEnrollment: { email: input.email.trim() } } : {}),
             role: input.role,
             selfServiceEnabled: input.selfServiceEnabled,
             agentTokenIssuance: input.agentTokenIssuance
@@ -88,7 +90,7 @@ export function usePrincipalActions() {
       toast(interactiveUser ? "User created" : "Service account created", { tone: "success" });
       refreshMembership();
       navigate(paths.principal(principalId));
-      if (interactiveUser && !enrollLocal) toast("User has no sign-in methods. Link Microsoft or explicitly enable local password sign-in on Overview.", { duration: 10000 });
+      if (interactiveUser && !enrollLocal && !input.enrollMicrosoft) toast("User has no sign-in methods. Link Microsoft or explicitly enable local password sign-in on Overview.", { duration: 10000 });
       setModal(enrollLocal ? { type: "passwordReveal", principalId, password: generatedPassword, action: "created" } : null);
     }
 
@@ -178,6 +180,28 @@ export function usePrincipalActions() {
       });
     }
 
+    async function createMicrosoftEnrollment(principalId: string, email: string) {
+      await attempt((current) => brokerApi.adminCreateMicrosoftEnrollment(current, principalId, email.trim()));
+      toast("Microsoft enrollment created", { tone: "success" });
+      refreshMembership();
+    }
+
+    async function editMicrosoftEnrollment(enrollment: MicrosoftEnrollment, email: string) {
+      await attempt((current) => brokerApi.adminEditMicrosoftEnrollment(current, enrollment.principalId, {
+        enrollmentId: enrollment.enrollmentId, expectedRevision: enrollment.revision, email: email.trim()
+      }));
+      toast("Microsoft enrollment saved", { tone: "success" });
+      refreshMembership();
+    }
+
+    async function cancelMicrosoftEnrollment(enrollment: MicrosoftEnrollment) {
+      await attempt((current) => brokerApi.adminCancelMicrosoftEnrollment(current, enrollment.principalId, {
+        enrollmentId: enrollment.enrollmentId, expectedRevision: enrollment.revision
+      }));
+      toast("Microsoft enrollment cancelled", { tone: "success" });
+      refreshMembership();
+    }
+
     async function linkMicrosoft(principalId: string, userObjectId: string) {
       await attempt((current) => brokerApi.adminLinkMicrosoftLogin(current, principalId, userObjectId));
       toast("Microsoft login linked", { tone: "success" });
@@ -212,6 +236,9 @@ export function usePrincipalActions() {
       confirmResetPassword,
       updateLoginMethod,
       confirmDisablePassword,
+      createMicrosoftEnrollment,
+      editMicrosoftEnrollment,
+      cancelMicrosoftEnrollment,
       linkMicrosoft,
       unlinkMicrosoft,
       confirmUnlinkMicrosoft

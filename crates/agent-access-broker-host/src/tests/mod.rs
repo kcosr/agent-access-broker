@@ -101,6 +101,7 @@ mod mcp;
 mod mcp_managed;
 mod mcp_spans;
 mod membership_renewal;
+mod microsoft_enrollments;
 mod microsoft_oidc;
 mod oauth;
 mod openapi_gateway;

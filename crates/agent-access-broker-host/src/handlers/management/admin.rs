@@ -48,6 +48,8 @@ pub(crate) struct PrincipalCreateBody {
     kind: String,
     display_name: Option<String>,
     email: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present")]
+    microsoft_enrollment: Option<agent_access_core::MicrosoftEnrollmentCreate>,
     external_subject: Option<String>,
     #[serde(default)]
     role: PrincipalRole,
@@ -1616,13 +1618,29 @@ pub(crate) async fn admin_principals_create(
         return *response;
     }
     let actor = context.identity.principal.clone();
+    let managed_identity = context.snapshot.runtime.config().identity.authority == "managed";
     committed_principal_mutation(
         state,
         context,
         operation,
         target,
         move |store, environment| {
-            let principal = store.create_principal(
+            let provider_generation = if body.microsoft_enrollment.is_some() {
+                if !managed_identity {
+                    return Err(ManagedStoreError::InputInvalid(
+                        "Microsoft enrollment requires identity.authority = managed".into(),
+                    ));
+                }
+                Some(
+                    store
+                        .oidc_provider_state()?
+                        .ok_or(ManagedStoreError::OidcProviderUnavailable)?
+                        .config_generation,
+                )
+            } else {
+                None
+            };
+            let principal = store.create_principal_with_microsoft_enrollment(
                 PrincipalWriteRequest {
                     principal_id: body.principal_id,
                     kind: body.kind,
@@ -1634,12 +1652,22 @@ pub(crate) async fn admin_principals_create(
                     agent_token_issuance: body.agent_token_issuance,
                     created_by: actor,
                 },
+                body.microsoft_enrollment,
+                provider_generation,
                 environment.contexts(),
             )?;
-            let completion = json!({
+            let mut completion = json!({
                 "principal": principal.principal_id,
                 "agentTokenIssuance": principal.agent_token_issuance,
             });
+            if let Some(enrollment) = &principal.microsoft_enrollment {
+                completion.as_object_mut().expect("audit object").extend(
+                    super::microsoft_enrollments::audit_target(enrollment)
+                        .as_object()
+                        .expect("audit object")
+                        .clone(),
+                );
+            }
             Ok((principal, completion))
         },
     )

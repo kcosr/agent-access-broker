@@ -240,10 +240,23 @@ late successor joins its family's revocation whenever its refresh reports,
 even after another process presumed it lost; each token keeps its own retry
 deadline.
 
-Microsoft group auto-enrollment adds local membership only in the new JIT
-principal's creation transaction after mapped-group admission; preserve the
-disabled-group pause, no-backfill/no-re-add semantics, and transaction-captured
-enrollment and setting-change audit details.
+Microsoft pending enrollment explicitly reserves a canonical token email for a
+human principal in the configured tenant. Keep it separate from profile email
+and established login methods; immutable subject resolution always wins, including
+disabled-account/method refusals. Bind and consume enrollment in the successful
+login transaction without JIT or mapped-group admission, preserving prepared
+access and identity inventory. Fence administrative edits/cancellation with the
+enrollment ID/revision and provider changes; include pending rows in the tenant
+change guard. Paused reconciled providers permit preparation.
+
+Microsoft sign-in refreshes the sanitized display name, preserving it when no
+usable claim exists. Add missing active auto-enrollment groups once while the
+principal's durable processed flag is false, then mark it true even for zero
+groups. Migration marks existing principals processed; post-migration prepared,
+Object-ID-linked, local and JIT accounts qualify at their first Microsoft sign-in.
+Preserve membership attribution, disabled-group pause, no-backfill/no-re-add
+semantics, and transaction-captured enrollment, name-change and audit facts.
+Neither local login nor membership renewal performs these changes.
 
 ## Agent token issuance
 
@@ -307,9 +320,9 @@ version) and writes nothing when it fails. Renew only at request admission
 (`membership_renewal.rs` in the host) for the caller's own identity, never under
 the store mutex or inside a store transaction, at most one wait per request,
 with a post-wait identity check that revalidates attested proofs rather than
-replacing them. Renewal never creates a principal, so group auto-enrollment
-never runs for it; a JIT sign-in records its row in the transaction that creates
-and enrolls the account. Failures never extend evidence. Refresh, ID and access tokens,
+replacing them. Renewal never performs initial group assignment or display-name
+refresh; sign-in records its renewal row in the same transaction as enrollment
+and session creation. Failures never extend evidence. Refresh, ID and access tokens,
 response bodies and `error_description` never reach logs, audit, errors or API
 responses.
 

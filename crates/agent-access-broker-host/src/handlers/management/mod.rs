@@ -16,3 +16,4 @@ pub(crate) mod identity_tokens;
 
 pub(crate) mod import_types;
 pub(crate) mod imports;
+pub(crate) mod microsoft_enrollments;

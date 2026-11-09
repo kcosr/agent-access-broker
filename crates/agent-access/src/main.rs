@@ -1139,6 +1139,9 @@ enum AdminPrincipalsCommand {
         display_name: Option<String>,
         #[arg(long)]
         email: Option<String>,
+        /// Prepare Microsoft sign-in using this email, independently of profile --email.
+        #[arg(long)]
+        microsoft_enrollment_email: Option<String>,
         #[arg(long)]
         external_subject: Option<String>,
         #[arg(long, default_value = "user", value_parser = ["user", "auditor", "service_policy_manager", "admin"])]
@@ -1352,7 +1355,7 @@ enum AdminGroupsCommand {
         display_name: Option<String>,
         #[arg(long)]
         description: Option<String>,
-        /// Add newly created Microsoft accounts to this group after admission.
+        /// Add eligible accounts to this group at their first Microsoft sign-in.
         #[arg(long)]
         auto_enroll_new_microsoft_users: bool,
         /// This group's contribution to personal agent token issuance permission.
@@ -1378,7 +1381,7 @@ enum AdminGroupsCommand {
         description: Option<String>,
         #[arg(long)]
         clear_description: bool,
-        /// Enable or disable automatic local membership for new Microsoft accounts.
+        /// Enable or disable once-only local membership at first Microsoft sign-in.
         #[arg(long, action = clap::ArgAction::Set)]
         auto_enroll_new_microsoft_users: Option<bool>,
         /// This group's contribution to personal agent token issuance permission.
@@ -1494,6 +1497,39 @@ enum AdminPrincipalOidcCommand {
     },
     Unlink {
         principal: String,
+    },
+    /// Prepare or manage email matching for the first Microsoft sign-in.
+    Enrollment {
+        #[command(subcommand)]
+        command: AdminMicrosoftEnrollmentCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdminMicrosoftEnrollmentCommand {
+    Inspect {
+        principal: String,
+    },
+    Create {
+        principal: String,
+        #[arg(long)]
+        email: String,
+    },
+    Update {
+        principal: String,
+        #[arg(long, value_parser = parse_uuid)]
+        enrollment_id: Uuid,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_revision: i64,
+        #[arg(long)]
+        email: String,
+    },
+    Cancel {
+        principal: String,
+        #[arg(long, value_parser = parse_uuid)]
+        enrollment_id: Uuid,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_revision: i64,
     },
 }
 
@@ -11412,7 +11448,15 @@ async fn run_send_http(
             route_spec.route
         )));
     }
-    let path = resolve_route_path(&route_spec, path_params, query)?;
+    if body.is_none() && route_spec.body_required {
+        require_cli_input::<()>(Err(anyhow::anyhow!(
+            "route {} {} requires a JSON body",
+            route_spec.method,
+            route_spec.route
+        )));
+    }
+    let path =
+        resolve_route_path(&route_spec, path_params, query).map_err(DeferredCliError::input)?;
     let method = reqwest::Method::from_bytes(route_spec.method.as_bytes())
         .map_err(|error| anyhow::anyhow!("catalog method is invalid: {error}"))?;
     let response_shape = response_shape_for_route(&route_spec);
@@ -11519,6 +11563,16 @@ fn resolve_route_path(
             anyhow::bail!("route {} has no query parameter {key}", route.route);
         }
     }
+    for param in route.query_params.iter().filter(|param| param.required) {
+        if !query.get(&param.name).is_some_and(query_value_is_present) {
+            anyhow::bail!(
+                "route {} {} requires query parameter {}",
+                route.method,
+                route.route,
+                param.name
+            );
+        }
+    }
     if query.is_empty() {
         return Ok(path);
     }
@@ -11528,6 +11582,14 @@ fn resolve_route_path(
     }
     let query = serializer.finish();
     Ok(format!("{path}?{query}"))
+}
+
+fn query_value_is_present(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values.iter().any(query_value_is_present),
+        serde_json::Value::Null | serde_json::Value::Object(_) => false,
+        _ => true,
+    }
 }
 
 fn append_query_value(
@@ -12674,6 +12736,7 @@ async fn run_admin_principals_command(
             kind,
             display_name,
             email,
+            microsoft_enrollment_email,
             external_subject,
             role,
             self_service_enabled,
@@ -12689,6 +12752,9 @@ async fn run_admin_principals_command(
                     "role": role,
                     "selfServiceEnabled": self_service_enabled.unwrap_or(kind != "service_account"),
             });
+            if let Some(email) = microsoft_enrollment_email {
+                body["microsoftEnrollment"] = serde_json::json!({ "email": email });
+            }
             if let Some(setting) = require_cli_input(agent_token_issuance_body(
                 *agent_token_issuance,
                 agent_token_issuance_contexts,
@@ -12840,6 +12906,9 @@ async fn run_admin_principals_command(
                     )
                     .await
                 }
+                AdminPrincipalOidcCommand::Enrollment { command } => {
+                    run_admin_microsoft_enrollment(ctx, command).await
+                }
             },
         },
         AdminPrincipalsCommand::Password { command } => match command {
@@ -12916,6 +12985,69 @@ async fn run_admin_principals_command(
                 .await
             }
         },
+    }
+}
+
+async fn run_admin_microsoft_enrollment(
+    ctx: &CliContext<'_>,
+    command: &AdminMicrosoftEnrollmentCommand,
+) -> Result<()> {
+    let principal = match command {
+        AdminMicrosoftEnrollmentCommand::Inspect { principal }
+        | AdminMicrosoftEnrollmentCommand::Create { principal, .. }
+        | AdminMicrosoftEnrollmentCommand::Update { principal, .. }
+        | AdminMicrosoftEnrollmentCommand::Cancel { principal, .. } => principal,
+    };
+    let path = format!(
+        "/v1/admin/principals/{}/login-methods/oidc/microsoft/enrollment",
+        encoded_path_segment(principal)
+    );
+    match command {
+        AdminMicrosoftEnrollmentCommand::Inspect { .. } => {
+            run_broker_get(ctx, &path, ResponseShape::Object).await
+        }
+        AdminMicrosoftEnrollmentCommand::Create { email, .. } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::POST,
+                &path,
+                Some(serde_json::json!({ "email": email })),
+            )
+            .await
+        }
+        AdminMicrosoftEnrollmentCommand::Update {
+            enrollment_id,
+            expected_revision,
+            email,
+            ..
+        } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::PATCH,
+                &path,
+                Some(serde_json::json!({
+                    "enrollmentId": enrollment_id.to_string(),
+                    "expectedRevision": expected_revision,
+                    "email": email,
+                })),
+            )
+            .await
+        }
+        AdminMicrosoftEnrollmentCommand::Cancel {
+            enrollment_id,
+            expected_revision,
+            ..
+        } => {
+            run_broker_json_method(
+                ctx,
+                reqwest::Method::DELETE,
+                &format!(
+                    "{path}?enrollmentId={enrollment_id}&expectedRevision={expected_revision}"
+                ),
+                None,
+            )
+            .await
+        }
     }
 }
 

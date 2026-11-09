@@ -1,3 +1,5 @@
+mod enrollment;
+
 use super::{TestBroker, fake_config, response_json, temp_path};
 use crate::state::RuntimeSnapshot;
 use crate::state::{MicrosoftOidcTransport, MicrosoftOidcTransportError};
@@ -1029,6 +1031,15 @@ async fn oidc_browser_fixture_configured(
     membership_renewal: bool,
     audit_path: PathBuf,
 ) -> OidcBrowserFixture {
+    oidc_browser_fixture_custom(discovery_outage, membership_renewal, audit_path, |_| {}).await
+}
+
+async fn oidc_browser_fixture_custom(
+    discovery_outage: bool,
+    membership_renewal: bool,
+    audit_path: PathBuf,
+    configure: impl FnOnce(&mut BrokerConfig),
+) -> OidcBrowserFixture {
     let store_path = temp_path("microsoft-oidc-browser.sqlite");
     let broker_hash_key_path = temp_path("microsoft-oidc-broker-hash-key");
     let csrf_key_path = temp_path("microsoft-oidc-csrf-key");
@@ -1094,6 +1105,7 @@ async fn oidc_browser_fixture_configured(
         membership_renewal,
     };
 
+    configure(&mut config);
     let store = ManagedStore::open(
         config.managed_store.as_ref().unwrap(),
         &agent_access_core::ConfiguredExecutionContexts::from_config(None).unwrap(),

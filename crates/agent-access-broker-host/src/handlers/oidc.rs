@@ -1010,6 +1010,19 @@ pub(crate) async fn microsoft_oidc_callback(
         source: None,
         caller_id: None,
     };
+    let mut login_details = json!({
+        "provider": "microsoft",
+        "loginMethodId": result.login_method.login_method_id,
+        "jitCreated": jit_created,
+        "autoEnrolledGroupIds": result.auto_enrolled_group_ids,
+        "displayNameUpdated": result.display_name_updated,
+        "effectiveGroupCount": result.membership.groups.len(),
+        "membershipEvidence": result.membership_evidence.as_str(),
+    });
+    if let Some(enrollment_id) = &result.enrollment_id {
+        login_details["enrollmentId"] = json!(enrollment_id);
+        login_details["tenantId"] = json!(identity.tenant_id);
+    }
     let audit = append_oidc_audit(
         &snapshot,
         &request_id,
@@ -1019,14 +1032,7 @@ pub(crate) async fn microsoft_oidc_callback(
         &audit_identity,
         Decision::Allow,
         None,
-        json!({
-            "provider": "microsoft",
-            "loginMethodId": result.login_method.login_method_id,
-            "jitCreated": jit_created,
-            "autoEnrolledGroupIds": result.auto_enrolled_group_ids,
-            "effectiveGroupCount": result.membership.groups.len(),
-            "membershipEvidence": result.membership_evidence.as_str(),
-        }),
+        login_details,
     )
     .await;
     if audit.is_err() {
@@ -1282,15 +1288,9 @@ fn sanitized_profile_value(value: &str, max_bytes: usize) -> Option<String> {
 }
 
 fn sanitized_email_claim(value: &str) -> Option<String> {
-    let value = sanitized_profile_value(value, 320)?;
-    let (local, domain) = value.split_once('@')?;
-    (value.matches('@').count() == 1
-        && !local.is_empty()
-        && !domain.is_empty()
-        && domain.contains('.')
-        && !domain.starts_with('.')
-        && !domain.ends_with('.'))
-    .then_some(value)
+    // One validator for enrollment and token email. Keep the original sanitized
+    // profile spelling; only the store's enrollment lookup uses its canonical form.
+    agent_access_core::canonical_microsoft_enrollment_email(value).map(|_| value.trim().to_string())
 }
 
 #[allow(clippy::too_many_arguments)]

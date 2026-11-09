@@ -359,7 +359,7 @@
   <header>
     <p class="eyebrow">Agent Access Broker · System Architecture</p>
     <h1>Agent Access Broker</h1>
-    <p class="lede">How agent requests are bound to a verified user and execution context, authorized, and executed against company systems while keeping upstream execution credentials in the broker.</p>
+    <p class="lede">Agent Access Broker is a service that gives AI agents controlled access to company systems such as Jira, Confluence and GitLab. It checks each requested operation, calls the system and records the outcome, while keeping that system's credentials out of the agent's environment.</p>
     <dl class="meta">
       <div><dt>Scope</dt><dd>Identity, policy, credentials, execution</dd></div>
       <div><dt>Upstreams</dt><dd>Built-in providers · MCP · OpenAPI</dd></div>
@@ -414,12 +414,12 @@
     <div class="sec-head">
       <div class="num">01</div>
       <h2>What the broker does</h2>
-      <p>The broker authorizes agent requests and calls company systems using stored credentials.</p>
+      <p>A common place to manage what agents can do across company systems.</p>
     </div>
     <div class="sec-body split">
       <div>
-        <p>The Agent Access Broker keeps upstream execution credentials outside the workload and provides a common place to authorize and audit agent requests, with controls over which actions are allowed from each execution environment.</p>
-        <p>An agent calls a typed action, such as <code>jira.issue.view</code> or <code>gitlab.merge_request.view</code>. The Broker identifies the user and execution context, checks policy, and calls the upstream using a stored credential.</p>
+        <p>An agent can use the Broker to read a Jira issue, update a Confluence page, inspect a GitLab merge request or trigger a build. Administrators configure the available services and decide which people or service accounts may perform which operations on which resources.</p>
+        <p>For example, an agent reviewing a merge request asks the Broker for its details. The Broker checks the caller's access, reads the merge request using an approved credential and returns the result. The same checks apply when an agent requests a change.</p>
         <div class="callout">
           <b>Policy enforcement.</b> Broker policy and upstream permissions both apply. A request must satisfy both sets of controls. <a href="#decision">Section 10</a> shows how they combine.
         </div>

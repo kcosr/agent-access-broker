@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
+  Back up first and upgrade Broker, CLI and portal together; rollback requires
+  the matching pre-migration database and binary. Existing principals are marked
+  processed without group backfill. For principals created after migration,
+  initial local groups now apply once at the first Microsoft sign-in, including
+  prepared, Object-ID-linked and established local accounts. Every successful
+  Microsoft sign-in refreshes display name, potentially replacing an administrator
+  edit; profile email remains unchanged. See
+  [Microsoft onboarding](docs/administrator-guide.md#microsoft-onboarding).
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
+
 - **GitLab file views return metadata by default and readable text on request.**
   Replace `contentBase64`/`encoding` consumers with `includeContent: true` and
   `file.content`, checking `contentStatus` for included or omitted content.
@@ -107,8 +118,10 @@ All notable changes to this project are documented in this file.
   ([#66](https://github.com/kcosr/agent-access-broker/pull/66))
 
 - **Route and imported API additions require consumer updates.**
-  `HttpRouteSpec` gains `request_body_kind`; downstream struct literals must
-  supply `RequestBodyKind::Json` for ordinary JSON routes.
+  `HttpRouteSpec` gains `request_body_kind` and `body_required`; downstream struct
+  literals must supply `RequestBodyKind::Json` for ordinary JSON routes and an
+  explicit required-body Boolean. HTTP catalog routes serialize that Boolean as
+  `bodyRequired`; credential verification keeps its body optional.
   `ImportedActionDefinition`, exposed through the host's `test-support` API,
   gains the public `download: bool` field. Downstream struct literals must
   supply it (`false` preserves existing JSON actions), and exhaustive
@@ -116,7 +129,7 @@ All notable changes to this project are documented in this file.
   gains `Basic`; update exhaustive matches to handle that delivery explicitly.
   `ImportedServiceRecord` gains `document` metadata; existing downstream struct
   literals must supply `None` when no uploaded source is retained.
-  ([#64](https://github.com/kcosr/agent-access-broker/pull/64), [#66](https://github.com/kcosr/agent-access-broker/pull/66))
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64), [#66](https://github.com/kcosr/agent-access-broker/pull/66), [#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - **Resource-access discovery replaces resource listing.** Use MCP
   `resource_access_describe`, CLI `resource-access describe`, HTTP
@@ -162,6 +175,21 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Prepare Microsoft users by email.** Administrators can create a normal human
+  account with explicit tenant-scoped `microsoftEnrollment`, then prepare access
+  before its first validated matching sign-in. The CLI adds
+  `--microsoft-enrollment-email` and `login-methods oidc enrollment`
+  inspect/create/update/cancel operations; the portal shows pending enrollment
+  separately from profile email. Binding consumes the reservation and preserves
+  the principal without a later approval, directory lookup or automatic token
+  distribution. Paused providers permit preparation. Login audit adds
+  `enrollmentId` and `tenantId` when pending enrollment is consumed, plus
+  `displayNameUpdated`; it preserves `jitCreated` and records actual initial
+  memberships in `autoEnrolledGroupIds`. `config.status` adds the
+  `microsoftEnrollment` availability/tenant object for administrative preparation.
+  See the [HTTP API](docs/http-api.md).
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
   2.0 and OpenAPI 3.1 documents by URL or upload, choose immutable Actions/tools
@@ -459,6 +487,12 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- HTTP route metadata declares whether a request body is required, keeping send
+  schemas and OpenAPI aligned with handlers while preserving optional credential
+  verification bodies. Microsoft enrollment cancellation carries its required
+  ID/revision query parameters without a JSON body.
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - GitLab raw downloads use the execution credential and metadata from the same
   response as their bytes. GitLab's potentially converted-content hash is no

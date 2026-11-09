@@ -29,6 +29,7 @@ import type {
   IssuedAdminBrokerToken,
   IssuedBrokerToken,
   LoginMethodRecord,
+  MicrosoftEnrollment,
   PolicyCatalogResult,
   PolicyGrantRecord,
   PolicyGrantWriteBody,
@@ -432,7 +433,7 @@ export const brokerApi = {
     managementRequest<PrincipalDetail>(`/v1/admin/principals/${enc(principalId)}`, {}, session),
   adminCreatePrincipal: (
     session: Session,
-    body: { principalId: string; kind?: "user" | "service_account"; displayName?: string; email?: string; role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }
+    body: { principalId: string; microsoftEnrollment?: { email: string }; kind?: "user" | "service_account"; displayName?: string; email?: string; role?: PrincipalRole; selfServiceEnabled?: boolean; agentTokenIssuance?: PrincipalAgentTokenIssuanceSetting }
   ) =>
     managementRequest<PrincipalRecord>(
       "/v1/admin/principals",
@@ -531,6 +532,25 @@ export const brokerApi = {
       `/v1/admin/principals/${enc(principalId)}/login-methods/local-password`,
       { method: "DELETE" },
       session
+    ),
+  adminMicrosoftEnrollment: (session: Session, principalId: string) =>
+    managementRequest<MicrosoftEnrollment | null>(
+      `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment`, {}, session
+    ),
+  adminCreateMicrosoftEnrollment: (session: Session, principalId: string, email: string) =>
+    managementRequest<MicrosoftEnrollment>(
+      `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment`,
+      { method: "POST", body: JSON.stringify({ email }) }, session
+    ),
+  adminEditMicrosoftEnrollment: (session: Session, principalId: string, body: { enrollmentId: string; expectedRevision: number; email: string }) =>
+    managementRequest<MicrosoftEnrollment>(
+      `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment`,
+      { method: "PATCH", body: JSON.stringify(body) }, session
+    ),
+  adminCancelMicrosoftEnrollment: (session: Session, principalId: string, fence: { enrollmentId: string; expectedRevision: number }) =>
+    managementRequest<{ cancelled: boolean }>(
+      `/v1/admin/principals/${enc(principalId)}/login-methods/oidc/microsoft/enrollment?enrollmentId=${enc(fence.enrollmentId)}&expectedRevision=${enc(String(fence.expectedRevision))}`,
+      { method: "DELETE" }, session
     ),
   adminLinkMicrosoftLogin: (session: Session, principalId: string, userObjectId: string) =>
     managementRequest<LoginMethodRecord>(

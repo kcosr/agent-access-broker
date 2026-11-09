@@ -78,3 +78,28 @@ test("a refusal with only group exclusions preserves its structured memberships"
     status: 400, blocked: { affectedGrants: [], resources: [], resourceGroups }
   });
 });
+
+test("Microsoft enrollment mutations preserve CSRF, explicit methods and concurrency fences", async () => {
+  const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ ok: true, result: null }))));
+  vi.stubGlobal("fetch", fetch);
+  const session = { authenticated: true, role: "admin" as const, csrfHeader: "x-csrf", csrfToken: "fixture" };
+  const fence = { enrollmentId: "enrollment-1", expectedRevision: 3 };
+  await brokerApi.adminMicrosoftEnrollment(session, "person@example.test");
+  await brokerApi.adminCreateMicrosoftEnrollment(session, "person@example.test", "match@example.test");
+  await brokerApi.adminEditMicrosoftEnrollment(session, "person@example.test", { ...fence, email: "next@example.test" });
+  await brokerApi.adminCancelMicrosoftEnrollment(session, "person@example.test", fence);
+  expect(fetch.mock.calls).toHaveLength(4);
+  const calls = fetch.mock.calls as [string, RequestInit][];
+  for (const [url] of calls) expect(new URL(url, "https://broker.example.test").pathname).toBe("/v1/admin/principals/person%40example.test/login-methods/oidc/microsoft/enrollment");
+  for (const [, init] of calls.slice(1)) expect(new Headers(init.headers).get("x-csrf")).toBe("fixture");
+  expect(calls.slice(1, 3).map(([, init]) => [init.method, JSON.parse(init.body as string)])).toEqual([
+    ["POST", { email: "match@example.test" }],
+    ["PATCH", { ...fence, email: "next@example.test" }]
+  ]);
+  expect(calls[3]![1].method).toBe("DELETE");
+  expect(calls[3]![1].body).toBeUndefined();
+  expect(Object.fromEntries(new URL(calls[3]![0], "https://broker.example.test").searchParams)).toEqual({ enrollmentId: "enrollment-1", expectedRevision: "3" });
+  fetch.mockImplementationOnce(() => Promise.resolve(new Response(JSON.stringify({ ok: false, error: { message: "Enrollment changed" } }), { status: 409 })));
+  await expect(brokerApi.adminEditMicrosoftEnrollment(session, "person@example.test", { ...fence, email: "next@example.test" })).rejects.toMatchObject({ status: 409, message: "Enrollment changed" });
+  expect(fetch).toHaveBeenCalledTimes(5);
+});

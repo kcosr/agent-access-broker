@@ -1081,6 +1081,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "admin.principals.services"
             | "admin.principals.service_limits.list"
             | "admin.principals.login_methods.list"
+            | "admin.principals.login_methods.oidc.microsoft.enrollment.inspect"
             | "admin.principals.identity_token.inspect"
             | "admin.principals.identity_access.inspect"
             | "admin.principals.identity_bindings.list"
@@ -1273,6 +1274,7 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "admin.principals.inspect",
     "admin.principals.services",
     "admin.principals.login_methods.list",
+    "admin.principals.login_methods.oidc.microsoft.enrollment.inspect",
     "admin.principals.service_limits.list",
     "admin.principals.identity_token.inspect",
     "admin.principals.identity_access.inspect",

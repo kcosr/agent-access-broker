@@ -28,6 +28,7 @@ use crate::handlers::management::admin::{
 };
 use crate::handlers::management::audit;
 use crate::handlers::management::imports;
+use crate::handlers::management::microsoft_enrollments;
 use crate::handlers::management::policy::{
     admin_policy_catalog, admin_policy_grants_create, admin_policy_grants_delete,
     admin_policy_grants_disable, admin_policy_grants_enable, admin_policy_grants_export,
@@ -388,6 +389,13 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         .route(
             "/v1/admin/principals/{principal}/login-methods/oidc/microsoft",
             put(admin_principal_microsoft_oidc_link).delete(admin_principal_microsoft_oidc_unlink),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/login-methods/oidc/microsoft/enrollment",
+            get(microsoft_enrollments::inspect)
+                .post(microsoft_enrollments::create)
+                .patch(microsoft_enrollments::update)
+                .delete(microsoft_enrollments::cancel),
         )
         .route(
             "/v1/admin/principals/{principal}/services",

@@ -9,7 +9,7 @@ export function GroupEnrollmentCheckbox({ paused = false, ...props }: Props) {
       <Checkbox
         {...props}
         label="Automatically add new Microsoft users"
-        description="Add newly created Microsoft accounts to this group. This setting does not authorize sign-in or change Microsoft admission requirements: new accounts still require membership in an active mapped Microsoft group. Membership is local and persists after Microsoft membership expires. Existing accounts are not added, and later sign-ins do not restore removed memberships."
+        description="Add eligible accounts once at their first successful Microsoft sign-in, including prepared accounts and Object-ID links. This setting does not authorize sign-in or change Microsoft admission requirements. Membership is local and persists after Microsoft membership expires. Accounts that existed before this feature are not added. Later sign-ins do not restore removed memberships or add groups enabled afterward."
       />
       {paused ? <p className="pt-prose">Enrollment is paused while this group is disabled. Re-enabling resumes enrollment for future new accounts.</p> : null}
     </div>

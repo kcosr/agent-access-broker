@@ -731,9 +731,19 @@ fn issuance_old_token(
     (id, raw)
 }
 
+fn issuance_table_columns(conn: &Connection, table: &str) -> String {
+    let statement = conn.prepare(&format!("SELECT * FROM {table} LIMIT 0")).unwrap();
+    statement.column_names().into_iter().map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>().join(", ")
+}
+
 fn issuance_table_rows(conn: &Connection, table: &str) -> Vec<Vec<rusqlite::types::Value>> {
+    issuance_projected_rows(conn, table, "*")
+}
+
+fn issuance_projected_rows(conn: &Connection, table: &str, columns: &str) -> Vec<Vec<rusqlite::types::Value>> {
     let mut statement = conn
-        .prepare(&format!("SELECT * FROM {table} ORDER BY 1"))
+        .prepare(&format!("SELECT {columns} FROM {table} ORDER BY 1"))
         .unwrap();
     let count = statement.column_count();
     statement
@@ -799,9 +809,10 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
         "credentials",
         "credential_secret_material",
     ];
-    let before = {
+    let (before, prior_columns) = {
         let conn = old.connection.lock().unwrap();
-        preserved_tables.map(|table| issuance_table_rows(&conn, table))
+        (preserved_tables.map(|table| issuance_table_rows(&conn, table)),
+         preserved_tables.map(|table| issuance_table_columns(&conn, table)))
     };
     let tokens_before = issuance_table_rows(&old.connection.lock().unwrap(), "broker_tokens");
     let ledger_before = migration_rows(&path);
@@ -848,12 +859,8 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
     {
         let conn = upgraded.connection.lock().unwrap();
         for (index, table) in preserved_tables.into_iter().enumerate() {
-            let mut after = issuance_table_rows(&conn, table);
-            if index < 2 {
-                for row in &mut after {
-                    row.pop();
-                }
-            }
+            // Compare every pre-migration value, independently of later additive columns.
+            let after = issuance_projected_rows(&conn, table, &prior_columns[index]);
             assert_eq!(after, before[index], "{table}");
         }
         let tokens_after = issuance_table_rows(&conn, "broker_tokens");

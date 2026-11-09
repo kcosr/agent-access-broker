@@ -91,6 +91,9 @@ HTTP-kind requests use a catalog route template, not a provider action:
 
 Use declared `pathParams`, `query` and `body` fields from the schema; the CLI
 encodes parameters. External URLs, unknown fields and `body: null` are rejected.
+Missing or empty required query parameters and a missing required body are
+rejected before dispatch with input exit status `3`, using the catalog's
+required query metadata and `bodyRequired` flag.
 Routes requiring exact raw JSON bytes are excluded from generic send. Discovering
 a management route does not authorize using it for an invocation task.
 
