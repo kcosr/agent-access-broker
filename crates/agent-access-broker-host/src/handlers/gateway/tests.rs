@@ -3132,9 +3132,16 @@ impl agent_access_provider::Provider for SharedGitlabRestProvider {
             .lock()
             .unwrap()
             .push(request.execution().static_credential().cloned());
-        Ok(agent_access_provider::ProviderResult::new(
-            json!({"id": 42}),
-        ))
+        // The production `project.view` result shape, which the real
+        // descriptor's result schemas declare.
+        Ok(agent_access_provider::ProviderResult::new(json!({
+            "project": {
+                "id": 42, "pathWithNamespace": "sip/service", "name": null,
+                "description": null, "webUrl": null, "defaultBranch": null,
+                "visibility": null, "archived": null, "lastActivityAt": null,
+                "starCount": null
+            }
+        })))
     }
 }
 
