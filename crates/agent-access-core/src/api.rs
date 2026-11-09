@@ -118,7 +118,7 @@ pub struct ApiActionSpec {
 /// optionally, the `result` its provider errors carry before the shared
 /// failure properties are merged in.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiResultSchemas {
     pub success: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
