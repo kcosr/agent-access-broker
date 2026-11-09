@@ -401,9 +401,68 @@ async fn describe_draws_from_the_command_budget() {
     assert_eq!(failed_reason(error), ReasonCode::OperationCancelled);
 }
 
+/// A command hook whose every invocation outcome is checked strictly
+/// against the result schemas the adapter states for the action (see
+/// [`result_schema::assert_conforms`]).
+#[cfg(unix)]
+struct ConformingHook {
+    hook: Arc<dyn CommandProvider>,
+    downloads: std::collections::BTreeSet<String>,
+}
+
+#[cfg(unix)]
+#[async_trait]
+impl Provider for ConformingHook {
+    async fn resolve_scopes(
+        &self,
+        request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        self.hook.resolve_scopes(request).await
+    }
+    async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        self.hook.invoke(request).await
+    }
+}
+
+#[cfg(unix)]
+#[async_trait]
+impl CommandProvider for ConformingHook {
+    async fn invoke_command(
+        &self,
+        invocation: CommandInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let download = self.downloads.contains(invocation.action());
+        let outcome = self.hook.invoke_command(invocation).await;
+        result_schema::assert_conforms(download, &outcome);
+        outcome
+    }
+    async fn verify_command(
+        &self,
+        verification: CommandVerification,
+    ) -> Result<ProviderCredentialVerification, ProviderError> {
+        self.hook.verify_command(verification).await
+    }
+}
+
+/// `hook`, built for `actions`, checking every invocation outcome.
+#[cfg(unix)]
+fn conforming(
+    hook: Arc<dyn CommandProvider>,
+    actions: &[ImportedActionDefinition],
+) -> Arc<dyn CommandProvider> {
+    Arc::new(ConformingHook {
+        hook,
+        downloads: actions
+            .iter()
+            .filter(|action| action.download)
+            .map(|action| action.action.clone())
+            .collect(),
+    })
+}
+
 /// The command hook of `command`'s import, built from its accepted
 /// discovery, with the first action reviewed as a read and the rest as
-/// writes.
+/// writes. It checks every invocation outcome (see [`ConformingHook`]).
 #[cfg(unix)]
 async fn command_hook(
     command: &CommandImportConfig,
@@ -439,7 +498,12 @@ async fn command_hook(
         .command()
         .cloned()
         .expect("command imports build a command hook");
-    (hook, built.provider().unwrap(), metadata, actions)
+    (
+        conforming(hook, &actions),
+        built.provider().unwrap(),
+        metadata,
+        actions,
+    )
 }
 
 /// `command` running the fixture `fixture` instead.
@@ -772,7 +836,7 @@ async fn clean_exit_before_response_deadline_expiry_keeps_unknown_write_and_null
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(31)).await;
     tokio::time::resume();
-    let error = provider
+    let outcome = provider
         .download_response(
             action,
             false,
@@ -783,8 +847,9 @@ async fn clean_exit_before_response_deadline_expiry_keeps_unknown_write_and_null
             deadline,
             lease,
         )
-        .await
-        .unwrap_err();
+        .await;
+    result_schema::assert_conforms(true, &outcome);
+    let error = outcome.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(error.result.unwrap()["mutationStatus"], "unknown");
     assert_eq!(facts.snapshot().contract_violation, None);
@@ -820,7 +885,7 @@ async fn download_hook_uses_its_own_stdout_cap_and_releases_budget_before_delive
             &host.context(),
         )
         .unwrap();
-    let hook = built.command().unwrap();
+    let hook = conforming(built.command().unwrap().clone(), &actions);
     let registry = CommandRegistry::new();
     let facts = CommandProcessFacts::new();
     let result = hook
@@ -968,4 +1033,66 @@ fn basic_delivery_is_rejected_by_command_validation_contract_and_build() {
             )
             .is_err()
     );
+}
+
+#[test]
+fn result_schemas_follow_the_output_kind_whatever_the_manifest_declares() {
+    use serde_json::json;
+    let mut action = ImportedActionDefinition {
+        action: "issue.update".into(),
+        source: json!({"name": "issue.update"}),
+        label: None,
+        description: "Update an issue".into(),
+        input_schema: json!({"type": "object"}),
+        output_schema: Some(json!({"type": "object", "required": ["key"]})),
+        annotations: json!({}),
+        read_only: false,
+        download: false,
+    };
+    let ordinary = CommandAdapter.result_schemas(&action).unwrap();
+    // Neither the manifest's output schema nor the reviewed classification
+    // narrows the wrapper, so refresh and acceptance keep cached validators.
+    action.output_schema = None;
+    action.read_only = true;
+    assert_eq!(CommandAdapter.result_schemas(&action).unwrap(), ordinary);
+    assert_eq!(ordinary.success()["required"], json!(["upstreamCommand"]));
+    assert_eq!(
+        ordinary.success()["properties"]["upstreamCommand"].get("type"),
+        None
+    );
+    action.download = true;
+    let download = CommandAdapter.result_schemas(&action).unwrap();
+    assert_eq!(
+        download.success()["required"],
+        json!([
+            "upstreamCommand",
+            "filename",
+            "contentType",
+            "size",
+            "sha256"
+        ])
+    );
+    assert_eq!(
+        download.success()["properties"]["upstreamCommand"]["type"],
+        "object"
+    );
+    assert_eq!(download.error(), ordinary.error());
+    assert_eq!(
+        ordinary.error().unwrap()["properties"]["operationDispatched"]["type"],
+        "boolean"
+    );
+    for (name, schemas) in [("issue.update", ordinary), ("report.export", download)] {
+        let mut descriptor = agent_access_provider::ServiceDescriptor::new("tickets", "Tickets")
+            .with_actions(vec![
+                agent_access_provider::ActionDescriptor::new(
+                    name,
+                    "Act",
+                    json!({"type": "object"}),
+                )
+                .credential_modes(vec!["service"])
+                .result_schemas(schemas),
+            ]);
+        descriptor.actions[0].sensitive_output_pointers = vec!["/result/upstreamCommand".into()];
+        descriptor.validate().unwrap();
+    }
 }

@@ -358,24 +358,32 @@ mod tests {
         secrets
     }
 
+    /// Every outcome a test reads conforms to the action's result schemas.
+    fn checked(outcome: Result<InvokeOutcome, Violation>) -> Result<InvokeOutcome, Violation> {
+        if let Ok(outcome) = &outcome {
+            crate::result_schema::assert_conforms(false, outcome);
+        }
+        outcome
+    }
+
     fn write(document: Value) -> Result<InvokeOutcome, Violation> {
-        invoke(
+        checked(invoke(
             "tickets",
             &action(Some(json!({"type": "object", "required": ["key"]}))),
             false,
             document.to_string().as_bytes(),
             &secrets(),
-        )
+        ))
     }
 
     fn read(document: &str) -> Result<InvokeOutcome, Violation> {
-        invoke(
+        checked(invoke(
             "tickets",
             &action(None),
             true,
             document.as_bytes(),
             &secrets(),
-        )
+        ))
     }
 
     fn failure(outcome: Result<InvokeOutcome, Violation>) -> ProviderError {

@@ -49,3 +49,38 @@ pub(crate) fn result_schemas(download: bool) -> ActionResultSchemas {
         }
     }))
 }
+
+/// Asserts that `outcome`, of a JSON action or a `download`, conforms
+/// strictly to the result schemas the hook states, both as the command
+/// provider returns it and as core delivers a failed write, with the
+/// `operationDispatched` fact beside the receipt.
+#[cfg(test)]
+pub(crate) fn assert_conforms(
+    download: bool,
+    outcome: &Result<agent_access_provider::ProviderResult, agent_access_provider::ProviderError>,
+) {
+    use agent_access_provider::test_support::assert_result_conforms;
+    let action = agent_access_provider::ActionDescriptor::new(
+        "item.update",
+        "Command action",
+        json!({"type": "object"}),
+    )
+    .result_schemas(result_schemas(download));
+    assert_result_conforms(&action, outcome);
+    if let Err(error) = outcome
+        && let Some(result) = error
+            .result
+            .as_deref()
+            .and_then(serde_json::Value::as_object)
+            .filter(|result| result.contains_key("mutationStatus"))
+    {
+        let mut result = result.clone();
+        result.insert("operationDispatched".into(), json!(true));
+        let delivered = agent_access_provider::ProviderError::error(
+            agent_access_provider::ReasonCode::OperationFailed,
+            "delivered",
+        )
+        .with_result(serde_json::Value::Object(result));
+        assert_result_conforms(&action, &Err(delivered));
+    }
+}
