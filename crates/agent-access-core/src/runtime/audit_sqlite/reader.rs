@@ -309,7 +309,7 @@ impl Admission {
         let capacity = shared.limits.connections + shared.limits.waiting;
         shared
             .admitted
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |admitted| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |admitted| {
                 (admitted < capacity).then_some(admitted + 1)
             })
             .map(|_| Self(Arc::clone(shared)))

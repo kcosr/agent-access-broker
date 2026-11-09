@@ -1442,7 +1442,7 @@ mod tests {
         ) -> Result<String, agent_access_provider::SigningError> {
             use std::sync::atomic::Ordering;
             self.successes
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .map_err(|_| agent_access_provider::SigningError)?;
             self.inner.hmac_base64url(context, payload)
         }
