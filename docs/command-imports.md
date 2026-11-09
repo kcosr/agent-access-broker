@@ -727,9 +727,10 @@ payloads are. With an `outputSchema`, `result` must validate against it.
 Every command action publishes fixed result schemas in its catalog
 `resultSchemas`, typed OpenAPI responses and MCP
 [output schema](mcp.md#output-schemas). A JSON action's success has an open
-`upstreamCommand`; a [download](#download-responses)'s metadata has an object
-`upstreamCommand` with `filename`, `contentType`, `size` and `sha256`, and its
-MCP tool exists only on local stdio. Both add optional write `mutationStatus`,
+`upstreamCommand`; a [download](#download-responses)'s metadata has
+`result.filename`, `result.contentType`, `result.size` and `result.sha256`
+beside an object `result.upstreamCommand` holding the command's own metadata,
+and its MCP tool exists only on local stdio. Both add optional write `mutationStatus`,
 `retrySafe` and `safeLocators`; a failure adds `operationDispatched` beside the
 shared failure fields. They never follow the manifest's `outputSchema` or the
 action's classification, so a refresh or acceptance does not change them.
