@@ -351,10 +351,12 @@ pub fn helper_output_schema(helper: HelperKind, mode: ProjectionMode) -> Value {
     helper_schema["description"] = json!("Discovery result.");
     match mode {
         ProjectionMode::Http => branches(vec![helper_schema, http_failure_schema()]),
+        // A refused discovery read is a Broker error envelope; its result
+        // is never an action payload, so it stays an open object here.
         ProjectionMode::Stdio => branches(vec![
             helper_schema,
             file_receipt_schema(None),
-            envelope_schema(shared_failure_result_schema()),
+            envelope_schema(json!({"type": "object"})),
         ]),
     }
 }
