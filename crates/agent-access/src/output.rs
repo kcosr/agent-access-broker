@@ -457,6 +457,86 @@ mod tests {
         assert!(!failure.to_string().contains("not-retained"));
     }
 
+    /// Every receipt and local output failure this module produces matches
+    /// the stdio outputSchema the catalog's action advertises.
+    #[test]
+    fn receipts_and_local_failures_match_advertised_stdio_output_schemas() {
+        use agent_access_core::mcp::ProjectionMode;
+        use agent_access_core::output_schema::action_output_schema;
+        let action = |io: Value| -> agent_access_core::ApiActionSpec {
+            serde_json::from_value(json!({
+                "action": "item.update", "scopedMcpName": "item.update", "description": "Update",
+                "readOnly": false, "requiredScopeTypes": [], "credentialModes": ["service"],
+                "inputSchema": {"type": "object"}, "io": io,
+                "responseKind": "response_envelope", "exitPolicy": "invoke_decision",
+                "resultSchemas": {"success": {"type": "object",
+                    "properties": {"id": {"type": "string"}}, "required": ["id"]}}
+            }))
+            .unwrap()
+        };
+        let json_schema =
+            action_output_schema(&action(json!({"type": "json"})), ProjectionMode::Stdio).unwrap();
+        let download_schema = action_output_schema(
+            &action(
+                json!({"type": "raw_download", "metadataHeader": "X-Metadata",
+                "metadataEncoding": "base64_json"}),
+            ),
+            ProjectionMode::Stdio,
+        )
+        .unwrap();
+        let valid = |schema: &Value, value: &Value| {
+            let validator = jsonschema::validator_for(schema).unwrap();
+            let problems = validator
+                .iter_errors(value)
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>();
+            assert!(problems.is_empty(), "{problems:?}\n{value}");
+        };
+        let envelope = json!({
+            "agentRequestId": "agent", "brokerRequestId": "broker", "decision": "allow",
+            "service": "example", "action": "item.update", "resourceScopes": {},
+            "result": {"id": "7", "mutationStatus": "applied_unverified", "retrySafe": false,
+                "verificationStage": "readback", "safeLocators": {"id": "7"}}
+        });
+        let output = FileOutput::new(
+            Path::new("/tmp/saved.json"),
+            2,
+            "digest".into(),
+            "application/json",
+            false,
+        );
+        let compact = receipt(&envelope, &output, false, &[]);
+        let download = receipt(&envelope, &output, true, &[]);
+        let failures = [
+            LocalOutputFailure::response(
+                &envelope,
+                Path::new("/tmp/saved.json"),
+                anyhow::anyhow!("forced failure"),
+                &[],
+            ),
+            LocalOutputFailure::metadata(
+                &compact,
+                Path::new("/tmp/metadata.json"),
+                anyhow::anyhow!("forced failure"),
+            ),
+            LocalOutputFailure::download(
+                &envelope,
+                Path::new("/tmp/download.bin"),
+                anyhow::anyhow!("forced failure"),
+                &[],
+                true,
+            ),
+        ];
+        valid(&json_schema, &envelope);
+        valid(&json_schema, &compact);
+        valid(&download_schema, &download);
+        valid(&download_schema, &envelope);
+        for failure in &failures {
+            valid(&json_schema, &failure.details);
+            valid(&download_schema, &failure.details);
+        }
+    }
+
     #[test]
     fn metadata_failure_keeps_successful_response_receipt_and_distinct_failure_status() {
         let directory = tempfile::tempdir().unwrap();

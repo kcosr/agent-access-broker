@@ -6,6 +6,8 @@ mod documentation;
 mod imported_oauth;
 #[path = "mcp_stdio/imports.rs"]
 mod imports;
+#[path = "common/mcp_output.rs"]
+mod mcp_output;
 #[path = "mcp_stdio/names.rs"]
 mod names;
 #[path = "mcp_stdio/rate_wait.rs"]
@@ -31,6 +33,7 @@ struct McpProcess {
     stderr: Arc<Mutex<String>>,
     next_id: u64,
     service: Option<String>,
+    tools: mcp_output::AdvertisedTools,
 }
 
 impl McpProcess {
@@ -87,6 +90,7 @@ impl McpProcess {
             stderr,
             next_id: 1,
             service: service.map(str::to_owned),
+            tools: Default::default(),
         }
     }
 
@@ -97,7 +101,39 @@ impl McpProcess {
         stdin.flush().unwrap();
     }
 
+    /// Sends one request. A `tools/call` result's structured content is
+    /// checked against the tool's advertised output schema, listing the
+    /// tools first, as a client would, when the tool was not listed yet.
     async fn request(&mut self, method: &str, params: Value) -> Value {
+        let call = (method == "tools/call")
+            .then(|| params["name"].as_str().unwrap_or_default().to_owned());
+        if let Some(name) = &call
+            && !self.tools.knows(name)
+        {
+            self.list_advertised_tools().await;
+        }
+        let response = self.send_request(method, params).await;
+        match &call {
+            Some(name) => self.tools.check_call(name, &response),
+            None if method == "tools/list" => self.tools.record_listing(&response),
+            None => {}
+        }
+        response
+    }
+
+    async fn list_advertised_tools(&mut self) {
+        let mut params = json!({});
+        loop {
+            let page = self.send_request("tools/list", params).await;
+            self.tools.record_listing(&page);
+            match page["result"]["nextCursor"].as_str() {
+                Some(cursor) => params = json!({"cursor": cursor}),
+                None => break,
+            }
+        }
+    }
+
+    async fn send_request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));
