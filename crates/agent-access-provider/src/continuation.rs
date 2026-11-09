@@ -1937,7 +1937,7 @@ mod tests {
         fn hmac_base64url(&self, context: &[u8], payload: &[u8]) -> Result<String, SigningError> {
             if self
                 .successes
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_err()
             {
                 return Err(SigningError);

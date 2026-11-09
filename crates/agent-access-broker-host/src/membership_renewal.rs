@@ -485,7 +485,7 @@ impl MembershipRenewals {
         }
         let deadline = deadline?;
         self.queued
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |queued| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |queued| {
                 (queued < MAX_QUEUED_FLIGHTS).then_some(queued + 1)
             })
             .ok()

@@ -363,8 +363,9 @@ Runtime construction loads the host CA store and performs local filesystem work,
 which can exceed a one-second deadline under parallel test load. Tests that
 exercise timeout validation keep explicit timeout values.
 
-Run these checks before submitting code changes with the pinned Rust/Cargo 1.98.1
-toolchain in `rust-toolchain.toml`. The tested portal toolchain is Node.js 24.18.0
+Run these checks before submitting code changes with the pinned Rust/Cargo 1.99.1
+toolchain in `rust-toolchain.toml`; the workspace crates declare
+`rust-version = "1.99"`. The tested portal toolchain is Node.js 24.18.0
 and npm 11.16.0; these pins record reproducible validation, not minimum supported
 versions. Commands below run locally. An available configured
 [build service](../AGENTS.md#build-service) can wrap the Cargo commands instead.

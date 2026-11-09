@@ -408,6 +408,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Building from source requires Rust 1.99 or newer.** Workspace crates declare
+  `rust-version = "1.99"` and the repository pins Rust 1.99.1, so downstream
+  providers and assemblies that pin these crates need Rust 1.99.
+  ([#110](https://github.com/kcosr/agent-access-broker/pull/110))
+
 - **Unlinked import adapters preserve configuration validity.** Syntactically
   valid `imports.allowed_kinds` entries may name adapters absent from the selected
   assembly. Startup and reload warn about each missing adapter; its imports
@@ -517,6 +522,13 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- Dependency updates clear RustSec advisories in `crypto-bigint` (through
+  `openidconnect`, now 4.1.0), `h2`, `pulldown-cmark`, `quinn-proto`, `rustls`,
+  `rustls-webpki`, `webpki-roots`, `anyhow` and Tokio. RUSTSEC-2023-0071
+  (`rsa` 0.9, through `openidconnect`) remains open until an `openidconnect`
+  release moves to `rsa` 0.10.
+  ([#110](https://github.com/kcosr/agent-access-broker/pull/110))
 
 - HTTP route metadata declares whether a request body is required, keeping send
   schemas and OpenAPI aligned with handlers while preserving optional credential

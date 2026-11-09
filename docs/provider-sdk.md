@@ -2242,8 +2242,8 @@ capability with its default `true` preserves existing policy behavior.
 `0.2.0` is the first released baseline of the
 [public API inventory](../api/README.md). Release review compares the
 inventory with the previous release on the same line; a compile-surface diff
-does not replace descriptor, lifecycle and feature behavior checks. The tested toolchain is the repository's pinned Rust toolchain;
-no wider minimum supported Rust version is implied.
+does not replace descriptor, lifecycle and feature behavior checks. The crates declare
+`rust-version = "1.99"`; the tested toolchain is the repository's pinned Rust toolchain.
 
 ## Worked example
 
