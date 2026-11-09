@@ -38,6 +38,9 @@ const SEARCH_PAGE_TOKEN_TTL_MINUTES: u64 = 15;
 /// The `pageToken` input bound: the exact size of the largest envelope.
 const MAX_PAGE_TOKEN_BYTES: usize = SEARCH_PAGES.max_token_bytes();
 const DEFAULT_MAX_RESULTS: u64 = 20;
+/// Each action's provider payload schemas.
+static RESULT_SCHEMAS: ResultSchemaBundle =
+    ResultSchemaBundle::new(&[include_str!("result-schemas.json")]);
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -147,6 +150,7 @@ pub fn descriptor() -> ServiceDescriptor {
     }
     for action in &mut actions {
         action.documentation = Some(documentation::for_action(&action.action));
+        action.result_schemas = Some(RESULT_SCHEMAS.action(&action.action));
     }
     ServiceDescriptor::new("gmail", "Gmail").with_actions(actions).with_credentials(CredentialDescriptor::default().delegated(
             "Lets agents read, search, archive, move mail to Trash and restore it. Agent access is limited by your Broker grants. Google’s consent screen describes the broader Gmail permission.",

@@ -47,7 +47,8 @@ pub(super) fn descriptors() -> Vec<ActionDescriptor> {
                     .documentation(input::documentation(name))
                     .read_only()
                     .scope("job")
-                    .credential_modes(["service", "per_user"]),
+                    .credential_modes(["service", "per_user"])
+                    .result_schemas(RESULT_SCHEMAS.action(name)),
             );
             if name.ends_with(".download") {
                 descriptor.raw_download()
@@ -494,7 +495,7 @@ impl CloudbeesCiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{invocation, provider};
+    use crate::tests::{CheckedInvoke, invocation, provider};
     use futures_util::StreamExt;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -538,7 +539,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation("build.log.download", inputs()))
+            .checked_invoke(invocation("build.log.download", inputs()))
             .await
             .unwrap();
         assert_eq!(result.result["fileName"], "build-42-console.log");
@@ -566,7 +567,7 @@ mod tests {
             let mut ci = provider(&server);
             ci.download_limit = 2;
             assert!(
-                ci.invoke(invocation("build.log.download", inputs()))
+                ci.checked_invoke(invocation("build.log.download", inputs()))
                     .await
                     .is_err()
             );
@@ -604,7 +605,7 @@ mod tests {
                     .mount(&server)
                     .await;
                 let error = provider(&server)
-                    .invoke(invocation(action, inputs()))
+                    .checked_invoke(invocation(action, inputs()))
                     .await
                     .unwrap_err();
                 assert_eq!(
@@ -649,7 +650,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation("build.tests.download", inputs()))
+            .checked_invoke(invocation("build.tests.download", inputs()))
             .await
             .unwrap();
         assert_eq!(result.result["contentType"], "application/json");
@@ -671,14 +672,14 @@ mod tests {
             .mount(&server).await;
         let ci = provider(&server);
         let result = ci
-            .invoke(invocation("build.pipeline.view", inputs()))
+            .checked_invoke(invocation("build.pipeline.view", inputs()))
             .await
             .unwrap()
             .result;
         assert_eq!(result["pipeline"]["stages"][0]["id"], "6");
         assert!(!result.to_string().contains("secret"));
         let result = ci
-            .invoke(invocation("build.pending-inputs.list", inputs()))
+            .checked_invoke(invocation("build.pending-inputs.list", inputs()))
             .await
             .unwrap()
             .result;
@@ -697,7 +698,7 @@ mod tests {
                     "stageFlowNodes":[{"id":"8","name":"shell","status":"FAILED","parentNodes":["6"],"error":{"message":"exit 1","type":"AbortException","extra":"hidden"}}]})))
                 .mount(&server).await;
             let result = provider(&server)
-                .invoke(invocation("build.pipeline.node.view", node_inputs()))
+                .checked_invoke(invocation("build.pipeline.node.view", node_inputs()))
                 .await;
             if id == "6" {
                 let result = result.unwrap().result;
@@ -722,7 +723,7 @@ mod tests {
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"nodeId":"6","nodeStatus":"SUCCESS","length":length,"hasMore":true,"text":"x".repeat(length),"consoleUrl":"/secret"})))
                 .mount(&server).await;
             let result = provider(&server)
-                .invoke(invocation("build.pipeline.node.log.read", node_inputs()))
+                .checked_invoke(invocation("build.pipeline.node.log.read", node_inputs()))
                 .await;
             if length == 10 {
                 let result = result.unwrap().result;
@@ -751,7 +752,7 @@ mod tests {
         let mut input = inputs();
         input["maxResults"] = json!(1);
         let result = provider(&server)
-            .invoke(invocation("build.tests.details", input))
+            .checked_invoke(invocation("build.tests.details", input))
             .await
             .unwrap()
             .result;
@@ -822,7 +823,7 @@ mod tests {
             )
             .unwrap();
             let result = ci
-                .invoke(invocation("build.log.download", inputs()))
+                .checked_invoke(invocation("build.log.download", inputs()))
                 .await
                 .unwrap();
             assert!(result.result["size"].is_null());
@@ -868,7 +869,7 @@ mod tests {
             .mount(&server)
             .await;
             let result = provider(&server)
-                .invoke(invocation("build.pipeline.node.log.read", node_inputs()))
+                .checked_invoke(invocation("build.pipeline.node.log.read", node_inputs()))
                 .await;
             if expected {
                 let result = result.unwrap().result;
@@ -895,7 +896,7 @@ mod tests {
         let mut input = inputs();
         input["maxResults"] = json!(2);
         let result = provider(&server)
-            .invoke(invocation("build.tests.details", input))
+            .checked_invoke(invocation("build.tests.details", input))
             .await
             .unwrap()
             .result;
@@ -928,7 +929,7 @@ mod tests {
             .mount(&server)
             .await;
             let error = provider(&server)
-                .invoke(invocation(action, inputs()))
+                .checked_invoke(invocation(action, inputs()))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::ResponseFormatUnsupported);
@@ -943,7 +944,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"suites":[{"name":"suite","cases":[{"name":"test","stdout":"x".repeat(JSON_LIMIT as usize)}]}]})))
             .mount(&server).await;
         let error = provider(&server)
-            .invoke(invocation("build.tests.details", inputs()))
+            .checked_invoke(invocation("build.tests.details", inputs()))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::AttachmentSizeDenied);

@@ -7,12 +7,12 @@ use agent_access_provider::{
     EgressProxyConfig, EgressRoute, ExecutionCredential, MutationReceipt, Provider,
     ProviderBuildError, ProviderError, ProviderFailureStatus, ProviderInvocation, ProviderLimits,
     ProviderReasonDefinition, ProviderResult, ProviderResultStream, ReasonCode, RedirectRules,
-    ResourceScopeCapabilities, ResourceScopes, ResourceType, ScopeRequest, ScopeResolution,
-    ServiceDescriptor, UpstreamAuthorization, UpstreamCall, UpstreamClient, UpstreamClientSpec,
-    UpstreamError, UpstreamRetryAfter, ValidationContext, complete_upstream_trace,
-    current_provider_action, is_service_name, parse_backend_config, read_bounded_body,
-    upstream_rate_limited, url_allowed_by_patterns, validate_egress_proxy_config,
-    validate_upstream_allowlist, validate_upstream_base_url,
+    ResourceScopeCapabilities, ResourceScopes, ResourceType, ResultSchemaBundle, ScopeRequest,
+    ScopeResolution, ServiceDescriptor, UpstreamAuthorization, UpstreamCall, UpstreamClient,
+    UpstreamClientSpec, UpstreamError, UpstreamRetryAfter, ValidationContext,
+    complete_upstream_trace, current_provider_action, is_service_name, parse_backend_config,
+    read_bounded_body, upstream_rate_limited, url_allowed_by_patterns,
+    validate_egress_proxy_config, validate_upstream_allowlist, validate_upstream_base_url,
 };
 use agent_access_provider::{NamespaceSelectorDescriptor, ResourceTypeDescriptor};
 use async_trait::async_trait;
@@ -32,6 +32,10 @@ pub use listing::CloudbeesCiListingConfig;
 mod reads;
 
 use input::{JobInput, input_error};
+
+/// Each action's provider payload schemas.
+static RESULT_SCHEMAS: ResultSchemaBundle =
+    ResultSchemaBundle::new(&[include_str!("result-schemas.json")]);
 
 const JSON_LIMIT: u64 = 1_048_576;
 const LOG_LIMIT: u64 = 65_536;
@@ -614,7 +618,8 @@ fn cloudbees_ci_service_descriptor(config: &CloudbeesCiListingConfig) -> Service
             ActionDescriptor::new(name, description, input::schema(name))
                 .documentation(input::documentation(name))
                 .scope("job")
-                .credential_modes(["service", "per_user"]),
+                .credential_modes(["service", "per_user"])
+                .result_schemas(RESULT_SCHEMAS.action(name)),
         );
         let action = match name {
             "job.view"
@@ -1474,7 +1479,9 @@ pub fn is_cloudbees_ci_resource_path(value: &str, allow_controller_only: bool) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_access_provider::test_support::{InvocationBuilder, basic_credential};
+    use agent_access_provider::test_support::{
+        InvocationBuilder, assert_result_conforms, basic_credential,
+    };
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1571,6 +1578,47 @@ mod tests {
             )]))
             .credential(basic_credential("automation", "secret"))
             .build()
+    }
+
+    /// Invokes a provider and checks the outcome strictly against the
+    /// action's result schemas. Unit tests use it instead of
+    /// `Provider::invoke`.
+    pub(crate) trait CheckedInvoke {
+        async fn checked_invoke(
+            &self,
+            request: ProviderInvocation,
+        ) -> Result<ProviderResult, ProviderError>;
+    }
+
+    impl CheckedInvoke for CloudbeesCiProvider {
+        async fn checked_invoke(
+            &self,
+            request: ProviderInvocation,
+        ) -> Result<ProviderResult, ProviderError> {
+            let action = cloudbees_ci_service_descriptor(&self.listing)
+                .action(request.action())
+                .cloned();
+            let outcome = Provider::invoke(self, request).await;
+            match &action {
+                Some(action) => assert_result_conforms(action, &outcome),
+                None => assert!(outcome.is_err(), "an undeclared action must fail"),
+            }
+            outcome
+        }
+    }
+
+    #[test]
+    fn every_action_declares_bundled_result_schemas() {
+        let descriptor = cloudbees_ci_service_descriptor(&Default::default());
+        assert_eq!(descriptor.validate(), Ok(()));
+        let mut names = descriptor
+            .actions
+            .iter()
+            .inspect(|action| assert!(action.result_schemas.is_some(), "{}", action.action))
+            .map(|action| action.action.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(RESULT_SCHEMAS.actions(), names);
     }
 
     #[test]
@@ -1835,7 +1883,7 @@ mod tests {
         .unwrap();
         let request = tokio::spawn(async move {
             provider
-                .invoke(invocation(
+                .checked_invoke(invocation(
                     "job.view",
                     json!({"controller":"team-ci","job":"payments/build-api"}),
                 ))
@@ -1861,7 +1909,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "queue.view",
                 json!({"controller":"team-ci","job":"payments/build-api","queueId":42}),
             ))
@@ -1891,7 +1939,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "queue.view",
                 json!({"controller":"team-ci","job":"payments/build-api","queueId":queue_id}),
             ))
@@ -1919,7 +1967,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.trigger",
                 json!({"controller":"team-ci","job":"payments/build-api"}),
             ))
@@ -1950,7 +1998,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.trigger",
                 json!({"controller":"team-ci","job":"payments/build-api"}),
             ))
@@ -1975,7 +2023,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "job.view",
                 json!({"controller":"team-ci","job":"payments/build-api"}),
             ))
@@ -2041,7 +2089,7 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = provider(&server)
-                .invoke(invocation(
+                .checked_invoke(invocation(
                     "job.view",
                     json!({"controller":"team-ci","job":"payments/build-api"}),
                 ))
@@ -2079,7 +2127,7 @@ mod tests {
             .await;
         let ci = provider(&server);
         let trigger = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.trigger",
                 json!({"controller":"team-ci","job":"payments/build-api"}),
             ))
@@ -2087,7 +2135,7 @@ mod tests {
             .unwrap_err();
         assert_upstream_rate_limited(&trigger, Some(8));
         let download = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2130,7 +2178,7 @@ mod tests {
             .await;
         let ci = provider(&server);
         let list = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.list",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42
@@ -2147,7 +2195,7 @@ mod tests {
             "feature%2Ffoo.zip"
         );
         let result = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2180,7 +2228,7 @@ mod tests {
         let server = MockServer::start().await;
         mount_artifacts(&server).await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2225,7 +2273,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2249,7 +2297,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2274,7 +2322,7 @@ mod tests {
             .mount(&server)
             .await;
         provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2323,7 +2371,7 @@ mod tests {
                 agent_access_provider::CorrelationContext::for_tests(),
                 "cloudbees_ci".into(),
                 "build.artifact.download".into(),
-                ci.invoke(invocation(
+                ci.checked_invoke(invocation(
                     "build.artifact.download",
                     json!({
                         "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2361,7 +2409,7 @@ mod tests {
         let mut ci = provider(&server);
         ci.download_limit = 4;
         let error = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.artifact.download",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42,
@@ -2389,7 +2437,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.tests.view",
                 json!({
                     "controller":"team-ci","job":"payments/build-api","buildNumber":42
@@ -2416,7 +2464,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.tests.view",
                 json!({"controller":"team-ci","job":"payments/build-api","buildNumber":42}),
             ))
@@ -2424,6 +2472,52 @@ mod tests {
             .unwrap();
         assert_eq!(result.result["reportAvailable"], false);
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_summary_reports_counts_and_nulls_counts_the_report_omits() {
+        // A JUnit report exports no totalCount; an aggregated report exports
+        // neither passCount nor duration.
+        for (report, expected) in [
+            (
+                json!({"_class":"hudson.tasks.junit.TestResult","duration":1.25,
+                    "failCount":1,"passCount":3,"skipCount":0}),
+                json!({"totalCount":null,"failCount":1,"skipCount":0,"passCount":3,"duration":1.25}),
+            ),
+            (
+                json!({"_class":"hudson.tasks.test.AggregatedTestResultAction",
+                    "failCount":0,"skipCount":1,"totalCount":5}),
+                json!({"totalCount":5,"failCount":0,"skipCount":1,"passCount":null,"duration":null}),
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(
+                    "/team-ci/job/payments/job/build-api/42/testReport/api/json",
+                ))
+                .and(query_param(
+                    "tree",
+                    "totalCount,failCount,skipCount,passCount,duration",
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(report))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = provider(&server)
+                .checked_invoke(invocation(
+                    "build.tests.view",
+                    json!({"controller":"team-ci","job":"payments/build-api","buildNumber":42}),
+                ))
+                .await
+                .unwrap();
+            let mut summary = json!({"controller":"team-ci","job":"payments/build-api",
+                "buildNumber":42,"reportAvailable":true});
+            summary
+                .as_object_mut()
+                .unwrap()
+                .extend(expected.as_object().unwrap().clone());
+            assert_eq!(result.result, summary);
+        }
     }
 
     #[tokio::test]
@@ -2438,7 +2532,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.list",
                 json!({"controller":"team-ci","job":"payments/build-api","maxResults":1}),
             ))
@@ -2459,7 +2553,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.list",
                 json!({"controller":"team-ci","job":"payments/build-api","maxResults":1}),
             ))
@@ -2483,7 +2577,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.view",
                 json!({"controller":"team-ci","job":"payments/build-api","buildNumber":42}),
             ))
@@ -2508,7 +2602,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.trigger",
                 json!({
                     "controller":"team-ci","job":"payments/build-api"
@@ -2589,7 +2683,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.view",
                 job_inputs(json!({"buildSelector":"lastFailedBuild"})),
             ))
@@ -2639,7 +2733,7 @@ mod tests {
                 server.uri()
             );
             let error = provider(&server)
-                .invoke(invocation("build.log.read", json!({"url":url})))
+                .checked_invoke(invocation("build.log.read", json!({"url":url})))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), expected, "{body}");
@@ -2682,7 +2776,7 @@ mod tests {
             .await;
         let ci = provider(&server);
         let first = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.log.read",
                 job_inputs(json!({"buildSelector":"lastBuild","mode":"head","maxBytes":1024})),
             ))
@@ -2692,7 +2786,7 @@ mod tests {
         assert_eq!(first["buildNumber"], 42);
         assert_eq!(first["buildSelector"], "lastBuild");
         let next = ci
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.log.read",
                 job_inputs(json!({"buildNumber":42,"mode":"head","maxBytes":1024,
                     "cursor":first["nextCursor"]})),
@@ -2725,7 +2819,10 @@ mod tests {
             ci.local_scopes("build.view", &inputs).unwrap()["job"],
             vec!["team-ci/payments/feature%2Ffoo"]
         );
-        let result = ci.invoke(invocation("build.view", inputs)).await.unwrap();
+        let result = ci
+            .checked_invoke(invocation("build.view", inputs))
+            .await
+            .unwrap();
         assert_eq!(result.result["controller"], "team-ci");
         assert_eq!(result.result["job"], "payments/feature%2Ffoo");
         assert_eq!(result.result["buildNumber"], 42);
@@ -2748,7 +2845,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation("build.list", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.list", job_inputs(json!({}))))
             .await
             .unwrap_err();
         assert_eq!(input_category(&error), "job_is_container");
@@ -2784,7 +2881,7 @@ mod tests {
             let mut inputs = job_inputs(extra);
             inputs["buildNumber"] = json!(42);
             let error = provider(&server)
-                .invoke(invocation(action, inputs))
+                .checked_invoke(invocation(action, inputs))
                 .await
                 .unwrap_err();
             assert_eq!(input_category(&error), "job_is_container", "{action}");
@@ -2804,7 +2901,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 "build.view",
                 job_inputs(json!({"buildNumber":42})),
             ))
@@ -2820,7 +2917,7 @@ mod tests {
         let server = MockServer::start().await;
         let inputs = json!({"controller":"team-ci","job":"job/payments/job/build-api"});
         let error = provider(&server)
-            .invoke(invocation("job.view", inputs))
+            .checked_invoke(invocation("job.view", inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
@@ -2839,7 +2936,7 @@ mod tests {
         let server = MockServer::start().await;
         let inputs = json!({"controller":"team-ci","job":"team-ci/payments/build-api"});
         let error = provider(&server)
-            .invoke(invocation("job.view", inputs))
+            .checked_invoke(invocation("job.view", inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ResourceNotFound);
@@ -2853,7 +2950,7 @@ mod tests {
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         // Other not-found jobs keep the plain message.
         let error = provider(&server)
-            .invoke(invocation("job.view", job_inputs(json!({}))))
+            .checked_invoke(invocation("job.view", job_inputs(json!({}))))
             .await
             .unwrap_err();
         assert_eq!(error.message, "CloudBees CI object was not found");
@@ -2885,7 +2982,7 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = provider(&server)
-                .invoke(invocation("build.trigger", job_inputs(json!({}))))
+                .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
                 .await
                 .unwrap_err();
             assert_trigger_unverified(&error);
@@ -2904,7 +3001,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -2921,7 +3018,7 @@ mod tests {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -2942,7 +3039,7 @@ mod tests {
             ProviderLimits::default().with_request_timeout_ms(300),
         );
         let error = ci
-            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
             .await
             .unwrap_err();
         assert_trigger_unverified(&error);
@@ -3001,7 +3098,7 @@ mod tests {
     async fn trigger_connection_lost_after_send_is_applied_unverified() {
         let (origin, server) = raw_trigger_controller(true).await;
         let error = provider_with_limits(&origin, ProviderLimits::default())
-            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
             .await
             .unwrap_err();
         assert_trigger_unverified(&error);
@@ -3012,7 +3109,7 @@ mod tests {
     async fn trigger_post_proven_not_sent_is_not_applied_and_retry_safe() {
         let (origin, server) = raw_trigger_controller(false).await;
         let error = provider_with_limits(&origin, ProviderLimits::default())
-            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
             .await
             .unwrap_err();
         server.await.unwrap();
@@ -3042,7 +3139,7 @@ mod tests {
         let origin = format!("http://{}", reserved.local_addr().unwrap());
         for action in ["job.view", "build.trigger"] {
             let error = provider_with_limits(&origin, ProviderLimits::default())
-                .invoke(invocation(action, job_inputs(json!({}))))
+                .checked_invoke(invocation(action, job_inputs(json!({}))))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
@@ -3060,7 +3157,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = provider(&server)
-            .invoke(invocation("build.trigger", job_inputs(json!({}))))
+            .checked_invoke(invocation("build.trigger", job_inputs(json!({}))))
             .await
             .unwrap()
             .result;

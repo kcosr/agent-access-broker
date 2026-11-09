@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::CheckedInvoke;
 use agent_access_provider::test_support::{
     InvocationBuilder, basic_credential, bearer_credential, credential_with_profile,
     test_signing_key,
@@ -121,7 +122,7 @@ async fn validates_config_and_local_inputs_without_http() {
         json!({"controller":"ci","pageToken":""}),
     ] {
         assert_eq!(
-            p.invoke(invocation(bad, scope()))
+            p.checked_invoke(invocation(bad, scope()))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -184,7 +185,7 @@ async fn traverses_denied_parents_and_reuses_parent_page_within_call() {
     );
     let p = provider(config(&server), ProviderLimits::default());
     let first = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":10}),
             allowed.clone(),
         ))
@@ -208,7 +209,7 @@ async fn traverses_denied_parents_and_reuses_parent_page_within_call() {
     // Across invocations, only the next offset survives, so the parent is read at offset two.
     mount(&server, "", 2, 10, json!([child("", "ROOT", false)])).await;
     let second = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":10,"pageToken":first.result["nextPageToken"]}),
             allowed,
         ))
@@ -259,7 +260,7 @@ async fn namespace_exclusions_and_independent_allows_control_descent() {
     ));
     let p = provider(config(&server), ProviderLimits::default());
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":10}),
             allowed,
         ))
@@ -269,7 +270,7 @@ async fn namespace_exclusions_and_independent_allows_control_descent() {
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
     for root in ["DENIED", "MISSING"] {
         let result = p
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 json!({"controller":"ci","folder":root}),
                 SearchAuthorizationScope::from_selectors(
                     vec![exact(&format!("ci/{root}"))],
@@ -310,7 +311,7 @@ async fn empty_budget_pages_resume_after_restart_without_skipping_jobs() {
     for index in 0..8 {
         let p = provider(cfg.clone(), ProviderLimits::default());
         let result = p
-            .invoke(invocation(input.clone(), allowed.clone()))
+            .checked_invoke(invocation(input.clone(), allowed.clone()))
             .await
             .unwrap();
         seen.extend(resources(&result));
@@ -356,7 +357,10 @@ async fn result_byte_boundary_resumes_at_first_unconsumed_child() {
     let mut input = json!({"controller":"ci","maxResults":4});
     let mut seen = vec![];
     for _ in 0..3 {
-        let result = p.invoke(invocation(input.clone(), scope())).await.unwrap();
+        let result = p
+            .checked_invoke(invocation(input.clone(), scope()))
+            .await
+            .unwrap();
         seen.extend(resources(&result));
         assert_eq!(result.result["count"], 1);
         assert_eq!(result.result["items"][0]["previewTruncated"], true);
@@ -398,7 +402,7 @@ async fn container_markers_identity_and_page_shapes_are_strict() {
         mount(&server, "", 0, 2, page).await;
         let p = provider(config(&server), ProviderLimits::default());
         assert_eq!(
-            p.invoke(invocation(
+            p.checked_invoke(invocation(
                 json!({"controller":"ci","maxResults":2}),
                 scope()
             ))
@@ -430,7 +434,7 @@ async fn container_markers_identity_and_page_shapes_are_strict() {
     let p = provider(config(&server), ProviderLimits::default());
     // The folder itself is excluded by namespace semantics; the percent-encoded branch is literal.
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","folder":"MB","maxResults":10}),
             SearchAuthorizationScope::from_selectors(vec![namespace("ci/MB")], vec![]),
         ))
@@ -457,7 +461,7 @@ async fn errors_are_bounded_single_attempt_and_never_echo_paths_or_bodies() {
             .await;
         let p = provider(config(&server), ProviderLimits::default());
         let error = p
-            .invoke(invocation(
+            .checked_invoke(invocation(
                 json!({"controller":"ci","folder":"SECRET_ROOT"}),
                 scope(),
             ))
@@ -473,7 +477,7 @@ async fn errors_are_bounded_single_attempt_and_never_echo_paths_or_bodies() {
     let mut cfg = config(&server);
     cfg.listing.max_scan_bytes = 10;
     let error = provider(cfg, ProviderLimits::default())
-        .invoke(invocation(json!({"controller":"ci"}), scope()))
+        .checked_invoke(invocation(json!({"controller":"ci"}), scope()))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -493,7 +497,7 @@ async fn errors_are_bounded_single_attempt_and_never_echo_paths_or_bodies() {
         limits
     });
     assert_eq!(
-        p.invoke(invocation(json!({"controller":"ci"}), scope()))
+        p.checked_invoke(invocation(json!({"controller":"ci"}), scope()))
             .await
             .unwrap_err()
             .reason_code(),
@@ -510,7 +514,7 @@ async fn continuation_rejects_changed_context_inputs_scope_method_and_configurat
         .insert("other".into(), cfg.controllers["ci"].clone());
     let p = provider(cfg.clone(), ProviderLimits::default());
     let first = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1}),
             scope(),
         ))
@@ -557,7 +561,7 @@ async fn continuation_rejects_changed_context_inputs_scope_method_and_configurat
     ];
     for request in altered {
         assert_eq!(
-            p.invoke(request).await.unwrap_err().reason_code(),
+            p.checked_invoke(request).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -575,7 +579,7 @@ async fn continuation_rejects_changed_context_inputs_scope_method_and_configurat
         }
         assert_eq!(
             provider(cfg, ProviderLimits::default())
-                .invoke(request.clone())
+                .checked_invoke(request.clone())
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -584,7 +588,7 @@ async fn continuation_rejects_changed_context_inputs_scope_method_and_configurat
     }
     let mut tampered = token.as_bytes().to_vec();
     tampered[10] = if tampered[10] == b'A' { b'B' } else { b'A' };
-    assert_eq!(p.invoke(invocation(json!({"controller":"ci","maxResults":1,"pageToken":String::from_utf8(tampered).unwrap()}),scope())).await.unwrap_err().reason_code(),ReasonCode::InputInvalid);
+    assert_eq!(p.checked_invoke(invocation(json!({"controller":"ci","maxResults":1,"pageToken":String::from_utf8(tampered).unwrap()}),scope())).await.unwrap_err().reason_code(),ReasonCode::InputInvalid);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
 }
 
@@ -631,7 +635,7 @@ async fn required_descent_beyond_payload_or_depth_is_terminal_incomplete() {
     mount(&server, "", 0, 1, json!([child("", &name, true)])).await;
     let p = provider(config(&server), ProviderLimits::default());
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1}),
             scope(),
         ))
@@ -658,7 +662,7 @@ async fn required_descent_beyond_payload_or_depth_is_terminal_incomplete() {
         vec![],
     );
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1}),
             allowed,
         ))
@@ -689,7 +693,7 @@ async fn continuations_preserve_original_expiry_and_enforce_range_windows_before
             )
             .is_err()
     );
-    let first = p.invoke(request.clone()).await.unwrap();
+    let first = p.checked_invoke(request.clone()).await.unwrap();
     let opened = p
         .listing_signer
         .open_confidential(&binding, first.result["nextPageToken"].as_str().unwrap())
@@ -705,7 +709,7 @@ async fn continuations_preserve_original_expiry_and_enforce_range_windows_before
         .seal_until_at(&binding, opened.payload(), expiry, now)
         .unwrap();
     let resumed = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1,"pageToken":aged}),
             scope(),
         ))
@@ -734,7 +738,7 @@ async fn continuations_preserve_original_expiry_and_enforce_range_windows_before
         )
         .unwrap();
     assert_eq!(
-        p.invoke(invocation(
+        p.checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1,"pageToken":expired}),
             scope()
         ))
@@ -758,7 +762,7 @@ async fn continuations_preserve_original_expiry_and_enforce_range_windows_before
         )
         .unwrap();
     let window = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1,"pageToken":token}),
             scope(),
         ))
@@ -783,7 +787,7 @@ async fn continuations_preserve_original_expiry_and_enforce_range_windows_before
             )
             .unwrap();
         assert_eq!(
-            p.invoke(invocation(
+            p.checked_invoke(invocation(
                 json!({"controller":"ci","maxResults":1,"pageToken":token}),
                 scope()
             ))
@@ -812,7 +816,7 @@ async fn continuations_preserve_original_expiry_and_enforce_range_windows_before
         )
         .unwrap();
     assert_eq!(
-        p.invoke(invocation(
+        p.checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1,"pageToken":token}),
             scope()
         ))
@@ -846,7 +850,7 @@ async fn full_result_cannot_skip_a_reachable_container_and_percent_names_encode_
     .await;
     let p = provider(config(&server), ProviderLimits::default());
     let first = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1}),
             scope(),
         ))
@@ -854,7 +858,7 @@ async fn full_result_cannot_skip_a_reachable_container_and_percent_names_encode_
         .unwrap();
     assert_eq!(first.result["items"][0]["kind"], "container");
     let second = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1,"pageToken":first.result["nextPageToken"]}),
             scope(),
         ))
@@ -876,7 +880,7 @@ async fn empty_containers_are_listed_by_marker_and_web_urls_require_exact_config
     mount(&server, "EMPTY", 0, 10, json!([])).await;
     let p = provider(config(&server), ProviderLimits::default());
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":10}),
             scope(),
         ))
@@ -896,7 +900,7 @@ async fn empty_containers_are_listed_by_marker_and_web_urls_require_exact_config
     mount(&server, "", 0, 10, json!([leaf])).await;
     let p = provider(config(&server), ProviderLimits::default());
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":10}),
             scope(),
         ))
@@ -917,7 +921,7 @@ async fn request_budget_yields_an_empty_page_and_stalled_bodies_keep_timeout_cla
     let p = provider(cfg, ProviderLimits::default());
     let allowed = SearchAuthorizationScope::from_selectors(vec![exact("ci/LATER")], vec![]);
     let result = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":1}),
             allowed,
         ))
@@ -945,7 +949,7 @@ async fn request_budget_yields_an_empty_page_and_stalled_bodies_keep_timeout_cla
     cfg.allowed_upstream_hosts = vec![format!("http://{address}/ci/**")];
     let p = provider(cfg, ProviderLimits::default().with_request_timeout_ms(50));
     assert_eq!(
-        p.invoke(invocation(json!({"controller":"ci"}), scope()))
+        p.checked_invoke(invocation(json!({"controller":"ci"}), scope()))
             .await
             .unwrap_err()
             .reason_code(),
@@ -969,14 +973,14 @@ async fn controller_namespaces_do_not_cross_alias_boundaries() {
     let p = provider(cfg, ProviderLimits::default());
     let allowed = SearchAuthorizationScope::from_selectors(vec![namespace("ci")], vec![]);
     assert_eq!(
-        p.invoke(invocation(json!({"controller":"ci2"}), allowed.clone()))
+        p.checked_invoke(invocation(json!({"controller":"ci2"}), allowed.clone()))
             .await
             .unwrap_err()
             .reason_code(),
         ReasonCode::ServiceActionDenied
     );
     let result = p
-        .invoke(invocation(json!({"controller":"ci"}), allowed))
+        .checked_invoke(invocation(json!({"controller":"ci"}), allowed))
         .await
         .unwrap();
     assert_eq!(resources(&result), ["ci/A"]);
@@ -1009,7 +1013,7 @@ async fn result_capacity_in_child_page_resumes_its_first_unconsumed_item() {
     let allowed =
         SearchAuthorizationScope::from_selectors(vec![exact("ci/J"), namespace("ci/F")], vec![]);
     let first = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":2}),
             allowed.clone(),
         ))
@@ -1018,7 +1022,7 @@ async fn result_capacity_in_child_page_resumes_its_first_unconsumed_item() {
     assert_eq!(resources(&first), ["ci/J", "ci/F/x"]);
     assert_eq!(first.result["scanStatus"], "more");
     let second = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":2,"pageToken":first.result["nextPageToken"]}),
             allowed.clone(),
         ))
@@ -1027,7 +1031,7 @@ async fn result_capacity_in_child_page_resumes_its_first_unconsumed_item() {
     assert_eq!(resources(&second), ["ci/F/y"]);
     assert_eq!(second.result["scanStatus"], "more");
     let third = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","maxResults":2,"pageToken":second.result["nextPageToken"]}),
             allowed,
         ))
@@ -1095,7 +1099,7 @@ async fn oversized_success_and_error_bodies_and_truncated_transport_keep_safe_er
                 limits.max_upstream_response_bytes = MIN_RESULT_BYTES;
             }
             let error = provider(cfg, limits)
-                .invoke(invocation(
+                .checked_invoke(invocation(
                     json!({"controller":"ci","folder":"SECRET_ROOT"}),
                     scope(),
                 ))
@@ -1125,7 +1129,7 @@ async fn oversized_success_and_error_bodies_and_truncated_transport_keep_safe_er
     cfg.controllers.get_mut("ci").unwrap().base_url = format!("http://{address}/ci/");
     cfg.allowed_upstream_hosts = vec![format!("http://{address}/ci/**")];
     let error = provider(cfg, ProviderLimits::default())
-        .invoke(invocation(
+        .checked_invoke(invocation(
             json!({"controller":"ci","folder":"SECRET_ROOT"}),
             scope(),
         ))

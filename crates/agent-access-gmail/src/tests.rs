@@ -1,5 +1,7 @@
 use super::*;
-use agent_access_provider::test_support::{InvocationBuilder, delegated_binding_id};
+use agent_access_provider::test_support::{
+    InvocationBuilder, assert_result_conforms, delegated_binding_id,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -87,7 +89,7 @@ async fn a_busy_refresh_passes_through_as_the_leases_concurrency_limit() {
             BusyLease,
         )))
         .build();
-    let error = provider(&server).invoke(request).await.unwrap_err();
+    let error = provider(&server).checked_invoke(request).await.unwrap_err();
     assert_eq!(error.decision(), agent_access_provider::Decision::Error);
     assert_eq!(error.reason_code(), ReasonCode::ConcurrencyLimited);
     assert_eq!(error.reason_code().http_status(), 429);
@@ -133,6 +135,43 @@ fn request(action: &str, inputs: Value) -> InvocationBuilder {
 }
 fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     request(action, inputs).build()
+}
+/// Invokes a provider and checks the outcome strictly against the action's
+/// result schemas. Unit tests use it instead of `Provider::invoke`.
+trait CheckedInvoke {
+    async fn checked_invoke(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError>;
+}
+impl CheckedInvoke for GmailProvider {
+    async fn checked_invoke(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = descriptor().action(request.action()).cloned();
+        let outcome = Provider::invoke(self, request).await;
+        match &action {
+            Some(action) => assert_result_conforms(action, &outcome),
+            None => assert!(outcome.is_err(), "an undeclared action must fail"),
+        }
+        outcome
+    }
+}
+/// Checks a projection strictly against `action`'s success schema.
+fn assert_projection_conforms(action: &str, value: &Value) {
+    let descriptor = descriptor();
+    let action = descriptor.action(action).expect("a declared Gmail action");
+    assert_result_conforms(action, &Ok(ProviderResult::new(value.clone())));
+}
+/// `mail::message` with bodies, checked against `message.view`'s schema.
+fn viewed_message(value: &Value) -> Result<Value, ProviderError> {
+    mail::message(value, true)
+        .inspect(|projected| assert_projection_conforms("message.view", projected))
+}
+/// `mail::thread`, checked against `thread.view`'s schema.
+fn viewed_thread(value: &Value) -> Result<Value, ProviderError> {
+    mail::thread(value).inspect(|projected| assert_projection_conforms("thread.view", projected))
 }
 fn provider(server: &MockServer) -> GmailProvider {
     let host = agent_access_provider::test_support::TestHost::default();
@@ -204,6 +243,19 @@ fn action_inputs_are_bounded_and_never_accept_mailboxes_urls_or_unsupported_effe
     }
 }
 #[test]
+fn every_action_declares_bundled_result_schemas() {
+    let descriptor = descriptor();
+    assert_eq!(descriptor.validate(), Ok(()));
+    let mut names = descriptor
+        .actions
+        .iter()
+        .inspect(|action| assert!(action.result_schemas.is_some(), "{}", action.action))
+        .map(|action| action.action.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(RESULT_SCHEMAS.actions(), names);
+}
+#[test]
 fn descriptor_audits_the_query_and_mail_ids_only() {
     let descriptor = descriptor();
     assert_eq!(descriptor.validate(), Ok(()));
@@ -241,20 +293,17 @@ fn descriptor_audits_the_query_and_mail_ids_only() {
 
 #[test]
 fn mime_projection_decodes_text_marks_omissions_and_rejects_invalid_base64() {
-    let result = mail::message(&message(), true).unwrap();
+    let result = viewed_message(&message()).unwrap();
     assert_eq!(result["textParts"][0]["text"], "private body");
     assert_eq!(result["contentTrust"], "untrusted");
     let mut m = message();
     m["payload"]["body"]["data"] = json!("***");
-    assert!(mail::message(&m, true).is_err());
+    assert!(viewed_message(&m).is_err());
     m["payload"] = json!({"mimeType":"text/plain","headers":[{"name":"Content-Type","value":"text/plain; charset=iso-8859-1"}],"body":{"data":URL_SAFE_NO_PAD.encode([0xe9])}});
-    assert_eq!(
-        mail::message(&m, true).unwrap()["textParts"][0]["text"],
-        "é"
-    );
+    assert_eq!(viewed_message(&m).unwrap()["textParts"][0]["text"], "é");
     m["payload"]["body"]["data"] = json!(URL_SAFE_NO_PAD.encode(vec![b'a'; 256 * 1024 + 1]));
     assert_eq!(
-        mail::message(&m, true).unwrap()["bodyOmissions"],
+        viewed_message(&m).unwrap()["bodyOmissions"],
         json!(["text_limit"])
     );
     let mut part = json!({});
@@ -263,12 +312,12 @@ fn mime_projection_decodes_text_marks_omissions_and_rejects_invalid_base64() {
     }
     m["payload"] = part;
     assert_eq!(
-        mail::message(&m, true).unwrap()["bodyOmissions"],
+        viewed_message(&m).unwrap()["bodyOmissions"],
         json!(["depth_limit"])
     );
     m["payload"] = json!({"parts":vec![json!({});101]});
     assert_eq!(
-        mail::message(&m, true).unwrap()["bodyOmissions"],
+        viewed_message(&m).unwrap()["bodyOmissions"],
         json!(["part_limit"])
     );
 }
@@ -288,7 +337,7 @@ async fn access_for_another_target_or_audience_is_denied_before_any_request() {
             lease.target = target;
             lease.audience = audience;
             let error = provider(&server)
-                .invoke(
+                .checked_invoke(
                     request(action, json!({}))
                         .delegated(delegated(lease))
                         .build(),
@@ -333,7 +382,7 @@ async fn message_and_thread_mutations_use_explicit_routes_with_no_bulk_expansion
             .mount(&server)
             .await;
             let r = p
-                .invoke(invocation(
+                .checked_invoke(invocation(
                     &format!("{entity}.{verb}"),
                     json!({"id":"a123"}),
                 ))
@@ -373,7 +422,7 @@ async fn search_is_one_page_with_explicit_trash_and_metadata_only_details() {
         .mount(&server)
         .await;
     let r = provider(&server)
-        .invoke(invocation(
+        .checked_invoke(invocation(
             "message.search",
             json!({"query":"in:trash","maxResults":1,"includeSpamTrash":true}),
         ))
@@ -443,7 +492,7 @@ async fn rate_limits_and_ambiguous_mutations_never_replay() {
             .mount(&server)
             .await;
         let err = provider(&server)
-            .invoke(invocation("thread.trash", json!({"id":"a123"})))
+            .checked_invoke(invocation("thread.trash", json!({"id":"a123"})))
             .await
             .unwrap_err();
         assert_eq!(err.object_ids.as_deref(), Some(&json!({"thread":"a123"})));
@@ -498,14 +547,14 @@ async fn provider_bounds_total_response_bytes_and_unexpected_page_size() {
         .await;
     assert!(
         provider(&server)
-            .invoke(invocation("message.search", json!({"maxResults":1})))
+            .checked_invoke(invocation("message.search", json!({"maxResults":1})))
             .await
             .is_err()
     );
     let mut p = provider(&server);
     p.max_bytes = 8;
     assert!(
-        p.invoke(invocation("account.view", json!({})))
+        p.checked_invoke(invocation("account.view", json!({})))
             .await
             .is_err()
     );
@@ -516,7 +565,7 @@ fn long_threads_keep_metadata_and_mark_text_and_charset_limits() {
     let mut m = message();
     let text = m["payload"].clone();
     m["payload"] = json!({"mimeType":"multipart/alternative","parts":[text.clone(),text]});
-    let thread = mail::thread(&json!({"id":"b456","messages":vec![m.clone();50]})).unwrap();
+    let thread = viewed_thread(&json!({"id":"b456","messages":vec![m.clone();50]})).unwrap();
     assert_eq!(thread["messages"].as_array().unwrap().len(), 50);
     assert!(
         thread["messages"]
@@ -527,7 +576,7 @@ fn long_threads_keep_metadata_and_mark_text_and_charset_limits() {
     );
     m["payload"]["parts"][0]["body"]["data"] =
         json!(URL_SAFE_NO_PAD.encode(vec![b'a'; 200 * 1024]));
-    let thread = mail::thread(&json!({"id":"b456","messages":[m.clone(),m]})).unwrap();
+    let thread = viewed_thread(&json!({"id":"b456","messages":[m.clone(),m]})).unwrap();
     assert_eq!(thread["messages"][1]["id"], "a123");
     assert_eq!(
         thread["messages"][1]["bodyOmissions"],
@@ -536,7 +585,7 @@ fn long_threads_keep_metadata_and_mark_text_and_charset_limits() {
     let mut m = message();
     m["payload"]["headers"] = json!([{"name":"Content-Type","value":"text/plain; charset=x-unknown"},{"name":"X-Unused","value":"a".repeat(20000)}]);
     m["payload"]["body"]["data"] = json!(URL_SAFE_NO_PAD.encode([0xff]));
-    let projected = mail::message(&m, true).unwrap();
+    let projected = viewed_message(&m).unwrap();
     assert_eq!(projected["textParts"][0]["charsetFallback"], true);
     assert_eq!(projected["textParts"][0]["decodeErrors"], true);
 }
@@ -564,7 +613,7 @@ async fn non_json_failures_keep_status_and_only_uncertain_writes_get_unknown_out
             .mount(&server)
             .await;
             let error = provider(&server)
-                .invoke(invocation(action, json!({"id":"a123"})))
+                .checked_invoke(invocation(action, json!({"id":"a123"})))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), reason);
@@ -604,7 +653,7 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
     let origin = format!("http://{}", reserved.local_addr().unwrap());
     for action in ["message.trash", "thread.archive", "message.view"] {
         let error = gmail(&origin)
-            .invoke(invocation(action, json!({"id":"a123"})))
+            .checked_invoke(invocation(action, json!({"id":"a123"})))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
@@ -633,7 +682,7 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
         assert!(head.starts_with(b"POST /gmail/v1/users/me/messages/a123/trash "));
     });
     let error = gmail(&origin)
-        .invoke(invocation("message.trash", json!({"id":"a123"})))
+        .checked_invoke(invocation("message.trash", json!({"id":"a123"})))
         .await
         .unwrap_err();
     server.await.unwrap();
@@ -650,7 +699,7 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
         .mount(&server)
         .await;
     let error = provider(&server)
-        .invoke(invocation("thread.trash", json!({"id":"a123"})))
+        .checked_invoke(invocation("thread.trash", json!({"id":"a123"})))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -684,7 +733,7 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
             .mount(&server)
             .await;
         let error = provider(&server)
-            .invoke(invocation(action, json!({"id":"a123"})))
+            .checked_invoke(invocation(action, json!({"id":"a123"})))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
@@ -698,7 +747,7 @@ async fn mutation_receipts_follow_what_gmail_may_have_applied() {
         .mount(&server)
         .await;
     let error = provider(&server)
-        .invoke(invocation("thread.view", json!({"id":"a123"})))
+        .checked_invoke(invocation("thread.view", json!({"id":"a123"})))
         .await
         .unwrap_err();
     assert!(error.result.is_none());
@@ -712,7 +761,7 @@ fn oversized_part_metadata_preserves_every_message_in_a_thread() {
     let mut invalid_mime = message();
     invalid_mime["payload"]["mimeType"] = json!("x".repeat(257));
     let thread =
-        mail::thread(&json!({"id":"b456","messages":[attachment, invalid_mime, message()]}))
+        viewed_thread(&json!({"id":"b456","messages":[attachment, invalid_mime, message()]}))
             .unwrap();
     let messages = thread["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 3);
@@ -752,7 +801,7 @@ async fn mount_page(server: &MockServer, page_token: Option<&str>, next: Option<
     .await;
 }
 async fn first_page_token(p: &GmailProvider, first: InvocationBuilder) -> String {
-    let page = p.invoke(first.build()).await.unwrap();
+    let page = p.checked_invoke(first.build()).await.unwrap();
     page.result["nextPageToken"].as_str().unwrap().to_owned()
 }
 async fn list_requests(server: &MockServer, page_token: &str) -> Vec<wiremock::Request> {
@@ -784,7 +833,7 @@ async fn search_continuations_round_trip_with_normalized_defaults() {
     assert_eq!(raw[0], SEARCH_PAGES.version());
     assert!(token.len() <= MAX_PAGE_TOKEN_BYTES);
     let next = p
-        .invoke(invocation(
+        .checked_invoke(invocation(
             "message.search",
             json!({"query":"in:inbox","maxResults":20,"includeSpamTrash":false,"pageToken":token}),
         ))
@@ -849,12 +898,12 @@ async fn search_continuations_reject_changed_settings_caller_context_and_connect
     // Another provider instance, as after a reload, has its own key.
     let reloaded = provider(&server);
     for (change, builder) in cases {
-        let error = p.invoke(builder.build()).await.unwrap_err();
+        let error = p.checked_invoke(builder.build()).await.unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{change}");
         assert_eq!(error.decision(), Decision::Deny, "{change}");
         assert!(error.message.contains("restart the search"), "{change}");
     }
-    let error = reloaded.invoke(same().build()).await.unwrap_err();
+    let error = reloaded.checked_invoke(same().build()).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
     // A lease for another target or audience is refused as a credential
     // before its continuation is considered.
@@ -866,7 +915,7 @@ async fn search_continuations_reject_changed_settings_caller_context_and_connect
         other.target = target;
         other.audience = audience;
         let error = p
-            .invoke(same().delegated(delegated(other)).build())
+            .checked_invoke(same().delegated(delegated(other)).build())
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
@@ -874,7 +923,7 @@ async fn search_continuations_reject_changed_settings_caller_context_and_connect
     // Only the first page reached Gmail, and the unchanged request continues.
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     mount_page(&server, Some("upstream-page-2"), None).await;
-    p.invoke(same().build()).await.unwrap();
+    p.checked_invoke(same().build()).await.unwrap();
 }
 
 #[tokio::test]
@@ -933,7 +982,7 @@ async fn search_continuations_are_purpose_separated_expiring_and_tamper_evident(
         "upstream-page-2".to_owned(),
     ] {
         let error = p
-            .invoke(builder.clone().input("pageToken", json!(token)).build())
+            .checked_invoke(builder.clone().input("pageToken", json!(token)).build())
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
@@ -941,7 +990,7 @@ async fn search_continuations_are_purpose_separated_expiring_and_tamper_evident(
     assert!(server.received_requests().await.unwrap().is_empty());
     // The same binding's current token does reach Gmail.
     mount_page(&server, Some("upstream-page-2"), None).await;
-    p.invoke(builder.input("pageToken", json!(valid)).build())
+    p.checked_invoke(builder.input("pageToken", json!(valid)).build())
         .await
         .unwrap();
 }
@@ -973,14 +1022,17 @@ async fn search_continuations_survive_access_refresh_and_recover_only_one_401() 
     };
     page("Bearer refreshed", 401).expect(1).mount(&server).await;
     page("Bearer recovered", 200).expect(1).mount(&server).await;
-    let next = p.invoke(continuation(refreshing())).await.unwrap();
+    let next = p.checked_invoke(continuation(refreshing())).await.unwrap();
     assert!(next.result["nextPageToken"].is_null());
     assert_eq!(list_requests(&server, "upstream-page-2").await.len(), 2);
     // A second 401 never causes a third dispatch.
     server.reset().await;
     page("Bearer refreshed", 401).expect(1).mount(&server).await;
     page("Bearer recovered", 401).expect(1).mount(&server).await;
-    let error = p.invoke(continuation(refreshing())).await.unwrap_err();
+    let error = p
+        .checked_invoke(continuation(refreshing()))
+        .await
+        .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
     assert_eq!(error.upstream_status, Some(401));
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
@@ -1006,7 +1058,7 @@ async fn upstream_page_tokens_keep_their_cap_and_are_never_truncated() {
         search.input_schema["properties"]["pageToken"]["maxLength"],
         MAX_PAGE_TOKEN_BYTES
     );
-    p.invoke(invocation("message.search", json!({"pageToken":token})))
+    p.checked_invoke(invocation("message.search", json!({"pageToken":token})))
         .await
         .unwrap();
     assert_eq!(list_requests(&server, &largest).await.len(), 1);
@@ -1019,7 +1071,7 @@ async fn upstream_page_tokens_keep_their_cap_and_are_never_truncated() {
     )
     .await;
     let error = provider(&server)
-        .invoke(invocation("message.search", json!({})))
+        .checked_invoke(invocation("message.search", json!({})))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -1091,4 +1143,72 @@ fn validation_requires_an_oauth_only_personal_connection() {
     ] {
         assert_eq!(errors(credentials), [REJECTED], "{credentials:?}");
     }
+}
+
+/// Each read and a thread mutation through `invoke`, with the optional
+/// upstream fields present, conform to their result schemas.
+#[tokio::test]
+async fn read_and_mutation_results_conform_to_their_result_schemas() {
+    let server = MockServer::start().await;
+    let mut full = message();
+    full["internalDate"] = json!("1700000000000");
+    full["sizeEstimate"] = json!(2048);
+    full["payload"] = json!({"mimeType":"multipart/mixed","headers":[{"name":"From","value":"bob@example.test"}],
+        "parts":[message()["payload"].clone(),
+            {"mimeType":"application/pdf","filename":"report.pdf","body":{"attachmentId":"att-1","size":512}}]});
+    for (route, body) in [
+        (
+            "/gmail/v1/users/me/profile",
+            json!({"emailAddress":"alice@example.test","messagesTotal":10,"threadsTotal":4,"historyId":"123"}),
+        ),
+        (
+            "/gmail/v1/users/me/labels",
+            json!({"labels":[
+            {"id":"INBOX","name":"INBOX","type":"system","messageListVisibility":"hide","labelListVisibility":"labelShow"},
+            {"id":"Label_1","name":"Receipts","type":"user"}]}),
+        ),
+        ("/gmail/v1/users/me/messages/a123", full.clone()),
+        (
+            "/gmail/v1/users/me/threads/b456",
+            json!({"id":"b456","historyId":"99","messages":[full, message()]}),
+        ),
+        (
+            "/gmail/v1/users/me/threads/b456/modify",
+            json!({"id":"b456","messages":[{"id":"a123","labelIds":["IMPORTANT"]}]}),
+        ),
+    ] {
+        Mock::given(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let p = provider(&server);
+    let result = |action: &'static str, inputs: Value| {
+        let p = &p;
+        async move {
+            p.checked_invoke(invocation(action, inputs))
+                .await
+                .unwrap()
+                .result
+        }
+    };
+    assert_eq!(result("account.view", json!({})).await["historyId"], "123");
+    let labels = result("label.list", json!({})).await;
+    assert_eq!(
+        labels["labels"][1],
+        json!({"id":"Label_1","name":"Receipts","type":"user",
+        "messageListVisibility":null,"labelListVisibility":null})
+    );
+    let viewed = result("message.view", json!({"id":"a123"})).await;
+    assert_eq!(viewed["attachments"][0]["size"], 512);
+    assert_eq!(viewed["textParts"][0]["text"], "private body");
+    let thread = result("thread.view", json!({"id":"b456"})).await;
+    assert_eq!(thread["messages"].as_array().unwrap().len(), 2);
+    let archived = result("thread.archive", json!({"id":"b456"})).await;
+    assert_eq!(archived["labelIds"], Value::Null);
+    assert_eq!(
+        archived["messages"],
+        json!([{"id":"a123","labelIds":["IMPORTANT"]}])
+    );
 }

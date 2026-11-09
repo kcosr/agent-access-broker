@@ -1,6 +1,6 @@
 //! Published schemas describe fields; local parsing owns their relationships.
 use super::*;
-use crate::tests::{invocation, provider};
+use crate::tests::{CheckedInvoke, invocation, provider};
 use agent_access_provider::Decision;
 use wiremock::MockServer;
 
@@ -297,7 +297,7 @@ async fn locator_and_build_precedence_preserves_full_denials_before_network() {
         for error in [
             ci.parse(action, &value).unwrap_err(),
             ci.local_scopes(action, &value).unwrap_err(),
-            ci.invoke(invocation(action, value.clone()))
+            ci.checked_invoke(invocation(action, value.clone()))
                 .await
                 .unwrap_err(),
         ] {
@@ -485,7 +485,7 @@ async fn log_relationships_keep_type_and_option_error_precedence() {
         for error in [
             ci.parse("build.log.read", &value).unwrap_err(),
             ci.local_scopes("build.log.read", &value).unwrap_err(),
-            ci.invoke(invocation("build.log.read", value.clone()))
+            ci.checked_invoke(invocation("build.log.read", value.clone()))
                 .await
                 .unwrap_err(),
         ] {
@@ -559,7 +559,7 @@ async fn syntactic_cursor_acceptance_keeps_late_denial_uncategorized_and_offline
     let value = build(json!({"mode":"head","cursor":"x"}));
     assert!(ci.local_scopes("build.log.read", &value).is_ok());
     let error = ci
-        .invoke(invocation("build.log.read", value))
+        .checked_invoke(invocation("build.log.read", value))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
@@ -574,5 +574,164 @@ async fn syntactic_cursor_acceptance_keeps_late_denial_uncategorized_and_offline
     assert!(error.upstream_status.is_none());
     assert!(error.upstream_duration_ms.is_none());
     assert!(error.object_ids.is_none());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn every_input_category_reaches_invoke_as_a_conforming_result() {
+    let server = MockServer::start().await;
+    let root = format!("{}/team-ci", server.uri());
+    let job = "payments/build-api";
+    let cases = [
+        (
+            "job.view",
+            json!({"controller":"team-ci","job":job,"offset":0}),
+            "unknown_field",
+            Some("offset"),
+        ),
+        (
+            "job.view",
+            json!({"job":job}),
+            "locator_missing",
+            Some("controller"),
+        ),
+        (
+            "job.view",
+            json!({"controller":"team-ci","url":format!("{root}/job/payments/")}),
+            "locator_conflict",
+            Some("url"),
+        ),
+        (
+            "job.view",
+            json!({"controller":"other-ci","job":job}),
+            "controller_not_configured",
+            Some("controller"),
+        ),
+        (
+            "job.view",
+            json!({"controller":"ci.example.test","job":job}),
+            "controller_not_alias",
+            Some("controller"),
+        ),
+        (
+            "job.view",
+            json!({"controller":"team-ci","job":format!("{root}/job/payments/")}),
+            "job_is_url",
+            Some("job"),
+        ),
+        (
+            "job.view",
+            json!({"controller":"team-ci","job":"payments//build-api"}),
+            "job_invalid",
+            Some("job"),
+        ),
+        (
+            "job.view",
+            json!({"url":"ftp://ci.example.test/job/payments/"}),
+            "url_invalid",
+            Some("url"),
+        ),
+        (
+            "job.view",
+            json!({"url":"https://elsewhere.example.test/job/payments/"}),
+            "url_not_configured",
+            Some("url"),
+        ),
+        (
+            "job.view",
+            json!({"url":format!("{root}/")}),
+            "url_no_job",
+            Some("url"),
+        ),
+        (
+            "job.view",
+            json!({"url":format!("{root}/blue/organizations/jenkins/")}),
+            "url_blue_ocean",
+            Some("url"),
+        ),
+        (
+            "job.view",
+            json!({"url":format!("{root}/queue/item/5/")}),
+            "url_queue_item",
+            Some("url"),
+        ),
+        (
+            "build.view",
+            json!({"controller":"team-ci","job":job}),
+            "build_missing",
+            Some("buildNumber"),
+        ),
+        (
+            "build.view",
+            json!({"controller":"team-ci","job":job,"buildNumber":42,"buildSelector":"lastBuild"}),
+            "build_conflict",
+            Some("buildSelector"),
+        ),
+        (
+            "queue.view",
+            json!({"controller":"team-ci","job":job}),
+            "field_missing",
+            Some("queueId"),
+        ),
+        (
+            "build.view",
+            json!({"controller":"team-ci","job":job,"buildNumber":"42"}),
+            "value_invalid",
+            Some("buildNumber"),
+        ),
+        (
+            "build.log.read",
+            build(json!({"mode":"tail","cursor":"x"})),
+            "option_conflict",
+            Some("cursor"),
+        ),
+        ("job.view", json!([]), "value_invalid", None),
+    ];
+    let ci = provider(&server);
+    for (action, value, category, field) in cases {
+        let error = ci
+            .checked_invoke(invocation(action, value))
+            .await
+            .unwrap_err();
+        let result = error.result.as_deref().expect("categorized input error");
+        assert_eq!(result["inputCategory"], category, "{action} {category}");
+        assert_eq!(
+            result.get("field").and_then(Value::as_str),
+            field,
+            "{category}"
+        );
+    }
+    // Two aliases on one root make a URL ambiguous.
+    let controller = |alias: &str| {
+        (
+            alias.to_owned(),
+            crate::CloudbeesCiControllerConfig {
+                base_url: format!("{root}/"),
+                web_base_url: None,
+            },
+        )
+    };
+    let ambiguous = CloudbeesCiProvider::for_tests(
+        CloudbeesCiProviderConfig {
+            listing: Default::default(),
+            max_log_scan_bytes: logs::default_scan_limit(),
+            controllers: BTreeMap::from([controller("team-ci"), controller("team-ci-2")]),
+            egress_proxy: None,
+            allowed_upstream_hosts: vec![format!("{root}/**")],
+        },
+        ProviderLimits::default(),
+    )
+    .unwrap();
+    let error = ambiguous
+        .checked_invoke(invocation(
+            "job.view",
+            json!({"url":format!("{root}/job/payments/job/build-api/")}),
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.result.as_deref().unwrap()["inputCategory"],
+        "url_ambiguous"
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }

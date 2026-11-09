@@ -342,7 +342,10 @@ async fn visible_relationship_rules_deny_at_preparation_scope_and_invoke_before_
         let invocation = InvocationBuilder::new("teams", ACTION)
             .inputs(value)
             .build();
-        assert_denial(provider.invoke(invocation).await.unwrap_err(), message);
+        assert_denial(
+            provider.checked_invoke(invocation).await.unwrap_err(),
+            message,
+        );
     }
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
