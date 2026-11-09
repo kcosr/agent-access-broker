@@ -18,9 +18,13 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use url::Url;
 
 mod invocation;
+mod result_conformance;
 mod trace_capture;
 
 pub use invocation::InvocationBuilder;
+pub use result_conformance::{
+    assert_result_conforms, check_result_conforms, check_strict_conformance, strict_result_schema,
+};
 pub use trace_capture::{TraceCapture, TraceCaptureDispatcher, install_trace_capture};
 
 /// A test provider that states its own descriptor, so tests can inject it

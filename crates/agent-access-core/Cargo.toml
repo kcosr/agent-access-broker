@@ -8,7 +8,7 @@ license.workspace = true
 role = "core"
 
 [features]
-test-support = []
+test-support = ["agent-access-provider/test-support"]
 
 [dependencies]
 agent-access-provider = { path = "../agent-access-provider" }

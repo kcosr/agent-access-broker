@@ -379,6 +379,10 @@ impl Handler {
                     object.remove("scopedMcpName");
                 }
                 if let Some(tool) = registry.action_detail(service, name) {
+                    // The tool's outputSchema composes the payload schemas.
+                    if let Some(object) = detail.as_object_mut() {
+                        object.remove("resultSchemas");
+                    }
                     detail["mcpTool"] = tool;
                 } else if mcp::action_eligible(spec, ProjectionMode::Http)
                     && let Some(issue) = registry.action_unavailable(service, name)

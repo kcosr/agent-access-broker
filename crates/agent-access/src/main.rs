@@ -19606,6 +19606,7 @@ mod tests {
                 .collect(),
             rendered_body_owners: Vec::new(),
             optional_rendered_body_owner_prefixes: Vec::new(),
+            result_schemas: None,
         }
     }
 
@@ -23420,6 +23421,7 @@ upload_spool_dir = "upload-spool"
                     response_formats: Vec::new(),
                     rendered_body_owners: Vec::new(),
                     optional_rendered_body_owner_prefixes: Vec::new(),
+                    result_schemas: None,
                 }],
             }],
             routes: Vec::new(),

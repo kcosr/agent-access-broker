@@ -373,7 +373,7 @@ mod tests {
     }
     impl agent_access_provider::test_support::DescribedProvider for ControlledProvider {
         fn descriptor(&self) -> ServiceDescriptor {
-            let mut descriptor = agent_access_fake::fake_descriptor();
+            let mut descriptor = crate::runtime::tests::untyped_fake_descriptor();
             if self.raw_write {
                 for action in &mut descriptor.actions {
                     action.read_only = false;

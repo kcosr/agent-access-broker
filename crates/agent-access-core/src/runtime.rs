@@ -58,6 +58,8 @@ mod provider_state_tests;
 mod resource_attribute_tests;
 #[cfg(test)]
 mod resource_coverage_tests;
+#[cfg(any(test, feature = "test-support"))]
+mod result_conformance;
 #[cfg(test)]
 mod search_authority_tests;
 #[cfg(test)]
@@ -5614,14 +5616,24 @@ impl BrokerRuntime {
                         ));
                     }
                     command_started = true;
-                    run_provider_hook(hook.clone(), command_provider.invoke_command(invocation))
-                        .await?
+                    let outcome = run_provider_hook(
+                        hook.clone(),
+                        command_provider.invoke_command(invocation),
+                    )
+                    .await;
+                    #[cfg(any(test, feature = "test-support"))]
+                    result_conformance::check_provider_outcome(
+                        &service,
+                        self.action_descriptor(&service, &action),
+                        &outcome,
+                    );
+                    outcome?
                 }
                 None => {
                     // The invocation consumes the request; keep its inputs
                     // to explain an input denial.
                     let inputs = agent_access_provider::host::admitted_inputs(&request);
-                    run_provider_hook(
+                    let outcome = run_provider_hook(
                         hook.clone(),
                         provider.invoke(agent_access_provider::host::invocation(
                             request,
@@ -5630,8 +5642,16 @@ impl BrokerRuntime {
                             state,
                         )),
                     )
-                    .await
-                    .map_err(|error| self.explain_input_denial(&service, &action, &inputs, error))?
+                    .await;
+                    #[cfg(any(test, feature = "test-support"))]
+                    result_conformance::check_provider_outcome(
+                        &service,
+                        self.action_descriptor(&service, &action),
+                        &outcome,
+                    );
+                    outcome.map_err(|error| {
+                        self.explain_input_denial(&service, &action, &inputs, error)
+                    })?
                 }
             };
             Ok(checked_result_stream(result, hook))
@@ -6549,6 +6569,15 @@ impl BrokerRuntime {
             }
             error
         });
+        #[cfg(any(test, feature = "test-support"))]
+        result_conformance::check_final_result(
+            &service,
+            self.action_descriptor(&service, &action),
+            match &result {
+                Ok(result) => Some(&result.result),
+                Err(error) => error.result.as_deref(),
+            },
+        );
         let (
             status,
             envelope,
