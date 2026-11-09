@@ -307,7 +307,7 @@ operation names remain readable.
 This loopback-only evaluation uses the offline fake provider. It does not require
 Jira, Confluence, or another live service. Install Rust through rustup; the
 checked-in [toolchain file](rust-toolchain.toml) selects the tested Rust/Cargo
-1.98.1 toolchain. The commands below build locally. A configured
+1.99.1 toolchain. The commands below build locally. A configured
 [build service](AGENTS.md#build-service) is optional.
 
 ```bash

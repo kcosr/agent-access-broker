@@ -56,9 +56,10 @@ category headings from the release.
 
 ## Qualify the candidate
 
-Use the pinned Rust/Cargo 1.98.1 toolchain in `rust-toolchain.toml`, Node.js 24.18.0,
-npm 11.16.0, and Python 3.11 or newer. The tested toolchain versions do not
-establish minimum supported Rust or Node.js versions. Python's `sqlite3` module
+Use the pinned Rust/Cargo 1.99.1 toolchain in `rust-toolchain.toml`, Node.js 24.18.0,
+npm 11.16.0, and Python 3.11 or newer. The workspace crates declare
+`rust-version = "1.99"`; the tested Node.js and npm versions do not establish
+minimum supported versions. Python's `sqlite3` module
 must use SQLite 3.43 or newer with FTS5 `contentless_delete` support. Preflight
 checks the version and exercises table creation, insertion, and deletion, so
 required audit smoke coverage cannot silently skip on an older or feature-limited
