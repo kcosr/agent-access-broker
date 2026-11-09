@@ -494,16 +494,16 @@ fn inject_rendered_body_at(schema: &mut Value, segments: &[String], rendered: &V
                 Some(Value::Array(names)) => names.iter().any(|name| name == "object"),
                 _ => false,
             };
-            if object.contains_key("properties") || (typed_object && !object.contains_key("anyOf"))
-            {
-                if let Some(properties) = object
+            let owner = object.contains_key("properties")
+                || (typed_object && !object.contains_key("anyOf"));
+            if owner
+                && let Some(properties) = object
                     .entry("properties")
                     .or_insert_with(|| Value::Object(Map::new()))
                     .as_object_mut()
-                {
-                    properties.insert("renderedBody".into(), rendered.clone());
-                    resolved = true;
-                }
+            {
+                properties.insert("renderedBody".into(), rendered.clone());
+                resolved = true;
             }
         }
         Some((segment, rest)) if segment == "*" => {

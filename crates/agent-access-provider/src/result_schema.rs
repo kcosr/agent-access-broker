@@ -124,6 +124,7 @@ impl ActionResultSchemas {
 /// assert_eq!(schemas.success()["properties"]["key"]["type"], "string");
 /// assert_eq!(RESULT_SCHEMAS.actions(), ["item.view"]);
 /// ```
+#[non_exhaustive]
 pub struct ResultSchemaBundle {
     sources: &'static [&'static str],
     parsed: OnceLock<BTreeMap<String, ActionResultSchemas>>,
