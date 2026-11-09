@@ -338,9 +338,10 @@ responses.
 ## Build Service
 
 Rust/Cargo commands work locally with the checked-in `rust-toolchain.toml` and
-`Cargo.lock`. The reproducible tested toolchain is Rust/Cargo 1.98.1 with rustfmt
-and Clippy. The tested portal toolchain is Node.js 24.18.0 and npm 11.16.0; these
-versions do not establish a minimum supported version.
+`Cargo.lock`. The reproducible tested toolchain is Rust/Cargo 1.99.1 with rustfmt
+and Clippy; workspace crates inherit `rust-version = "1.99"` from
+`[workspace.package]`. The tested portal toolchain is Node.js 24.18.0 and npm
+11.16.0; these versions do not establish a minimum supported version.
 
 The remote build service is optional. When it is configured and available, use
 it to offload Rust/Cargo work; it copies formatted sources plus debug/release
