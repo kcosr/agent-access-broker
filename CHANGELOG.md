@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
   Microsoft sign-in refreshes display name, potentially replacing an administrator
   edit; profile email remains unchanged. See
   [Microsoft onboarding](docs/administrator-guide.md#microsoft-onboarding).
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - **GitLab file views return metadata by default and readable text on request.**
   Replace `contentBase64`/`encoding` consumers with `includeContent: true` and
@@ -128,7 +129,7 @@ All notable changes to this project are documented in this file.
   gains `Basic`; update exhaustive matches to handle that delivery explicitly.
   `ImportedServiceRecord` gains `document` metadata; existing downstream struct
   literals must supply `None` when no uploaded source is retained.
-  ([#64](https://github.com/kcosr/agent-access-broker/pull/64), [#66](https://github.com/kcosr/agent-access-broker/pull/66))
+  ([#64](https://github.com/kcosr/agent-access-broker/pull/64), [#66](https://github.com/kcosr/agent-access-broker/pull/66), [#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - **Resource-access discovery replaces resource listing.** Use MCP
   `resource_access_describe`, CLI `resource-access describe`, HTTP
@@ -188,6 +189,7 @@ All notable changes to this project are documented in this file.
   memberships in `autoEnrolledGroupIds`. `config.status` adds the
   `microsoftEnrollment` availability/tenant object for administrative preparation.
   See the [HTTP API](docs/http-api.md).
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - **Managed OpenAPI HTTP gateways.** Administrators can import bounded Swagger
   2.0 and OpenAPI 3.1 documents by URL or upload, choose immutable Actions/tools
@@ -490,6 +492,7 @@ All notable changes to this project are documented in this file.
   schemas and OpenAPI aligned with handlers while preserving optional credential
   verification bodies. Microsoft enrollment cancellation carries its required
   ID/revision query parameters without a JSON body.
+  ([#108](https://github.com/kcosr/agent-access-broker/pull/108))
 
 - GitLab raw downloads use the execution credential and metadata from the same
   response as their bytes. GitLab's potentially converted-content hash is no
