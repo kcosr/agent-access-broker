@@ -187,7 +187,8 @@ All notable changes to this project are documented in this file.
   output-schema metadata is omitted. Tool names, inputs, results and the
   catalog version are the same either way. See
   [output schemas](docs/mcp.md#output-schemas).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
+  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
+  [#112](https://github.com/kcosr/agent-access-broker/pull/112))
 
 - **Catalog result schemas and typed OpenAPI responses.** Catalog actions add
   optional `resultSchemas` (`success`, optional `error`), and OpenAPI invoke
@@ -196,7 +197,8 @@ All notable changes to this project are documented in this file.
   `mcpTool.outputSchema` in their place for an action that is a tool there; a
   connection that omits output schemas returns neither. See
   [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
+  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
+  [#112](https://github.com/kcosr/agent-access-broker/pull/112))
 
 - **Provider SDK result schemas.** Providers declare payload schemas with
   `ActionDescriptor::result_schemas`, `ActionResultSchemas` and bundled
