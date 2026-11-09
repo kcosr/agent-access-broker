@@ -851,8 +851,8 @@ Rate-limited tool errors are the one exception to the text copy; see
 Every action tool whose action declares result schemas, and each of the five
 discovery helpers, advertises an MCP `outputSchema` describing the
 `structuredContent` that tool returns: successes, denials, failures and local
-file receipts. Every built-in provider action declares them, and imported
-actions advertise their adapter's wrapper layout (below). A tool for an action
+file receipts. Every built-in provider action and imported action declares
+them; imported actions use their adapter's wrapper (below). A tool for an action
 without result schemas omits `outputSchema`. The schema is added metadata only;
 tool names, arguments and results are unchanged.
 
@@ -911,11 +911,15 @@ validate `structuredContent` against `outputSchema`, including on `isError`
 results, accept every shape the Broker delivers. Refresh tool discovery after
 upgrading the Broker.
 
-Imported actions advertise their adapter's stable wrapper, such as
-`result.upstreamMcp`, `result.upstreamHttp` or `result.upstreamCommand` with
-the adapter's receipt fields, and leave the upstream content open even when
-the accepted definition has its own output schema, so accepting or refreshing
-an import does not change the advertised schema.
+Imported actions advertise a wrapper fixed per adapter and output kind:
+`result.upstreamMcp`, `result.upstreamHttp` or `result.upstreamCommand`, with
+optional write receipt fields on success and `toolDispatched` or
+`operationDispatched` on failure. The upstream content stays open whatever the
+accepted output schema, declared responses or read classification, so accepting
+or refreshing an import does not change the advertised schema. See
+[imported MCP](imported-services.md#invocation-and-outcomes),
+[OpenAPI](imported-openapi.md#results-and-execution) and
+[command](command-imports.md#the-response) results.
 
 `actions_describe` returns an executable action's schema as
 `mcpTool.outputSchema` and omits the catalog's duplicate `resultSchemas`; an

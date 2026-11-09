@@ -162,7 +162,14 @@ also includes a same-origin browser portal frontend:
   service/action definitions, bounded import schemas, the `ImportedAdapter`
   seam, and the opaque `ImportedAdapterRegistration` that the shipped adapter
   crates build with an internal free function. That contract is Broker
-  implementation, not a provider-author interface.
+  implementation, not a provider-author interface. Its required, offline
+  `ImportedAdapter::result_schemas` states each accepted invocation action's
+  result schemas: a wrapper fixed per adapter and output kind, with upstream
+  payloads as open leaves whatever the accepted output schema, declared
+  responses or read classification, so refresh and re-acceptance never change
+  them. Core attaches them to the imported descriptor; an adapter error refuses
+  acceptance or publication, and leaves a loaded import unavailable
+  (`ActionPlanInvalid`). Gateway actions are never asked and carry none.
 - **Import adapter crates** — `agent-access-mcp-upstream`,
   `agent-access-openapi-upstream` and `agent-access-command-import` implement
   the internal import contract and depend on core. Each exports

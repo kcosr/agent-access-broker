@@ -3226,7 +3226,8 @@ companions and whole-result Markdown are not part of them. A schema covers
 every supported configuration and input of the action, lists as `required` only
 fields that are always present, and leaves objects open, so clients must accept
 fields it does not declare. The field is omitted for actions that declare none;
-every built-in provider action declares it. The catalog version remains
+every built-in provider action and imported action declares it. The catalog
+version remains
 `agent-access.catalog.v2`, and service capabilities from `/v1/services` and
 service detail do not include it. MCP action detail replaces it with the
 composed [`mcpTool.outputSchema`](mcp.md#output-schemas) when the action is a

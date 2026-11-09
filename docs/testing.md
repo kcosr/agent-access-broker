@@ -826,6 +826,8 @@ every emitted field must be declared. The advertised schemas stay open.
   `test-support` `assert_result_conforms`, so stub-driven successes, receipts and
   failures are checked. Each native provider's tests also require a bundle entry
   for every action that any supported configuration publishes, and no other.
+  The MCP, OpenAPI and command import adapters check their outcomes strictly
+  against their wrapper schemas the same way.
 - Core's `test-support` feature, which the host's enables, checks every
   invocation of an action with result schemas twice: the provider outcome after
   its hook contract check, and the final `result`, after presentation and the

@@ -695,6 +695,15 @@ In the legacy protocol, disconnecting does not prove cancellation: a timed-out
 call may continue upstream. Its uncertain write outcome remains `unknown` with
 `retrySafe: false`.
 
+Every imported MCP action publishes the same fixed result schemas in its catalog
+`resultSchemas`, typed OpenAPI responses and MCP
+[output schema](mcp.md#output-schemas): success `upstreamMcp` with `content`,
+`isError` and optional `structuredContent`, plus optional write
+`mutationStatus`/`retrySafe`; failure optional `upstreamMcp` and
+`toolDispatched`, with the shared failure fields. Content blocks and structured
+content stay open whatever output schema the tool declared or how it is
+classified, so accepting or refreshing a tool never changes them.
+
 ### Command import calls
 
 A command import's call takes a slot from its command's concurrency budget,

@@ -349,6 +349,16 @@ its request was dispatched in `operationDispatched`, with a mutation receipt:
 The failure keeps its ordinary reason code. Local output saving uses the
 existing receipt behavior and never replays the API operation.
 
+Every imported operation publishes the same fixed result schemas in its catalog
+`resultSchemas`, typed OpenAPI responses and MCP
+[output schema](mcp.md#output-schemas): success `upstreamHttp` with an integer
+`status` and an open `body`, plus optional write `mutationStatus`/`retrySafe`;
+failure optional `upstreamHttp` (present when the error body matched a declared
+response) and `operationDispatched`, with the shared failure fields. The body
+stays open whatever responses the operation declares or how it is classified,
+so accepting or refreshing an operation never changes them. Gateway operations
+are not invoked and publish no result schemas.
+
 Accepted plans load offline after restart. Existing JSON plan bytes retain their
 meaning. Newly accepted Basic or form definitions require a compatible Broker;
 before rolling back to an older binary, restore a compatible backup or remove
