@@ -23,7 +23,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use openidconnect::core::{
-    CoreAuthenticationFlow, CoreClient, CoreJwsSigningAlgorithm, CoreRsaPrivateSigningKey,
+    CoreAuthenticationFlow, CoreClient, CoreHmacKey, CoreJwsSigningAlgorithm,
+    CoreRsaPrivateSigningKey,
 };
 use openidconnect::{
     AsyncHttpClient, AuthType, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest,
@@ -49,6 +50,7 @@ pub(super) const CLIENT_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2";
 pub(super) const USER_OBJECT_ID: &str = "cccccccc-cccc-4ccc-8ccc-ccccccccccc3";
 pub(super) const GROUP_ID: &str = "dddddddd-dddd-4ddd-8ddd-ddddddddddd4";
 pub(super) const CLIENT_SECRET: &str = "test-client-secret";
+const OTHER_TENANT_ID: &str = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5";
 const INITIAL_KEY_ID: &str = "microsoft-test-key-1";
 const ROTATED_KEY_ID: &str = "microsoft-test-key-2";
 pub(super) const FIXED_NOW: i64 = 1_893_456_000;
@@ -140,6 +142,8 @@ pub(super) struct FakeTokenClaims {
     pub(super) corrupt_signature: bool,
     /// Issue an unsigned token (`alg: none`, no key ID).
     pub(super) unsigned: bool,
+    /// Sign with HS256 keyed by the client secret instead of the RSA key.
+    pub(super) hmac_client_secret: bool,
     /// Issue a single audience as a string rather than a one-element array.
     pub(super) audience_as_string: bool,
     pub(super) auth_time: Option<i64>,
@@ -167,6 +171,7 @@ impl FakeTokenClaims {
             duplicate_tenant_claim: false,
             corrupt_signature: false,
             unsigned: false,
+            hmac_client_secret: false,
             audience_as_string: false,
             auth_time: None,
             at_hash: None,
@@ -945,6 +950,8 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
     }
     let header = if grant.claims.unsigned {
         json!({"alg": "none", "typ": "JWT"})
+    } else if grant.claims.hmac_client_secret {
+        json!({"alg": "HS256", "kid": grant.signing_key_id, "typ": "JWT"})
     } else {
         json!({"alg": "RS256", "kid": grant.signing_key_id, "typ": "JWT"})
     };
@@ -960,12 +967,18 @@ fn sign_id_token(grant: &AuthorizationGrant) -> Result<String, FakeProviderError
     if grant.claims.unsigned {
         return Ok(format!("{signing_input}."));
     }
-    let mut signature = signing_key(&grant.signing_key_id)
-        .sign(
+    let signature = if grant.claims.hmac_client_secret {
+        CoreHmacKey::new(CLIENT_SECRET.as_bytes()).sign(
+            &CoreJwsSigningAlgorithm::HmacSha256,
+            signing_input.as_bytes(),
+        )
+    } else {
+        signing_key(&grant.signing_key_id).sign(
             &CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             signing_input.as_bytes(),
         )
-        .map_err(|_| FakeProviderError::SigningFailed)?;
+    };
+    let mut signature = signature.map_err(|_| FakeProviderError::SigningFailed)?;
     if grant.claims.corrupt_signature
         && let Some(first) = signature.first_mut()
     {
@@ -1784,6 +1797,40 @@ async fn microsoft_oidc_browser_rejects_nonce_signature_and_duplicate_claim_fail
         "oidc-malformed-groups",
     );
 
+    assert_eq!(fixture.provider.request_counts(), (1, 1, 4));
+    assert!(fixture.store.list_principals().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn microsoft_oidc_browser_rejects_disallowed_algorithm_issuer_and_early_tokens() {
+    let fixture = oidc_browser_fixture(false).await;
+    type Adjust = fn(&mut FakeTokenClaims);
+    let mut binding_cookie = None;
+    let cases: [(&str, Adjust); 4] = [
+        ("oidc-hs256-client-secret", |claims| {
+            claims.hmac_client_secret = true
+        }),
+        ("oidc-other-issuer", |claims| {
+            claims.issuer = format!("https://{MICROSOFT_OIDC_HOST}/{OTHER_TENANT_ID}/v2.0")
+        }),
+        ("oidc-not-yet-valid", |claims| {
+            claims.not_before = Some(FIXED_NOW + 600)
+        }),
+        ("oidc-issued-in-future", |claims| {
+            claims.issued_at = FIXED_NOW + 600;
+            claims.expires_at = FIXED_NOW + 900;
+        }),
+    ];
+    for (request_id, adjust) in cases {
+        let mut claims = FakeTokenClaims::valid(FIXED_NOW);
+        adjust(&mut claims);
+        fixture.provider.set_next_claims(claims);
+        let pending = start_browser_login(&fixture, binding_cookie.as_deref()).await;
+        let response = finish_browser_login(&fixture, &pending, request_id).await;
+        assert_callback_error(&response, "oidc_identity_invalid", request_id);
+        binding_cookie = Some(pending.binding_cookie);
+    }
+    // No rejection refreshed the signing keys or created a principal.
     assert_eq!(fixture.provider.request_counts(), (1, 1, 4));
     assert!(fixture.store.list_principals().unwrap().is_empty());
 }
