@@ -522,6 +522,10 @@ The `route` field must match a route template from the fetched catalog. The CLI
 percent-encodes `pathParams`, encodes declared scalar/array query parameters,
 rejects unknown path/query keys, rejects `body: null`, and never accepts
 arbitrary external URLs.
+Before sending, it rejects missing or empty required query parameters and a
+missing required body, using the catalog's required query metadata and
+`bodyRequired` flag. These route-input errors exit `3` without dispatching the
+request.
 
 Routes marked `requestBodyKind: "raw_json"` require exact document bytes and are
 excluded from the generated `send` schema. Generic `send` rejects those routes.
@@ -1402,7 +1406,8 @@ In addition to HTTP-derived codes:
   or Confluence `--content-format` values. CLI-local errors detected after
   argument parsing exit `3` (`exit_cli_input_error` / `require_cli_input`),
   including malformed native JSON, content-file read failures, schema
-  mismatches, and a non-existent explicit `--config` path.
+  mismatches, generic `send` path/query input errors or a missing required body,
+  and a non-existent explicit `--config` path.
 - Network errors, request timeouts, malformed broker responses, unexpected JSON
   shapes, and output-formatting failures exit `5` (`exit_network_error`,
   `exit_malformed_broker_response`, response-shape validation, and
