@@ -384,8 +384,11 @@ product in code, tests or docs.
 
 The portal's approval page (`/ui/authorize/<request>`) stays a focused page in
 the sign-in frame, without portal navigation or the command palette, and
-works without self-service. It opens the decision's `redirectTo` only as a
-top-level navigation, and keeps the request ID and that address out of
+works without self-service. It sends a decision once per explicit click,
+only while the browser's session is still the account the page shows, and
+never replays one after a CSRF or session failure: it shows the account that
+is signed in now and asks again. It opens the decision's `redirectTo` only as
+a top-level navigation, and keeps the request ID and that address out of
 rendered text, logs and error messages. A person's list lives on **Account**,
 which accounts without self-service can reach, and is shown from the runtime
 catalog's `account_management` routes, never by probing; an administrator's

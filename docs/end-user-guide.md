@@ -442,7 +442,9 @@ obtains its own short-lived tokens, and you never hold them.
    both cases it stays within what you are already allowed to do. An
    administrator sets the level; you cannot change it on this page.
 3. If the account is not yours, choose **Use a different account** and sign in
-   again; the request stays open.
+   again; the request stays open. If your sign-in changes while the page is
+   open, for example in another tab, your answer is not sent: the page shows
+   the account that is signed in now and asks you to choose again.
 4. Choose **Approve** to connect the application, or **Cancel** to decline. Both
    return you to the application.
 

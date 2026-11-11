@@ -420,6 +420,7 @@ refused while an administrator has your access disabled.
 | What you see | What to check |
 | --- | --- |
 | **This request is no longer valid** | An application's request expires after 10 minutes and can be answered once; it also ends when the operator removes the application or changes where it returns to. Go back to the application and start again. |
+| **You are now signed in as a different account than this page showed** | The browser's sign-in changed while the request was open, for example in another tab. Nothing was sent. Check **Signed in as**, then answer again or choose **Use a different account**. |
 | **You can’t connect _application_** | The page gives the reason: connecting is turned off, an administrator disabled your access for it, or your account cannot connect applications. Ask your administrator; **Return to _application_** takes you back. |
 | My access is missing or `self_service_disabled` | Ask an administrator to enable self-service or manage credentials and tokens for you. |
 | No services, actions, or contexts to select | Ask the administrator to review active grants, group membership, and execution contexts. |

@@ -1126,13 +1126,17 @@ top-level navigation that carries the code, cancel, an answered request, the
 **Account** list for a person without self-service changing only at the code
 exchange, an administrator's **Read-only**, **Enabled** and **Remove**
 against the refresh token, a restriction surviving the person's **Remove** and
-being reused by the next approval, the auditor's view, and a reload from the
+being reused by the next approval, the auditor's view, a second account
+signing in under an open request (nothing is sent for the account that is no
+longer shown, and the Broker's CSRF refusal is not replayed), and a reload from the
 **System** page that narrows a registration: the notice naming the ended
 tokens, and pending requests answering as invalid for **Approve** and
-**Cancel** once their redirect address is removed. `tests/applications.spec.ts`
+**Cancel** once their redirect address is removed. Its last test asserts that
+no `Referer` carries the request ID, which holds only while the Broker serves
+the portal document with `Referrer-Policy: no-referrer`. `tests/applications.spec.ts`
 uses mocked browser contracts for what a real Broker does not reach
 deterministically: each denial reason, a refused approval, expiry between read
-and decision, the double-submit guard, the Microsoft sign-in start, a session
+and decision, the double-submit guard, a rotated CSRF token, the Microsoft sign-in start, a session
 ending on the page, phone width, the list's empty and hidden states, stale
 versions, an unregistered application and a failed token step after a reload.
 The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
