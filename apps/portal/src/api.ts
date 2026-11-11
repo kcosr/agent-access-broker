@@ -196,6 +196,11 @@ async function authRequest<T>(path: string, init: RequestInit = {}, session?: Se
 }
 
 async function managementRequest<T>(path: string, init: RequestInit = {}, session?: Session): Promise<T> {
+  return (await managementEnvelope<T>(path, init, session)).result;
+}
+
+/** A successful management envelope: the result and the principal the broker answered for. */
+async function managementEnvelope<T>(path: string, init: RequestInit = {}, session?: Session): Promise<{ result: T; principal: string }> {
   const body = init.body ?? null;
   const response = await fetch(path, {
     ...init,
@@ -216,7 +221,7 @@ async function managementRequest<T>(path: string, init: RequestInit = {}, sessio
       envelope?.details && typeof envelope.details === "object" ? envelope.details : undefined
     );
   }
-  return envelope.result;
+  return { result: envelope.result, principal: envelope.principal };
 }
 
 async function discoveryRequest<T>(path: string): Promise<T> {
@@ -812,10 +817,15 @@ export const brokerApi = {
     ),
   // The caller-filtered runtime catalog. Rendered auth descriptions are not needed.
   routeCatalog: () => discoveryRequest<RouteCatalog>("/v1/spec/catalog?auth=omit"),
-  applicationAuthorization: (session: Session, requestId: string) =>
-    managementRequest<ApplicationAuthorization>(`/v1/applications/authorizations/${enc(requestId)}`, { cache: "no-store" }, session),
-  decideApplicationAuthorization: (session: Session, requestId: string, decision: ApplicationDecision["decision"]) =>
-    managementRequest<ApplicationDecision>(`/v1/applications/authorizations/${enc(requestId)}/decision`, { method: "POST", cache: "no-store", body: JSON.stringify({ decision }) }, session),
+  /** The request, with the account the broker showed it to (the envelope's principal). */
+  applicationAuthorization: async (session: Session, requestId: string): Promise<ApplicationAuthorization> => {
+    const { result, principal } = await managementEnvelope<Omit<ApplicationAuthorization, "principal">>(`/v1/applications/authorizations/${enc(requestId)}`, { cache: "no-store" }, session);
+    if (typeof principal !== "string" || !principal) throw new ApiError("The broker did not say which account the request was shown to.", 502);
+    return { ...result, principal };
+  },
+  /** `principalId` is the account the page displayed; the broker refuses a decision from any other session. */
+  decideApplicationAuthorization: (session: Session, requestId: string, decision: ApplicationDecision["decision"], principalId: string) =>
+    managementRequest<ApplicationDecision>(`/v1/applications/authorizations/${enc(requestId)}/decision`, { method: "POST", cache: "no-store", body: JSON.stringify({ decision, principalId }) }, session),
   applicationAccess: (session: Session) =>
     managementRequest<{ access: ApplicationAccess[] }>("/v1/applications/access", { cache: "no-store" }, session).then((result) => result.access),
   removeApplicationAccess: (session: Session, accessId: string) =>

@@ -38,6 +38,8 @@ function newModel() {
     csrf: "csrf-fixture",
     /** Runs when a decision arrives, before the Broker checks it. */
     beforeDecision: null as null | (() => void),
+    /** Runs when the request is read, before the Broker answers it. */
+    beforeRead: null as null | (() => void),
     role: "user" as PrincipalRole,
     selfServiceEnabled: false,
     authorization: { applicationId: "example-runner", applicationName: "Example Runner", connect: "read_write", readOnly: false, canConnect: true, denialReason: null, expiresAt: "2099-01-01T00:10:00Z" } as ApplicationAuthorization | null,
@@ -51,7 +53,7 @@ function newModel() {
     /** Fails the next administrator change with a stale version, after another administrator's change. */
     adminConflict: false,
     authorizationReads: 0,
-    decisions: [] as { decision: unknown; csrf: string | null }[],
+    decisions: [] as { decision: unknown; csrf: string | null; principal: unknown }[],
     writes: [] as { method: string; path: string; query: string; body: unknown }[],
     logins: [] as unknown[],
     callbacks: [] as { url: string; method: string; navigation: boolean; resourceType: string; mainFrame: boolean }[],
@@ -116,13 +118,17 @@ async function fixture(page: Page, configure: (model: Model) => void = () => und
     if (path === "/v1/me") return route.fulfill(ok({ serviceLimits: [] }));
     if (path === `/v1/applications/authorizations/${REQUEST_ID}`) {
       model.authorizationReads += 1;
-      return route.fulfill(model.authorization ? ok(model.authorization) : invalid);
+      model.beforeRead?.();
+      // The envelope names the account the Broker read the request for.
+      return route.fulfill(model.authorization ? { json: { ok: true, principal: model.account, result: model.authorization } } : invalid);
     }
     if (path === `/v1/applications/authorizations/${REQUEST_ID}/decision`) {
       model.beforeDecision?.();
-      model.decisions.push({ decision: body?.decision, csrf: request.headers()["x-csrf-token"] ?? null });
-      // As the Broker does: a CSRF token belongs to one session.
+      model.decisions.push({ decision: body?.decision, csrf: request.headers()["x-csrf-token"] ?? null, principal: body?.principalId });
+      // As the Broker does: a CSRF token belongs to one session, and a decision names the account it was shown to.
       if (request.headers()["x-csrf-token"] !== model.csrf) return route.fulfill(refusal(403, "csrf_invalid", "csrf token is invalid"));
+      if (typeof body?.principalId !== "string") return route.fulfill(refusal(400, "input_invalid", "request body requires decision (approve or cancel) and principalId"));
+      if (body.principalId !== model.account) return route.fulfill(refusal(409, "version_conflict", "the signed-in account is not the one this request was shown to; read the request again"));
       const decision = String(body?.decision);
       return route.fulfill(model.decide ? await model.decide(decision) : ok({ decision, redirectTo: callbackUrl(decision) }));
     }
@@ -206,7 +212,7 @@ test.describe("approval page", () => {
     await expect(page.getByText(REQUEST_ID)).toHaveCount(0);
     await request.getByRole("button", { name: "Approve", exact: true }).click();
     await expectReturnedToApplication(page, model, "approve");
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }]);
     expectNothingLeaked(model);
   });
 
@@ -219,7 +225,7 @@ test.describe("approval page", () => {
     await request.getByRole("button", { name: "Cancel", exact: true }).click();
     await expectReturnedToApplication(page, model, "cancel");
     expect(new URL(page.url()).searchParams.get("error")).toBe("access_denied");
-    expect(model.decisions).toEqual([{ decision: "cancel", csrf: "csrf-fixture" }]);
+    expect(model.decisions).toEqual([{ decision: "cancel", csrf: "csrf-fixture", principal: "alex" }]);
     expectNothingLeaked(model);
   });
 
@@ -239,7 +245,7 @@ test.describe("approval page", () => {
       await expect(request.getByRole("button")).toHaveText(["Return to Example Runner", "Use a different account"]);
       await request.getByRole("button", { name: "Return to Example Runner", exact: true }).click();
       await expectReturnedToApplication(page, model, "cancel");
-      expect(model.decisions).toEqual([{ decision: "cancel", csrf: "csrf-fixture" }]);
+      expect(model.decisions).toEqual([{ decision: "cancel", csrf: "csrf-fixture", principal: "alex" }]);
       expectNothingLeaked(model);
     });
   }
@@ -330,7 +336,7 @@ test.describe("approval page", () => {
     expect(model.decisions).toHaveLength(1);
     release();
     await expectReturnedToApplication(page, model, "approve");
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }]);
   });
 
   test("a failed answer can be tried again", async ({ page }) => {
@@ -406,7 +412,7 @@ test.describe("approval page", () => {
     // Only a new, explicit answer on the page that names the new account is sent.
     await request.getByRole("button", { name: "Approve", exact: true }).click();
     await expectReturnedToApplication(page, model, "approve");
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-sam" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-sam", principal: "sam" }]);
     expectNothingLeaked(model);
   });
 
@@ -421,13 +427,47 @@ test.describe("approval page", () => {
     await expect(request).toContainText("Sam Example · sam");
     await expect(request.getByRole("status")).toContainText("You are now signed in as a different account than this page showed. Nothing was sent.");
     // The one decision that was sent carried the first account's token and was refused; none followed.
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }]);
     expect(model.callbacks).toEqual([]);
     await expect(request.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
     await request.getByRole("button", { name: "Cancel", exact: true }).click();
     await expectReturnedToApplication(page, model, "cancel");
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }, { decision: "cancel", csrf: "csrf-sam" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }, { decision: "cancel", csrf: "csrf-sam", principal: "sam" }]);
     expectNothingLeaked(model);
+  });
+
+  test("a decision for the displayed account is refused under another account's session and never replayed", async ({ page }) => {
+    const model = await fixture(page);
+    await page.goto(`${assets.baseUrl}${CONSENT_PATH}`);
+    const request = page.getByRole("main", { name: "Application request", exact: true });
+    await expect(request).toContainText("Alex Example · alex");
+    // The other account's session accepts the CSRF token, so only the named account stops the decision.
+    model.beforeDecision = () => { model.account = "sam"; model.beforeDecision = null; };
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(request).toContainText("Sam Example · sam");
+    await expect(request.getByRole("status")).toContainText("You are now signed in as a different account than this page showed. Nothing was sent.");
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }]);
+    expect(model.callbacks).toEqual([]);
+    // The new answer names the account now shown.
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expectReturnedToApplication(page, model, "approve");
+    expect(model.decisions[1]).toEqual({ decision: "approve", csrf: "csrf-fixture", principal: "sam" });
+    expectNothingLeaked(model);
+  });
+
+  test("a request read for another account than the portal's session is shown for that account only", async ({ page }) => {
+    const model = await fixture(page);
+    // The sign-in changes between the portal's session read and its read of the request.
+    model.beforeRead = () => { model.account = "sam"; model.csrf = "csrf-sam"; model.beforeRead = null; };
+    await page.goto(`${assets.baseUrl}${CONSENT_PATH}`);
+    const request = page.getByRole("main", { name: "Application request", exact: true });
+    await expect(request).toContainText("Sam Example · sam");
+    await expect(request).not.toContainText("alex");
+    await expect(request.getByRole("status")).toContainText("You are now signed in as a different account than this page showed.");
+    expect(model.decisions).toEqual([]);
+    await request.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expectReturnedToApplication(page, model, "cancel");
+    expect(model.decisions).toEqual([{ decision: "cancel", csrf: "csrf-sam", principal: "sam" }]);
   });
 
   test("a rotated CSRF token asks the same account again instead of resending", async ({ page }) => {
@@ -438,13 +478,13 @@ test.describe("approval page", () => {
     await request.getByRole("button", { name: "Approve", exact: true }).click();
     await expect(request.getByRole("status")).toHaveText("Your sign-in was refreshed and nothing was sent. Check the request and choose again.");
     await expect(request).toContainText("Alex Example · alex");
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }]);
     expect(model.callbacks).toEqual([]);
     // The request was read again for the answer that follows.
     expect(model.authorizationReads).toBe(2);
     await request.getByRole("button", { name: "Approve", exact: true }).click();
     await expectReturnedToApplication(page, model, "approve");
-    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }, { decision: "approve", csrf: "csrf-rotated" }]);
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture", principal: "alex" }, { decision: "approve", csrf: "csrf-rotated", principal: "alex" }]);
   });
 
   test("a person on the wrong account can switch without leaving the request", async ({ page }) => {

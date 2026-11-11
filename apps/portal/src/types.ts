@@ -862,6 +862,11 @@ export type ApplicationDenialReason = "connecting_disabled" | "access_disabled" 
 
 /** A pending request from an application to act as the signed-in person. */
 export type ApplicationAuthorization = {
+  /**
+   * The account the broker showed the request to: the `principal` of the
+   * read's envelope. The page displays it and sends it back with the decision.
+   */
+  principal: string;
   applicationId: string;
   applicationName: string;
   connect: ApplicationConnectLevel;

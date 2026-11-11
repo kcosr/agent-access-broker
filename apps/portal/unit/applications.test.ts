@@ -32,7 +32,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const REQUEST_ID = "request-id-fixture-".padEnd(43, "x");
 const session: Session = { authenticated: true, principal: "alex", displayName: "Alex Example", role: "user", selfServiceEnabled: false, csrfHeader: "x-csrf-token", csrfToken: "fixture-csrf" };
-const request: ApplicationAuthorization = { applicationId: "example-runner", applicationName: "Example Runner", connect: "read_write", readOnly: false, canConnect: true, denialReason: null, expiresAt: "2026-01-01T00:10:00Z" };
+const request: ApplicationAuthorization = { principal: "alex", applicationId: "example-runner", applicationName: "Example Runner", connect: "read_write", readOnly: false, canConnect: true, denialReason: null, expiresAt: "2026-01-01T00:10:00Z" };
 const access: ApplicationAccess = {
   accessId: "11111111-2222-4333-8444-555555555555", principalId: "alex", applicationId: "example-runner", applicationName: "Example Runner", applicationAvailable: true,
   connect: "read_write", enabled: true, readOnly: false, effectiveReadOnly: false, version: 3, connected: true,
@@ -81,7 +81,7 @@ describe("authorization requests", () => {
   });
 
   test("a decision refused for a changed session is recognized, so it is never sent again by itself", () => {
-    for (const [status, reasonCode] of [[403, "csrf_invalid"], [401, "identity_required"], [401, "broker_token_expired"], [401, undefined], [403, "broker_token_revoked"], [403, "password_change_required"]] as const) {
+    for (const [status, reasonCode] of [[409, "version_conflict"], [403, "csrf_invalid"], [401, "identity_required"], [401, "broker_token_expired"], [401, undefined], [403, "broker_token_revoked"], [403, "password_change_required"]] as const) {
       expect(decisionSessionChanged(new ApiError("refused", status, reasonCode)), String(reasonCode)).toBe(true);
     }
     for (const error of [new ApiError("denied", 403, "application_access_denied"), new ApiError("denied", 403, "management_denied"), new ApiError("gone", 404, "application_authorization_invalid"), new ApiError("down", 503, "audit_unavailable"), new Error("network")]) {
@@ -144,11 +144,18 @@ describe("the approval page", () => {
   });
 
   test("says when nothing was sent and the answer is needed again", () => {
-    const changed = card({ session: { ...session, principal: "sam", displayName: "Sam Example" }, notice: { tone: "warning", text: "You are now signed in as a different account than this page showed." } });
+    const changed = card({ request: { ...request, principal: "sam" }, session: { ...session, principal: "sam", displayName: "Sam Example" }, notice: { tone: "warning", text: "You are now signed in as a different account than this page showed." } });
     expect(changed).toMatch(/<div class="wb-banner[^"]*" role="status">.*You are now signed in as a different account than this page showed\./s);
     expect(changed).toContain("Sam Example · ");
     expect(changed).toContain(">sam</span>");
     expect(card()).not.toContain("wb-banner");
+  });
+
+  test("shows the account the request was read for, with a name only when the session is that account", () => {
+    const other = card({ request: { ...request, principal: "sam" } });
+    expect(other).toContain(">sam</span>");
+    expect(other).not.toContain("Alex Example");
+    expect(other).not.toContain(">alex</span>");
   });
 
   test("an invalid request offers no way onward", () => {
@@ -287,14 +294,14 @@ describe("a reload's application tokens", () => {
 });
 
 describe("the API client", () => {
-  const ok = () => vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ ok: true, result: { access: [] } }))));
+  const ok = () => vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ ok: true, principal: "alex", result: { access: [] } }))));
 
   test("uses the canonical routes, CSRF on every request and the current version on administrator changes", async () => {
     const fetch = ok();
     vi.stubGlobal("fetch", fetch);
     await brokerApi.applicationAuthorization(session, REQUEST_ID);
-    await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "approve");
-    await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "cancel");
+    await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "approve", "alex");
+    await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "cancel", "user/1");
     await brokerApi.applicationAccess(session);
     await brokerApi.removeApplicationAccess(session, "access/1");
     await brokerApi.adminApplicationAccess(session, "user/1");
@@ -303,8 +310,8 @@ describe("the API client", () => {
     await brokerApi.adminRemoveApplicationAccess(session, "user/1", "access/1", 5);
     expect(fetch.mock.calls.map(([url, init]) => [url, init.method ?? "GET", init.body && JSON.parse(init.body)])).toEqual([
       [`/v1/applications/authorizations/${REQUEST_ID}`, "GET", undefined],
-      [`/v1/applications/authorizations/${REQUEST_ID}/decision`, "POST", { decision: "approve" }],
-      [`/v1/applications/authorizations/${REQUEST_ID}/decision`, "POST", { decision: "cancel" }],
+      [`/v1/applications/authorizations/${REQUEST_ID}/decision`, "POST", { decision: "approve", principalId: "alex" }],
+      [`/v1/applications/authorizations/${REQUEST_ID}/decision`, "POST", { decision: "cancel", principalId: "user/1" }],
       ["/v1/applications/access", "GET", undefined],
       ["/v1/applications/access/access%2F1", "DELETE", undefined],
       ["/v1/admin/principals/user%2F1/application-access", "GET", undefined],
@@ -332,7 +339,7 @@ describe("the API client", () => {
 
   test("a refused approval, an invalid request and a stale version keep their status, reason and details", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "application_access_denied", error: { message: "application access denied" }, details: { denialReason: "connecting_disabled" } }), { status: 403 })));
-    const refused = await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "approve").catch((error: unknown) => error);
+    const refused = await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "approve", "alex").catch((error: unknown) => error);
     expect(refused).toMatchObject({ status: 403, reasonCode: "application_access_denied", details: { denialReason: "connecting_disabled" } });
     expect(refusedApprovalReason(refused)).toBe("connecting_disabled");
     expect((refused as Error).message).not.toContain(REQUEST_ID);
@@ -342,6 +349,22 @@ describe("the API client", () => {
     expect((invalid as ApiError).details).toBeUndefined();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "version_conflict", error: { message: "version conflict" } }), { status: 409 })));
     await expect(brokerApi.adminUpdateApplicationAccess(session, "alex", access.accessId, { enabled: false, expectedVersion: 1 })).rejects.toMatchObject({ status: 409, reasonCode: "version_conflict" });
+  });
+
+  test("the request carries the account the broker showed it to, from the read's envelope", async () => {
+    const { principal: _principal, ...result } = request;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, principal: "sam", result }))));
+    await expect(brokerApi.applicationAuthorization(session, REQUEST_ID)).resolves.toEqual({ ...request, principal: "sam" });
+    // Without it the page could not say, or send, whom the request was shown to.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, result }))));
+    await expect(brokerApi.applicationAuthorization(session, REQUEST_ID)).rejects.toMatchObject({ status: 502 });
+  });
+
+  test("a decision for another account than the signed-in one is a conflict that is not replayed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, reasonCode: "version_conflict", error: { message: "the signed-in account is not the one this request was shown to; read the request again" } }), { status: 409 })));
+    const conflict = await brokerApi.decideApplicationAuthorization(session, REQUEST_ID, "approve", "alex").catch((error: unknown) => error);
+    expect(conflict).toMatchObject({ status: 409, reasonCode: "version_conflict" });
+    expect(decisionSessionChanged(conflict)).toBe(true);
   });
 
   test("application queries are isolated by viewer, request and principal", () => {

@@ -566,8 +566,9 @@ test("an account switched under an open request is shown before anything is sent
   const admin = await administrator.newPage();
   await admin.goto(`${baseUrl}/ui/admin/principals`);
   const accessOf = (principal: string) => manage<{ access: ApplicationAccess[] }>(admin, `/v1/admin/principals/${principal}/application-access`).then((result) => result.access.filter((item) => item.applicationId === NOTES.id));
-  const decisions: string[] = [];
-  page.on("request", (request) => { if (request.url().endsWith("/decision")) decisions.push(request.method()); });
+  /** The account each decision named, as the page sent it. */
+  const decisions: unknown[] = [];
+  page.on("request", (request) => { if (request.url().endsWith("/decision")) decisions.push(request.postDataJSON().principalId); });
   const visited: string[] = [];
   page.on("request", (request) => { if (request.url().startsWith("https://")) visited.push(request.url()); });
   const warning = "You are now signed in as a different account than this page showed. Nothing was sent. Check “Signed in as” before you answer.";
@@ -600,15 +601,43 @@ test("an account switched under an open request is shown before anything is sent
   expect(await refusal.json()).toMatchObject({ ok: false, reasonCode: "csrf_invalid" });
   await expect(consent(page)).toContainText("Sam Example · sam");
   await expect(consent(page).getByRole("status")).toHaveText(warning);
-  expect(decisions).toEqual(["POST"]);
+  expect(decisions).toEqual([USER]);
   // Nobody was connected and the browser went nowhere.
   expect(visited).toEqual([]);
   expect(await accessOf("sam")).toEqual([]);
   expect(await accessOf(USER)).toEqual([]);
-  // Sam's own explicit answer on the page that names Sam is what counts.
+
+  // 3. The same race, but the decision arrives with Sam's own valid CSRF token: only the account it names stops it.
+  expect(await signIn(page, USER, USER_PASSWORD)).not.toBeNull();
+  const third = authorizationRequest(NOTES);
+  await page.goto(third.url);
+  await expect(consent(page)).toContainText("Alex Example · alex");
+  await page.route("**/v1/applications/authorizations/*/decision", async (route) => {
+    const sam = await signIn(page, "sam", USER_PASSWORD);
+    expect(sam).not.toBeNull();
+    // The page's decision, unchanged, reaches the real Broker under Sam's session: Sam's cookie and Sam's CSRF token.
+    const request = route.request();
+    const response = await page.request.post(request.url(), {
+      headers: { Origin: baseUrl, "Content-Type": "application/json", "X-Agent-Access-Request-Id": randomUUID(), [sam!.csrfHeader]: sam!.csrfToken },
+      data: request.postData()!
+    });
+    await route.fulfill({ response });
+  }, { times: 1 });
+  const conflicted = page.waitForResponse((response) => response.url().endsWith("/decision"));
+  await consent(page).getByRole("button", { name: "Approve", exact: true }).click();
+  const conflict = await conflicted;
+  expect(await conflict.json()).toMatchObject({ ok: false, reasonCode: "version_conflict" });
+  expect(conflict.status()).toBe(409);
+  await expect(consent(page)).toContainText("Sam Example · sam");
+  await expect(consent(page).getByRole("status")).toHaveText(warning);
+  expect(decisions).toEqual([USER, USER]);
+  expect(visited).toEqual([]);
+  expect(await accessOf("sam")).toEqual([]);
+  expect(await accessOf(USER)).toEqual([]);
+  // Sam's own explicit answer on the page that names Sam is what counts; the refused request stayed pending.
   const cancel = consent(page).getByRole("button", { name: "Cancel", exact: true });
-  expect((await returnedTo(page, second, () => cancel.click())).get("error")).toBe("access_denied");
-  expect(decisions).toEqual(["POST", "POST"]);
+  expect((await returnedTo(page, third, () => cancel.click())).get("error")).toBe("access_denied");
+  expect(decisions).toEqual([USER, USER, "sam"]);
   expect(await accessOf("sam")).toEqual([]);
   await admin.close();
   await context.close();
@@ -658,11 +687,9 @@ test("a reload that narrows the registration ends its tokens, and a request for 
   await admin.close();
 });
 
-// DEPENDS ON A BACKEND CHANGE: the Broker must serve the portal document with
-// `Referrer-Policy: no-referrer`. Until it does, this test fails at the
-// Referer assertions: the browser sends the page's own address, which
-// contains the request ID, as the Referer of the page's same-origin requests.
-// It is last in the file so that its failure skips nothing.
+// The request ID is in the page's address. The Broker serves portal documents
+// with `Referrer-Policy: no-referrer`; without it the browser would send that
+// address as the Referer of the page's own asset and API requests.
 test("the request ID never travels in a Referer header", async ({ browser }) => {
   const context = await newContext(browser);
   const page = await context.newPage();

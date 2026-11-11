@@ -70,9 +70,10 @@ export function InvalidRequest() {
 }
 
 /**
- * The account the last decision on this page was attempted for. A session
- * for another account remounts the page; the page that replaces it reads
- * this to say that the account changed.
+ * The account this page last displayed a request to, when the browser's
+ * session turned out to be another's. A session for another account remounts
+ * the page; the page that replaces it reads this to say that the account
+ * changed.
  */
 let attemptedAs: { requestId: string; principal: string | undefined } | null = null;
 
@@ -108,33 +109,55 @@ function PendingRequest({ requestId }: { requestId: string }) {
     return () => window.removeEventListener("pageshow", restored);
   }, [refetch]);
 
+  // The account the request was shown to is the one the broker read it for.
+  // The page displays that account and decides only for it.
+  const displayed = query.data?.principal;
+
   /**
    * Reads the browser's session as it is now and makes the portal show it.
    * Returns it only when it is still the account this page displays; any
    * other account, or none, re-renders the page (or the sign-in page) for a
    * fresh, explicit answer.
    */
-  async function displayedAccountSession() {
+  async function displayedAccountSession(account: string) {
+    attemptedAs = { requestId, principal: account };
     const current = await brokerApi.session();
     if (!current.authenticated) setSignInNotice({ tone: "info", text: "Sign in again to answer the application’s request." });
     setSession(current);
-    return current.authenticated && !current.passwordChangeRequired && current.principal === session.principal ? current : null;
+    return current.authenticated && !current.passwordChangeRequired && current.principal === account ? current : null;
   }
+
+  // A request read for another account than the session the portal holds
+  // (the sign-in changed between the two reads) is a changed account too:
+  // nothing is offered until the portal has adopted the browser's current
+  // session and read the request for it.
+  const disagrees = displayed !== undefined && displayed !== session.principal;
+  const resyncing = useRef(false);
+  const [resync, setResync] = useState<{ attempt: number; failure: unknown }>({ attempt: 0, failure: null });
+  useEffect(() => {
+    if (!disagrees || resyncing.current) return;
+    resyncing.current = true;
+    displayedAccountSession(session.principal ?? "")
+      .then(() => refetch())
+      .catch((failure: unknown) => setResync((current) => ({ ...current, failure })))
+      .finally(() => { resyncing.current = false; });
+    // Only a new disagreement or a retry starts this; the functions it calls are this render's.
+  }, [disagrees, displayed, resync.attempt]);
 
   // A decision is sent at most once per click, only for the account shown,
   // and never replayed: a retry after a CSRF or session failure could answer
   // for whoever the browser is signed in as by then.
   async function decide(decision: Decision) {
-    if (deciding.current) return;
+    if (deciding.current || !displayed || disagrees) return;
     deciding.current = true;
     setPending(decision);
     setError(null);
     setNotice(null);
-    attemptedAs = { requestId, principal: session.principal };
     try {
-      const current = await displayedAccountSession();
+      const current = await displayedAccountSession(displayed);
       if (current) {
-        const result = await brokerApi.decideApplicationAuthorization(current, requestId, decision);
+        // The broker refuses the decision (409) unless its session is the displayed account's.
+        const result = await brokerApi.decideApplicationAuthorization(current, requestId, decision, displayed);
         const target = applicationRedirectTarget(result.redirectTo);
         if (!target) throw new Error("The broker returned an address this page cannot open. Go back to the application and start again.");
         attemptedAs = null;
@@ -150,7 +173,7 @@ function PendingRequest({ requestId }: { requestId: string }) {
       else if (decisionSessionChanged(failure)) {
         // Show who is signed in now and what the request says for them; the person answers again.
         try {
-          if (await displayedAccountSession()) {
+          if (await displayedAccountSession(displayed)) {
             await refetch();
             setNotice(SESSION_REFRESHED);
           }
@@ -164,15 +187,19 @@ function PendingRequest({ requestId }: { requestId: string }) {
   }
 
   if (answered || (query.isError && authorizationInvalid(query.error))) return <InvalidRequest />;
-  if (query.isError) {
+  if (query.isError || resync.failure) {
+    const retry = () => {
+      setResync((current) => ({ attempt: current.attempt + 1, failure: null }));
+      void refetch();
+    };
     return (
       <>
         <Title>Application request</Title>
-        <ErrorState compact title="Couldn’t load the request" error={query.error} onRetry={() => void refetch()} retrying={query.isFetching} />
+        <ErrorState compact title="Couldn’t load the request" error={query.error ?? resync.failure} onRetry={retry} retrying={query.isFetching} />
       </>
     );
   }
-  if (!query.data) {
+  if (!query.data || disagrees) {
     return (
       <>
         <Title>Application request</Title>
@@ -196,13 +223,16 @@ function PendingRequest({ requestId }: { requestId: string }) {
   );
 }
 
-/** Who is signed in: the name when there is one, then the principal ID. */
-function SignedInAs({ session }: { session: Session }) {
-  const name = identityDisplayName(session.displayName);
+/**
+ * The account the request was shown to: its principal ID, with the session's
+ * display name only while the session is that same account.
+ */
+function SignedInAs({ principal, session }: { principal: string; session: Session }) {
+  const name = session.principal === principal ? identityDisplayName(session.displayName) : null;
   return (
     <>
       {name ? `${name} · ` : null}
-      <span className="wb-num">{session.principal}</span>
+      <span className="wb-num">{principal}</span>
     </>
   );
 }
@@ -235,7 +265,7 @@ export function ConsentCard({
 }) {
   const name = request.applicationName;
   const busy = pending !== null || leaving;
-  const signedInAs = { label: "Signed in as", value: <SignedInAs session={session} /> };
+  const signedInAs = { label: "Signed in as", value: <SignedInAs principal={request.principal} session={session} /> };
   return (
     <>
       <Title>{denial === null ? `Connect ${name}?` : `You can’t connect ${name}`}</Title>
