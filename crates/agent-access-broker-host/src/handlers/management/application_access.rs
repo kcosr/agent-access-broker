@@ -58,6 +58,9 @@ fn settings(access: &ApplicationAccessRecord) -> Value {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DecisionBody {
     decision: ConsentDecision,
+    /// The account the page showed the request to. The decision is refused
+    /// when another account's session sends it.
+    principal_id: String,
 }
 
 #[derive(Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -184,15 +187,32 @@ pub(crate) async fn authorization_decide(
         Ok(context) => context,
         Err(response) => return *response,
     };
-    let Some(DecisionBody { decision }) = parse_body(&body) else {
+    let Some(DecisionBody {
+        decision,
+        principal_id,
+    }) = parse_body(&body)
+    else {
         return invalid_input(
             &context,
             operation,
             None,
-            "request body requires decision: approve or cancel",
+            "request body requires decision (approve or cancel) and principalId",
         )
         .await;
     };
+    // The page decided for the account it displayed. A session that has
+    // since become another account's must read the request again.
+    if principal_id != context.identity.principal {
+        return management_context_error_response(
+            &context,
+            StatusCode::CONFLICT,
+            operation,
+            ReasonCode::VersionConflict,
+            "the signed-in account is not the one this request was shown to; read the request again",
+            Some(json!({"decision": decision})),
+        )
+        .await;
+    }
     let Some(hasher) = context.snapshot.runtime.broker_token_hasher().cloned() else {
         return hasher_unavailable(&context, operation).await;
     };

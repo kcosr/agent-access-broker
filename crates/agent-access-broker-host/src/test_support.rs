@@ -754,6 +754,7 @@ pub struct ShutdownReport {
     unfinished_admissions: usize,
     unfinished_operations: usize,
     unfinished_command_processes: usize,
+    unfinished_application_owners: usize,
     forced: bool,
     audit_error: Option<String>,
 }
@@ -776,6 +777,12 @@ impl ShutdownReport {
         self.unfinished_command_processes
     }
 
+    /// Application token mint, revocation or reconciliation owners still
+    /// running when the shutdown drain ended.
+    pub fn unfinished_application_owners(&self) -> usize {
+        self.unfinished_application_owners
+    }
+
     /// Whether listeners or lifecycle tasks were cut off at the shutdown
     /// deadline.
     pub fn was_forced(&self) -> bool {
@@ -793,6 +800,7 @@ impl ShutdownReport {
         self.unfinished_operations == 0
             && self.unfinished_admissions == 0
             && self.unfinished_command_processes == 0
+            && self.unfinished_application_owners == 0
             && !self.forced
             && self.audit_error.is_none()
     }
@@ -804,6 +812,7 @@ impl From<DrainReport> for ShutdownReport {
             unfinished_admissions: report.unfinished_admissions,
             unfinished_operations: report.unfinished_operations,
             unfinished_command_processes: report.unfinished_command_processes,
+            unfinished_application_owners: report.unfinished_application_owners,
             forced: report.forced,
             audit_error: report.audit_error,
         }

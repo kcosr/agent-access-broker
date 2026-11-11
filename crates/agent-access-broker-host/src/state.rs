@@ -59,6 +59,9 @@ pub(crate) struct ReloadableState {
     /// Per-(principal, service) invocation windows; history survives reloads.
     pub(crate) shared_invocations: Arc<InvocationLimiter>,
     pub(crate) admission_owners: Arc<crate::admission::AdmissionRegistry>,
+    /// Application token mint, revocation and reconciliation owners, drained
+    /// through their audit before the audit writers close.
+    pub(crate) application_owners: Arc<crate::owner_drain::OwnerDrain>,
     pub(crate) shared_spool: Arc<UploadSpoolBudgets>,
     pub(crate) operations: Arc<crate::operations::OperationRegistry>,
     pub(crate) body_hard_cap: usize,
@@ -777,6 +780,7 @@ impl ReloadableState {
                     .aggregate_limits(),
             )),
             admission_owners: Arc::new(crate::admission::AdmissionRegistry::default()),
+            application_owners: Arc::new(crate::owner_drain::OwnerDrain::default()),
             shared_spool: Arc::new(UploadSpoolBudgets::new()),
             operations: Arc::new(crate::operations::OperationRegistry::default()),
             body_hard_cap,

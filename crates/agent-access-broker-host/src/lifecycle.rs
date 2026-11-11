@@ -267,6 +267,10 @@ pub(crate) struct DrainReport {
     /// process and returned their budget permit when the command drain
     /// ended.
     pub(crate) unfinished_command_processes: usize,
+    /// Application token mint, revocation or reconciliation owners still
+    /// running when their drain ended: their store work may commit without
+    /// its audit record.
+    pub(crate) unfinished_application_owners: usize,
     /// Whether listeners or lifecycle tasks were cut off at the shutdown
     /// deadline.
     pub(crate) forced: bool,
@@ -733,6 +737,16 @@ async fn drain_lifecycle(
         .admission_owners
         .drain(remaining.max(SHUTDOWN_DRAIN_FLOOR))
         .await;
+    // Application token owners have no preflight record: their completion
+    // audit is the only one, so they finish before the audit writers close.
+    let unfinished_application_owners = state
+        .application_owners
+        .drain(
+            remaining_shutdown_time(&coordinator, shutdown_timeout)
+                .unwrap_or_default()
+                .max(SHUTDOWN_DRAIN_FLOOR),
+        )
+        .await;
     let remaining =
         remaining_shutdown_time(&coordinator, shutdown_timeout).unwrap_or(SHUTDOWN_DRAIN_FLOOR);
     let audit_error = match state.shutdown_audit(remaining).await {
@@ -750,6 +764,7 @@ async fn drain_lifecycle(
         unfinished_admissions,
         unfinished_operations,
         unfinished_command_processes,
+        unfinished_application_owners,
         forced: timed_out || lifecycle_timed_out,
         audit_error,
     })
