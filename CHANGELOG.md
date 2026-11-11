@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
   `RouteAccess` exhaustively must handle the new variants, and `BrokerConfig`
   has a new `applications` field. See
   [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
 
 - **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
   Back up first and upgrade Broker, CLI and portal together; rollback requires
@@ -205,6 +206,7 @@ All notable changes to this project are documented in this file.
   administrators manage each application as a row of the person's **Access
   paths**; the **Reload config** notice names the application tokens a reload
   ended. See [applications](docs/applications.md).
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to
   required Microsoft email, optional display name and access settings, with a
@@ -418,6 +420,7 @@ All notable changes to this project are documented in this file.
 
 - **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
   portal page makes no longer send the page's address.
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
 
 - **Building from source requires Rust 1.99 or newer.** Workspace crates declare
   `rust-version = "1.99"` and the repository pins Rust 1.99.1, so downstream
@@ -537,6 +540,7 @@ All notable changes to this project are documented in this file.
 - A browser session that expires while a portal page is open now shows the
   sign-in choices again, instead of "No browser sign-in method is enabled" until
   the page was reloaded. Signing in returns to the same page.
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
 
 - Dependency updates clear RustSec advisories in `crypto-bigint` (through
   `openidconnect`, now 4.1.0), `h2`, `pulldown-cmark`, `quinn-proto`, `rustls`,
