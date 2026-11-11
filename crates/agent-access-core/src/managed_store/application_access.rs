@@ -114,8 +114,6 @@ pub struct ApplicationAuthorizationDecision {
     /// `Some` for an approval.
     pub code: Option<String>,
     pub access: Option<ApplicationAccessRecord>,
-    /// Agent tokens a reconnect ended.
-    pub revoked_tokens: u64,
 }
 
 impl std::fmt::Debug for ApplicationAuthorizationDecision {
@@ -198,6 +196,8 @@ pub struct ApplicationTokenMint {
     pub principal_name: String,
     pub read_only: bool,
     pub expires_in_seconds: u64,
+    /// Earlier tokens of the access that a code exchange ended.
+    pub replaced_tokens: u64,
 }
 
 impl std::fmt::Debug for ApplicationTokenMint {
@@ -577,11 +577,13 @@ impl ManagedStore {
     /// current registration; a request whose application is no longer
     /// registered with the request's exact redirect URI is invalid, for an
     /// approval and a cancellation alike, so nothing is returned to an
-    /// address the operator removed. An approval connects `principal`: it
-    /// creates the access or reuses the existing one with its administrator
-    /// settings, ends its refresh token and live tokens, and issues the
-    /// one-use code. A refused approval changes nothing, so the person can
-    /// still return to the application.
+    /// address the operator removed. An approval only issues the one-use
+    /// code, for the person's existing access or, for a first approval, a
+    /// placeholder that is not yet connected. A working consent is untouched
+    /// until that code is exchanged, so an approval the application never
+    /// redeems changes nothing and expires with its code. A refused approval
+    /// changes nothing either, so the person can still return to the
+    /// application.
     pub fn decide_application_authorization(
         &self,
         hasher: &BrokerTokenHasher,
@@ -619,7 +621,6 @@ impl ManagedStore {
             parameters: pending.parameters,
             code: None,
             access: None,
-            revoked_tokens: 0,
         };
         if !approve {
             tx.commit().map_err(sql_unavailable)?;
@@ -635,22 +636,9 @@ impl ManagedStore {
             return Err(ManagedStoreError::ApplicationAccessDenied(denial));
         }
         let access_id = match existing_access(&tx, principal, &pending.application_id, &current)? {
-            Some(existing) => {
-                decision.revoked_tokens =
-                    revoke_access_tokens(&tx, &existing.access_id, principal, &current)?;
-                tx.execute(
-                    "DELETE FROM application_authorization_codes WHERE access_id = ?1",
-                    [&existing.access_id],
-                )
-                .map_err(sql_unavailable)?;
-                tx.execute(
-                    "UPDATE application_access SET refresh_token_hash = NULL, connected_at = ?2,
-                     last_used_at = NULL WHERE access_id = ?1",
-                    params![existing.access_id, current],
-                )
-                .map_err(sql_unavailable)?;
-                existing.access_id
-            }
+            // The existing consent, its tokens and its settings stay as
+            // they are until the code is exchanged.
+            Some(existing) => existing.access_id,
             None => {
                 let access_id = Uuid::new_v4().to_string();
                 tx.execute(
@@ -1175,9 +1163,25 @@ fn mint_tx(
             return refused(ApplicationGrantRefusal::RefreshTokenIdle, Some(&access));
         }
     }
-    if access.live_token_count >= APPLICATION_ACCESS_MAX_LIVE_TOKENS {
-        return refused(ApplicationGrantRefusal::TokenLimit, Some(&access));
-    }
+    // A redeemed code is the new grant: it ends the previous refresh token
+    // (replaced below), the tokens minted through it and every other code
+    // outstanding for the access. Until here an approval changed nothing.
+    let replaced_tokens = match grant {
+        ApplicationGrant::AuthorizationCode { .. } => {
+            tx.execute(
+                "DELETE FROM application_authorization_codes WHERE access_id = ?1",
+                [&access.access_id],
+            )
+            .map_err(sql_unavailable)?;
+            revoke_access_tokens(tx, &access.access_id, &access.principal_id, &current)?
+        }
+        ApplicationGrant::RefreshToken { .. } => {
+            if access.live_token_count >= APPLICATION_ACCESS_MAX_LIVE_TOKENS {
+                return refused(ApplicationGrantRefusal::TokenLimit, Some(&access));
+            }
+            0
+        }
+    };
     let read_only = terms.read_only || access.read_only;
     let mut scopes = serde_json::json!({
         "readOnly": read_only,
@@ -1215,8 +1219,8 @@ fn mint_tx(
         ApplicationGrant::AuthorizationCode { .. } => {
             let refresh_token = generate_application_secret(REFRESH_TOKEN_PREFIX);
             tx.execute(
-                "UPDATE application_access SET refresh_token_hash = ?2, last_used_at = ?3
-                 WHERE access_id = ?1",
+                "UPDATE application_access SET refresh_token_hash = ?2, connected_at = ?3,
+                 last_used_at = ?3 WHERE access_id = ?1",
                 params![access.access_id, hasher.hash(&refresh_token)?, current],
             )
             .map_err(sql_unavailable)?;
@@ -1244,6 +1248,7 @@ fn mint_tx(
         access,
         read_only,
         expires_in_seconds: terms.access_token_ttl_seconds,
+        replaced_tokens,
     }))
 }
 

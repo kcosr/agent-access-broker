@@ -48,7 +48,9 @@ pub(crate) struct ReloadableState {
     caller_security_publication: StdRwLock<()>,
     pub(crate) active_lock_set: ArcSwap<StateLockSet>,
     pub(crate) state_lock_history: Mutex<Vec<Weak<StateLockSet>>>,
-    pub(crate) policy_mutation_lock: TokioMutex<()>,
+    /// Shared so that a reload can hand its guard to the owner that finishes
+    /// a published generation after the reload's waiter is gone.
+    pub(crate) policy_mutation_lock: Arc<TokioMutex<()>>,
     pub(crate) reload_lock: TokioMutex<()>,
     pub(crate) reload_in_progress: AtomicBool,
     pub(crate) shared_ingress: Arc<IngressGuards>,
@@ -74,6 +76,10 @@ pub(crate) struct ReloadableState {
     pub(crate) microsoft_oidc_test_components: Mutex<Option<MicrosoftOidcTestComponents>>,
     #[cfg(test)]
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
+    /// Holds the next reload's application-token reconciliation owner after
+    /// publication, before its store work.
+    #[cfg(test)]
+    pub(crate) application_reconciliation_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
     #[cfg(test)]
     pub(crate) gateway_dispatch_barrier:
         Mutex<Option<(GatewayDispatchPhase, Arc<McpAdmissionBarrier>)>>,
@@ -759,7 +765,7 @@ impl ReloadableState {
             caller_security_publication: StdRwLock::new(()),
             active_lock_set: ArcSwap::from(Arc::clone(&snapshot.state_locks)),
             state_lock_history: Mutex::new(vec![Arc::downgrade(&snapshot.state_locks)]),
-            policy_mutation_lock: TokioMutex::new(()),
+            policy_mutation_lock: Arc::new(TokioMutex::new(())),
             reload_lock: TokioMutex::new(()),
             reload_in_progress: AtomicBool::new(false),
             shared_ingress: Arc::new(IngressGuards::new()),
@@ -784,6 +790,8 @@ impl ReloadableState {
             microsoft_oidc_test_components: Mutex::new(None),
             #[cfg(test)]
             mcp_admission_barrier: Mutex::new(None),
+            #[cfg(test)]
+            application_reconciliation_barrier: Mutex::new(None),
             #[cfg(test)]
             gateway_dispatch_barrier: Mutex::new(None),
             #[cfg(test)]

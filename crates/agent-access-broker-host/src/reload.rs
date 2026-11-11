@@ -26,6 +26,8 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::Instrument;
+use tracing::instrument::WithSubscriber;
 
 const MAX_RELOAD_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(300);
@@ -98,8 +100,8 @@ pub(crate) async fn start_reloadable_state(
         .await?;
     snapshot.reconcile_microsoft_oidc_provider()?;
     // A registration narrowed while the broker was down applies from the start.
-    let reconciled = snapshot.reconcile_application_tokens().await?;
-    append_application_reconciliation_audit(
+    // A failure is logged and audited; the next reload or startup retries.
+    reconcile_application_tokens(
         &snapshot,
         ApplicationReconciliationAudit {
             agent_request_id: "startup",
@@ -113,7 +115,6 @@ pub(crate) async fn start_reloadable_state(
                 agent_request_id_generated: None,
             },
         },
-        &reconciled,
     )
     .await;
     let state = ReloadableState::from_snapshot(
@@ -605,15 +606,69 @@ struct ApplicationReconciliationAudit<'a> {
     source: &'a SourceContext,
 }
 
-/// Records, once per application, the live tokens a startup or reload ended
-/// because the application's registration no longer mints them. The
-/// revocations are committed, so a failed append is logged.
-async fn append_application_reconciliation_audit(
+/// What an admitted generation's token reconciliation did.
+enum ApplicationTokenOutcome {
+    Reconciled(Vec<agent_access_core::ApplicationTokenReconciliation>),
+    /// The store work failed. Nothing was ended; the next reload or startup
+    /// runs it again.
+    Failed,
+}
+
+impl ApplicationTokenOutcome {
+    fn result_json(&self) -> Value {
+        match self {
+            Self::Reconciled(applications) => json!({
+                "status": "reconciled",
+                "applications": applications
+                    .iter()
+                    .map(|application| json!({
+                        "applicationId": application.application_id,
+                        "reason": application.reason,
+                        "revokedTokens": application.revoked_tokens,
+                    }))
+                    .collect::<Vec<_>>(),
+            }),
+            Self::Failed => json!({"status": "failed"}),
+        }
+    }
+}
+
+const APPLICATION_TOKEN_RECONCILIATION_FAILED: &str =
+    "application token reconciliation failed; it runs again at the next reload or startup";
+
+/// Ends the live application tokens the generation `snapshot` no longer
+/// mints and audits the result: one record per application whose tokens were
+/// ended, or one failure record. The caller holds the mutation fence and has
+/// already published or started `snapshot`, so a rejected or abandoned
+/// candidate never reaches this, and nothing here can reject the generation.
+async fn reconcile_application_tokens(
     snapshot: &RuntimeSnapshot,
     input: ApplicationReconciliationAudit<'_>,
-    reconciled: &[agent_access_core::ApplicationTokenReconciliation],
-) {
-    for application in reconciled {
+) -> ApplicationTokenOutcome {
+    let reconciled = match snapshot.reconcile_application_tokens().await {
+        Ok(reconciled) => reconciled,
+        Err(error) => {
+            tracing::error!(
+                event = "application_token_reconciliation_failed",
+                agentRequestId = input.agent_request_id,
+                brokerRequestId = input.broker_request_id,
+                configGeneration = snapshot.generation,
+                trigger = input.trigger,
+                reasonCode = error.reason_code().as_str(),
+                "{APPLICATION_TOKEN_RECONCILIATION_FAILED}"
+            );
+            append_application_reconciliation_record(
+                snapshot,
+                &input,
+                Decision::Error,
+                Some(error.reason_code()),
+                json!({"trigger": input.trigger, "reason": "reconciliation_failed"}),
+            )
+            .await;
+            return ApplicationTokenOutcome::Failed;
+        }
+    };
+    for application in &reconciled {
         tracing::info!(
             event = "application_tokens_reconciled",
             agentRequestId = input.agent_request_id,
@@ -624,63 +679,121 @@ async fn append_application_reconciliation_audit(
             revokedTokens = application.revoked_tokens,
             "ended application tokens the current registration no longer mints"
         );
-        let (principal, principal_subject, groups, identity_source) = match input.identity {
-            Some(identity) => (
-                identity.principal.clone(),
-                identity.principal_subject.clone(),
-                identity.groups.clone(),
-                identity.source.clone(),
-            ),
-            None => ("system".to_string(), None, vec!["system".to_string()], None),
-        };
-        let record = AuditRecord {
-            caller_id: None,
-            search_authorization: None,
-            timestamp: Utc::now().to_rfc3339(),
-            agent_request_id: input.agent_request_id.to_string(),
-            broker_request_id: input.broker_request_id.to_string(),
-            config_generation: Some(snapshot.generation),
-            policy_generation: Some(snapshot.runtime.policy_generation()),
-            principal,
-            principal_subject,
-            groups,
-            service: "broker".to_string(),
-            action: crate::handlers::management::audit_actions::APPLICATIONS_TOKENS_RECONCILED
-                .to_string(),
-            resource_scopes: ResourceScopes::new(),
-            matched_grant: None,
-            credential_mode: Some(None),
-            credential_connection: None,
-            decision: Decision::Allow,
-            reason_code: None,
-            upstream_status: None,
-            upstream_duration_ms: None,
-            object_ids: None,
-            identity_source,
-            source: input.source.clone(),
-            execution_context: None,
-            audit_inputs: Vec::new(),
-            provider_audit: Some(json!({
-                "application": {
-                    "applicationId": application.application_id,
-                    "trigger": input.trigger,
-                    "reason": application.reason,
-                    "revokedTokens": application.revoked_tokens,
-                }
-            })),
-        };
-        if let Err(error) = snapshot.runtime.append_audit_record(&record).await {
-            tracing::error!(
-                event = "application_reconciliation_audit_append_failed",
-                agentRequestId = input.agent_request_id,
-                brokerRequestId = input.broker_request_id,
-                applicationId = application.application_id.as_str(),
-                reasonCode = ReasonCode::AuditUnavailable.as_str(),
-                error = %error,
-                "application tokens were ended but the audit record is unavailable"
-            );
-        }
+        append_application_reconciliation_record(
+            snapshot,
+            &input,
+            Decision::Allow,
+            None,
+            json!({
+                "applicationId": application.application_id,
+                "trigger": input.trigger,
+                "reason": application.reason,
+                "revokedTokens": application.revoked_tokens,
+            }),
+        )
+        .await;
     }
+    ApplicationTokenOutcome::Reconciled(reconciled)
+}
+
+/// The revocations are committed (or the failure is final for this attempt),
+/// so a failed append is logged.
+async fn append_application_reconciliation_record(
+    snapshot: &RuntimeSnapshot,
+    input: &ApplicationReconciliationAudit<'_>,
+    decision: Decision,
+    reason_code: Option<ReasonCode>,
+    details: Value,
+) {
+    let (principal, principal_subject, groups, identity_source) = match input.identity {
+        Some(identity) => (
+            identity.principal.clone(),
+            identity.principal_subject.clone(),
+            identity.groups.clone(),
+            identity.source.clone(),
+        ),
+        None => ("system".to_string(), None, vec!["system".to_string()], None),
+    };
+    let record = AuditRecord {
+        caller_id: None,
+        search_authorization: None,
+        timestamp: Utc::now().to_rfc3339(),
+        agent_request_id: input.agent_request_id.to_string(),
+        broker_request_id: input.broker_request_id.to_string(),
+        config_generation: Some(snapshot.generation),
+        policy_generation: Some(snapshot.runtime.policy_generation()),
+        principal,
+        principal_subject,
+        groups,
+        service: "broker".to_string(),
+        action: crate::handlers::management::audit_actions::APPLICATIONS_TOKENS_RECONCILED
+            .to_string(),
+        resource_scopes: ResourceScopes::new(),
+        matched_grant: None,
+        credential_mode: Some(None),
+        credential_connection: None,
+        decision,
+        reason_code: reason_code.map(Into::into),
+        upstream_status: None,
+        upstream_duration_ms: None,
+        object_ids: None,
+        identity_source,
+        source: input.source.clone(),
+        execution_context: None,
+        audit_inputs: Vec::new(),
+        provider_audit: Some(json!({ "application": details })),
+    };
+    if let Err(error) = snapshot.runtime.append_audit_record(&record).await {
+        tracing::error!(
+            event = "application_reconciliation_audit_append_failed",
+            agentRequestId = input.agent_request_id,
+            brokerRequestId = input.broker_request_id,
+            reasonCode = ReasonCode::AuditUnavailable.as_str(),
+            error = %error,
+            "application token reconciliation finished but its audit record is unavailable"
+        );
+    }
+}
+
+/// What the reconciliation owner needs after the reload's waiter may be gone.
+struct ApplicationTokenFinalization {
+    snapshot: Arc<RuntimeSnapshot>,
+    agent_request_id: String,
+    broker_request_id: String,
+    identity: Option<agent_access_core::IdentityContext>,
+    source: SourceContext,
+    /// The reload's mutation fence: no token is minted and no other reload
+    /// or policy mutation starts until reconciliation and its audit are done.
+    fence: tokio::sync::OwnedMutexGuard<()>,
+    /// The reloading request's admitted capacity, when a request reloaded.
+    permit: Option<crate::ingress::guards::IngressPermit>,
+    #[cfg(test)]
+    barrier: Option<Arc<crate::state::McpBlockingBarrier>>,
+}
+
+/// Owns the reconciliation of a published generation through its store work
+/// and audit, then hands the fence back with the outcome. When the reload's
+/// waiter was cancelled, the fence is released here instead.
+async fn finalize_application_tokens(
+    input: ApplicationTokenFinalization,
+) -> (tokio::sync::OwnedMutexGuard<()>, ApplicationTokenOutcome) {
+    #[cfg(test)]
+    if let Some(barrier) = input.barrier.clone() {
+        let _ = tokio::task::spawn_blocking(move || barrier.wait()).await;
+    }
+    let outcome = reconcile_application_tokens(
+        &input.snapshot,
+        ApplicationReconciliationAudit {
+            agent_request_id: &input.agent_request_id,
+            broker_request_id: &input.broker_request_id,
+            trigger: "reload",
+            identity: input.identity.as_ref(),
+            source: &input.source,
+        },
+    )
+    .await;
+    drop(input.permit);
+    (input.fence, outcome)
 }
 
 async fn append_admin_audit(
@@ -1020,7 +1133,7 @@ impl ReloadableState {
         let started = Instant::now();
         let listener = reload_listener(trigger, &source);
         let attempted_at = Utc::now().to_rfc3339();
-        let Ok(_mutation_guard) = self.policy_mutation_lock.try_lock() else {
+        let Ok(mutation_guard) = Arc::clone(&self.policy_mutation_lock).try_lock_owned() else {
             let active = self.current();
             let reason_code = ReasonCode::ReloadInProgress;
             let errors = vec![
@@ -1247,37 +1360,6 @@ impl ReloadableState {
                         )
                         .await;
                 }
-                // Still under the mutation fence: no token is minted from
-                // either generation until the new one is published.
-                let reconciled_applications =
-                    match new_snapshot.reconcile_application_tokens().await {
-                        Ok(reconciled) => reconciled,
-                        Err(error) => {
-                            self.shutdown_candidate_audit(&new_snapshot, self.reload_timeout)
-                                .await;
-                            let failure = ReloadFailure::new(
-                                AdminDecision::Error,
-                                ReasonCode::ConfigAdmissionFailed,
-                                vec![format!("application token reconciliation failed: {error}")],
-                                Some(candidate_hash),
-                            );
-                            return self
-                                .reload_failure_response(
-                                    ReloadFailureContext {
-                                        active: active.clone(),
-                                        trigger,
-                                        attempted_at: &attempted_at,
-                                        started,
-                                        agent_request_id: &agent_request_id,
-                                        broker_request_id: &broker_request_id,
-                                        source: &source,
-                                        identity: identity.as_ref(),
-                                    },
-                                    failure,
-                                )
-                                .await;
-                        }
-                    };
                 if let Err(error) = new_snapshot.runtime.activate_oauth() {
                     self.shutdown_candidate_audit(&new_snapshot, self.reload_timeout)
                         .await;
@@ -1308,25 +1390,49 @@ impl ReloadableState {
                     .runtime
                     .retire_superseded_import_dispatch(&new_snapshot.runtime);
                 let new_snapshot = self.publish_snapshot(new_snapshot);
-                append_application_reconciliation_audit(
-                    &new_snapshot,
-                    ApplicationReconciliationAudit {
-                        agent_request_id: &agent_request_id,
-                        broker_request_id: &broker_request_id,
-                        trigger: "reload",
-                        identity: match trigger {
-                            ReloadTrigger::AdminHttp => identity.as_ref(),
-                            ReloadTrigger::Signal => None,
-                        },
-                        source: &source,
-                    },
-                    &reconciled_applications,
-                )
-                .await;
                 new_snapshot.runtime.warn_aggregate_mcp_names();
                 self.active_lock_set
                     .store(Arc::clone(&new_snapshot.state_locks));
                 self.track_state_lock_set(&new_snapshot.state_locks);
+                // The generation is published and nothing below can reject
+                // it, so only now are the tokens it no longer mints ended. No
+                // await separates publication from this owner, which keeps
+                // the fence and the request's capacity through the store work
+                // and its audit even when this reload's waiter is cancelled.
+                let finalization = tokio::spawn(
+                    finalize_application_tokens(ApplicationTokenFinalization {
+                        snapshot: new_snapshot.clone(),
+                        agent_request_id: agent_request_id.clone(),
+                        broker_request_id: broker_request_id.clone(),
+                        identity: match trigger {
+                            ReloadTrigger::AdminHttp => identity.clone(),
+                            ReloadTrigger::Signal => None,
+                        },
+                        source: source.clone(),
+                        fence: mutation_guard,
+                        permit: matches!(trigger, ReloadTrigger::AdminHttp)
+                            .then(|| {
+                                self.shared_ingress
+                                    .try_global_concurrency(
+                                        new_snapshot.runtime.limits().max_concurrent_requests,
+                                    )
+                                    .ok()
+                            })
+                            .flatten(),
+                        #[cfg(test)]
+                        barrier: self
+                            .application_reconciliation_barrier
+                            .lock()
+                            .unwrap()
+                            .take(),
+                    })
+                    .in_current_span()
+                    .with_current_subscriber(),
+                );
+                let (_mutation_guard, application_tokens) = match finalization.await {
+                    Ok((fence, outcome)) => (Some(fence), outcome),
+                    Err(_) => (None, ApplicationTokenOutcome::Failed),
+                };
                 let previous_audit_error = if changed_audit_file {
                     append_admin_audit_best_effort(
                         active.clone(),
@@ -1359,8 +1465,15 @@ impl ReloadableState {
                     candidate_config_hash: Some(candidate_hash.clone()),
                     previous_generation,
                     active_generation: new_snapshot.generation,
-                    message: previous_audit_error
-                        .map(|error| format!("previous audit append failed: {error}")),
+                    message: match (
+                        previous_audit_error
+                            .map(|error| format!("previous audit append failed: {error}")),
+                        matches!(application_tokens, ApplicationTokenOutcome::Failed)
+                            .then(|| APPLICATION_TOKEN_RECONCILIATION_FAILED.to_string()),
+                    ) {
+                        (Some(audit), Some(tokens)) => Some(format!("{audit}; {tokens}")),
+                        (audit, tokens) => audit.or(tokens),
+                    },
                 };
                 self.set_last_reload_attempt(summary);
                 observability::record_decision(AdminDecision::Allow.as_str());
@@ -1399,6 +1512,7 @@ impl ReloadableState {
                         "bodyHardCapBytes": self.body_hard_cap,
                         "reloadTimeoutMs": self.reload_timeout.as_millis() as u64,
                         "shutdownTimeoutMs": self.shutdown_timeout.as_millis() as u64,
+                        "applicationTokens": application_tokens.result_json(),
                         "lastReloadAttempt": self.last_reload_attempt().map(reload_attempt_summary_json),
                     }),
                 }

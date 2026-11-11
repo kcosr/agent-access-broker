@@ -774,6 +774,7 @@ where
                         "tokenClass": "agent_invoke",
                         "expiresAt": minted.record.expires_at,
                         "boundary": minted.record.scopes,
+                        "replacedTokens": minted.replaced_tokens,
                     });
                     if append_audit(
                         &request.snapshot,

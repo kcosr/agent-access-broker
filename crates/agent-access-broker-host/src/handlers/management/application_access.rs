@@ -233,7 +233,6 @@ pub(crate) async fn authorization_decide(
             "applicationId": decided.application_id,
             "decision": decision,
             "accessId": decided.access.as_ref().map(|access| access.access_id.as_str()),
-            "revokedTokens": decided.revoked_tokens,
         });
         Ok((
             json!({"decision": decision, "redirectTo": redirect_to}),

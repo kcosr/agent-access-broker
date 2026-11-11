@@ -33,6 +33,18 @@ fn application(connect: ApplicationConnectLevel, secret_path: &Path) -> Applicat
 }
 
 async fn apps_fixture(connect: ApplicationConnectLevel) -> Apps {
+    apps_fixture_with(connect, test_limits(), |config| {
+        config.identity.sources[0].header = "Authorization".into();
+    })
+    .await
+}
+
+/// [`apps_fixture`] with its limits and a final configuration hook.
+async fn apps_fixture_with(
+    connect: ApplicationConnectLevel,
+    limits: LimitsConfig,
+    configure: impl FnOnce(&mut BrokerConfig),
+) -> Apps {
     let secret_path = temp_path("application-client-secret");
     std::fs::write(&secret_path, SECRET).unwrap();
     // A file reference, so a reload can load the provider credential again.
@@ -40,8 +52,8 @@ async fn apps_fixture(connect: ApplicationConnectLevel) -> Apps {
     std::fs::write(&provider_token, "synthetic-fake-service-token").unwrap();
     let captured = Arc::new(std::sync::Mutex::new(None));
     let capture = captured.clone();
-    let fixture = browser_rate_fixture_with(test_limits(), move |config| {
-        config.identity.sources[0].header = "Authorization".into();
+    let fixture = browser_rate_fixture_with(limits, move |config| {
+        configure(config);
         config
             .credentials
             .service
@@ -1721,5 +1733,365 @@ async fn mutation_owners_keep_their_admitted_capacity_after_the_waiter_is_cancel
     assert_eq!(
         application_audit(&apps, "applications.token.revoked").len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn an_unredeemed_approval_leaves_the_working_consent_untouched() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    // A first approval that is never redeemed connects nothing.
+    let abandoned = apps.approve().await;
+    let placeholder = apps.admin_access().await[0].clone();
+    assert_eq!(placeholder["connected"], false);
+    let (_, own) = apps
+        .bearer(
+            Method::GET,
+            &apps.fixture.management_token,
+            "/v1/applications/access",
+            None,
+        )
+        .await;
+    assert_eq!(own["result"], json!({"access": []}));
+    let _ = abandoned;
+
+    let minted = apps.connect().await;
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
+    let refresh_token = minted["refresh_token"].as_str().unwrap().to_string();
+    let connected = apps.admin_access().await[0].clone();
+
+    // Approving again, without the application exchanging the code, ends
+    // nothing: the token, the refresh token and the row stay as they were.
+    let code = apps.approve().await;
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::OK);
+    let (status, refreshed) = apps.refresh(&refresh_token).await;
+    assert_eq!(status, StatusCode::OK, "{refreshed}");
+    let pending = apps.admin_access().await[0].clone();
+    assert_eq!(pending["accessId"], connected["accessId"]);
+    assert_eq!(pending["connected"], true);
+    assert_eq!(pending["connectedAt"], connected["connectedAt"]);
+    assert_eq!(pending["liveTokenCount"], 2);
+
+    // Redeeming the code makes it the live grant and ends the earlier one.
+    let (status, replaced) = apps.exchange(&code).await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        apps.invoke(refreshed["access_token"].as_str().unwrap())
+            .await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        apps.refresh(&refresh_token).await,
+        (StatusCode::BAD_REQUEST, json!({"error": "invalid_grant"}))
+    );
+    assert_eq!(
+        apps.invoke(replaced["access_token"].as_str().unwrap())
+            .await,
+        StatusCode::OK
+    );
+    let after = apps.admin_access().await[0].clone();
+    assert_eq!(after["accessId"], connected["accessId"]);
+    assert_eq!(after["liveTokenCount"], 1);
+    let issued = application_audit(&apps, "applications.token.issued");
+    assert_eq!(issued.last().unwrap()["replacedTokens"], 2);
+}
+
+#[tokio::test]
+async fn broker_credentials_do_not_exempt_the_oauth_endpoints_from_the_source_budget() {
+    // Each case: the endpoint, and the unrelated Broker credential presented.
+    for (path, with_cookie) in [
+        ("/v1/applications/token", false),
+        ("/v1/applications/token", true),
+        ("/v1/applications/revoke", false),
+        ("/v1/applications/revoke", true),
+    ] {
+        // The identity source keeps its own header, so a valid Broker token
+        // can accompany the client's Basic credentials.
+        let apps = apps_fixture_with(
+            ApplicationConnectLevel::ReadWrite,
+            LimitsConfig {
+                auth_requests_per_source_per_minute: 5,
+                ..test_limits()
+            },
+            |_| {},
+        )
+        .await;
+        let attempt = || async {
+            let mut builder = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .extension(ConnectInfo(
+                    "127.0.0.1:43201".parse::<SocketAddr>().unwrap(),
+                ))
+                .header(REQUEST_ID_HEADER, "application-rate")
+                .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header(
+                    "Authorization",
+                    basic(APP, "a-guessed-client-secret-0123456789"),
+                );
+            builder = if with_cookie {
+                builder
+                    .header("Cookie", &apps.fixture.cookie)
+                    .header("X-Agent-Access-CSRF", &apps.fixture.csrf)
+            } else {
+                builder.header(
+                    "X-Agent-Token",
+                    format!("Bearer {}", apps.fixture.management_token),
+                )
+            };
+            let response = apps
+                .app()
+                .oneshot(
+                    builder
+                        .body(Body::from(
+                            "grant_type=refresh_token&refresh_token=a&token=a",
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            (response.status(), response_json(response).await)
+        };
+        // The fixture's sign-in spent one request of this address's budget.
+        for _ in 0..4 {
+            assert_eq!(
+                attempt().await,
+                (StatusCode::UNAUTHORIZED, json!({"error": "invalid_client"})),
+                "{path} cookie={with_cookie}"
+            );
+        }
+        for _ in 0..3 {
+            assert_eq!(
+                attempt().await,
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error": "temporarily_unavailable"})
+                ),
+                "{path} cookie={with_cookie}: the credential must not lift the budget"
+            );
+        }
+        // Refused attempts reach neither client authentication nor the audit.
+        assert_eq!(
+            application_audit(&apps, "applications.token.refused").len(),
+            4
+        );
+    }
+}
+
+/// Rewrites the configuration file for a reload the test starts itself.
+fn stage_config(apps: &Apps, config: &BrokerConfig) {
+    apps.fixture
+        ._broker
+        .running()
+        .rewrite_config(super::broker::ConfigDoc::from_config(config).render())
+        .unwrap();
+}
+
+fn read_only_config(apps: &Apps) -> BrokerConfig {
+    let mut config = apps.config.clone();
+    config.applications.get_mut(APP).unwrap().connect = ApplicationConnectLevel::ReadOnly;
+    config
+}
+
+/// Holds the next reload's reconciliation owner after publication.
+fn hold_reconciliation(apps: &Apps) -> Arc<crate::state::McpBlockingBarrier> {
+    let barrier = Arc::new(crate::state::McpBlockingBarrier::default());
+    *apps
+        .fixture
+        .state
+        .application_reconciliation_barrier
+        .lock()
+        .unwrap() = Some(barrier.clone());
+    barrier
+}
+
+#[tokio::test]
+async fn reconciliation_keeps_the_reload_fence_after_the_waiter_is_cancelled() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let minted = apps.connect().await;
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
+    let state = apps.fixture.state.clone();
+    let generation = state.current().generation;
+    let barrier = hold_reconciliation(&apps);
+    stage_config(&apps, &read_only_config(&apps));
+    let reloading = state.clone();
+    let waiter = tokio::spawn(async move {
+        reloading.reload_from_signal().await;
+    });
+    // The owner is reached only after the candidate was published.
+    tokio::time::timeout(Duration::from_secs(10), barrier.reached.notified())
+        .await
+        .expect("the reconciliation owner starts");
+    assert_eq!(state.current().generation, generation + 1);
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    // The owner still holds the fence: no mint, reload or policy mutation
+    // starts while the reconciliation is unfinished.
+    assert!(state.policy_mutation_lock.try_lock().is_err());
+    let (status, body) = apps
+        .bearer(
+            Method::POST,
+            &apps.fixture.admin_token,
+            "/v1/admin/config/reload",
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["reasonCode"], "reload_in_progress");
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::OK);
+    assert!(application_audit(&apps, "applications.tokens.reconciled").is_empty());
+    barrier.release();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while state.policy_mutation_lock.try_lock().is_err() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the owner releases the fence when it has finished");
+    // The owner finished the work and its audit although nobody waited.
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        application_audit(&apps, "applications.tokens.reconciled"),
+        vec![
+            json!({"applicationId": APP, "trigger": "reload", "reason": "registration_narrowed", "revokedTokens": 1})
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_rejected_reload_ends_no_tokens() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let minted = apps.connect().await;
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
+    let generation = apps.fixture.state.current().generation;
+    stage_config(&apps, &read_only_config(&apps));
+    let untouched = |stage: &'static str| {
+        let apps = &apps;
+        let access_token = access_token.clone();
+        async move {
+            assert_eq!(
+                apps.fixture.state.current().generation,
+                generation,
+                "{stage}"
+            );
+            // The old generation keeps serving and its tokens are untouched.
+            assert_eq!(apps.invoke(&access_token).await, StatusCode::OK, "{stage}");
+            assert_eq!(apps.admin_access().await[0]["liveTokenCount"], 1, "{stage}");
+            assert!(
+                application_audit(apps, "applications.tokens.reconciled").is_empty(),
+                "{stage}"
+            );
+        }
+    };
+
+    // The candidate is admitted and built, then fails its activation: another
+    // writer holds the store for longer than the store waits.
+    let writer = rusqlite::Connection::open(&apps.fixture.store_path).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let outcome = apps.fixture._broker.running().reload().await.unwrap();
+    writer.execute_batch("ROLLBACK").unwrap();
+    assert!(!outcome.is_success(), "{outcome:?}");
+    assert_eq!(outcome.reason_code(), Some("config_admission_failed"));
+    assert!(
+        outcome
+            .message()
+            .unwrap()
+            .contains("OAuth state reconciliation failed"),
+        "{outcome:?}"
+    );
+    untouched("activation failure").await;
+
+    // The same when its success record cannot be written.
+    let audit = rusqlite::Connection::open(&apps.fixture.audit_path).unwrap();
+    audit
+        .execute_batch(
+            "CREATE TRIGGER fail_reload_audit BEFORE INSERT ON audit_events
+             WHEN NEW.action = 'config.reload' AND NEW.decision = 'allow'
+             BEGIN SELECT RAISE(ABORT, 'private-reload-audit-failure'); END;",
+        )
+        .unwrap();
+    let outcome = apps.fixture._broker.running().reload().await.unwrap();
+    assert!(!outcome.is_success(), "{outcome:?}");
+    assert_eq!(outcome.reason_code(), Some("config_admission_failed"));
+    untouched("audit failure").await;
+
+    // Accepted, the same candidate ends them, with its audit record.
+    audit
+        .execute_batch("DROP TRIGGER fail_reload_audit")
+        .unwrap();
+    let outcome = apps.fixture._broker.running().reload().await.unwrap();
+    assert!(outcome.is_success(), "{outcome:?}");
+    assert_eq!(
+        outcome.result()["applicationTokens"],
+        json!({"status": "reconciled", "applications": [
+            {"applicationId": APP, "reason": "registration_narrowed", "revokedTokens": 1}
+        ]})
+    );
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        application_audit(&apps, "applications.tokens.reconciled").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_failed_reconciliation_is_reported_audited_and_retried_by_the_next_reload() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let minted = apps.connect().await;
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
+    let generation = apps.fixture.state.current().generation;
+    let barrier = hold_reconciliation(&apps);
+    stage_config(&apps, &read_only_config(&apps));
+    // Once the candidate is published, another writer holds the store for
+    // longer than the store waits, so the reconciliation fails.
+    let writer = rusqlite::Connection::open(&apps.fixture.store_path).unwrap();
+    let (outcome, ()) = tokio::join!(apps.fixture._broker.running().reload(), async {
+        barrier.reached.notified().await;
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        barrier.release();
+    });
+    writer.execute_batch("ROLLBACK").unwrap();
+    let outcome = outcome.unwrap();
+    // The configuration is active; the failure is not a rejected reload.
+    assert!(outcome.is_success(), "{outcome:?}");
+    assert_eq!(apps.fixture.state.current().generation, generation + 1);
+    assert_eq!(
+        outcome.result()["applicationTokens"],
+        json!({"status": "failed"})
+    );
+    assert!(
+        outcome.result()["lastReloadAttempt"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("application token reconciliation failed")
+    );
+    let failed = read_audit_records(&apps.fixture.audit_path)
+        .into_iter()
+        .filter(|record| record["action"] == "applications.tokens.reconciled")
+        .collect::<Vec<_>>();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["decision"], "error");
+    assert_eq!(
+        failed[0]["providerAudit"]["application"],
+        json!({"trigger": "reload", "reason": "reconciliation_failed"})
+    );
+    // Nothing was ended, and the published level already governs new tokens.
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::OK);
+    let (_, refreshed) = apps
+        .refresh(minted["refresh_token"].as_str().unwrap())
+        .await;
+    assert_eq!(refreshed["read_only"], true);
+    // The next reload runs it again.
+    let outcome = apps.fixture._broker.running().reload().await.unwrap();
+    assert!(outcome.is_success(), "{outcome:?}");
+    assert_eq!(
+        outcome.result()["applicationTokens"]["applications"][0]["revokedTokens"],
+        1
+    );
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        apps.invoke(refreshed["access_token"].as_str().unwrap())
+            .await,
+        StatusCode::OK
     );
 }

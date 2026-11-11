@@ -579,25 +579,60 @@ fn removal_reconnect_and_revocation_end_the_access_tokens() {
     let first = connect(&store, "alice");
     let old_refresh = first.refresh_token.clone().unwrap();
 
-    // Connecting again keeps the access and its settings, ends its tokens
-    // and replaces the refresh token.
+    // Approving again changes nothing until its code is redeemed: an
+    // approval the application never exchanges leaves the consent working.
+    let unredeemed = approve(&store, "alice");
     let decision = approve(&store, "alice");
-    assert_eq!(decision.revoked_tokens, 1);
     assert_eq!(
         decision.access.as_ref().unwrap().access_id,
         first.access.access_id
     );
-    assert!(resolves(&store, &first.token).is_err());
+    assert!(decision.access.as_ref().unwrap().connected);
+    assert_eq!(decision.access.as_ref().unwrap().live_token_count, 1);
+    assert!(resolves(&store, &first.token).is_ok());
+    let still = refresh(&store, Some(&registration(false)), &old_refresh).unwrap();
+    // A failed exchange consumes its code and still changes nothing.
+    let failed = approve(&store, "alice");
     assert_eq!(
-        refusal(refresh(&store, Some(&registration(false)), &old_refresh)),
+        refusal(mint(
+            &store,
+            Some(&registration(false)),
+            ApplicationGrant::AuthorizationCode {
+                code: failed.code.as_deref().unwrap(),
+                redirect_uri: REDIRECT,
+                code_verifier: "wrong-verifier-wrong-verifier-wrong-verifier-01",
+            }
+        )),
         ApplicationGrantRefusal::GrantInvalid
     );
+    assert!(resolves(&store, &first.token).is_ok() && resolves(&store, &still.token).is_ok());
+    assert!(refresh(&store, Some(&registration(false)), &old_refresh).is_ok());
+
+    // The exchange installs the new grant and, in the same transaction, ends
+    // the previous refresh token, its tokens and every other pending code.
     let second = mint(
         &store,
         Some(&registration(false)),
         code_grant(decision.code.as_deref().unwrap()),
     )
     .unwrap();
+    assert_eq!(second.replaced_tokens, 3);
+    assert_eq!(second.access.access_id, first.access.access_id);
+    assert_eq!(second.access.live_token_count, 1);
+    assert!(resolves(&store, &first.token).is_err() && resolves(&store, &still.token).is_err());
+    assert_eq!(
+        refusal(refresh(&store, Some(&registration(false)), &old_refresh)),
+        ApplicationGrantRefusal::GrantInvalid
+    );
+    assert_eq!(
+        refusal(mint(
+            &store,
+            Some(&registration(false)),
+            code_grant(unredeemed.code.as_deref().unwrap())
+        )),
+        ApplicationGrantRefusal::GrantInvalid,
+        "an older approval's code ended with the exchange"
+    );
     let refresh_token = second.refresh_token.clone().unwrap();
 
     // Another application cannot revoke these.

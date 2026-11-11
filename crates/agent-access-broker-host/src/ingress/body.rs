@@ -206,7 +206,15 @@ async fn admit_body_inner(
             *request.method(),
             Method::POST | Method::PUT | Method::PATCH | Method::DELETE
         ) || has_body);
-    let auth = !gateway && path.starts_with("/v1/auth/");
+    // The application token and revocation endpoints authenticate a client
+    // secret of their own. They are authentication requests whatever
+    // unrelated Broker credential or session the request also carries.
+    let application_protocol = !gateway
+        && matches!(
+            path,
+            crate::handlers::applications::TOKEN_PATH | crate::handlers::applications::REVOKE_PATH
+        );
+    let auth = !gateway && (path.starts_with("/v1/auth/") || application_protocol);
     let password_exchange = matches!(
         path,
         "/v1/auth/local/login" | "/v1/auth/local/password/change"
@@ -217,9 +225,11 @@ async fn admit_body_inner(
         None
     };
     let authenticated = body_identity.is_some();
-    let anonymous_body =
-        ordinary_body && has_body && (!authenticated || path == "/v1/auth/local/login");
-    let source_budget_required = ordinary_body && (password_exchange || !authenticated);
+    let anonymous_body = ordinary_body
+        && has_body
+        && (!authenticated || path == "/v1/auth/local/login" || application_protocol);
+    let source_budget_required =
+        ordinary_body && (password_exchange || application_protocol || !authenticated);
     let body_admission = if anonymous_body {
         // Reserve at most a quarter of global capacity for anonymous extraction.
         // A configured global limit of one cannot reserve a separate slot.
