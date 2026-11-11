@@ -47,6 +47,18 @@ scheme = "Bearer"
 # A caller secret is distinct from ordinary Broker tokens. Username assertions
 # are accepted only on /mcp and /mcp/{service}; see docs/trusted-callers.md.
 
+# Optional client application: a person approves it in the portal and it then
+# obtains short-lived agent tokens for them. The table name is the client ID.
+# [applications.example-runner]
+# display_name = "Example Runner"
+# client_secret_ref = "file:/etc/agent-access-broker/secrets/example-runner-client-secret"
+# redirect_uris = ["https://runner.example.test/auth/broker/callback"]
+# connect = "read_write"                   # none | read_only | read_write, for everyone
+# allowed_execution_contexts = ["default"]
+# access_token_ttl = "8h"
+# refresh_idle_ttl = "90d"
+# Keep the client secret outside workloads; see docs/applications.md.
+
 # Direct clients use this context. Add caller-attested contexts only after
 # configuring named trusted callers; a request header alone cannot attest one.
 [execution_context]

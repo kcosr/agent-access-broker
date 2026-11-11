@@ -1536,6 +1536,81 @@ and returns the existing audit-unavailable error without the secret; issuance
 is never retried automatically. See [storage and recovery](database.md#agent-token-issuance-storage-and-upgrade)
 and [account settings](roles.md#agent-token-issuance).
 
+## Application access
+
+A [registered application](applications.md) obtains agent tokens for a person
+who approved it. The Broker is its OAuth 2.0 authorization server
+(authorization code with PKCE, confidential preregistered clients, refresh
+tokens that do not rotate, RFC 8414 metadata and RFC 7009 revocation). The
+feature adds no identity path: an application's token is an ordinary
+`agent_invoke` row in `broker_tokens`, admitted, limited and audited exactly
+like an issued agent token.
+
+Registrations are TOML (`[applications.<id>]`), loaded with their client
+secrets into each runtime generation beside the trusted callers
+(`applications_config.rs`). The managed store owns everything else
+(`managed_store/application_access.rs`, migration `037_application_access`):
+
+- **Pending requests.** The authorization endpoint validates the client and its
+  exact redirect URI, stores the request for 10 minutes and redirects the
+  browser to the literal portal path `/ui/authorize/<id>`, which the existing
+  sign-in return rule carries through local or Microsoft sign-in. The store
+  keeps the ID's hash and encrypts the request under a key derived from the
+  raw ID, as `oidc_authorization_flows` does with its payload.
+- **The decision.** Two management routes serve the portal page with the
+  person's browser session; bearer tokens cannot consent. Approval runs in one
+  transaction: it consumes the request, checks again that the application's
+  level is not `none`, that the person is an enabled human and that an
+  administrator has not disabled their access, and issues a one-use code bound
+  to the client, redirect URI and PKCE challenge, for the existing access or a
+  not-yet-connected placeholder. It changes nothing else: a working consent
+  stays as it is until the code is redeemed. A refused approval rolls back,
+  leaving the request for the return to the application.
+- **Minting.** Code exchange and refresh share one transaction that consumes
+  the code or finds the refresh-token hash and re-checks the application, the
+  access, the person, refresh idleness and the live-token bound before
+  inserting the token. A redeemed code is the new grant: the same transaction
+  installs its refresh token and ends the previous one, the tokens minted
+  through it and the access's other pending codes. Its caveats are the application's contexts and services
+  and `readOnly` when the application's level is `read_only` or the access is
+  read-only. The host runs it through the reload fence used for token issuance
+  (`token_store_call_from_snapshot`), so the registration it was admitted with
+  is the current one, in an owner task that also writes the completion audit
+  and keeps the request's admission permit until it has finished, whether or
+  not the response waiter is still there. A failed audit withholds the
+  committed token and is never retried.
+- **Ending tokens.** A settings change, removal, redeemed re-approval or
+  refresh-token revocation revokes the access's live tokens in its transaction; a database
+  trigger does the same when the person's status becomes `disabled`. Startup,
+  and each reload once its generation is published and can no longer be
+  rejected, revoke the live tokens the generation's registrations would no
+  longer mint, so an operator's narrowing never waits for token expiry. The
+  reload hands its mutation fence and admission permit to an owner task for
+  this step, so it completes with its audit when the reload's waiter is
+  cancelled and no mint or reload interleaves; mint re-checks the published
+  registration, so nothing is minted under the old one meanwhile. A failure
+  is reported in the reload result, logged and audited, and retried by the
+  next reload or startup. Startup has published nothing, so it stops instead
+  of serving when the step fails.
+- **Restrictions outlive consent.** A disconnect by the person or the
+  application clears the refresh token but keeps a disabled or read-only row
+  for the next approval to reuse; only an administrator deletes it. The
+  settings version does not move for connecting or disconnecting.
+- **Current registration.** The decision and the code exchange check the
+  stored redirect URI against the fenced generation's registration, so nothing
+  is returned to an address removed at reload. Tokens
+  carry `application_access_id`, which hides them from the individual token
+  lists and selects them for deletion 7 days after they end.
+
+The token and revocation endpoints answer RFC 6749 JSON. A response layer
+outside transport admission rewrites any other refusal on those two paths, so
+rate limits and body limits keep the same contract. Transport admission
+classes both paths as authentication requests unconditionally, so an unrelated
+Broker token or session never exempts them from the source budget. Connecting is independent
+of self-service and of the agent-token issuance policy; the personal routes use
+a management access that requires only a browser session or `user_manage`
+token.
+
 ## Execution-context boundary
 
 The fixed `X-Agent-Access-Context` header is a trusted ingress attribute, not a
@@ -2994,7 +3069,11 @@ permit, reporting those that have not. Microsoft
 [membership renewals](#microsoft-membership-renewal) stop starting when drain
 begins; shutdown then waits within the remaining budget (at least 100 ms) for
 submitted renewal writes and their audit records, logging each one that does
-not finish. The audit writer shuts
+not finish. The application token mint and revocation owners and a reload's
+token reconciliation owner have no preflight record, so each holds a lease in
+a drain from before it can outlive its caller; shutdown waits for those leases
+within the remaining budget (at least 100 ms) and reports the owners still
+running. The audit writer shuts
 down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.

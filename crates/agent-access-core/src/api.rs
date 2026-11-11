@@ -251,6 +251,9 @@ pub enum RouteAccess {
     UserManagement,
     BrowserManagement,
     UserTokenManagement,
+    /// The signed-in person's own account routes, which self-service does
+    /// not gate: a browser session or `user_manage` token.
+    AccountManagement,
     PolicyRead,
     PolicyWrite,
     AdminRead,
@@ -896,6 +899,7 @@ pub fn http_route_specs(
     routes.extend(spec_route_specs());
     routes.extend(user_management_route_specs());
     routes.extend(oauth_route_specs());
+    routes.extend(application_access_route_specs());
     routes.extend(admin_management_route_specs());
     routes.extend(resource_policy_route_specs(resource_types));
     routes.extend(audit_query_route_specs());
@@ -1394,6 +1398,116 @@ fn spec_route_specs() -> Vec<HttpRouteSpec> {
         spec
     })
     .collect()
+}
+
+/// A person's application access with the application's current
+/// registration, as the personal and administrative routes return it.
+fn application_access_schema() -> Value {
+    json!({
+        "title":"ApplicationAccess", "type":"object", "additionalProperties":false,
+        "required":["accessId","principalId","applicationId","applicationName","applicationAvailable",
+            "connect","enabled","readOnly","effectiveReadOnly","version","connected","createdAt",
+            "connectedAt","updatedAt","updatedBy","lastUsedAt","liveTokenCount"],
+        "properties":{
+            "accessId":{"type":"string","format":"uuid"},
+            "principalId":{"type":"string"},
+            "applicationId":{"type":"string"},
+            "applicationName":{"type":["string","null"],"description":"The registered display name; null while the application is not registered."},
+            "applicationAvailable":{"type":"boolean","description":"Whether the application is currently registered. An unavailable application mints nothing."},
+            "connect":{"enum":["none","read_only","read_write",null],"description":"The application's current level; null while it is not registered."},
+            "enabled":{"type":"boolean"},
+            "readOnly":{"type":"boolean","description":"This person's access is limited to actions classified as reads."},
+            "effectiveReadOnly":{"type":"boolean","description":"Tokens are read-only: the application's level is read_only or this access is read-only."},
+            "version":{"type":"integer","minimum":1},
+            "connected":{"type":"boolean","description":"Whether the application holds a refresh token for this access."},
+            "createdAt":{"type":"string","format":"date-time"},
+            "connectedAt":{"type":"string","format":"date-time"},
+            "updatedAt":{"type":"string","format":"date-time"},
+            "updatedBy":{"type":"string"},
+            "lastUsedAt":{"type":["string","null"],"format":"date-time"},
+            "liveTokenCount":{"type":"integer","minimum":0,"description":"Unexpired, unrevoked agent tokens the application holds through this access. They are not listed individually."}
+        }
+    })
+}
+
+fn application_access_list_schema() -> Value {
+    json!({"type":"object", "additionalProperties":false, "required":["access"],
+        "properties":{"access":{"type":"array", "items":application_access_schema()}}})
+}
+
+fn application_access_removed_schema() -> Value {
+    json!({"type":"object", "additionalProperties":false,
+        "required":["removed"], "properties":{"removed":{"const":true}}})
+}
+
+/// The signed-in person's own application routes. The two authorization
+/// routes additionally require a browser session.
+fn application_access_route_specs() -> Vec<HttpRouteSpec> {
+    let mut routes = vec![
+        get_management_route(
+            "/v1/applications/authorizations/{request}",
+            "applications.authorizations.inspect",
+            RouteAccess::AccountManagement,
+        ),
+        body_route(
+            "POST",
+            "/v1/applications/authorizations/{request}/decision",
+            "applications.authorizations.decide",
+            RouteAccess::AccountManagement,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+            Vec::new(),
+        ),
+        get_management_route(
+            "/v1/applications/access",
+            "applications.access.list",
+            RouteAccess::AccountManagement,
+        ),
+        no_body_route(
+            "DELETE",
+            "/v1/applications/access/{access}",
+            "applications.access.remove",
+            RouteAccess::AccountManagement,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+        ),
+    ];
+    set_request_body_schema(
+        &mut routes,
+        "POST",
+        "/v1/applications/authorizations/{request}/decision",
+        json!({"type":"object", "additionalProperties":false, "required":["decision","principalId"],
+            "properties":{"decision":{"enum":["approve","cancel"]},
+                "principalId":{"type":"string","description":"The signed-in account the request was shown to: the principal of the inspect response. A decision sent under another account's session is refused with version_conflict."}}}),
+    );
+    for route in &mut routes {
+        route.result_schema = match route.operation.as_str() {
+            "applications.authorizations.inspect" => Some(json!({
+                "title":"ApplicationAuthorizationRequest", "type":"object", "additionalProperties":false,
+                "required":["applicationId","applicationName","connect","readOnly","canConnect","denialReason","expiresAt"],
+                "properties":{
+                    "applicationId":{"type":"string"},
+                    "applicationName":{"type":"string"},
+                    "connect":{"enum":["none","read_only","read_write"],"description":"The application's level for everyone."},
+                    "readOnly":{"type":"boolean","description":"Whether the application's tokens for this person will be read-only."},
+                    "canConnect":{"type":"boolean"},
+                    "denialReason":{"enum":["connecting_disabled","access_disabled","not_human","account_disabled",null],
+                        "description":"Why the person may not connect; null when canConnect is true."},
+                    "expiresAt":{"type":"string","format":"date-time"}
+                }
+            })),
+            "applications.authorizations.decide" => Some(json!({
+                "type":"object", "additionalProperties":false,
+                "required":["decision","redirectTo"],
+                "properties":{"decision":{"enum":["approve","cancel"]},
+                    "redirectTo":{"type":"string","format":"uri","description":"The application URL the browser navigates to."}}
+            })),
+            "applications.access.list" => Some(application_access_list_schema()),
+            "applications.access.remove" => Some(application_access_removed_schema()),
+            _ => None,
+        };
+    }
+    routes
 }
 
 fn oauth_route_specs() -> Vec<HttpRouteSpec> {
@@ -2358,6 +2472,28 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             ExitPolicy::ManagementOk,
         ),
         get_management_route(
+            "/v1/admin/principals/{principal}/application-access",
+            "admin.principals.application_access.list",
+            RouteAccess::AdminRead,
+        ),
+        body_route(
+            "PATCH",
+            "/v1/admin/principals/{principal}/application-access/{access}",
+            "admin.principals.application_access.patch",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+            Vec::new(),
+        ),
+        no_body_route(
+            "DELETE",
+            "/v1/admin/principals/{principal}/application-access/{access}",
+            "admin.principals.application_access.delete",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+        ),
+        get_management_route(
             "/v1/admin/principals/{principal}/login-methods",
             "admin.principals.login_methods.list",
             RouteAccess::AdminRead,
@@ -2520,6 +2656,19 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
     );
     set_request_body_schema(
         &mut routes,
+        "PATCH",
+        "/v1/admin/principals/{principal}/application-access/{access}",
+        identity_path_settings_body_schema("expectedVersion"),
+    );
+    add_required_integer_query_params(
+        &mut routes,
+        "DELETE",
+        "/v1/admin/principals/{principal}/application-access/{access}",
+        &["expectedVersion"],
+        1,
+    );
+    set_request_body_schema(
+        &mut routes,
         "POST",
         "/v1/admin/groups",
         group_write_body_schema(false),
@@ -2563,6 +2712,11 @@ fn principal_group_admin_routes() -> Vec<HttpRouteSpec> {
             })),
             "admin.principals.identity_bindings.create"
             | "admin.principals.identity_bindings.patch" => Some(identity_binding_schema()),
+            "admin.principals.application_access.list" => Some(application_access_list_schema()),
+            "admin.principals.application_access.patch" => Some(application_access_schema()),
+            "admin.principals.application_access.delete" => {
+                Some(application_access_removed_schema())
+            }
             "admin.principals.identity_bindings.delete" => {
                 Some(json!({"type":"object", "additionalProperties":false,
                 "required":["deleted"], "properties":{"deleted":{"const":true}}}))

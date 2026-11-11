@@ -29,7 +29,7 @@ Sections fall into three categories:
 | --- | --- | --- |
 | Mandatory | `identity`, `policy`, `limits` | parse error; an omitted `[limits]` is reported as its missing `upload_spool_dir` |
 | Optional | `execution_context`, `managed_store`, `credential_encryption`, `broker_tokens`, `audit` | feature-specific behavior described below; audit is disabled without `[audit]` |
-| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
+| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `applications`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
 
 ### Conditional requirements
 
@@ -55,6 +55,10 @@ These cross-section rules are enforced by validation (not by the parser):
   [`[browser_auth]`](#browser_auth).
 - `portal.enabled = true` requires `browser_auth.enabled = true` and an
   absolute `portal.static_dir`.
+- Any `[applications.<id>]` entry requires managed identity authority,
+  `[managed_store]`, `[broker_tokens]` with a `broker_tokens` identity source,
+  `browser_auth.enabled = true` with `browser_auth.public_origin`, and
+  `management.enabled = true`. See [Applications](#applications).
 
 Validation runs `deployment`, `identity`, `execution_context`, `network`, managed sections,
 `credentials`, `providers`, `gateways`, `policy`,
@@ -2758,6 +2762,49 @@ until its database write finishes even if the HTTP caller disconnects. OIDC JIT
 performs this generation check after the external exchange. Initial-administrator
 bootstrap into an empty store is startup-only; a reload that would bootstrap a
 new administrator is rejected without provisioning one.
+
+## Applications
+
+`[applications.<id>]` registers a client application that obtains short-lived
+agent tokens for a person who approved it in the portal. The contract, flow
+and administration are in [applications.md](applications.md). The table name
+is the OAuth client ID: at most 64 safe identifier characters, without `:`.
+
+```toml
+[applications.example-runner]
+display_name = "Example Runner"
+client_secret_ref = "file:/run/secrets/example-runner-client-secret"
+redirect_uris = ["https://runner.example.test/auth/broker/callback"]
+connect = "read_write"
+allowed_execution_contexts = ["internal"]
+allowed_services = ["jira"]
+access_token_ttl = "8h"
+refresh_idle_ttl = "90d"
+```
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `display_name` | yes | The name people see on the approval page: 1 to 128 bytes, no control characters or surrounding whitespace. |
+| `client_secret_ref` | yes | An `env:` or `file:` reference to the client secret. |
+| `redirect_uris` | yes | 1 to 16 distinct absolute `https` URIs of at most 2,048 bytes, without fragment or credentials. Plain `http` is accepted only for a loopback host. A request's `redirect_uri` must equal one exactly. |
+| `connect` | yes | `none`, `read_only` or `read_write`: what everyone who connects receives. |
+| `allowed_execution_contexts` | yes | The context caveat of every minted token: one or more distinct values from the configured [execution contexts](#execution_context). It must contain every context in which the application or its agents present a token. |
+| `allowed_services` | no | When set, the service caveat of every minted token: one or more distinct service names. A name no service has grants nothing. |
+| `access_token_ttl` | no | Lifetime of each minted token; default `8h`, at most `broker_tokens.max_self_issued_agent_invoke_ttl`. |
+| `refresh_idle_ttl` | no | How long a refresh token may go unused before it stops working; default `90d`, at most `3650d`. |
+
+Applications require managed identity authority, `[managed_store]`,
+`[broker_tokens]` with a `broker_tokens` identity source,
+`browser_auth.enabled = true` with `browser_auth.public_origin` (the issuer of
+the authorization server), and `management.enabled = true`.
+
+A client secret holds 16 to 1,024 visible ASCII bytes, cannot start with
+`aab_`, and must differ from every other application's secret and from every
+trusted caller credential. The secret file holds only the raw secret; the
+application sends it with HTTP Basic authentication. Secrets and registrations
+are loaded at startup and reload. A reload that changes or removes a
+registration applies to the next request; see
+[what a change affects](applications.md#registering-an-application).
 
 ## Delegated upstream OAuth
 

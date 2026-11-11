@@ -1,7 +1,7 @@
 import { canViewAdmin, canWriteAdmin, canWritePolicies, hasPolicyScope } from "../lib/capabilities";
 // Ctrl/Cmd-K command palette: go to views, jump to entities, run common actions.
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { useMatch, useNavigate } from "react-router";
 import { CommandPalette, useCommandPaletteHotkey, type PaletteItem, type PaletteSource } from "../workbench";
 import { useResourceTypes } from "../lib/resource-types";
 import {
@@ -20,7 +20,7 @@ import { useAgentTokenActions } from "../mutations/tokens";
 import { useRuntimeActions } from "../mutations/runtime";
 import { useSelfSubject } from "./active-route";
 import { useModal } from "./modal";
-import { paths } from "./paths";
+import { ROUTE, paths } from "./paths";
 import { useSession } from "./session";
 import { entityPaletteSources, navigationPaletteItems, paletteQueryFeedback } from "./palette-sources";
 import { usePortalTheme } from "./theme";
@@ -36,7 +36,9 @@ export function usePalette() {
 export function PaletteProvider({ children }: { children: ReactNode }) {
   const { session } = useSession();
   const [open, setOpen] = useState(false);
-  const usable = session.authenticated && !session.passwordChangeRequired;
+  // An application's approval page stays focused: no jumping elsewhere from it.
+  const approving = useMatch(ROUTE.authorize) !== null;
+  const usable = session.authenticated && !session.passwordChangeRequired && !approving;
   useCommandPaletteHotkey(() => setOpen((current) => !current), usable);
   const openPalette = useCallback(() => setOpen(true), []);
   const value = useMemo(() => ({ openPalette }), [openPalette]);

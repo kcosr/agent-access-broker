@@ -312,6 +312,98 @@ Token commit and completion audit belong to the cancellation-resistant mutation
 owner. A failed completion returns the existing audit-unavailable error without
 the secret while retaining the committed row; never retry issuance automatically.
 
+## Application access
+
+`docs/applications.md` is the contract for registered applications
+(`[applications.<id>]`, `applications_config.rs`,
+`managed_store/application_access.rs`, migration `037`, host
+`handlers/applications.rs` and `handlers/management/application_access.rs`).
+The wire contract is fixed for clients: metadata, authorization code with PKCE
+S256, `client_secret_basic`, non-rotating refresh tokens, revocation, and RFC
+6749 JSON errors on the token and revocation endpoints for every refusal,
+including those made before their handlers. In this repository "connection"
+means an outbound provider account; the inbound objects are an application and
+a person's application access.
+
+An application's token is an ordinary `agent_invoke` `broker_tokens` row, so
+every admission path works unchanged; never add an identity path or special
+admission for it. Its caveats are fixed at mint: the application's contexts
+and services, and `readOnly` when the level is `read_only` or the access is
+read-only. Per-person settings only narrow. Connecting is independent of
+self-service and of the agent-token issuance policy: the personal routes use
+`ManagementAccess::Account`, and consent requires a browser session with CSRF,
+never a bearer token.
+
+Approval, mint and refresh re-check inside their transaction that the
+application is registered and not `none`, the access is enabled, the person is
+an enabled human and the refresh token is not idle. An approval only issues a
+code (with a not-yet-connected placeholder row for a first approval); the code
+exchange installs the new refresh token and, in the same transaction, ends the
+previous refresh token, its tokens and the access's other codes, so an
+unredeemed approval never ends a working consent. The decision (approve and
+cancel alike) and the code exchange also require the stored redirect URI to be
+registered still; never return a browser or a code to an address the fenced
+registration no longer lists. Mint and revocation run in owners that keep the
+request's admission permit through store completion and audit; mint also
+holds the token-issuance reload fence. A failed mint audit keeps the committed
+row, withholds the secret and is never retried. Audit every refusal after
+client authentication, and failed client authentication itself, with a fixed
+reason and no supplied value.
+
+A settings change, administrator removal, redeemed re-approval, disconnect or
+principal disable ends the access's live tokens in the same transaction; every
+actual settings change advances `version` once and a no-op writes nothing.
+Startup and every reload end the live tokens the current registration would no
+longer mint (removed, `none`, `read_only` against a write-capable token, or
+different contexts or services) and audit one record per application; refresh
+tokens stay. A reload reconciles only after its generation is published, in an
+owner that keeps the mutation fence and admission permit through the store
+work and audit, with no await between publication and that owner: a rejected
+or abandoned candidate never revokes, and every committed reconciliation is
+audited. A failure there is reported, logged and audited, never a rejected
+reload, and retried by the next reload or startup; startup itself must not
+serve when its reconciliation fails. The mint, revocation and reconciliation
+owners take an `OwnerDrain` lease before they can outlive their caller, and
+shutdown drains those leases before the audit writers close. The consent
+decision carries the required `principalId` the page displayed and is refused
+with `version_conflict` under another account's session. Portal documents are
+served with `Referrer-Policy: no-referrer`; the portal's writes must keep
+sending `Origin`, which the sign-in routes check. Token and revocation
+requests are authentication-budget requests at pre-body admission whatever
+other Broker credential they carry. A disconnect by the person or by the
+application's refresh-token revocation never lifts an administrator's
+restriction: it deletes only an enabled, not read-only row and otherwise keeps
+the row, disconnected, for the next approval to reuse. Only an administrator's
+delete removes a restricted row, the person's own list shows connected rows
+only, and connecting or disconnecting never moves `version`.
+Keep application-minted tokens out of the individual token lists (the access
+reports a live count), bounded per access and deleted 7 days after they end.
+`broker_tokens.application_access_id` is deliberately not a foreign key.
+
+Codes, refresh tokens and client secrets stay outside the `aab_` namespace and
+are never accepted as caller credentials. Store only keyed hashes of codes and
+refresh tokens and the hash of a request ID; keep them, verifiers, `state` and
+client secrets out of logs, audit, errors and `Debug`. Redirect URIs match
+exactly, and an unknown client or redirect URI gets an error page, never a
+redirect. Audit approval, denial, every mint, refusal, revocation and
+administrator change with the application ID. Never name a specific client
+product in code, tests or docs.
+
+The portal's approval page (`/ui/authorize/<request>`) stays a focused page in
+the sign-in frame, without portal navigation or the command palette, and
+works without self-service. It shows the account the request was read for
+(the `principal` of the read's envelope) and sends that account as the
+decision's `principalId`, once per explicit click and only while the
+browser's session is still that account. It never replays a decision after a
+`version_conflict`, CSRF or session failure: it shows the account that is
+signed in now and asks again. It opens the decision's `redirectTo` only as
+a top-level navigation, and keeps the request ID and that address out of
+rendered text, logs and error messages. A person's list lives on **Account**,
+which accounts without self-service can reach, and is shown from the runtime
+catalog's `account_management` routes, never by probing; an administrator's
+rows are in the principal's **Access paths**. `docs/testing.md` lists the
+portal's unit, real-Broker and mocked coverage.
+
 ## Microsoft membership renewal
 
 `membership_renewal` keeps one encrypted Microsoft refresh-token record per
@@ -818,6 +910,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
+- `docs/applications.md`: registered client applications: registration and
+  levels, the OAuth authorization-server wire contract, consent routes,
+  personal and administrative management, limits, retention, audit and
+  security notes.
 - `docs/oauth.md`: delegated OAuth, production Google, GitLab and Atlassian
   dialects (including their administrator setup and scopes, and Atlassian's
   connection table, per-product registrations, quota and lifecycle), separate

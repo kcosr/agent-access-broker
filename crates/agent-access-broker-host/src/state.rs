@@ -48,7 +48,9 @@ pub(crate) struct ReloadableState {
     caller_security_publication: StdRwLock<()>,
     pub(crate) active_lock_set: ArcSwap<StateLockSet>,
     pub(crate) state_lock_history: Mutex<Vec<Weak<StateLockSet>>>,
-    pub(crate) policy_mutation_lock: TokioMutex<()>,
+    /// Shared so that a reload can hand its guard to the owner that finishes
+    /// a published generation after the reload's waiter is gone.
+    pub(crate) policy_mutation_lock: Arc<TokioMutex<()>>,
     pub(crate) reload_lock: TokioMutex<()>,
     pub(crate) reload_in_progress: AtomicBool,
     pub(crate) shared_ingress: Arc<IngressGuards>,
@@ -57,6 +59,9 @@ pub(crate) struct ReloadableState {
     /// Per-(principal, service) invocation windows; history survives reloads.
     pub(crate) shared_invocations: Arc<InvocationLimiter>,
     pub(crate) admission_owners: Arc<crate::admission::AdmissionRegistry>,
+    /// Application token mint, revocation and reconciliation owners, drained
+    /// through their audit before the audit writers close.
+    pub(crate) application_owners: Arc<crate::owner_drain::OwnerDrain>,
     pub(crate) shared_spool: Arc<UploadSpoolBudgets>,
     pub(crate) operations: Arc<crate::operations::OperationRegistry>,
     pub(crate) body_hard_cap: usize,
@@ -74,6 +79,10 @@ pub(crate) struct ReloadableState {
     pub(crate) microsoft_oidc_test_components: Mutex<Option<MicrosoftOidcTestComponents>>,
     #[cfg(test)]
     pub(crate) mcp_admission_barrier: Mutex<Option<Arc<McpAdmissionBarrier>>>,
+    /// Holds the next reload's application-token reconciliation owner after
+    /// publication, before its store work.
+    #[cfg(test)]
+    pub(crate) application_reconciliation_barrier: Mutex<Option<Arc<McpBlockingBarrier>>>,
     #[cfg(test)]
     pub(crate) gateway_dispatch_barrier:
         Mutex<Option<(GatewayDispatchPhase, Arc<McpAdmissionBarrier>)>>,
@@ -668,6 +677,25 @@ impl RuntimeSnapshot {
         }))
     }
 
+    /// Ends the live application-minted tokens that this generation's
+    /// registrations would no longer mint, so that an operator's narrowing
+    /// takes effect when the generation is admitted. The caller holds the
+    /// mutation fence (startup, or a reload before it publishes).
+    pub(crate) async fn reconcile_application_tokens(
+        &self,
+    ) -> Result<Vec<agent_access_core::ApplicationTokenReconciliation>, ManagedStoreError> {
+        if self.runtime.managed_store().is_none() {
+            return Ok(Vec::new());
+        }
+        let applications = self.runtime.applications().clone();
+        self.managed_store_call(move |store| {
+            store.reconcile_application_tokens(&|application_id| {
+                applications.registration(application_id)
+            })
+        })
+        .await
+    }
+
     pub(crate) fn reconcile_microsoft_oidc_provider(&self) -> Result<(), ManagedStoreError> {
         self.reconcile_microsoft_oidc_provider_with_fallback(None)
     }
@@ -740,7 +768,7 @@ impl ReloadableState {
             caller_security_publication: StdRwLock::new(()),
             active_lock_set: ArcSwap::from(Arc::clone(&snapshot.state_locks)),
             state_lock_history: Mutex::new(vec![Arc::downgrade(&snapshot.state_locks)]),
-            policy_mutation_lock: TokioMutex::new(()),
+            policy_mutation_lock: Arc::new(TokioMutex::new(())),
             reload_lock: TokioMutex::new(()),
             reload_in_progress: AtomicBool::new(false),
             shared_ingress: Arc::new(IngressGuards::new()),
@@ -752,6 +780,7 @@ impl ReloadableState {
                     .aggregate_limits(),
             )),
             admission_owners: Arc::new(crate::admission::AdmissionRegistry::default()),
+            application_owners: Arc::new(crate::owner_drain::OwnerDrain::default()),
             shared_spool: Arc::new(UploadSpoolBudgets::new()),
             operations: Arc::new(crate::operations::OperationRegistry::default()),
             body_hard_cap,
@@ -765,6 +794,8 @@ impl ReloadableState {
             microsoft_oidc_test_components: Mutex::new(None),
             #[cfg(test)]
             mcp_admission_barrier: Mutex::new(None),
+            #[cfg(test)]
+            application_reconciliation_barrier: Mutex::new(None),
             #[cfg(test)]
             gateway_dispatch_barrier: Mutex::new(None),
             #[cfg(test)]

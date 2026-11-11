@@ -34,6 +34,7 @@ flowchart TB
         I["Invoke: POST /v1/invoke/{service}/{action}"]
         M["Downstream MCP: POST/DELETE /mcp or /mcp/{service}"]
         B["Browser auth + portal: /v1/auth/*, /ui"]
+        O["Applications: /.well-known/oauth-authorization-server, /v1/applications/*"]
         S["Self-service: /v1/credentials/*, /v1/tokens/*, /v1/audit/*"]
         A["Admin management: /v1/admin/principals, /rights, /tokens, /credentials, /store/status, /audit/*"]
         C["Admin config operations: /v1/admin/config/status, /reload"]
@@ -3034,8 +3035,8 @@ These operations are not audited when they succeed:
 
 | Area | Operations |
 | --- | --- |
-| Self-service | `auth.session` (with a valid session or no session cookie), `tokens.list`, `tokens.inspect`, `tokens.options`, `tokens.effective_access`, `credentials.list`, `credentials.inspect`, `credentials.targets`, `credentials.input_schema`, `oauth.connections.list`, `audit.options`, `audit.events.list`, `audit.requests.inspect` |
-| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
+| Self-service | `auth.session` (with a valid session or no session cookie), `tokens.list`, `tokens.inspect`, `tokens.options`, `tokens.effective_access`, `applications.authorizations.inspect`, `applications.access.list`, `credentials.list`, `credentials.inspect`, `credentials.targets`, `credentials.input_schema`, `oauth.connections.list`, `audit.options`, `audit.events.list`, `audit.requests.inspect` |
+| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.principals.application_access.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
 | Imports | `admin.imports.list`, `admin.imports.inspect`, `admin.imports.preview` (saved previews only; discovery remains a write operation) |
 | Policy | `admin.policy.status`, `admin.policy.catalog`, `admin.policy.grants.list`, `admin.policy.grants.inspect`, `admin.policy.service_managers.list`, `admin.policy.resources.list`, `admin.policy.resources.get`, `admin.policy.resources.used_by`, `admin.policy.resource_groups.list`, `admin.policy.resource_groups.get`, `admin.policy.resource_groups.used_by`, `admin.audit.options`, `admin.audit.events.list`, `admin.audit.requests.inspect`, and the POST dry runs `admin.policy.effective_access` and `admin.policy.grants.validate` (a `valid: false` result is a successful response) |
 
@@ -3225,8 +3226,8 @@ reason code in the sanitized portal error URL.
 | --- | --- |
 | 400 | `identity_assertion_invalid`, `identity_assertion_unsupported`, `request_id_missing`, `request_id_invalid`, `input_invalid`, `oidc_flow_invalid`, `oidc_flow_expired`, `invalid_draft_handle`, `policy_authority_unavailable`, `policy_validation_failed`, `body_malformed`, `gateway_host_invalid`, `gateway_query_denied`, `gateway_header_denied`, `gateway_request_body_denied`, `git_service_denied`, `git_pkt_line_malformed`, `config_parse_failed`, `config_validation_failed` |
 | 401 | `caller_authentication_required`, `caller_authentication_invalid`, `identity_required`, `identity_invalid`, `broker_token_not_found`, `broker_token_expired`, `broker_token_revoked`, `broker_token_paused`, `gateway_auth_required`, `gateway_auth_invalid`, `local_login_failed`, `local_login_locked`, `oidc_provider_denied`, `oidc_identity_invalid`, `oidc_sign_in_required` |
-| 404 | `identity_binding_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
-| 403 | `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `token_issuance_denied`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
+| 404 | `identity_binding_not_found`, `application_authorization_invalid`, `application_access_not_found`, `principal_not_found`, `group_not_found`, `external_group_binding_not_found`, `policy_grant_not_found`, `resource_not_found`, `resource_group_not_found`, `credential_not_found`, `gateway_host_unmatched`, `gateway_rule_not_found`, `audit_query_unavailable`, `audit_request_not_found` |
+| 403 | `application_access_denied`, `caller_user_assertion_denied`, `identity_assertion_denied`, `caller_identity_forwarding_denied`, `execution_context_required`, `execution_context_invalid`, `execution_context_denied`, `service_action_denied`, `webhook_destination_denied`, `principal_required`, `principal_disabled`, `broker_token_class_denied`, `management_denied`, `csrf_invalid`, `password_change_required`, `self_service_disabled`, `token_issuance_denied`, `oidc_group_claims_incomplete`, `oidc_admission_denied`, `right_missing`, `scope_unresolved`, `gateway_scope_unresolved`, `locator_invalid`, `lookup_failed`, `credential_not_provisioned`, `credential_invalid`, `credential_expired`, `git_ref_denied`, `git_capability_denied` |
 | 409 | `identity_binding_conflict`, `identity_version_conflict`, `resource_in_use`, `local_password_not_enabled`, `local_password_already_enabled`, `version_conflict`, `mutation_verification_failed`, `broker_token_state_conflict`, `oidc_login_method_conflict`, `external_group_binding_conflict`, `verification_mismatch`, `reload_in_progress` |
 | 405 | `gateway_method_denied` |
 | 408 | `operation_cancelled` |
@@ -3727,8 +3728,16 @@ A successful reload returns HTTP 200 with `operation = "config.reload"` and
 ```text
 nodeId, audit, previousGeneration, generation, policyGeneration, previousConfigHash,
 configHash, loadedAt, identityAuthority, policyAuthority, bodyHardCapBytes,
-reloadTimeoutMs, shutdownTimeoutMs, lastReloadAttempt
+reloadTimeoutMs, shutdownTimeoutMs, applicationTokens, lastReloadAttempt
 ```
+
+`applicationTokens` reports the [application tokens](applications.md#registering-an-application)
+the new configuration ended once it was active: `{"status": "reconciled",
+"applications": [{applicationId, reason, revokedTokens}]}`, with an empty list
+when nothing changed, or `{"status": "failed"}` when that step could not
+complete. A failure does not reject the reload: the configuration is active,
+`lastReloadAttempt.message` says so, and the next reload or restart runs the
+step again.
 
 Failed reload admission returns the mapped HTTP status and `reasonCode` in the
 management envelope. Candidate config parse and validation failures return
@@ -3949,6 +3958,111 @@ browser login, separately issued Broker tokens and inventory. Every actual
 pause/resume or principal status transition advances the gate version; a new
 human with a reused principal ID gets a new incarnation. Changes affect final
 invocation admission, not cancellation of already admitted work.
+
+## Application access
+
+[Registered applications](applications.md) obtain agent tokens for a person who
+approved them. Four routes are an OAuth 2.0 authorization server and do not use
+Broker envelopes; the others are management routes.
+
+### Authorization server
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| GET | `/.well-known/oauth-authorization-server` | RFC 8414 metadata; 404 while no application is registered |
+| GET | `/v1/applications/authorize` | Browser authorization request; 303 to `/ui/authorize/{requestId}`, to the registered redirect URI with `error`, or an HTML error page |
+| POST | `/v1/applications/token` | `authorization_code` and `refresh_token` grants |
+| POST | `/v1/applications/revoke` | RFC 7009 revocation |
+
+These routes are not in the runtime catalog or the OpenAPI projection, like the
+sign-in routes. The token and revocation routes take a form body, authenticate
+the client with HTTP Basic, and answer RFC 6749 JSON errors for every refusal,
+including those made by transport admission and rate limiting. Both count as
+authentication requests at admission, with the 16 KiB body cap and the source
+budget of the sign-in routes, whatever Broker token or browser session the
+request also carries. A refusal that
+would otherwise be a Broker envelope is replaced by `invalid_request`,
+`temporarily_unavailable` (for 429 and 503, keeping `Retry-After`) or
+`server_error`. Parameters, statuses and error codes are in
+[the wire contract](applications.md#wire-contract).
+
+### Personal routes
+
+A browser session or a `user_manage` Broker token; **not** gated by
+self-service, and never an `agent_invoke` or classless credential. The catalog
+lists them with `account_management` access while applications are registered.
+Cookie-authenticated writes need the CSRF header. Responses use the management
+envelope.
+
+| Method | Route | Operation | Body / result |
+| --- | --- | --- | --- |
+| GET | `/v1/applications/authorizations/{requestId}` | `applications.authorizations.inspect` | `{applicationId, applicationName, connect, readOnly, canConnect, denialReason, expiresAt}` |
+| POST | `/v1/applications/authorizations/{requestId}/decision` | `applications.authorizations.decide` | `{"decision":"approve","principalId":"alice"}` or `{"decision":"cancel","principalId":"alice"}`; `{decision, redirectTo}` |
+| GET | `/v1/applications/access` | `applications.access.list` | `{access: [...]}`, connected applications only |
+| DELETE | `/v1/applications/access/{accessId}` | `applications.access.remove` | `{removed: true}` |
+
+The two authorization routes additionally require a signed-in browser session
+and answer 403 `management_denied` to any bearer token. An unknown, used or
+expired request answers 404 `application_authorization_invalid`, as does one
+whose application is no longer registered with the request's exact redirect
+URI, for an approval and a cancellation alike. A refused
+approval answers 403 `application_access_denied` with
+`details.denialReason` (`connecting_disabled`, `access_disabled`, `not_human` or
+`account_disabled`) and leaves the request pending. The decision's required
+`principalId` is the account the page showed the request to, the `principal`
+of the read's envelope; a decision sent by another account's session answers
+409 `version_conflict` and changes nothing. The decision's success audit
+target is `{principal, applicationId, decision, accessId}`. An approval only
+issues the code; the existing connection, if any, is replaced when the
+application redeems it.
+
+### Administration
+
+Administrators and auditors read; administrators change. The rules of the
+[identity-binding routes](#administrator-identity-access-and-bindings) apply:
+management envelope, `Cache-Control: no-store`, CSRF for cookie-authenticated
+writes, audit preflight and completion, and unaudited successful reads.
+
+| Method | Suffix under `/v1/admin/principals/{principal}` | Body / result |
+| --- | --- | --- |
+| GET | `/application-access` | `{access: [...]}` |
+| PATCH | `/application-access/{accessId}` | `{"enabled":false,"readOnly":true,"expectedVersion":1}`; current access |
+| DELETE | `/application-access/{accessId}?expectedVersion=2` | Version-checked removal; `{removed: true}` |
+
+An access is `{accessId, principalId, applicationId, applicationName,
+applicationAvailable, connect, enabled, readOnly, effectiveReadOnly, version,
+connected, createdAt, connectedAt, updatedAt, updatedBy, lastUsedAt,
+liveTokenCount}`. `applicationName` and `connect` are null and
+`applicationAvailable` is false while the application is not registered.
+`effectiveReadOnly` is true when the application's level is `read_only` or the
+access is read-only. `connected` is true while the application holds a working
+refresh token: from its first successful code exchange until a disconnect,
+including while a newer approval awaits its exchange. `connectedAt` is the
+time of the latest successful exchange. `liveTokenCount` counts the unexpired,
+unrevoked tokens minted through the access, which no token list shows
+individually.
+
+The PATCH takes optional `enabled` and `readOnly` with the required
+`expectedVersion`; at least one setting is required and unknown fields are
+rejected. A change advances the version once and ends the access's live tokens;
+a PATCH that changes nothing returns the access unchanged at the same version.
+A stale version answers 409 `version_conflict`; an unknown access, or one owned
+by another principal, answers 404 `application_access_not_found`. Success audit
+targets are `{principal, accessId, applicationId, before, after}` with
+`{enabled, readOnly, version}` read inside the transaction (`after` is null on
+removal). `connected` is false for a first approval whose code has not been
+redeemed and after a disconnect.
+
+The personal removal needs no version and applies only to a connected access;
+any other answers 404 `application_access_not_found`. It ends the consent (the
+refresh token and live tokens) and deletes the access unless an administrator
+disabled it or made it read-only. A restricted access is kept, disconnected,
+with its ID, settings and version, stays in the administrator's list with
+`connected: false`, and is reused by a later approval. The application's
+refresh-token revocation follows the same rule. `version` advances only for
+Enabled and Read-only changes, never for connecting or disconnecting. The
+personal removal's audit target carries `after: null` when the access was
+deleted and its kept settings otherwise.
 
 ## Administrator identity tokens
 

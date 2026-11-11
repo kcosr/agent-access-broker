@@ -20,6 +20,11 @@ pub(crate) const OIDC_LOGIN_FAILED: &str = "oidc.login.failed";
 pub(crate) const OIDC_MEMBERSHIP_RENEWED: &str = "oidc.membership.renewed";
 pub(crate) const OIDC_MEMBERSHIP_RENEWAL_FAILED: &str = "oidc.membership.renewal_failed";
 pub(crate) const OAUTH_CONNECTIONS_CALLBACK: &str = "oauth.connections.callback";
+pub(crate) const APPLICATIONS_AUTHORIZE_REFUSED: &str = "applications.authorize.refused";
+pub(crate) const APPLICATIONS_TOKENS_RECONCILED: &str = "applications.tokens.reconciled";
+pub(crate) const APPLICATIONS_TOKEN_ISSUED: &str = "applications.token.issued";
+pub(crate) const APPLICATIONS_TOKEN_REFUSED: &str = "applications.token.refused";
+pub(crate) const APPLICATIONS_TOKEN_REVOKED: &str = "applications.token.revoked";
 pub(crate) const ADMIN_TOKENS_ISSUE: &str = "admin.tokens.issue";
 pub(crate) const ADMIN_TOKENS_LIST_PRINCIPAL_AGENT: &str = "admin.tokens.list_principal_agent";
 pub(crate) const ADMIN_TOKENS_INSPECT_PRINCIPAL_AGENT: &str =
@@ -142,6 +147,11 @@ const NON_MANAGEMENT_ACTIONS: &[&str] = &[
     OIDC_MEMBERSHIP_RENEWED,
     OIDC_MEMBERSHIP_RENEWAL_FAILED,
     OAUTH_CONNECTIONS_CALLBACK,
+    APPLICATIONS_AUTHORIZE_REFUSED,
+    APPLICATIONS_TOKENS_RECONCILED,
+    APPLICATIONS_TOKEN_ISSUED,
+    APPLICATIONS_TOKEN_REFUSED,
+    APPLICATIONS_TOKEN_REVOKED,
 ];
 
 /// Only these operations currently supply a service or grantRef target.

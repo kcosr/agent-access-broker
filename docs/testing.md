@@ -1099,6 +1099,49 @@ authorization/CSRF, rollback, preflight refusal and committed-state retention
 after completion-audit failure. The API test
 `principal_creation_id_contract_projects_into_catalog_openapi_and_send` checks
 the same conditional input contract across all three projections.
+Application access is covered at four levels. Core
+`managed_store/application_access_tests.rs` exercises migration 037 from the
+previous schema, the request, code, refresh and revocation transactions, the
+settings version, the principal-disable trigger, idle expiry, the live-token
+bound, retention and that no raw secret reaches the database or `Debug`
+output; `lib_tests.rs` covers `[applications]` validation and client-secret
+loading. Host `tests/applications.rs` drives the authorization, token and
+revocation endpoints and the consent, personal and administrative routes
+through the router, including the RFC 6749 error contract for refusals made
+before the handlers, expired requests and codes, levels `none` and
+`read_only`, a person without self-service or issuance permission, reloads
+that remove and restore a registration, and a failed mint audit. CLI
+`tests/application_access.rs` runs the whole flow over HTTP against the real
+assembly, invokes a service with the minted token through the `agent-access`
+binary and administers the access with
+`admin principals application-access`.
+The portal's `unit/applications.test.ts` covers the request-ID, redirect
+address and state helpers, the API client and the rendered approval card,
+**Account > Applications** table and **Access paths** row.
+`tests/applications-live.spec.ts` starts a real Broker with two registered
+applications and plays the application's side of the OAuth flow over HTTP with
+its client secret; only the applications' redirect addresses are answered by
+the test. It covers sign-in returning to the request, the approval ending in a
+top-level navigation that carries the code, cancel, an answered request, the
+**Account** list for a person without self-service changing only at the code
+exchange, an administrator's **Read-only**, **Enabled** and **Remove**
+against the refresh token, a restriction surviving the person's **Remove** and
+being reused by the next approval, the auditor's view, a second account
+signing in under an open request (nothing is sent for the account that is no
+longer shown, and neither the Broker's CSRF refusal nor its `principalId`
+conflict is replayed), and a reload from the
+**System** page that narrows a registration: the notice naming the ended
+tokens, and pending requests answering as invalid for **Approve** and
+**Cancel** once their redirect address is removed. Its last test asserts that
+the portal document is served with `Referrer-Policy: no-referrer` and that no
+`Referer`, on assets, API calls or the navigation to the application, carries
+the request ID. `tests/applications.spec.ts`
+uses mocked browser contracts for what a real Broker does not reach
+deterministically: each denial reason, a refused approval, expiry between read
+and decision, the double-submit guard, a rotated CSRF token, a request read
+for another account than the portal's session, the Microsoft sign-in start, a session
+ending on the page, phone width, the list's empty and hidden states, stale
+versions, an unregistered application and a failed token step after a reload.
 The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
 validated-email binding, claim fallback and refusals, immutable precedence,
 callback/admin/reload races and session rollback; no live Microsoft tenant is

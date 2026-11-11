@@ -1520,6 +1520,9 @@ impl core::marker::UnsafeUnpin for agent_access_provider::ProviderStateError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ProviderStateError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderStateError
 #[non_exhaustive] pub enum agent_access_provider::ReasonCode
+pub agent_access_provider::ReasonCode::ApplicationAccessDenied
+pub agent_access_provider::ReasonCode::ApplicationAccessNotFound
+pub agent_access_provider::ReasonCode::ApplicationAuthorizationInvalid
 pub agent_access_provider::ReasonCode::AttachmentIntegrityMismatch
 pub agent_access_provider::ReasonCode::AttachmentMediaTypeDenied
 pub agent_access_provider::ReasonCode::AttachmentSizeDenied

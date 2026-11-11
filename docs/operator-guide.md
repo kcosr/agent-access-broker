@@ -1501,6 +1501,17 @@ upgrade Broker, CLI and portal together. Older binaries reject the newer ledger;
 rollback requires the matching pre-migration database, configuration, keys and
 binary. Do not drop the new table/column or edit migration history.
 
+Migration `037_application_access` adds the tables behind
+[registered applications](applications.md) and the nullable
+`broker_tokens.application_access_id`. It changes no existing row, token or
+setting, and nothing uses it until an `[applications.<id>]` table is
+configured. Back up before startup with `auto_migrate = true` and upgrade
+Broker and CLI together: the runtime catalog gains the `account_management`
+route access, which an older CLI does not parse. Older binaries reject the
+newer ledger; rollback requires the matching pre-migration database,
+configuration, keys and binary. See
+[application access storage](database.md#application-access).
+
 Accepted HTTP gateway response declarations containing `*/*` or `type/*` require
 a Broker with [response media range support](http-gateway-setup.md#response-media-declarations),
 without another database migration. Older binaries cannot load any retained
@@ -2415,6 +2426,69 @@ SSH tunnel; hosted origins use HTTPS termination. Google reusable refresh materi
 survives transient failures with persisted cooldown; only a Google HTTP 429 is
 reported as `upstream_rate_limited`, while the cooldown after a 5xx or transport
 failure reports that failure's class. Invalid grants require owner reconnect. No Google credentials or account consent are provisioned by a build.
+
+## Application operations
+
+[Applications](applications.md) are registered in `[applications.<id>]` and
+loaded with their client secrets at startup and reload.
+
+- Create each client secret as 16 to 1,024 visible ASCII bytes, for example
+  `openssl rand -base64 48 | tr -d '\n'`, in a file only the Broker can read,
+  and give the same value to the application's operator out of band. It must
+  differ from every other application's secret and trusted caller credential.
+- Register the application's exact redirect URIs. Give its operator the
+  Broker's public origin; the application reads every endpoint from
+  `/.well-known/oauth-authorization-server`.
+- To rotate a secret, replace the file and reload; the old secret stops
+  working at once and refresh tokens are unaffected.
+- To stop an application for everyone, set `connect = "none"` or remove its
+  table and reload. The reload ends every token the application holds.
+  People's access rows remain, mint nothing, and work again with the same
+  refresh tokens when the registration returns.
+- Narrowing takes effect at the reload that admits it, and at startup.
+  Changing `connect` to `read_only` ends the application's write-capable
+  tokens; changing `allowed_execution_contexts` or `allowed_services` ends the
+  tokens minted with the previous lists. Clients obtain new tokens at their
+  next request, with their existing refresh tokens. Each reload or startup
+  that ended tokens writes one `applications.tokens.reconciled` audit record
+  per application with the count. The step runs once the new configuration
+  is active and holds off token requests and further reloads until it has
+  finished, even when the reload request itself is abandoned; a rejected
+  reload ends nothing. If the step fails, the reload still succeeds, reports
+  `applicationTokens.status: "failed"` in its result and in
+  `lastReloadAttempt.message`, logs `application_token_reconciliation_failed`
+  and writes an `applications.tokens.reconciled` audit record with decision
+  `error`. Tokens minted from then on already follow the new registration;
+  reload again, or restart, to end the remaining ones.
+- At startup the same step must succeed before the Broker serves. If it
+  fails, startup stops with `application token reconciliation failed at
+  startup`, after logging `application_token_reconciliation_failed` and
+  writing the audit record: a token minted under an earlier registration
+  would otherwise keep authority the configuration no longer grants. Restore
+  write access to the managed store (a locked or read-only database is the
+  usual cause) and start again; nothing needs to be repaired by hand.
+- Shutdown waits, within `--shutdown-timeout-ms`, for token requests,
+  revocations and a reload's reconciliation that are still completing, so
+  that their audit records are written before the audit store closes, also
+  when their caller has disconnected. One that does not finish in time is
+  logged as `application_owner_shutdown_unfinalized`: its store change may
+  have committed without its audit record.
+- Removing a redirect URI invalidates the pending approval requests and
+  unexchanged codes issued for it.
+- A reload fences token requests: one admitted under the previous generation
+  answers `temporarily_unavailable` and the application retries.
+- The token, revocation and authorization endpoints share
+  `limits.auth_requests_per_source_per_minute` per client address, whatever
+  other Broker credential a request carries. An
+  application that opens many agent sessions from one address may need a higher
+  value; a refused request answers `temporarily_unavailable`.
+- Refresh-token hashes, pending requests and codes are managed-store data and
+  are covered by its backups. Restoring an older backup can restore an access
+  a person or administrator had removed; review application access after a
+  restore.
+
+Audit records use the actions listed in
+[application audit](applications.md#audit).
 
 ## Imported service operations
 

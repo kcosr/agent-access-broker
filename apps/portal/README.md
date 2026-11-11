@@ -5,7 +5,10 @@ manage accounts, groups, grants, resources and imported services, inspect audit
 events, and reload configuration. Auditors use the same administrative views
 with read-only controls. Service policy managers work within their assigned
 services. Personal tokens, credentials and connections require the account's
-independent self-service setting.
+independent self-service setting. The approval page a registered
+[application](../../docs/applications.md) sends a person to
+(`/ui/authorize/<request>`) and the person's **Account > Applications** list
+do not.
 
 Administrators configure **Agent token issuance** under a user's **Account
 access** or a managed group's **Token issuance** section. Users start with

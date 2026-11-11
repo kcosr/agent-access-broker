@@ -688,6 +688,236 @@ fn sample_configs_validate() {
     validate_cli_config_file(root.join("agent-access.sample.toml")).unwrap();
 }
 
+/// The production sample with one registered application.
+fn application_config() -> BrokerConfig {
+    let raw =
+        fs::read_to_string(workspace_root().join("agent-access-broker.production.sample.toml"))
+            .unwrap();
+    let raw = format!(
+        "{raw}\n[applications.example-runner]\n\
+         display_name = \"Example Runner\"\n\
+         client_secret_ref = \"file:/etc/agent-access-broker/secrets/example-runner-client-secret\"\n\
+         redirect_uris = [\"https://runner.example.test/auth/broker/callback\"]\n\
+         connect = \"read_write\"\n\
+         allowed_execution_contexts = [\"default\"]\n"
+    );
+    parse_test_config(&raw).unwrap()
+}
+
+#[test]
+fn applications_validate_their_registration_and_prerequisites() {
+    let config = application_config();
+    validate_broker_config(&config).unwrap();
+    let application = &config.applications["example-runner"];
+    assert_eq!(application.connect, ApplicationConnectLevel::ReadWrite);
+    assert_eq!(application.access_token_ttl, "8h");
+    assert_eq!(application.refresh_idle_ttl, "90d");
+    assert!(application.allowed_services.is_none());
+
+    let invalid = |change: &dyn Fn(&mut BrokerConfig), expected: &str| {
+        let mut changed = config.clone();
+        change(&mut changed);
+        assert_contains(
+            &validation_errors(validate_broker_config(&changed)),
+            expected,
+        );
+    };
+    fn app(config: &mut BrokerConfig) -> &mut ApplicationConfig {
+        config.applications.get_mut("example-runner").unwrap()
+    }
+    invalid(
+        &|config| config.identity.authority = "toml".into(),
+        "applications requires managed identity, managed_store, broker_tokens and a broker_tokens identity source",
+    );
+    invalid(
+        &|config| config.identity.sources.clear(),
+        "applications requires managed identity",
+    );
+    invalid(
+        &|config| config.browser_auth.public_origin = None,
+        "applications requires browser_auth.enabled and browser_auth.public_origin",
+    );
+    invalid(
+        &|config| config.management.enabled = false,
+        "applications requires management.enabled",
+    );
+    for redirect in [
+        "http://runner.example.test/callback",
+        "https://runner.example.test/callback#fragment",
+        "https://user:password@runner.example.test/callback",
+        "/callback",
+    ] {
+        invalid(
+            &|config| app(config).redirect_uris = vec![redirect.into()],
+            "redirect_uris entries must be absolute https URIs",
+        );
+    }
+    invalid(
+        &|config| app(config).redirect_uris.clear(),
+        "redirect_uris must list 1 to 16 URIs",
+    );
+    invalid(
+        &|config| {
+            let uri = app(config).redirect_uris[0].clone();
+            app(config).redirect_uris.push(uri);
+        },
+        "redirect_uris must not repeat a URI",
+    );
+    invalid(
+        &|config| app(config).display_name = " ".into(),
+        "display_name must be 1 to 128 bytes",
+    );
+    invalid(
+        &|config| app(config).client_secret_ref = String::new(),
+        "client_secret_ref is required",
+    );
+    invalid(
+        &|config| app(config).allowed_execution_contexts = vec!["unconfigured".into()],
+        "invalid, duplicate, or unconfigured execution context",
+    );
+    invalid(
+        &|config| app(config).allowed_execution_contexts.clear(),
+        "allowed_execution_contexts must not be empty",
+    );
+    invalid(
+        &|config| app(config).allowed_services = Some(Vec::new()),
+        "allowed_services must list distinct service names when set",
+    );
+    invalid(
+        &|config| app(config).access_token_ttl = "31d".into(),
+        "access_token_ttl must not exceed broker_tokens.max_self_issued_agent_invoke_ttl",
+    );
+    invalid(
+        &|config| app(config).access_token_ttl = "soon".into(),
+        "access_token_ttl must be a duration",
+    );
+    invalid(
+        &|config| app(config).refresh_idle_ttl = "0d".into(),
+        "refresh_idle_ttl must be a duration",
+    );
+    invalid(
+        &|config| {
+            let application = app(config).clone();
+            config.applications.insert("bad:id".into(), application);
+        },
+        "applications.bad:id has an invalid application ID",
+    );
+    // An unknown field or level is a parse error, never ignored.
+    for extra in ["scope = \"all\"", "connect = \"admin\""] {
+        let raw = format!(
+            "[applications.example-runner]\ndisplay_name = \"Example Runner\"\n\
+             client_secret_ref = \"env:SECRET\"\nredirect_uris = []\n\
+             allowed_execution_contexts = []\n{extra}\n"
+        );
+        assert!(toml::from_str::<toml::Table>(&raw).is_ok());
+        let mut complete =
+            fs::read_to_string(workspace_root().join("agent-access-broker.production.sample.toml"))
+                .unwrap();
+        complete.push_str(&raw);
+        assert!(parse_test_config(&complete).is_err(), "{extra}");
+    }
+}
+
+#[test]
+fn application_client_secrets_follow_the_caller_credential_rules() {
+    let directory = tempfile::tempdir().unwrap();
+    let secret = |name: &str, value: &str| {
+        let path = directory.path().join(name);
+        fs::write(&path, value).unwrap();
+        format!("file:{}", path.display())
+    };
+    let mut config = application_config();
+    config
+        .applications
+        .get_mut("example-runner")
+        .unwrap()
+        .client_secret_ref = secret("one", "example-runner-client-secret-0123456789\n");
+    let loaded = RegisteredApplications::load(&config, &[]).unwrap();
+    let application = loaded.get("example-runner").unwrap();
+    assert_eq!(application.display_name(), "Example Runner");
+    assert!(application.accepts_redirect_uri("https://runner.example.test/auth/broker/callback"));
+    assert!(!application.accepts_redirect_uri("https://runner.example.test/auth/broker/callback/"));
+    let terms = application.terms().unwrap();
+    assert_eq!(
+        (
+            terms.read_only,
+            terms.access_token_ttl_seconds,
+            terms.refresh_idle_ttl_seconds
+        ),
+        (false, 8 * 60 * 60, 90 * 24 * 60 * 60)
+    );
+    assert!(
+        loaded
+            .authenticate("example-runner", "example-runner-client-secret-0123456789")
+            .is_some()
+    );
+    assert!(
+        loaded
+            .authenticate("example-runner", "another-secret-0123456789")
+            .is_none()
+    );
+    assert!(
+        loaded
+            .authenticate(
+                "another-application",
+                "example-runner-client-secret-0123456789"
+            )
+            .is_none()
+    );
+    // The secret never reaches Debug output.
+    assert!(!format!("{loaded:?}").contains("client-secret"));
+
+    let refused = |config: &BrokerConfig, others: &[&str], expected: &str| {
+        let error = match RegisteredApplications::load(config, others).unwrap_err() {
+            HostConfigError::Config(error) => error.errors().join("; "),
+            other => other.to_string(),
+        };
+        assert!(error.contains(expected), "{error}");
+        assert!(!error.contains("0123456789"), "{error}");
+    };
+    // Distinct from trusted caller credentials.
+    refused(
+        &config,
+        &["example-runner-client-secret-0123456789"],
+        "must be distinct",
+    );
+    let mut second = config.clone();
+    let mut other = second.applications["example-runner"].clone();
+    other.client_secret_ref = secret("two", "example-runner-client-secret-0123456789");
+    second.applications.insert("second-runner".into(), other);
+    refused(&second, &[], "must be distinct");
+    for (value, expected) in [
+        ("too-short", "16 to 1024 visible ASCII bytes"),
+        (
+            "contains a space 0123456789",
+            "16 to 1024 visible ASCII bytes",
+        ),
+        (
+            "aab_ai_0123456789abcdef",
+            "reserved managed-token namespace",
+        ),
+    ] {
+        let mut changed = config.clone();
+        changed
+            .applications
+            .get_mut("example-runner")
+            .unwrap()
+            .client_secret_ref = secret("bad", value);
+        refused(&changed, &[], expected);
+    }
+    // Level none has no terms.
+    let mut none = config.clone();
+    none.applications.get_mut("example-runner").unwrap().connect = ApplicationConnectLevel::None;
+    assert!(
+        RegisteredApplications::load(&none, &[])
+            .unwrap()
+            .get("example-runner")
+            .unwrap()
+            .terms()
+            .is_none()
+    );
+}
+
 #[test]
 fn rejects_provider_tenant_hosts_that_are_not_bare_hosts() {
     for invalid in [

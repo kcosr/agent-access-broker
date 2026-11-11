@@ -1,5 +1,7 @@
 mod agent_token_issuance;
 pub use agent_token_issuance::*;
+mod application_access;
+pub use application_access::*;
 mod connection_credentials;
 mod identity_access;
 mod identity_tokens;
@@ -89,7 +91,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_APPLICATION_ACCESS_VERSION;
+const MANAGED_STORE_APPLICATION_ACCESS_VERSION: &str = "037_application_access";
 const MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION: &str = "036_microsoft_enrollments";
 const MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION: &str = "035_imported_gateway_routes";
 const MANAGED_STORE_AGENT_TOKEN_ISSUANCE_CONTEXTS_VERSION: &str =
@@ -316,6 +319,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         seed: None,
         structural_validation: microsoft_enrollments::validate_structure,
     },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_APPLICATION_ACCESS_VERSION,
+        checksum: "fb9b5f28cf55f3e1eb46923be3dec54a173619c23e90e4fe208a3382329fbea2",
+        sql: include_str!("managed_store/application_access.sql"),
+        seed: None,
+        structural_validation: application_access::validate_structure,
+    },
 ];
 
 fn production_migration_catalog() -> ManagedStoreMigrationCatalog<'static> {
@@ -493,6 +503,14 @@ pub enum ManagedStoreError {
     IdentityVersionConflict,
     #[error("identity binding was not found")]
     IdentityBindingNotFound,
+    #[error("application authorization request was not found or is no longer valid")]
+    ApplicationAuthorizationInvalid,
+    #[error("application authorization request capacity is exhausted")]
+    ApplicationAuthorizationCapacity,
+    #[error("application access is denied: {}", .0.as_str())]
+    ApplicationAccessDenied(ApplicationConnectDenial),
+    #[error("application access was not found")]
+    ApplicationAccessNotFound,
     #[error("attested identity is denied")]
     AttestedIdentityDenied,
     #[error("broker token was not found")]
@@ -580,6 +598,10 @@ impl ManagedStoreError {
             Self::IdentityBindingConflict => ReasonCode::IdentityBindingConflict,
             Self::IdentityVersionConflict => ReasonCode::IdentityVersionConflict,
             Self::IdentityBindingNotFound => ReasonCode::IdentityBindingNotFound,
+            Self::ApplicationAuthorizationInvalid => ReasonCode::ApplicationAuthorizationInvalid,
+            Self::ApplicationAuthorizationCapacity => ReasonCode::ConcurrencyLimited,
+            Self::ApplicationAccessDenied(_) => ReasonCode::ApplicationAccessDenied,
+            Self::ApplicationAccessNotFound => ReasonCode::ApplicationAccessNotFound,
             Self::AttestedIdentityDenied => ReasonCode::IdentityAssertionDenied,
             Self::BrokerTokenNotFound => ReasonCode::BrokerTokenNotFound,
             Self::BrokerTokenExpired => ReasonCode::BrokerTokenExpired,
@@ -2667,6 +2689,7 @@ impl ManagedStore {
                         created_at, expires_at, revoked_at, revoked_by, paused_at, paused_by,
                         last_used_at, created_by
                  FROM broker_tokens
+                 WHERE application_access_id IS NULL
                  ORDER BY created_at DESC, token_id",
             )
             .map_err(sql_unavailable)?;
@@ -2689,7 +2712,7 @@ impl ManagedStore {
                         created_at, expires_at, revoked_at, revoked_by, paused_at, paused_by,
                         last_used_at, created_by
                  FROM broker_tokens
-                 WHERE principal_id = ?1
+                 WHERE principal_id = ?1 AND application_access_id IS NULL
                  ORDER BY created_at DESC, token_id",
             )
             .map_err(sql_unavailable)?;
@@ -4051,6 +4074,7 @@ impl ManagedStore {
                  FROM broker_tokens
                  WHERE principal_id = ?1
                    AND token_class = 'agent_invoke'
+                   AND application_access_id IS NULL
                    AND (?2 OR revoked_at IS NULL)
                    AND (?3 OR expires_at IS NULL OR expires_at > ?4)
                  ORDER BY created_at DESC, token_id",

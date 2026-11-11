@@ -20,7 +20,8 @@ local demonstration accounts and policy.
    **Policies** to review actions, contexts, credential modes, and resources.
 4. Review **Tokens**, including expiry, last use, paused/revoked status, and
    resource/action restrictions. Review **Credentials** and **Limits** where
-   applicable.
+   applicable, and the applications the person approved under
+   [**Access paths**](#review-application-access).
 5. Open **Admin > Audit** or the principal's **Activity** tab to investigate
    unexpected use or management changes.
 
@@ -142,6 +143,47 @@ upstream revocation or rotation when needed. See
 [classless static credential rights](../administrator-guide.md#grant-personal-credential-rights)
 and the [end-user guide](../end-user-guide.md#rotate-pause-and-revoke).
 
+## Review application access
+
+A person approves a registered [application](../applications.md) in their own
+browser; an administrator cannot connect one for them. To review or limit what
+a person approved:
+
+1. Open **Admin > Principals > the person > Overview** and find **Access
+   paths** under **Identity access**. Each application the person approved is
+   one row, named **Application**, after the identity token and the username
+   bindings.
+2. Read the row: the application's level set by the operator (**Level: read and
+   write**, **read-only** or **none**), how many tokens it currently holds, and
+   its status. **Connected** means the application can obtain tokens; the
+   count can still be zero, for example after a reload ended them. **Not
+   connected** means it cannot: either a first approval that the application
+   has not finished connecting, which disappears if it never does, or a row
+   that you disabled or made read-only and that was kept, with those
+   settings, when the person or the application ended the connection.
+   **Application unavailable** means the application is no longer registered:
+   the row shows **Level: not available** and the application obtains nothing.
+3. Turn **Read-only** on to limit the application to actions classified as
+   reads for this person. When the application's level is already read-only,
+   the column shows **Read-only, Fixed by the application’s level** instead of
+   a toggle: a person's setting only narrows the level.
+4. Turn **Enabled** off to stop the application for this person. It cannot
+   obtain tokens, and the person cannot connect it again until you turn it on.
+5. Choose **Remove**, then **Remove access**, to delete the row. The person may
+   connect the application again later, starting without restrictions. This is
+   the only way to clear a restriction: a person's own **Remove** under
+   **Account > Applications** leaves a disabled or read-only row here, not
+   connected, and their next approval reuses its settings.
+
+Expected result: every change ends the tokens the application holds for the
+person at once, and a change to **Enabled** or **Read-only** advances the
+row's version; connecting and disconnecting do not. If another administrator
+changed the row first, the portal refreshes it and asks you to repeat the
+change. Auditors see the same rows without controls. Application tokens are not
+listed on the person's **Tokens** tab; the row's live token count is their only
+listing. The CLI equivalents are in the
+[administrator guide](../administrator-guide.md#review-application-access).
+
 ## Offboard a user or workload
 
 1. Open the account's principal page and choose **Disable user** or
@@ -189,6 +231,11 @@ For the full sequence, see
    **Identity authority**, and **Policy authority**.
 3. After an operator prepares a validated configuration change, use
    **Reload config** and inspect **Last reload** for **Applied** or **Rejected**.
+   When the new configuration narrows or removes a registered
+   [application](../applications.md#registering-an-application), the reload
+   notice names each application whose tokens it ended and why. If that step
+   failed, the notice and **Last reload**'s **Message** say so: the
+   configuration is active, and the next reload or restart ends the tokens.
 
 Expected result: the runtime facts describe the active configuration. File-owned
 identity or policy can be inspected in the portal but requires configuration edits

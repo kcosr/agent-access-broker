@@ -518,6 +518,12 @@ fn route_visible(context: &SpecContext, access: &SpecAccess, route_access: Route
         RouteAccess::UserTokenManagement => {
             access.visibility_all || access.can_user_token_management
         }
+        // Not gated by self-service; listed while applications are registered.
+        RouteAccess::AccountManagement => {
+            !context.snapshot.runtime.applications().is_empty()
+                && (access.visibility_all
+                    || token_class(context) == Some(BrokerTokenClass::UserManage))
+        }
         RouteAccess::PolicyRead => access.can_policy_read,
         RouteAccess::PolicyWrite => access.can_policy_write,
         RouteAccess::AdminRead => access.can_admin_read,

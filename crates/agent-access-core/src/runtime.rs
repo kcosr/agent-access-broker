@@ -1803,6 +1803,8 @@ pub struct BrokerRuntime {
     credential_key_ring: Option<CredentialKeyRing>,
     oauth: Option<crate::OAuthManager>,
     trusted_callers: Arc<Vec<ResolvedTrustedCaller>>,
+    /// `[applications]` with their loaded client secrets.
+    applications: Arc<crate::RegisteredApplications>,
     broker_token_hasher: Option<BrokerTokenHasher>,
     local_password_hasher: Option<LocalPasswordHasher>,
     browser_csrf_key: Option<BrowserCsrfKey>,
@@ -2282,6 +2284,7 @@ impl BrokerRuntime {
             )
         };
         let trusted_callers = load_trusted_callers(&config)?;
+        let applications = trusted_callers::load_applications(&config, &trusted_callers)?;
         let local_password_hasher = config
             .browser_auth
             .local_password
@@ -2498,6 +2501,7 @@ impl BrokerRuntime {
             credential_key_ring,
             oauth,
             trusted_callers,
+            applications,
             broker_token_hasher,
             local_password_hasher,
             browser_csrf_key,
@@ -3064,6 +3068,11 @@ impl BrokerRuntime {
 
     pub fn broker_token_hasher(&self) -> Option<&BrokerTokenHasher> {
         self.broker_token_hasher.as_ref()
+    }
+
+    /// This generation's registered client applications.
+    pub fn applications(&self) -> &crate::RegisteredApplications {
+        &self.applications
     }
 
     pub fn local_password_hasher(&self) -> Option<&LocalPasswordHasher> {
@@ -8401,6 +8410,12 @@ fn managed_store_failure_message(error: &ManagedStoreError) -> &'static str {
         ManagedStoreError::IdentityBindingConflict => "managed identity binding already exists",
         ManagedStoreError::IdentityVersionConflict => "managed identity version changed",
         ManagedStoreError::IdentityBindingNotFound => "managed identity binding was not found",
+        ManagedStoreError::ApplicationAuthorizationInvalid
+        | ManagedStoreError::ApplicationAuthorizationCapacity => {
+            "application authorization request is not available"
+        }
+        ManagedStoreError::ApplicationAccessDenied(_) => "application access is denied",
+        ManagedStoreError::ApplicationAccessNotFound => "application access was not found",
         ManagedStoreError::AttestedIdentityDenied => "managed identity assertion is denied",
         ManagedStoreError::SelfServiceDisabled => "self-service is disabled",
         ManagedStoreError::TokenIssuanceDenied { category } => category.message(),

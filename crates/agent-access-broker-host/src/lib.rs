@@ -17,6 +17,7 @@ mod oauth_revocations;
 mod observability;
 mod oidc_id_token;
 mod operations;
+mod owner_drain;
 mod reload;
 mod router;
 mod state;

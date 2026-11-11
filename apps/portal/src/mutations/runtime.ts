@@ -1,6 +1,7 @@
 // Runtime configuration reload.
 import { useMemo } from "react";
 import { brokerApi } from "../api";
+import { applicationTokensNotice } from "../lib/applications";
 import { useToast } from "../workbench";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
@@ -19,7 +20,11 @@ export function useRuntimeActions() {
       invalidate.admin();
       invalidate.console();
       invalidate.oauthConnections();
-      toast(`Config reloaded · generation ${status.generation}`, { tone: "success" });
+      const tokens = applicationTokensNotice(status.applicationTokens);
+      const reloaded = `Config reloaded · generation ${status.generation}`;
+      if (!tokens) toast(reloaded, { tone: "success" });
+      // The configuration is active either way; a failed token step is retried by the next reload.
+      else toast(`${reloaded}. ${tokens.text}`, { tone: tokens.failed ? "error" : "success", duration: 8000 });
     }
 
     function confirmReload() {

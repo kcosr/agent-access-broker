@@ -20,6 +20,7 @@ use thiserror::Error;
 use url::Url;
 
 mod api;
+mod applications_config;
 mod attribution;
 mod audit_query;
 mod backends;
@@ -49,6 +50,7 @@ mod state_lock;
 pub mod test_support;
 
 pub use api::*;
+pub use applications_config::*;
 pub use attribution::AttributionConfig;
 pub use audit_query::*;
 pub use backends::{BackendRegistry, ProvidersConfig};
@@ -571,6 +573,10 @@ pub struct BrokerConfig {
     pub command_imports: CommandImportsConfig,
     #[serde(default)]
     pub oauth: OAuthConfig,
+    /// `[applications.<id>]`: operator-approved client applications, keyed by
+    /// application ID.
+    #[serde(default)]
+    pub applications: ApplicationsConfig,
     pub managed_store: Option<ManagedStoreConfig>,
     pub credential_encryption: Option<CredentialEncryptionConfig>,
     #[serde(default)]
@@ -1796,6 +1802,7 @@ pub fn validate_broker_config(config: &BrokerConfig) -> Result<(), ConfigError> 
     validate_browser_auth(config, &mut errors);
     validate_portal(config, &mut errors);
     mcp_config::validate(config, &mut errors);
+    applications_config::validate(config, &mut errors);
     // Imported types live in the managed store, and configuration cannot
     // reference them, so offline validation sees the composition's types.
     let effective_types = runtime::EffectiveResourceTypes::composition(config.providers.registry());

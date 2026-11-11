@@ -6,6 +6,17 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Application access adds managed-store migration `037_application_access`.**
+  Back up first and upgrade Broker and CLI together; rollback requires the
+  matching pre-migration database and binary. The migration changes no existing
+  row. The runtime catalog gains the `account_management` route access for the
+  new personal routes, listed only while an application is registered, which an
+  older CLI cannot parse. Downstream code matching `ManagedStoreError` or
+  `RouteAccess` exhaustively must handle the new variants, and `BrokerConfig`
+  has a new `applications` field. See
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
+
 - **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
   Back up first and upgrade Broker, CLI and portal together; rollback requires
   the matching pre-migration database and binary. Existing principals are marked
@@ -175,6 +186,27 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Applications connect with OAuth instead of pasted tokens.** An operator
+  registers a client application in `[applications.<id>]`; a person approves it
+  once in their browser, and the application then obtains short-lived
+  `agent_invoke` tokens for them with the authorization-code flow (PKCE,
+  `client_secret_basic`, non-rotating refresh tokens, RFC 8414 metadata and
+  RFC 7009 revocation). Connecting needs neither self-service nor token-issuance
+  permission. The operator sets each application's level (`none`, `read_only`,
+  `read_write`); administrators make one person's access read-only, disable it
+  or remove it with `admin principals application-access` or the matching
+  routes, which ends its tokens at once; a person or the application can end
+  the consent but not lift those restrictions. A reload or restart under a
+  narrower registration ends the tokens it no longer mints, and the Broker does
+  not start when it cannot. Application tokens
+  are not listed individually and are deleted 7 days after they end. In the
+  portal, the person approves or declines on a dedicated page, reviews and
+  removes their applications under **Account > Applications**, and
+  administrators manage each application as a row of the person's **Access
+  paths**; the **Reload config** notice names the application tokens a reload
+  ended. See [applications](docs/applications.md).
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to
   required Microsoft email, optional display name and access settings, with a
@@ -386,6 +418,10 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
+  portal page makes no longer send the page's address.
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
+
 - **Building from source requires Rust 1.99 or newer.** Workspace crates declare
   `rust-version = "1.99"` and the repository pins Rust 1.99.1, so downstream
   providers and assemblies that pin these crates need Rust 1.99.
@@ -500,6 +536,11 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- A browser session that expires while a portal page is open now shows the
+  sign-in choices again, instead of "No browser sign-in method is enabled" until
+  the page was reloaded. Signing in returns to the same page.
+  ([#113](https://github.com/kcosr/agent-access-broker/pull/113))
 
 - Dependency updates clear RustSec advisories in `crypto-bigint` (through
   `openidconnect`, now 4.1.0), `h2`, `pulldown-cmark`, `quinn-proto`, `rustls`,

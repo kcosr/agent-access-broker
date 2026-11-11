@@ -2,6 +2,10 @@ import type { GroupAgentTokenIssuanceSetting, PrincipalAgentTokenIssuanceSetting
 import type { ImportAcceptResult, ImportActionStatus, ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
 import type { CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
+  ApplicationAccess,
+  ApplicationAuthorization,
+  ApplicationDecision,
+  RouteCatalog,
   IdentityPathSettings,
   IdentityTokenMetadata,
   PrincipalIdentityAccess,
@@ -66,6 +70,7 @@ type ManagementEnvelope<T> = {
   operation: string;
   principal: string;
   target?: { conflict?: unknown; classificationChanges?: ImportClassificationChange[] } & ImportChangeBlocked;
+  details?: Record<string, unknown>;
   result?: T;
   error?: { message: string };
 };
@@ -98,8 +103,10 @@ export class ApiError extends Error {
   readonly blocked?: ImportChangeBlocked;
   /** An import acceptance refused until its effect on existing grants is confirmed: the broker's classification changes for the submitted selections. */
   readonly classificationChanges?: ImportClassificationChange[];
+  /** A management refusal's structured details, such as why an application may not be connected. */
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, status: number, reasonCode?: string, requestId?: string, brokerRequestId?: string, conflict?: unknown, blocked?: ImportChangeBlocked, classificationChanges?: ImportClassificationChange[]) {
+  constructor(message: string, status: number, reasonCode?: string, requestId?: string, brokerRequestId?: string, conflict?: unknown, blocked?: ImportChangeBlocked, classificationChanges?: ImportClassificationChange[], details?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -109,6 +116,7 @@ export class ApiError extends Error {
     this.conflict = conflict;
     this.blocked = blocked;
     this.classificationChanges = classificationChanges;
+    this.details = details;
   }
 }
 
@@ -188,6 +196,11 @@ async function authRequest<T>(path: string, init: RequestInit = {}, session?: Se
 }
 
 async function managementRequest<T>(path: string, init: RequestInit = {}, session?: Session): Promise<T> {
+  return (await managementEnvelope<T>(path, init, session)).result;
+}
+
+/** A successful management envelope: the result and the principal the broker answered for. */
+async function managementEnvelope<T>(path: string, init: RequestInit = {}, session?: Session): Promise<{ result: T; principal: string }> {
   const body = init.body ?? null;
   const response = await fetch(path, {
     ...init,
@@ -204,10 +217,11 @@ async function managementRequest<T>(path: string, init: RequestInit = {}, sessio
       envelope?.brokerRequestId,
       envelope?.target?.conflict,
       importChangeBlocked(envelope?.target),
-      Array.isArray(envelope?.target?.classificationChanges) ? envelope.target.classificationChanges : undefined
+      Array.isArray(envelope?.target?.classificationChanges) ? envelope.target.classificationChanges : undefined,
+      envelope?.details && typeof envelope.details === "object" ? envelope.details : undefined
     );
   }
-  return envelope.result;
+  return { result: envelope.result, principal: envelope.principal };
 }
 
 async function discoveryRequest<T>(path: string): Promise<T> {
@@ -801,6 +815,27 @@ export const brokerApi = {
       { method: "DELETE" },
       session
     ),
+  // The caller-filtered runtime catalog. Rendered auth descriptions are not needed.
+  routeCatalog: () => discoveryRequest<RouteCatalog>("/v1/spec/catalog?auth=omit"),
+  /** The request, with the account the broker showed it to (the envelope's principal). */
+  applicationAuthorization: async (session: Session, requestId: string): Promise<ApplicationAuthorization> => {
+    const { result, principal } = await managementEnvelope<Omit<ApplicationAuthorization, "principal">>(`/v1/applications/authorizations/${enc(requestId)}`, { cache: "no-store" }, session);
+    if (typeof principal !== "string" || !principal) throw new ApiError("The broker did not say which account the request was shown to.", 502);
+    return { ...result, principal };
+  },
+  /** `principalId` is the account the page displayed; the broker refuses a decision from any other session. */
+  decideApplicationAuthorization: (session: Session, requestId: string, decision: ApplicationDecision["decision"], principalId: string) =>
+    managementRequest<ApplicationDecision>(`/v1/applications/authorizations/${enc(requestId)}/decision`, { method: "POST", cache: "no-store", body: JSON.stringify({ decision, principalId }) }, session),
+  applicationAccess: (session: Session) =>
+    managementRequest<{ access: ApplicationAccess[] }>("/v1/applications/access", { cache: "no-store" }, session).then((result) => result.access),
+  removeApplicationAccess: (session: Session, accessId: string) =>
+    managementRequest<{ removed: true }>(`/v1/applications/access/${enc(accessId)}`, { method: "DELETE" }, session),
+  adminApplicationAccess: (session: Session, principalId: string) =>
+    managementRequest<{ access: ApplicationAccess[] }>(`/v1/admin/principals/${enc(principalId)}/application-access`, { cache: "no-store" }, session).then((result) => result.access),
+  adminUpdateApplicationAccess: (session: Session, principalId: string, accessId: string, body: IdentityPathSettings & { expectedVersion: number }) =>
+    managementRequest<ApplicationAccess>(`/v1/admin/principals/${enc(principalId)}/application-access/${enc(accessId)}`, { method: "PATCH", body: JSON.stringify(body) }, session),
+  adminRemoveApplicationAccess: (session: Session, principalId: string, accessId: string, expectedVersion: number) =>
+    managementRequest<{ removed: true }>(`/v1/admin/principals/${enc(principalId)}/application-access/${enc(accessId)}?expectedVersion=${expectedVersion}`, { method: "DELETE" }, session),
   auditOptions: (session: Session, scope: "admin" | "self") =>
     managementRequest<AuditOptions>(scope === "admin" ? "/v1/admin/audit/options" : "/v1/audit/options", {}, session),
   /** One page of audit records. `params` are sent as given: callers omit empty filters. */

@@ -62,6 +62,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 
 mod aggregate_limits;
+mod applications;
 mod atlassian_connections;
 mod audit_query;
 mod body_admission;
@@ -16521,6 +16522,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
         imports: Default::default(),
         command_imports: Default::default(),
         oauth: Default::default(),
+        applications: Default::default(),
         deployment: DeploymentConfig {
             enable_fake_service: true,
             ..DeploymentConfig::default()

@@ -1,5 +1,6 @@
 import { canUseSelfService, ROLE_LABELS } from "../../lib/capabilities";
-// Account settings: session facts, appearance, password, and own service limits.
+// Account settings: session facts, approved applications, appearance, password,
+// and own service limits.
 // Also shown in place of every page while a password change is required.
 import { SignInMethodBadges } from "../principals/sign-in-methods";
 import { useState } from "react";
@@ -32,6 +33,7 @@ import { useSession } from "../../app/session";
 import { usePortalTheme } from "../../app/theme";
 import { useOwnMicrosoftMembership, useOwnServiceLimits } from "../../data/queries";
 import { useAuthActions } from "../../mutations/auth";
+import { ApplicationsSection } from "./applications-section";
 
 /** How this session signed in; unknown methods show their wire name. */
 const LOGIN_METHOD_LABELS: Record<string, string> = { local_password: "Local password", oidc: "Microsoft" };
@@ -78,6 +80,7 @@ export function AccountPage() {
               ]}
             />
           </SettingsSection>
+          {!locked ? <ApplicationsSection /> : null}
           <SettingsSection title="Appearance">
             <SettingsRow label="Theme" help="System follows your operating system." group>
               <Seg<ThemeMode>

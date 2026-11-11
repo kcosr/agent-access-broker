@@ -1,3 +1,4 @@
+pub(crate) mod applications;
 pub(crate) mod auth;
 pub(crate) mod common;
 pub(crate) mod data;
