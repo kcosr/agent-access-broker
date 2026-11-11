@@ -50,6 +50,7 @@ pub struct ApplicationAccessUpdate {
 }
 
 /// Why a person may not connect an application.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplicationConnectDenial {

@@ -420,6 +420,7 @@ impl core::marker::UnsafeUnpin for agent_access_core::api::ResponseKind
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::api::ResponseKind
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::ResponseKind
 pub enum agent_access_core::api::RouteAccess
+pub agent_access_core::api::RouteAccess::AccountManagement
 pub agent_access_core::api::RouteAccess::AdminRead
 pub agent_access_core::api::RouteAccess::AdminWrite
 pub agent_access_core::api::RouteAccess::AgentInvoke
@@ -1136,6 +1137,34 @@ impl core::marker::Unpin for agent_access_core::managed_store::agent_token_issua
 impl core::marker::UnsafeUnpin for agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial
+pub mod agent_access_core::managed_store::application_access
+#[non_exhaustive] pub enum agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub agent_access_core::managed_store::application_access::ApplicationConnectDenial::AccessDisabled
+pub agent_access_core::managed_store::application_access::ApplicationConnectDenial::AccountDisabled
+pub agent_access_core::managed_store::application_access::ApplicationConnectDenial::ConnectingDisabled
+pub agent_access_core::managed_store::application_access::ApplicationConnectDenial::NotHuman
+impl agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub const fn agent_access_core::managed_store::application_access::ApplicationConnectDenial::as_str(self) -> &'static str
+impl core::clone::Clone for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub fn agent_access_core::managed_store::application_access::ApplicationConnectDenial::clone(&self) -> agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::cmp::Eq for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::cmp::PartialEq for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub fn agent_access_core::managed_store::application_access::ApplicationConnectDenial::eq(&self, &agent_access_core::managed_store::application_access::ApplicationConnectDenial) -> bool
+impl core::fmt::Debug for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub fn agent_access_core::managed_store::application_access::ApplicationConnectDenial::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::marker::StructuralPartialEq for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl serde_core::ser::Serialize for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub fn agent_access_core::managed_store::application_access::ApplicationConnectDenial::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+pub fn agent_access_core::managed_store::application_access::ApplicationConnectDenial::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::marker::Send for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::marker::Sync for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::marker::Unpin for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::marker::UnsafeUnpin for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::application_access::ApplicationConnectDenial
+impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::application_access::ApplicationConnectDenial
 pub mod agent_access_core::managed_store::imported_documents
 #[non_exhaustive] pub struct agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata
 pub agent_access_core::managed_store::imported_documents::ImportedDocumentMetadata::byte_length: u64
@@ -1341,6 +1370,10 @@ impl core::marker::UnsafeUnpin for agent_access_core::managed_store::resources::
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::managed_store::resources::audit::CatalogAuditEntity
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::managed_store::resources::audit::CatalogAuditEntity
 pub enum agent_access_core::managed_store::ManagedStoreError
+pub agent_access_core::managed_store::ManagedStoreError::ApplicationAccessDenied(agent_access_core::managed_store::application_access::ApplicationConnectDenial)
+pub agent_access_core::managed_store::ManagedStoreError::ApplicationAccessNotFound
+pub agent_access_core::managed_store::ManagedStoreError::ApplicationAuthorizationCapacity
+pub agent_access_core::managed_store::ManagedStoreError::ApplicationAuthorizationInvalid
 pub agent_access_core::managed_store::ManagedStoreError::AttestedIdentityDenied
 pub agent_access_core::managed_store::ManagedStoreError::BrokerTokenClassDenied
 pub agent_access_core::managed_store::ManagedStoreError::BrokerTokenExpired
@@ -1841,6 +1874,7 @@ enum agent_access_core::imports::definition::ImportedDiscoveryCredential: exhaus
 enum agent_access_core::imports::metadata::ImportedCredentialKind: exhaustive
 enum agent_access_core::managed_store::ManagedStoreError: exhaustive
 enum agent_access_core::managed_store::agent_token_issuance::TokenIssuanceDenial: non-exhaustive
+enum agent_access_core::managed_store::application_access::ApplicationConnectDenial: non-exhaustive
 enum agent_access_core::managed_store::imported_store::ImportedActionStatus: exhaustive
 enum agent_access_core::managed_store::imported_store::ImportedServiceStatus: exhaustive
 enum agent_access_core::managed_store::resources::audit::CatalogAuditEntityKind: exhaustive
