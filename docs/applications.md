@@ -88,7 +88,9 @@ registration, or that has a different remaining lifetime, is left alone. A
 configuration that is rejected ends nothing. If ending the tokens fails after
 the configuration became active, the reload still succeeds and reports
 `applicationTokens.status: "failed"`; new tokens already follow the new
-registration, and the next reload or restart ends the remaining ones.
+registration, and the next reload or restart ends the remaining ones. At
+startup nothing is serving yet, so the Broker does not start when this step
+fails: it never serves with a token the configuration no longer grants.
 Removing a registration keeps each person's access row, shown to
 administrators as unavailable; it mints nothing, and registering the same ID
 again makes the same refresh tokens work. A redirect URI removed from the
@@ -333,9 +335,15 @@ browser session; a bearer token cannot consent, whatever its class.
 `access_disabled`, `not_human` or `account_disabled`.
 
 `POST /v1/applications/authorizations/{requestId}/decision` with
-`{"decision": "approve"}` or `{"decision": "cancel"}` and the CSRF header
-returns `{decision, redirectTo}`. The page navigates to `redirectTo`. Cancel
-always returns the application `error=access_denied`. A refused approval
+`{"decision": "approve", "principalId": "..."}` or
+`{"decision": "cancel", "principalId": "..."}` and the CSRF header returns
+`{decision, redirectTo}`. `principalId` is required: it is the account the
+page showed the request to, which is the `principal` of the read above. When
+the session that sends the decision belongs to another account, for example
+after signing in again in another tab, the decision answers 409
+`version_conflict` and changes nothing; the page reads the request again. The
+page navigates to `redirectTo`. Cancel always returns the application
+`error=access_denied`. A refused approval
 answers 403 `application_access_denied` with `details.denialReason` and leaves
 the request pending, so the person can still cancel back to the application.
 An unknown, used or expired request answers 404
@@ -376,4 +384,8 @@ written; when that record cannot be written the request fails with
   request's parameters are encrypted with a key derived from its ID, which the
   store does not hold.
 - The approval is the person's own decision in their own browser session, with
-  CSRF protection. An administrator cannot connect an application for someone.
+  CSRF protection, for the account the page displayed. An administrator cannot
+  connect an application for someone.
+- Portal documents are served with `Referrer-Policy: no-referrer`, so the
+  request ID in the approval page's address is not sent in the `Referer` of
+  the requests that page makes.

@@ -197,7 +197,8 @@ All notable changes to this project are documented in this file.
   or remove it with `admin principals application-access` or the matching
   routes, which ends its tokens at once; a person or the application can end
   the consent but not lift those restrictions. A reload or restart under a
-  narrower registration ends the tokens it no longer mints. Application tokens
+  narrower registration ends the tokens it no longer mints, and the Broker does
+  not start when it cannot. Application tokens
   are not listed individually and are deleted 7 days after they end. In the
   portal, the person approves or declines on a dedicated page, reviews and
   removes their applications under **Account > Applications**, and
@@ -414,6 +415,9 @@ All notable changes to this project are documented in this file.
   ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
+
+- **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
+  portal page makes no longer send the page's address.
 
 - **Building from source requires Rust 1.99 or newer.** Workspace crates declare
   `rust-version = "1.99"` and the repository pins Rust 1.99.1, so downstream

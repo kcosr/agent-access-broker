@@ -2460,6 +2460,19 @@ loaded with their client secrets at startup and reload.
   and writes an `applications.tokens.reconciled` audit record with decision
   `error`. Tokens minted from then on already follow the new registration;
   reload again, or restart, to end the remaining ones.
+- At startup the same step must succeed before the Broker serves. If it
+  fails, startup stops with `application token reconciliation failed at
+  startup`, after logging `application_token_reconciliation_failed` and
+  writing the audit record: a token minted under an earlier registration
+  would otherwise keep authority the configuration no longer grants. Restore
+  write access to the managed store (a locked or read-only database is the
+  usual cause) and start again; nothing needs to be repaired by hand.
+- Shutdown waits, within `--shutdown-timeout-ms`, for token requests,
+  revocations and a reload's reconciliation that are still completing, so
+  that their audit records are written before the audit store closes, also
+  when their caller has disconnected. One that does not finish in time is
+  logged as `application_owner_shutdown_unfinalized`: its store change may
+  have committed without its audit record.
 - Removing a redirect URI invalidates the pending approval requests and
   unexchanged codes issued for it.
 - A reload fences token requests: one admitted under the previous generation

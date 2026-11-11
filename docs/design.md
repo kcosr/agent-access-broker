@@ -1590,7 +1590,8 @@ secrets into each runtime generation beside the trusted callers
   cancelled and no mint or reload interleaves; mint re-checks the published
   registration, so nothing is minted under the old one meanwhile. A failure
   is reported in the reload result, logged and audited, and retried by the
-  next reload or startup.
+  next reload or startup. Startup has published nothing, so it stops instead
+  of serving when the step fails.
 - **Restrictions outlive consent.** A disconnect by the person or the
   application clears the refresh token but keeps a disabled or read-only row
   for the next approval to reuse; only an administrator deletes it. The
@@ -3068,7 +3069,11 @@ permit, reporting those that have not. Microsoft
 [membership renewals](#microsoft-membership-renewal) stop starting when drain
 begins; shutdown then waits within the remaining budget (at least 100 ms) for
 submitted renewal writes and their audit records, logging each one that does
-not finish. The audit writer shuts
+not finish. The application token mint and revocation owners and a reload's
+token reconciliation owner have no preflight record, so each holds a lease in
+a drain from before it can outlive its caller; shutdown waits for those leases
+within the remaining budget (at least 100 ms) and reports the owners still
+running. The audit writer shuts
 down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.

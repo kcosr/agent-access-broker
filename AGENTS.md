@@ -361,7 +361,14 @@ owner that keeps the mutation fence and admission permit through the store
 work and audit, with no await between publication and that owner: a rejected
 or abandoned candidate never revokes, and every committed reconciliation is
 audited. A failure there is reported, logged and audited, never a rejected
-reload, and retried by the next reload or startup. Token and revocation
+reload, and retried by the next reload or startup; startup itself must not
+serve when its reconciliation fails. The mint, revocation and reconciliation
+owners take an `OwnerDrain` lease before they can outlive their caller, and
+shutdown drains those leases before the audit writers close. The consent
+decision carries the required `principalId` the page displayed and is refused
+with `version_conflict` under another account's session. Portal documents are
+served with `Referrer-Policy: no-referrer`; the portal's writes must keep
+sending `Origin`, which the sign-in routes check. Token and revocation
 requests are authentication-budget requests at pre-body admission whatever
 other Broker credential they carry. A disconnect by the person or by the
 application's refresh-token revocation never lifts an administrator's

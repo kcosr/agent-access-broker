@@ -3997,7 +3997,7 @@ envelope.
 | Method | Route | Operation | Body / result |
 | --- | --- | --- | --- |
 | GET | `/v1/applications/authorizations/{requestId}` | `applications.authorizations.inspect` | `{applicationId, applicationName, connect, readOnly, canConnect, denialReason, expiresAt}` |
-| POST | `/v1/applications/authorizations/{requestId}/decision` | `applications.authorizations.decide` | `{"decision":"approve"}` or `{"decision":"cancel"}`; `{decision, redirectTo}` |
+| POST | `/v1/applications/authorizations/{requestId}/decision` | `applications.authorizations.decide` | `{"decision":"approve","principalId":"alice"}` or `{"decision":"cancel","principalId":"alice"}`; `{decision, redirectTo}` |
 | GET | `/v1/applications/access` | `applications.access.list` | `{access: [...]}`, connected applications only |
 | DELETE | `/v1/applications/access/{accessId}` | `applications.access.remove` | `{removed: true}` |
 
@@ -4008,7 +4008,10 @@ whose application is no longer registered with the request's exact redirect
 URI, for an approval and a cancellation alike. A refused
 approval answers 403 `application_access_denied` with
 `details.denialReason` (`connecting_disabled`, `access_disabled`, `not_human` or
-`account_disabled`) and leaves the request pending. The decision's success audit
+`account_disabled`) and leaves the request pending. The decision's required
+`principalId` is the account the page showed the request to, the `principal`
+of the read's envelope; a decision sent by another account's session answers
+409 `version_conflict` and changes nothing. The decision's success audit
 target is `{principal, applicationId, decision, accessId}`. An approval only
 issues the code; the existing connection, if any, is replaced when the
 application redeems it.
