@@ -27,7 +27,7 @@ export function navigationPaletteItems(session: Session, go: Go): PaletteItem[] 
       { id: "go-resource-groups", label: "Resource groups", icon: "database" as const, keywords: ["catalog", "collections", "include", "exclude"], onSelect: go(paths.resourceGroups()) },
       { id: "go-system", label: "System", icon: "gear" as const, keywords: ["runtime", "reload", "config"], onSelect: go(ROUTE.system) }
     ] : []),
-    { id: "go-account", label: "Account settings", icon: "user", onSelect: go(ROUTE.account) }
+    { id: "go-account", label: "Account settings", icon: "user", keywords: ["applications"], onSelect: go(ROUTE.account) }
   ];
 }
 
