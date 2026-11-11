@@ -32,6 +32,12 @@ type Model = ReturnType<typeof newModel>;
 function newModel() {
   return {
     signedIn: true,
+    /** Whose cookie the browser holds; another tab can change it under an open page. */
+    account: "alex" as "alex" | "sam",
+    /** The CSRF token of the current session. */
+    csrf: "csrf-fixture",
+    /** Runs when a decision arrives, before the Broker checks it. */
+    beforeDecision: null as null | (() => void),
     role: "user" as PrincipalRole,
     selfServiceEnabled: false,
     authorization: { applicationId: "example-runner", applicationName: "Example Runner", connect: "read_write", readOnly: false, canConnect: true, denialReason: null, expiresAt: "2099-01-01T00:10:00Z" } as ApplicationAuthorization | null,
@@ -58,8 +64,8 @@ function sessionOf(model: Model) {
   const loginOptions = { localPassword: { enabled: true }, microsoft: { enabled: true, available: true, displayName: "Microsoft", startPath: "/v1/auth/oidc/microsoft/start" } };
   if (!model.signedIn) return { authenticated: false, loginOptions };
   return {
-    authenticated: true, principal: model.role === "user" ? "alex" : "viewer", displayName: model.role === "user" ? "Alex Example" : "Viewer", role: model.role, selfServiceEnabled: model.selfServiceEnabled,
-    loginMethod: "local_password", signInMethods: { localPassword: "active", microsoft: "absent" }, csrfHeader: "x-csrf-token", csrfToken: "csrf-fixture", loginOptions
+    authenticated: true, principal: model.role !== "user" ? "viewer" : model.account, displayName: model.role !== "user" ? "Viewer" : model.account === "alex" ? "Alex Example" : "Sam Example", role: model.role, selfServiceEnabled: model.selfServiceEnabled,
+    loginMethod: "local_password", signInMethods: { localPassword: "active", microsoft: "absent" }, csrfHeader: "x-csrf-token", csrfToken: model.csrf, loginOptions
   };
 }
 
@@ -113,7 +119,10 @@ async function fixture(page: Page, configure: (model: Model) => void = () => und
       return route.fulfill(model.authorization ? ok(model.authorization) : invalid);
     }
     if (path === `/v1/applications/authorizations/${REQUEST_ID}/decision`) {
+      model.beforeDecision?.();
       model.decisions.push({ decision: body?.decision, csrf: request.headers()["x-csrf-token"] ?? null });
+      // As the Broker does: a CSRF token belongs to one session.
+      if (request.headers()["x-csrf-token"] !== model.csrf) return route.fulfill(refusal(403, "csrf_invalid", "csrf token is invalid"));
       const decision = String(body?.decision);
       return route.fulfill(model.decide ? await model.decide(decision) : ok({ decision, redirectTo: callbackUrl(decision) }));
     }
@@ -378,6 +387,64 @@ test.describe("approval page", () => {
     await page.getByRole("button", { name: "Sign in", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Connect Example Runner?", exact: true })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe(CONSENT_PATH);
+  });
+
+  test("an account switched in another tab is shown before anything is sent", async ({ page }) => {
+    const model = await fixture(page);
+    await page.goto(`${assets.baseUrl}${CONSENT_PATH}`);
+    const request = page.getByRole("main", { name: "Application request", exact: true });
+    await expect(request).toContainText("Alex Example · alex");
+    // Another tab signs in as someone else: the cookie changes under this page.
+    model.account = "sam";
+    model.csrf = "csrf-sam";
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(request).toContainText("Sam Example · sam");
+    await expect(request.getByRole("status")).toHaveText("You are now signed in as a different account than this page showed. Nothing was sent. Check “Signed in as” before you answer.");
+    await expect(request).not.toContainText("Alex Example");
+    expect(model.decisions).toEqual([]);
+    expect(model.callbacks).toEqual([]);
+    // Only a new, explicit answer on the page that names the new account is sent.
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expectReturnedToApplication(page, model, "approve");
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-sam" }]);
+    expectNothingLeaked(model);
+  });
+
+  test("a decision refused for a changed session is never replayed for the other account", async ({ page }) => {
+    const model = await fixture(page);
+    await page.goto(`${assets.baseUrl}${CONSENT_PATH}`);
+    const request = page.getByRole("main", { name: "Application request", exact: true });
+    await expect(request).toContainText("Alex Example · alex");
+    // The cookie changes after the page checked the session and before the decision arrives.
+    model.beforeDecision = () => { model.account = "sam"; model.csrf = "csrf-sam"; model.beforeDecision = null; };
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(request).toContainText("Sam Example · sam");
+    await expect(request.getByRole("status")).toContainText("You are now signed in as a different account than this page showed. Nothing was sent.");
+    // The one decision that was sent carried the first account's token and was refused; none followed.
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }]);
+    expect(model.callbacks).toEqual([]);
+    await expect(request.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
+    await request.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expectReturnedToApplication(page, model, "cancel");
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }, { decision: "cancel", csrf: "csrf-sam" }]);
+    expectNothingLeaked(model);
+  });
+
+  test("a rotated CSRF token asks the same account again instead of resending", async ({ page }) => {
+    const model = await fixture(page);
+    await page.goto(`${assets.baseUrl}${CONSENT_PATH}`);
+    const request = page.getByRole("main", { name: "Application request", exact: true });
+    model.beforeDecision = () => { model.csrf = "csrf-rotated"; model.beforeDecision = null; };
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect(request.getByRole("status")).toHaveText("Your sign-in was refreshed and nothing was sent. Check the request and choose again.");
+    await expect(request).toContainText("Alex Example · alex");
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }]);
+    expect(model.callbacks).toEqual([]);
+    // The request was read again for the answer that follows.
+    expect(model.authorizationReads).toBe(2);
+    await request.getByRole("button", { name: "Approve", exact: true }).click();
+    await expectReturnedToApplication(page, model, "approve");
+    expect(model.decisions).toEqual([{ decision: "approve", csrf: "csrf-fixture" }, { decision: "approve", csrf: "csrf-rotated" }]);
   });
 
   test("a person on the wrong account can switch without leaving the request", async ({ page }) => {

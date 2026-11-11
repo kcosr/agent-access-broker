@@ -559,6 +559,61 @@ test("an auditor reads a person's application access without controls", async ({
   await context.close();
 });
 
+test("an account switched under an open request is shown before anything is sent, and a refused decision is not replayed", async ({ browser }) => {
+  // "sam" exists since the auditor test. This browser starts as Alex.
+  const context = await newContext(browser);
+  const page = await context.newPage();
+  const admin = await administrator.newPage();
+  await admin.goto(`${baseUrl}/ui/admin/principals`);
+  const accessOf = (principal: string) => manage<{ access: ApplicationAccess[] }>(admin, `/v1/admin/principals/${principal}/application-access`).then((result) => result.access.filter((item) => item.applicationId === NOTES.id));
+  const decisions: string[] = [];
+  page.on("request", (request) => { if (request.url().endsWith("/decision")) decisions.push(request.method()); });
+  const visited: string[] = [];
+  page.on("request", (request) => { if (request.url().startsWith("https://")) visited.push(request.url()); });
+  const warning = "You are now signed in as a different account than this page showed. Nothing was sent. Check “Signed in as” before you answer.";
+
+  // 1. The cookie changes while the page shows Alex; the page checks before it sends.
+  expect(await signIn(page, USER, USER_PASSWORD)).not.toBeNull();
+  const first = authorizationRequest(NOTES);
+  await page.goto(first.url);
+  await expect(consent(page)).toContainText("Alex Example · alex");
+  expect(await signIn(page, "sam", USER_PASSWORD)).not.toBeNull();
+  await consent(page).getByRole("button", { name: "Approve", exact: true }).click();
+  await expect(consent(page)).toContainText("Sam Example · sam");
+  await expect(consent(page).getByRole("status")).toHaveText(warning);
+  expect(decisions).toEqual([]);
+
+  // 2. The cookie changes between that check and the decision: the Broker refuses Alex's CSRF token under Sam's session.
+  expect(await signIn(page, USER, USER_PASSWORD)).not.toBeNull();
+  const second = authorizationRequest(NOTES);
+  await page.goto(second.url);
+  await expect(consent(page)).toContainText("Alex Example · alex");
+  await page.route("**/v1/applications/authorizations/*/decision", async (route) => {
+    // Sign in as Sam in the same browser; the request continues with the cookie the browser holds now.
+    expect(await signIn(page, "sam", USER_PASSWORD)).not.toBeNull();
+    await route.continue();
+  }, { times: 1 });
+  const answered = page.waitForResponse((response) => response.url().endsWith("/decision"));
+  await consent(page).getByRole("button", { name: "Approve", exact: true }).click();
+  const refusal = await answered;
+  expect(refusal.status()).toBe(403);
+  expect(await refusal.json()).toMatchObject({ ok: false, reasonCode: "csrf_invalid" });
+  await expect(consent(page)).toContainText("Sam Example · sam");
+  await expect(consent(page).getByRole("status")).toHaveText(warning);
+  expect(decisions).toEqual(["POST"]);
+  // Nobody was connected and the browser went nowhere.
+  expect(visited).toEqual([]);
+  expect(await accessOf("sam")).toEqual([]);
+  expect(await accessOf(USER)).toEqual([]);
+  // Sam's own explicit answer on the page that names Sam is what counts.
+  const cancel = consent(page).getByRole("button", { name: "Cancel", exact: true });
+  expect((await returnedTo(page, second, () => cancel.click())).get("error")).toBe("access_denied");
+  expect(decisions).toEqual(["POST", "POST"]);
+  expect(await accessOf("sam")).toEqual([]);
+  await admin.close();
+  await context.close();
+});
+
 test("a reload that narrows the registration ends its tokens, and a request for a removed redirect address is invalid", async () => {
   // Two requests are waiting for the person's answer when the operator changes the registration.
   const approving = await person.newPage();
@@ -601,4 +656,46 @@ test("a reload that narrows the registration ends its tokens, and a request for 
   await approving.close();
   await cancelling.close();
   await admin.close();
+});
+
+// DEPENDS ON A BACKEND CHANGE: the Broker must serve the portal document with
+// `Referrer-Policy: no-referrer`. Until it does, this test fails at the
+// Referer assertions: the browser sends the page's own address, which
+// contains the request ID, as the Referer of the page's same-origin requests.
+// It is last in the file so that its failure skips nothing.
+test("the request ID never travels in a Referer header", async ({ browser }) => {
+  const context = await newContext(browser);
+  const page = await context.newPage();
+  expect(await signIn(page, USER, USER_PASSWORD)).not.toBeNull();
+  const attempt = authorizationRequest(NOTES);
+  const referers: { url: string; referer: string }[] = [];
+  page.on("request", (request) => {
+    const referer = request.headers().referer;
+    if (referer) referers.push({ url: request.url(), referer });
+  });
+  const requested: string[] = [];
+  page.on("request", (request) => requested.push(new URL(request.url()).pathname));
+  await page.goto(attempt.url);
+  await expect(consent(page).getByRole("heading", { name: "Connect Example Notes?", exact: true })).toBeVisible();
+  const consentUrl = page.url();
+  const requestId = new URL(consentUrl).pathname.split("/").pop()!;
+  expect(requestId).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  // Opened directly, then reloaded: the document, its assets and its API calls.
+  const opened = await page.goto(consentUrl);
+  expect.soft(opened!.headers()["referrer-policy"], "the portal document's Referrer-Policy").toBe("no-referrer");
+  await expect(consent(page).getByRole("heading", { name: "Connect Example Notes?", exact: true })).toBeVisible();
+  const reloaded = await page.reload();
+  expect.soft(reloaded!.headers()["referrer-policy"], "the reloaded portal document's Referrer-Policy").toBe("no-referrer");
+  await expect(consent(page).getByRole("heading", { name: "Connect Example Notes?", exact: true })).toBeVisible();
+  // The final navigation to the application's redirect address.
+  const cancel = consent(page).getByRole("button", { name: "Cancel", exact: true });
+  await returnedTo(page, attempt, () => cancel.click());
+  // The page did load assets and call the API, and the application's address was reached.
+  expect(requested.some((pathname) => pathname.startsWith("/ui/assets/"))).toBe(true);
+  expect(requested).toContain(`/v1/applications/authorizations/${requestId}`);
+  expect(requested).toContain(`/v1/applications/authorizations/${requestId}/decision`);
+  expect(requested).toContain(new URL(NOTES.callback).pathname);
+  const leaked = referers.filter((entry) => entry.referer.includes(requestId)).map((entry) => new URL(entry.url).pathname.replace(requestId, "<request>"));
+  expect([...new Set(leaked)], "requests whose Referer carried the request ID").toEqual([]);
+  await context.close();
 });

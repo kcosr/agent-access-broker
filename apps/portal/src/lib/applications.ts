@@ -53,6 +53,15 @@ export function refusedApprovalReason(error: unknown) {
   return typeof reason === "string" ? reason : "";
 }
 
+/**
+ * A decision the broker refused because the browser's session is not the one
+ * the page sent it for: a rotated or foreign CSRF token, an ended session, or
+ * a required password change. Such a decision is never sent again by itself.
+ */
+export function decisionSessionChanged(error: unknown) {
+  return error instanceof ApiError && (error.status === 401 || ["csrf_invalid", "identity_required", "broker_token_expired", "broker_token_revoked", "password_change_required"].includes(error.reasonCode ?? ""));
+}
+
 /** The request is unknown, already answered or expired (404 `application_authorization_invalid`). */
 export function authorizationInvalid(error: unknown) {
   return error instanceof ApiError && error.reasonCode === "application_authorization_invalid";

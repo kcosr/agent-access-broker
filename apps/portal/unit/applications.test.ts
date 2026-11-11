@@ -20,6 +20,7 @@ import {
   applicationTokensNotice,
   authorizationInvalid,
   catalogListsApplications,
+  decisionSessionChanged,
   liveTokenSummary,
   refusedApprovalReason,
   validAuthorizationRequestId
@@ -79,6 +80,15 @@ describe("authorization requests", () => {
     expect(authorizationInvalid(new Error("network"))).toBe(false);
   });
 
+  test("a decision refused for a changed session is recognized, so it is never sent again by itself", () => {
+    for (const [status, reasonCode] of [[403, "csrf_invalid"], [401, "identity_required"], [401, "broker_token_expired"], [401, undefined], [403, "broker_token_revoked"], [403, "password_change_required"]] as const) {
+      expect(decisionSessionChanged(new ApiError("refused", status, reasonCode)), String(reasonCode)).toBe(true);
+    }
+    for (const error of [new ApiError("denied", 403, "application_access_denied"), new ApiError("denied", 403, "management_denied"), new ApiError("gone", 404, "application_authorization_invalid"), new ApiError("down", 503, "audit_unavailable"), new Error("network")]) {
+      expect(decisionSessionChanged(error)).toBe(false);
+    }
+  });
+
   test("only an absolute web address is opened after a decision", () => {
     expect(applicationRedirectTarget("https://runner.example.test/auth/broker/callback?code=c&state=s")).toBe("https://runner.example.test/auth/broker/callback?code=c&state=s");
     expect(applicationRedirectTarget("http://127.0.0.1:8080/callback?error=access_denied&state=s")).toBe("http://127.0.0.1:8080/callback?error=access_denied&state=s");
@@ -131,6 +141,14 @@ describe("the approval page", () => {
     expect(markup).not.toContain("Approve");
     expect(markup).not.toContain("Access level");
     expect(markup).toContain(">alex</span>");
+  });
+
+  test("says when nothing was sent and the answer is needed again", () => {
+    const changed = card({ session: { ...session, principal: "sam", displayName: "Sam Example" }, notice: { tone: "warning", text: "You are now signed in as a different account than this page showed." } });
+    expect(changed).toMatch(/<div class="wb-banner[^"]*" role="status">.*You are now signed in as a different account than this page showed\./s);
+    expect(changed).toContain("Sam Example · ");
+    expect(changed).toContain(">sam</span>");
+    expect(card()).not.toContain("wb-banner");
   });
 
   test("an invalid request offers no way onward", () => {

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { brokerApi } from "../../api";
-import { isSessionFailure, useSession } from "../../app/session";
+import { useSession } from "../../app/session";
 import { usePortalTheme } from "../../app/theme";
 import { FormError } from "../../components/form";
 import { useApplicationAuthorization } from "../../data/queries";
@@ -16,6 +16,7 @@ import {
   applicationLevelMeaning,
   applicationRedirectTarget,
   authorizationInvalid,
+  decisionSessionChanged,
   refusedApprovalReason,
   validAuthorizationRequestId
 } from "../../lib/applications";
@@ -25,6 +26,9 @@ import type { ApplicationAuthorization, ApplicationDecision, Session } from "../
 import { Banner, Brand, Button, ErrorState, KeyValue, SkeletonBlock, Spacer, ThemeMenu, Time, TopBar } from "../../workbench";
 
 type Decision = ApplicationDecision["decision"];
+
+/** Why the page asks for the answer again; nothing was sent for the earlier one. */
+export type ConsentNotice = { tone: "warning" | "info"; text: string };
 
 const TITLE_ID = "authorize-title";
 
@@ -65,8 +69,18 @@ export function InvalidRequest() {
   );
 }
 
+/**
+ * The account the last decision on this page was attempted for. A session
+ * for another account remounts the page; the page that replaces it reads
+ * this to say that the account changed.
+ */
+let attemptedAs: { requestId: string; principal: string | undefined } | null = null;
+
+const ACCOUNT_CHANGED: ConsentNotice = { tone: "warning", text: "You are now signed in as a different account than this page showed. Nothing was sent. Check “Signed in as” before you answer." };
+const SESSION_REFRESHED: ConsentNotice = { tone: "info", text: "Your sign-in was refreshed and nothing was sent. Check the request and choose again." };
+
 function PendingRequest({ requestId }: { requestId: string }) {
-  const { session, attempt } = useSession();
+  const { session, setSession, setSignInNotice } = useSession();
   const { logout } = useAuthActions();
   const query = useApplicationAuthorization(requestId);
   const { refetch } = query;
@@ -78,6 +92,7 @@ function PendingRequest({ requestId }: { requestId: string }) {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [answered, setAnswered] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ConsentNotice | null>(() => (attemptedAs?.requestId === requestId && attemptedAs.principal !== session.principal ? ACCOUNT_CHANGED : null));
 
   // Returning with the browser's Back button can restore this page as it was
   // left. Ask again: the request has been answered by then.
@@ -93,26 +108,59 @@ function PendingRequest({ requestId }: { requestId: string }) {
     return () => window.removeEventListener("pageshow", restored);
   }, [refetch]);
 
+  /**
+   * Reads the browser's session as it is now and makes the portal show it.
+   * Returns it only when it is still the account this page displays; any
+   * other account, or none, re-renders the page (or the sign-in page) for a
+   * fresh, explicit answer.
+   */
+  async function displayedAccountSession() {
+    const current = await brokerApi.session();
+    if (!current.authenticated) setSignInNotice({ tone: "info", text: "Sign in again to answer the application’s request." });
+    setSession(current);
+    return current.authenticated && !current.passwordChangeRequired && current.principal === session.principal ? current : null;
+  }
+
+  // A decision is sent at most once per click, only for the account shown,
+  // and never replayed: a retry after a CSRF or session failure could answer
+  // for whoever the browser is signed in as by then.
   async function decide(decision: Decision) {
     if (deciding.current) return;
     deciding.current = true;
     setPending(decision);
     setError(null);
+    setNotice(null);
+    attemptedAs = { requestId, principal: session.principal };
     try {
-      const result = await attempt((current) => brokerApi.decideApplicationAuthorization(current, requestId, decision));
-      const target = applicationRedirectTarget(result.redirectTo);
-      if (!target) throw new Error("The broker returned an address this page cannot open. Go back to the application and start again.");
-      setLeaving(true);
-      // A full-page GET navigation: the application's redirect address receives the outcome.
-      window.location.assign(target);
+      const current = await displayedAccountSession();
+      if (current) {
+        const result = await brokerApi.decideApplicationAuthorization(current, requestId, decision);
+        const target = applicationRedirectTarget(result.redirectTo);
+        if (!target) throw new Error("The broker returned an address this page cannot open. Go back to the application and start again.");
+        attemptedAs = null;
+        setLeaving(true);
+        // A full-page GET navigation: the application's redirect address receives the outcome.
+        window.location.assign(target);
+        return;
+      }
     } catch (failure) {
       const reason = refusedApprovalReason(failure);
       if (authorizationInvalid(failure)) setAnswered(true);
       else if (reason !== null) setRefusal(reason);
-      else if (!isSessionFailure(failure)) setError(errorMessage(failure));
-      deciding.current = false;
-      setPending(null);
+      else if (decisionSessionChanged(failure)) {
+        // Show who is signed in now and what the request says for them; the person answers again.
+        try {
+          if (await displayedAccountSession()) {
+            await refetch();
+            setNotice(SESSION_REFRESHED);
+          }
+        } catch (refreshFailure) {
+          setError(errorMessage(refreshFailure));
+        }
+      } else setError(errorMessage(failure));
     }
+    deciding.current = false;
+    setPending(null);
   }
 
   if (answered || (query.isError && authorizationInvalid(query.error))) return <InvalidRequest />;
@@ -140,6 +188,7 @@ function PendingRequest({ requestId }: { requestId: string }) {
       denial={refusal ?? (request.canConnect ? null : (request.denialReason ?? ""))}
       pending={pending}
       leaving={leaving}
+      notice={notice}
       error={error}
       onDecide={(decision) => void decide(decision)}
       onSwitchAccount={() => void logout({ stay: true })}
@@ -169,6 +218,7 @@ export function ConsentCard({
   denial,
   pending,
   leaving,
+  notice = null,
   error,
   onDecide,
   onSwitchAccount
@@ -178,6 +228,7 @@ export function ConsentCard({
   denial: string | null;
   pending: Decision | null;
   leaving: boolean;
+  notice?: ConsentNotice | null;
   error: string | null;
   onDecide: (decision: Decision) => void;
   onSwitchAccount: () => void;
@@ -188,6 +239,11 @@ export function ConsentCard({
   return (
     <>
       <Title>{denial === null ? `Connect ${name}?` : `You can’t connect ${name}`}</Title>
+      {notice ? (
+        <Banner tone={notice.tone} live>
+          {notice.text}
+        </Banner>
+      ) : null}
       {denial === null ? (
         <>
           <p className="pt-prose">
