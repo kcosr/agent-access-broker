@@ -844,6 +844,66 @@ export type PrincipalIdentityBindingsResponse = {
   }[];
 };
 
+/** The level an operator set for a registered application, for everyone. */
+export type ApplicationConnectLevel = "none" | "read_only" | "read_write";
+
+/** Why a person may not connect an application; the broker may add reasons. */
+export type ApplicationDenialReason = "connecting_disabled" | "access_disabled" | "not_human" | "account_disabled";
+
+/** A pending request from an application to act as the signed-in person. */
+export type ApplicationAuthorization = {
+  applicationId: string;
+  applicationName: string;
+  connect: ApplicationConnectLevel;
+  /** What this person's tokens will be; the person does not choose it. */
+  readOnly: boolean;
+  canConnect: boolean;
+  denialReason: ApplicationDenialReason | null;
+  expiresAt: string;
+};
+
+/** The person's answer and the application address the browser returns to. */
+export type ApplicationDecision = {
+  decision: "approve" | "cancel";
+  redirectTo: string;
+};
+
+/** One person's approval of a registered application. */
+export type ApplicationAccess = {
+  accessId: string;
+  principalId: string;
+  applicationId: string;
+  /** Null while the application is not registered. */
+  applicationName: string | null;
+  applicationAvailable: boolean;
+  /** The application's current level; null while it is not registered. */
+  connect: ApplicationConnectLevel | null;
+  enabled: boolean;
+  /** This person's own setting; it only narrows the application's level. */
+  readOnly: boolean;
+  /** Tokens are read-only: the level is `read_only` or this access is read-only. */
+  effectiveReadOnly: boolean;
+  version: number;
+  /**
+   * Whether the application holds a refresh token. A person's own list holds
+   * only connected rows; an administrator also sees a disconnected row that
+   * was kept because it is disabled or read-only.
+   */
+  connected: boolean;
+  createdAt: string;
+  connectedAt: string;
+  updatedAt: string;
+  updatedBy: string;
+  lastUsedAt: string | null;
+  /** Unexpired, unrevoked tokens the application holds; no token list shows them. */
+  liveTokenCount: number;
+};
+
+/** The caller-filtered runtime catalog's HTTP routes; the portal reads only their operations. */
+export type RouteCatalog = {
+  routes: { operation: string }[];
+};
+
 /** One action input the broker copied into an audit record. `value` is the
  * supplied JSON (integers beyond ±(2^53−1) as decimal strings); `truncated`
  * marks a value the broker cut to its 1 KiB storage bound. */

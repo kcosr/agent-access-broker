@@ -57,5 +57,10 @@ export const portalQueryKeys = {
   auditRequest: (viewer: string, scope: "admin" | "self", brokerRequestId: string) =>
     [...root, "audit", viewer, scope, "requests", brokerRequestId] as const,
   oauthConnections: (viewer: string) => [...root, "oauth-connections", viewer] as const,
+  /** Whether the caller's runtime catalog lists the personal application routes. */
+  applicationsRegistered: (viewer: string) => [...root, "applications", viewer, "registered"] as const,
+  applicationAccess: (viewer: string) => [...root, "applications", viewer, "access"] as const,
+  applicationAuthorization: (viewer: string, requestId: string) => [...root, "applications", viewer, "authorization", requestId] as const,
+  adminApplicationAccess: (viewer: string, principalId: string) => [...adminRoot(viewer), "application-access", principalId] as const,
   // Under the console root so token changes refresh the Activity token names.
 };

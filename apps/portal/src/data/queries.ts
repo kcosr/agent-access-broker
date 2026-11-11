@@ -3,6 +3,8 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { brokerApi } from "../api";
 import type {
+  ApplicationAccess,
+  ApplicationAuthorization,
   AdminBrokerTokenRecord,
   AgentTokenOptions,
   BrokerTokenRecord,
@@ -33,6 +35,7 @@ import type {
 import type { ImportListResult, ImportPreviewResult } from "../import-types";
 import { portalQueryKeys, viewerKey } from "../lib/portal-queries";
 import { EMPTY_CREDENTIAL_LIST } from "../lib/credentials";
+import { catalogListsApplications } from "../lib/applications";
 import { indexResourceTypes, NO_RESOURCE_TYPES, type ResourceTypes } from "../lib/resource-types";
 import { canViewAdmin, canUseSelfService, hasPolicyScope } from "../lib/capabilities";
 import { useSession } from "../app/session";
@@ -419,5 +422,56 @@ export function useOAuthConnections(enabled = true) {
     queryKey: portalQueryKeys.oauthConnections(viewer),
     enabled: selfService && enabled,
     queryFn: () => runQuery((current) => brokerApi.oauthConnections(current))
+  });
+}
+
+/**
+ * Whether applications are registered, from the caller's runtime catalog: it
+ * lists the personal application routes only then. Registrations change with
+ * a broker reload, so each visit asks again.
+ */
+export function useApplicationsRegistered(enabled = true) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  return useQuery<boolean>({
+    queryKey: portalQueryKeys.applicationsRegistered(viewer),
+    enabled: signedIn && enabled,
+    staleTime: 0,
+    queryFn: () => runQuery(() => brokerApi.routeCatalog()).then(catalogListsApplications)
+  });
+}
+
+/** The signed-in person's own application access; self-service does not gate it. */
+export function useOwnApplicationAccess(enabled = true) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  return useQuery<ApplicationAccess[]>({
+    queryKey: portalQueryKeys.applicationAccess(viewer),
+    enabled: signedIn && enabled,
+    staleTime: 0,
+    queryFn: () => runQuery((current) => brokerApi.applicationAccess(current))
+  });
+}
+
+/**
+ * One pending application request. It is never cached across visits or
+ * refetched in the background: an answered or expired request must not
+ * reappear, and a request that has been shown must not change on its own.
+ */
+export function useApplicationAuthorization(requestId: string, enabled: boolean) {
+  const { viewer, signedIn, runQuery } = useQueryAccess();
+  return useQuery<ApplicationAuthorization>({
+    queryKey: portalQueryKeys.applicationAuthorization(viewer, requestId),
+    enabled: signedIn && enabled,
+    staleTime: Infinity,
+    gcTime: 0,
+    queryFn: () => runQuery((current) => brokerApi.applicationAuthorization(current, requestId))
+  });
+}
+
+export function useAdminApplicationAccess(principalId: string) {
+  const { viewer, admin, runQuery } = useQueryAccess();
+  return useQuery<ApplicationAccess[]>({
+    queryKey: portalQueryKeys.adminApplicationAccess(viewer, principalId),
+    enabled: admin && Boolean(principalId),
+    queryFn: () => runQuery((current) => brokerApi.adminApplicationAccess(current, principalId))
   });
 }
