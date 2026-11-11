@@ -406,15 +406,20 @@ self-service nor permission to issue tokens.
    row and confirm **Remove application**.
 
 Expected result: after **Approve**, the application continues without asking
-you for a token, and **Account > Applications** lists it as **Connected** with
-its access level, last use and live token count. After **Remove**, its tokens
-stop working at once and it must ask for your approval again.
+you for a token. Once it has finished connecting, normally within moments,
+**Account > Applications** lists it as **Connected** with its access level,
+last use and live token count; until then the list is unchanged, and an
+application you had already connected keeps working. After **Remove**, its
+tokens stop working at once and it must ask for your approval again. Removing
+does not lift an administrator's restriction: the confirmation says so when
+there is one, and approving again gives the same read-only level, or is
+refused while an administrator has your access disabled.
 
 ## Troubleshooting
 
 | What you see | What to check |
 | --- | --- |
-| **This request is no longer valid** | An application's request expires after 10 minutes and can be answered once. Go back to the application and start again. |
+| **This request is no longer valid** | An application's request expires after 10 minutes and can be answered once; it also ends when the operator removes the application or changes where it returns to. Go back to the application and start again. |
 | **You can’t connect _application_** | The page gives the reason: connecting is turned off, an administrator disabled your access for it, or your account cannot connect applications. Ask your administrator; **Return to _application_** takes you back. |
 | My access is missing or `self_service_disabled` | Ask an administrator to enable self-service or manage credentials and tokens for you. |
 | No services, actions, or contexts to select | Ask the administrator to review active grants, group membership, and execution contexts. |

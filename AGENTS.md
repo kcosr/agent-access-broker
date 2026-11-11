@@ -382,6 +382,16 @@ redirect. Audit approval, denial, every mint, refusal, revocation and
 administrator change with the application ID. Never name a specific client
 product in code, tests or docs.
 
+The portal's approval page (`/ui/authorize/<request>`) stays a focused page in
+the sign-in frame, without portal navigation or the command palette, and
+works without self-service. It opens the decision's `redirectTo` only as a
+top-level navigation, and keeps the request ID and that address out of
+rendered text, logs and error messages. A person's list lives on **Account**,
+which accounts without self-service can reach, and is shown from the runtime
+catalog's `account_management` routes, never by probing; an administrator's
+rows are in the principal's **Access paths**. `docs/testing.md` lists the
+portal's unit, real-Broker and mocked coverage.
+
 ## Microsoft membership renewal
 
 `membership_renewal` keeps one encrypted Microsoft refresh-token record per

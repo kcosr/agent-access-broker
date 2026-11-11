@@ -446,21 +446,33 @@ obtains its own short-lived tokens, and you never hold them.
 4. Choose **Approve** to connect the application, or **Cancel** to decline. Both
    return you to the application.
 
-A request is valid for 10 minutes and can be answered once. After that the page
-says **This request is no longer valid**; go back to the application and start
-again. When you may not connect the application, the page says why, for example
-that an administrator disabled your access for it, and offers only the way back
-to the application.
+Approving takes effect when the application finishes connecting, normally
+within moments of your return. Until then **Account > Applications** is
+unchanged, and an application you had already connected keeps working as
+before; an approval the application never completes changes nothing.
 
-**Account > Applications** lists the applications you approved, with their
-access level, status, when each was connected and last used, and how many
-tokens each currently holds. Those tokens are not listed under **Tokens**.
+A request is valid for 10 minutes and can be answered once. After that, or
+when your operator has removed the application or changed where it returns
+to, the page says **This request is no longer valid** and returns you nowhere;
+go back to the application and start again. When you may not connect the
+application, the page says why, for example that an administrator disabled
+your access for it, and offers only the way back to the application.
+
+**Account > Applications** lists the applications that are connected for
+you, with their access level, status, when each last connected and was last
+used, and how many tokens each currently holds. Those tokens are not listed
+under **Tokens**. An application your operator no longer registers is shown as
+**Application unavailable**, without an access level, and obtains nothing.
 Choose **Remove** to end an application's access at once: every token it holds
 for you stops working, and it must ask for your approval again. The same list
 and removal are available to a `user_manage` client through the
-[application access routes](applications.md#managing-access). An
-administrator can also make your access for one application read-only, disable
-it or remove it.
+[application access routes](applications.md#managing-access).
+
+An administrator can make your access for one application read-only, disable
+it or remove it. Removing an application yourself does not lift such a
+restriction: when you approve it again, a read-only access is still
+read-only, and a disabled one still cannot be connected until an
+administrator enables it.
 
 ## Rotate, pause, and revoke
 

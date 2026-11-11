@@ -155,11 +155,14 @@ a person approved:
    bindings.
 2. Read the row: the application's level set by the operator (**Level: read and
    write**, **read-only** or **none**), how many tokens it currently holds, and
-   its status. **Connected** means the application can obtain tokens; **Not
-   connected** means it holds none, either because it has not finished
-   connecting or because the person or the application ended the connection
-   and the row was kept for its settings; **Application unavailable** means
-   the application is no longer registered and obtains nothing.
+   its status. **Connected** means the application can obtain tokens; the
+   count can still be zero, for example after a reload ended them. **Not
+   connected** means it cannot: either a first approval that the application
+   has not finished connecting, which disappears if it never does, or a row
+   that you disabled or made read-only and that was kept, with those
+   settings, when the person or the application ended the connection.
+   **Application unavailable** means the application is no longer registered:
+   the row shows **Level: not available** and the application obtains nothing.
 3. Turn **Read-only** on to limit the application to actions classified as
    reads for this person. When the application's level is already read-only,
    the column shows **Read-only, Fixed by the application’s level** instead of
@@ -167,10 +170,14 @@ a person approved:
 4. Turn **Enabled** off to stop the application for this person. It cannot
    obtain tokens, and the person cannot connect it again until you turn it on.
 5. Choose **Remove**, then **Remove access**, to delete the row. The person may
-   connect the application again later, starting without restrictions.
+   connect the application again later, starting without restrictions. This is
+   the only way to clear a restriction: a person's own **Remove** under
+   **Account > Applications** leaves a disabled or read-only row here, not
+   connected, and their next approval reuses its settings.
 
 Expected result: every change ends the tokens the application holds for the
-person at once, and the row's version advances. If another administrator
+person at once, and a change to **Enabled** or **Read-only** advances the
+row's version; connecting and disconnecting do not. If another administrator
 changed the row first, the portal refreshes it and asks you to repeat the
 change. Auditors see the same rows without controls. Application tokens are not
 listed on the person's **Tokens** tab; the row's live token count is their only
@@ -224,6 +231,11 @@ For the full sequence, see
    **Identity authority**, and **Policy authority**.
 3. After an operator prepares a validated configuration change, use
    **Reload config** and inspect **Last reload** for **Applied** or **Rejected**.
+   When the new configuration narrows or removes a registered
+   [application](../applications.md#registering-an-application), the reload
+   notice names each application whose tokens it ended and why. If that step
+   failed, the notice and **Last reload**'s **Message** say so: the
+   configuration is active, and the next reload or restart ends the tokens.
 
 Expected result: the runtime facts describe the active configuration. File-owned
 identity or policy can be inspected in the portal but requires configuration edits

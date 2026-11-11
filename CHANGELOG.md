@@ -202,8 +202,8 @@ All notable changes to this project are documented in this file.
   portal, the person approves or declines on a dedicated page, reviews and
   removes their applications under **Account > Applications**, and
   administrators manage each application as a row of the person's **Access
-  paths**. See
-  [applications](docs/applications.md).
+  paths**; the **Reload config** notice names the application tokens a reload
+  ended. See [applications](docs/applications.md).
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to
   required Microsoft email, optional display name and access settings, with a
