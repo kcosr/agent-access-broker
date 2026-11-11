@@ -325,8 +325,10 @@ row.
 
 `application_access` holds one row per person and application. Its refresh
 token is stored only as the same keyed hash as broker tokens
-(`refresh_token_hash`), which is null between an approval and the
-application's first code exchange and after a disconnect. A disconnect by the
+(`refresh_token_hash`), which is null for a first approval until its code is
+exchanged and after a disconnect. An approval inserts only a code; the code
+exchange replaces the hash, sets `connected_at` and revokes the previous
+tokens and other codes of the access in one transaction. A disconnect by the
 person or the application deletes the row only when it is enabled and not
 read-only; a restricted row stays, with a null hash, for a later approval to
 reuse, and only an administrator's removal deletes it. Rows belong to humans (a trigger refuses

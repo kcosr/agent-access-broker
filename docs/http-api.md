@@ -3728,8 +3728,16 @@ A successful reload returns HTTP 200 with `operation = "config.reload"` and
 ```text
 nodeId, audit, previousGeneration, generation, policyGeneration, previousConfigHash,
 configHash, loadedAt, identityAuthority, policyAuthority, bodyHardCapBytes,
-reloadTimeoutMs, shutdownTimeoutMs, lastReloadAttempt
+reloadTimeoutMs, shutdownTimeoutMs, applicationTokens, lastReloadAttempt
 ```
+
+`applicationTokens` reports the [application tokens](applications.md#registering-an-application)
+the new configuration ended once it was active: `{"status": "reconciled",
+"applications": [{applicationId, reason, revokedTokens}]}`, with an empty list
+when nothing changed, or `{"status": "failed"}` when that step could not
+complete. A failure does not reject the reload: the configuration is active,
+`lastReloadAttempt.message` says so, and the next reload or restart runs the
+step again.
 
 Failed reload admission returns the mapped HTTP status and `reasonCode` in the
 management envelope. Candidate config parse and validation failures return
@@ -3969,7 +3977,10 @@ Broker envelopes; the others are management routes.
 These routes are not in the runtime catalog or the OpenAPI projection, like the
 sign-in routes. The token and revocation routes take a form body, authenticate
 the client with HTTP Basic, and answer RFC 6749 JSON errors for every refusal,
-including those made by transport admission and rate limiting: a refusal that
+including those made by transport admission and rate limiting. Both count as
+authentication requests at admission, with the 16 KiB body cap and the source
+budget of the sign-in routes, whatever Broker token or browser session the
+request also carries. A refusal that
 would otherwise be a Broker envelope is replaced by `invalid_request`,
 `temporarily_unavailable` (for 429 and 503, keeping `Retry-After`) or
 `server_error`. Parameters, statuses and error codes are in
@@ -3998,7 +4009,9 @@ URI, for an approval and a cancellation alike. A refused
 approval answers 403 `application_access_denied` with
 `details.denialReason` (`connecting_disabled`, `access_disabled`, `not_human` or
 `account_disabled`) and leaves the request pending. The decision's success audit
-target is `{principal, applicationId, decision, accessId, revokedTokens}`.
+target is `{principal, applicationId, decision, accessId}`. An approval only
+issues the code; the existing connection, if any, is replaced when the
+application redeems it.
 
 ### Administration
 
@@ -4019,8 +4032,10 @@ connected, createdAt, connectedAt, updatedAt, updatedBy, lastUsedAt,
 liveTokenCount}`. `applicationName` and `connect` are null and
 `applicationAvailable` is false while the application is not registered.
 `effectiveReadOnly` is true when the application's level is `read_only` or the
-access is read-only. `connected` is false between an approval and the
-application's first code exchange. `liveTokenCount` counts the unexpired,
+access is read-only. `connected` is true while the application holds a working
+refresh token: from its first successful code exchange until a disconnect,
+including while a newer approval awaits its exchange. `connectedAt` is the
+time of the latest successful exchange. `liveTokenCount` counts the unexpired,
 unrevoked tokens minted through the access, which no token list shows
 individually.
 
@@ -4032,8 +4047,8 @@ A stale version answers 409 `version_conflict`; an unknown access, or one owned
 by another principal, answers 404 `application_access_not_found`. Success audit
 targets are `{principal, accessId, applicationId, before, after}` with
 `{enabled, readOnly, version}` read inside the transaction (`after` is null on
-removal). `connected` is false between an approval and the application's
-first code exchange and after a disconnect.
+removal). `connected` is false for a first approval whose code has not been
+redeemed and after a disconnect.
 
 The personal removal needs no version and applies only to a connected access;
 any other answers 404 `application_access_not_found`. It ends the consent (the

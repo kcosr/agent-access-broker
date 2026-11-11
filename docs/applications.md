@@ -71,8 +71,9 @@ no group setting:
 | `read_write` | Tokens are limited only by the person's grants, unless an administrator made that person's access read-only. |
 
 A changed registration applies at startup and at the reload that admits it,
-to the tokens already minted as well. The Broker then ends every live token
-the registration would no longer mint:
+to the tokens already minted as well. As soon as the new configuration is
+active, and before any further token is minted, the Broker ends every live
+token the registration would no longer mint:
 
 - all of the application's tokens when it is removed or its level becomes
   `none`;
@@ -83,7 +84,11 @@ the registration would no longer mint:
 Refresh tokens are unaffected, so the application obtains a token under the
 new registration at its next request and nobody reconnects; a later widening
 needs no reconnect either. A token that is merely narrower than the
-registration, or that has a different remaining lifetime, is left alone.
+registration, or that has a different remaining lifetime, is left alone. A
+configuration that is rejected ends nothing. If ending the tokens fails after
+the configuration became active, the reload still succeeds and reports
+`applicationTokens.status: "failed"`; new tokens already follow the new
+registration, and the next reload or restart ends the remaining ones.
 Removing a registration keeps each person's access row, shown to
 administrators as unavailable; it mints nothing, and registering the same ID
 again makes the same refresh tokens work. A redirect URI removed from the
@@ -105,11 +110,16 @@ codes for it become invalid.
    verifier, for an access token and a refresh token.
 6. Whenever it needs another token, the application uses the refresh token.
 
-Approving creates the person's access for that application. Approving again
-later (reconnecting) keeps the access and its administrator settings, ends
-every token minted through it, and replaces the refresh token. Ending the
-consent, by the person or by the application, never lifts an administrator's
-restriction; see [managing access](#managing-access).
+An approval only issues the code. The code exchange is what connects: it
+installs the new refresh token and, in the same transaction, ends the previous
+refresh token, every token minted through it and any other code still
+outstanding for that person and application. The last successful exchange is
+therefore always the live grant. An approval whose code the application never
+redeems (a closed tab, a client error, a superseded attempt) changes nothing:
+an existing connection keeps working, and the approval expires with its code
+after 60 seconds. Reconnecting keeps the access, its ID and its administrator
+settings. Ending the consent, by the person or by the application, never lifts
+an administrator's restriction; see [managing access](#managing-access).
 
 ## Wire contract
 
@@ -220,7 +230,8 @@ form field `token`. The answer is 200 whether or not the token was known.
 
 - The authorization, token and revocation endpoints count against
   `limits.auth_requests_per_source_per_minute` for the caller's address, as the
-  sign-in routes do.
+  sign-in routes do. Every request counts, whatever Broker token or browser
+  session it also carries.
 - At most 1,000 authorization requests are pending at once.
 - One access holds at most 256 unexpired, unrevoked tokens, which leaves room
   for an application that keeps one token per running agent session and
@@ -231,8 +242,8 @@ form field `token`. The answer is 200 whether or not the token was known.
   are deleted once they have been expired or revoked for 7 days, by the next
   authorization or token request; audit records keep their token IDs.
 - An access that is neither connected nor restricted by an administrator,
-  such as an approval whose code was never exchanged, is deleted by the same
-  retention.
+  such as a first approval whose code was never exchanged, is deleted by the
+  same retention once its code has expired.
 
 ## What ends an application's tokens
 
@@ -241,7 +252,7 @@ Each of these ends the live tokens of the access at once:
 - an administrator disables the access, changes its read-only setting or
   removes it;
 - the person removes it;
-- the person connects the application again;
+- the application redeems the code of a new approval by the person;
 - the application revokes its refresh token;
 - the person's account is disabled. Enabling the account again does not restore
   the ended tokens; the application refreshes instead;
@@ -283,6 +294,12 @@ disconnect:
   settings and its ID. The administrator's list still shows it, with
   `connected: false`. A later approval reuses it: a disabled access still
   cannot be connected, and a read-only one stays read-only.
+
+`connected` is true while the application holds a working refresh token: from
+its first successful code exchange until a disconnect. It stays true through a
+new approval, and a first approval is not connected until its code is
+redeemed. `connectedAt` is the time of the latest successful code exchange
+(for an access that was never connected, the time of its first approval).
 
 Only an administrator's delete removes a restricted access, after which the
 person may connect afresh. `version` covers the Enabled and Read-only settings

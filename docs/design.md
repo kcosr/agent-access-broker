@@ -1561,14 +1561,17 @@ secrets into each runtime generation beside the trusted callers
   person's browser session; bearer tokens cannot consent. Approval runs in one
   transaction: it consumes the request, checks again that the application's
   level is not `none`, that the person is an enabled human and that an
-  administrator has not disabled their access, creates the access or resets it
-  for a reconnect (ending its tokens and refresh token), and issues a one-use
-  code bound to the client, redirect URI and PKCE challenge. A refused approval
-  rolls back, leaving the request for the return to the application.
+  administrator has not disabled their access, and issues a one-use code bound
+  to the client, redirect URI and PKCE challenge, for the existing access or a
+  not-yet-connected placeholder. It changes nothing else: a working consent
+  stays as it is until the code is redeemed. A refused approval rolls back,
+  leaving the request for the return to the application.
 - **Minting.** Code exchange and refresh share one transaction that consumes
   the code or finds the refresh-token hash and re-checks the application, the
   access, the person, refresh idleness and the live-token bound before
-  inserting the token. Its caveats are the application's contexts and services
+  inserting the token. A redeemed code is the new grant: the same transaction
+  installs its refresh token and ends the previous one, the tokens minted
+  through it and the access's other pending codes. Its caveats are the application's contexts and services
   and `readOnly` when the application's level is `read_only` or the access is
   read-only. The host runs it through the reload fence used for token issuance
   (`token_store_call_from_snapshot`), so the registration it was admitted with
@@ -1576,12 +1579,18 @@ secrets into each runtime generation beside the trusted callers
   and keeps the request's admission permit until it has finished, whether or
   not the response waiter is still there. A failed audit withholds the
   committed token and is never retried.
-- **Ending tokens.** A settings change, removal, reconnect or refresh-token
-  revocation revokes the access's live tokens in its transaction; a database
+- **Ending tokens.** A settings change, removal, redeemed re-approval or
+  refresh-token revocation revokes the access's live tokens in its transaction; a database
   trigger does the same when the person's status becomes `disabled`. Startup,
-  and each reload under its mutation fence before the new generation is
-  published, revoke the live tokens the generation's registrations would no
-  longer mint, so an operator's narrowing never waits for token expiry.
+  and each reload once its generation is published and can no longer be
+  rejected, revoke the live tokens the generation's registrations would no
+  longer mint, so an operator's narrowing never waits for token expiry. The
+  reload hands its mutation fence and admission permit to an owner task for
+  this step, so it completes with its audit when the reload's waiter is
+  cancelled and no mint or reload interleaves; mint re-checks the published
+  registration, so nothing is minted under the old one meanwhile. A failure
+  is reported in the reload result, logged and audited, and retried by the
+  next reload or startup.
 - **Restrictions outlive consent.** A disconnect by the person or the
   application clears the refresh token but keeps a disabled or read-only row
   for the next approval to reuse; only an administrator deletes it. The
@@ -1594,7 +1603,9 @@ secrets into each runtime generation beside the trusted callers
 
 The token and revocation endpoints answer RFC 6749 JSON. A response layer
 outside transport admission rewrites any other refusal on those two paths, so
-rate limits and body limits keep the same contract. Connecting is independent
+rate limits and body limits keep the same contract. Transport admission
+classes both paths as authentication requests unconditionally, so an unrelated
+Broker token or session never exempts them from the source budget. Connecting is independent
 of self-service and of the agent-token issuance policy; the personal routes use
 a management access that requires only a browser session or `user_manage`
 token.

@@ -2451,15 +2451,22 @@ loaded with their client secrets at startup and reload.
   tokens minted with the previous lists. Clients obtain new tokens at their
   next request, with their existing refresh tokens. Each reload or startup
   that ended tokens writes one `applications.tokens.reconciled` audit record
-  per application with the count. A reload that cannot complete this step
-  fails with `config_admission_failed` and leaves the active generation
-  serving.
+  per application with the count. The step runs once the new configuration
+  is active and holds off token requests and further reloads until it has
+  finished, even when the reload request itself is abandoned; a rejected
+  reload ends nothing. If the step fails, the reload still succeeds, reports
+  `applicationTokens.status: "failed"` in its result and in
+  `lastReloadAttempt.message`, logs `application_token_reconciliation_failed`
+  and writes an `applications.tokens.reconciled` audit record with decision
+  `error`. Tokens minted from then on already follow the new registration;
+  reload again, or restart, to end the remaining ones.
 - Removing a redirect URI invalidates the pending approval requests and
   unexchanged codes issued for it.
 - A reload fences token requests: one admitted under the previous generation
   answers `temporarily_unavailable` and the application retries.
 - The token, revocation and authorization endpoints share
-  `limits.auth_requests_per_source_per_minute` per client address. An
+  `limits.auth_requests_per_source_per_minute` per client address, whatever
+  other Broker credential a request carries. An
   application that opens many agent sessions from one address may need a higher
   value; a refused request answers `temporarily_unavailable`.
 - Refresh-token hashes, pending requests and codes are managed-store data and

@@ -336,7 +336,11 @@ never a bearer token.
 
 Approval, mint and refresh re-check inside their transaction that the
 application is registered and not `none`, the access is enabled, the person is
-an enabled human and the refresh token is not idle. The decision (approve and
+an enabled human and the refresh token is not idle. An approval only issues a
+code (with a not-yet-connected placeholder row for a first approval); the code
+exchange installs the new refresh token and, in the same transaction, ends the
+previous refresh token, its tokens and the access's other codes, so an
+unredeemed approval never ends a working consent. The decision (approve and
 cancel alike) and the code exchange also require the stored redirect URI to be
 registered still; never return a browser or a code to an address the fenced
 registration no longer lists. Mint and revocation run in owners that keep the
@@ -346,13 +350,20 @@ row, withholds the secret and is never retried. Audit every refusal after
 client authentication, and failed client authentication itself, with a fixed
 reason and no supplied value.
 
-A settings change, administrator removal, reconnect, disconnect or principal
-disable ends the access's live tokens in the same transaction; every actual
-settings change advances `version` once and a no-op writes nothing. Startup
-and every reload, under the mutation fence, end the live tokens the current
-registration would no longer mint (removed, `none`, `read_only` against a
-write-capable token, or different contexts or services) and audit one record
-per application; refresh tokens stay. A disconnect by the person or by the
+A settings change, administrator removal, redeemed re-approval, disconnect or
+principal disable ends the access's live tokens in the same transaction; every
+actual settings change advances `version` once and a no-op writes nothing.
+Startup and every reload end the live tokens the current registration would no
+longer mint (removed, `none`, `read_only` against a write-capable token, or
+different contexts or services) and audit one record per application; refresh
+tokens stay. A reload reconciles only after its generation is published, in an
+owner that keeps the mutation fence and admission permit through the store
+work and audit, with no await between publication and that owner: a rejected
+or abandoned candidate never revokes, and every committed reconciliation is
+audited. A failure there is reported, logged and audited, never a rejected
+reload, and retried by the next reload or startup. Token and revocation
+requests are authentication-budget requests at pre-body admission whatever
+other Broker credential they carry. A disconnect by the person or by the
 application's refresh-token revocation never lifts an administrator's
 restriction: it deletes only an enabled, not read-only row and otherwise keeps
 the row, disconnected, for the next approval to reuse. Only an administrator's
