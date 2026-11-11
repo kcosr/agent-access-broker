@@ -625,9 +625,19 @@ export type ConfigStatusResult = {
   lastReloadAttempt?: ConfigReloadAttempt | null;
 };
 
+/**
+ * The application tokens a reload ended because the new registration no
+ * longer mints them, or that this step failed (the configuration is active
+ * either way).
+ */
+export type ApplicationTokensOutcome =
+  | { status: "reconciled"; applications: { applicationId: string; reason: string; revokedTokens: number }[] }
+  | { status: "failed" };
+
 export type ConfigReloadResult = ConfigStatusResult & {
   previousGeneration: number;
   previousConfigHash: string;
+  applicationTokens?: ApplicationTokensOutcome;
 };
 
 export type PolicyGrantCounts = {
@@ -885,17 +895,19 @@ export type ApplicationAccess = {
   effectiveReadOnly: boolean;
   version: number;
   /**
-   * Whether the application holds a refresh token. A person's own list holds
-   * only connected rows; an administrator also sees a disconnected row that
-   * was kept because it is disabled or read-only.
+   * Whether the application holds a working refresh token: from its first
+   * code exchange until a disconnect. A person's own list holds only
+   * connected rows; an administrator also sees a row kept for its restriction
+   * after a disconnect, and a first approval awaiting its exchange.
    */
   connected: boolean;
   createdAt: string;
+  /** The latest successful code exchange (the first approval while never connected). */
   connectedAt: string;
   updatedAt: string;
   updatedBy: string;
   lastUsedAt: string | null;
-  /** Unexpired, unrevoked tokens the application holds; no token list shows them. */
+  /** Unexpired, unrevoked tokens the application holds; no token list shows them. Can be 0 while connected. */
   liveTokenCount: number;
 };
 

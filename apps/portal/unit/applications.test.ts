@@ -9,12 +9,15 @@ import { ApplicationAccessTable } from "../src/features/account/applications-sec
 import { ConsentCard, InvalidRequest } from "../src/features/applications/authorize-page";
 import { ApplicationAccessRow } from "../src/features/principals/identity-access";
 import {
+  applicationAccessLevel,
   applicationAccessName,
+  applicationAccessRestricted,
   applicationAccessState,
   applicationDenialMessage,
   applicationLevelLabel,
   applicationLevelSummary,
   applicationRedirectTarget,
+  applicationTokensNotice,
   authorizationInvalid,
   catalogListsApplications,
   liveTokenSummary,
@@ -160,7 +163,13 @@ describe("application access", () => {
     expect(applicationAccessState({ ...access, applicationAvailable: false, connect: null, connected: false })).toEqual({ label: "Application unavailable", tone: "warning" });
     expect(applicationLevelLabel(true)).toBe("Read-only");
     expect(applicationLevelLabel(false)).toBe("Read and write");
-    expect([applicationLevelSummary("read_write"), applicationLevelSummary("read_only"), applicationLevelSummary("none"), applicationLevelSummary(null)]).toEqual(["Level: read and write", "Level: read-only", "Level: none", "Not registered"]);
+    expect([applicationLevelSummary("read_write"), applicationLevelSummary("read_only"), applicationLevelSummary("none"), applicationLevelSummary(null)]).toEqual(["Level: read and write", "Level: read-only", "Level: none", "Level: not available"]);
+    // An application that is not registered gives no level, whatever the row's own setting.
+    expect(applicationAccessLevel(access)).toBe("Read and write");
+    expect(applicationAccessLevel({ applicationAvailable: true, effectiveReadOnly: true })).toBe("Read-only");
+    expect(applicationAccessLevel({ applicationAvailable: false, effectiveReadOnly: false })).toBeNull();
+    expect(applicationAccessLevel({ applicationAvailable: false, effectiveReadOnly: true })).toBeNull();
+    expect([applicationAccessRestricted(access), applicationAccessRestricted({ enabled: false, readOnly: false }), applicationAccessRestricted({ enabled: true, readOnly: true })]).toEqual([false, true, true]);
     expect([liveTokenSummary(0), liveTokenSummary(1), liveTokenSummary(2)]).toEqual(["0 live tokens", "1 live token", "2 live tokens"]);
     expect(applicationAccessName(access)).toBe("Example Runner");
     expect(applicationAccessName({ applicationName: null, applicationId: "example-runner" })).toBe("example-runner");
@@ -184,6 +193,8 @@ describe("application access", () => {
     expect(second).not.toContain("Never");
     expect(third).toContain(">retired-runner</span>");
     expect(third).toContain("Application unavailable");
+    expect(third).toContain('<td class="whitespace-nowrap"><span class="wb-muted">Not available</span></td>');
+    expect(third).not.toContain("Read and write");
   });
 
   describe("the administrator's access path row", () => {
@@ -222,7 +233,8 @@ describe("application access", () => {
       const markup = row({ applicationName: null, applicationAvailable: false, connect: null, applicationId: "retired-runner" });
       expect(markup).toContain("retired-runner");
       expect(markup).toContain("Application unavailable");
-      expect(markup).toContain("Application · Not registered · 2 live tokens");
+      expect(markup).toContain("Application · Level: not available · 2 live tokens");
+      expect(markup).not.toMatch(/read and write|Level: read-only/);
       expect(markup).toContain('aria-label="Application retired-runner read-only"');
     });
 
@@ -232,6 +244,27 @@ describe("application access", () => {
       expect(markup).toContain("<td><span>Disabled</span></td>");
       expect(markup).toContain("<td><span>Read-only</span></td>");
     });
+  });
+});
+
+describe("a reload's application tokens", () => {
+  test("says nothing when no token was ended", () => {
+    expect(applicationTokensNotice(undefined)).toBeNull();
+    expect(applicationTokensNotice({ status: "reconciled", applications: [] })).toBeNull();
+    expect(applicationTokensNotice({ status: "other" } as never)).toBeNull();
+  });
+
+  test("names each application, its ended tokens and why", () => {
+    expect(applicationTokensNotice({ status: "reconciled", applications: [
+      { applicationId: "example-runner", reason: "registration_narrowed", revokedTokens: 3 },
+      { applicationId: "retired-runner", reason: "registration_removed", revokedTokens: 1 },
+      { applicationId: "example-notes", reason: "connecting_disabled", revokedTokens: 2 },
+      { applicationId: "example-reports", reason: "new_reason", revokedTokens: 4 }
+    ] })).toEqual({ failed: false, text: "Ended application tokens: example-runner 3 (registration narrowed), retired-runner 1 (no longer registered), example-notes 2 (connecting turned off), example-reports 4 (new reason)" });
+  });
+
+  test("reports a failed step as a failure that is retried", () => {
+    expect(applicationTokensNotice({ status: "failed" })).toEqual({ failed: true, text: "Application tokens the new configuration no longer allows were not ended; the next reload or restart tries again." });
   });
 });
 

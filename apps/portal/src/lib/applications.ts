@@ -2,7 +2,7 @@
 // person's application access is described. Pure helpers, no JSX.
 import { ApiError } from "../api";
 import type { BadgeTone } from "../app-types";
-import type { ApplicationAccess, RouteCatalog } from "../types";
+import type { ApplicationAccess, ApplicationTokensOutcome, RouteCatalog } from "../types";
 
 /** A pending request's ID as the broker issues it: 43 unpadded base64url characters. */
 const AUTHORIZATION_REQUEST_ID = /^[A-Za-z0-9_-]{43}$/;
@@ -22,6 +22,11 @@ export function catalogListsApplications(catalog: RouteCatalog) {
 /** The level a person's tokens have, in the words every application view uses. */
 export function applicationLevelLabel(readOnly: boolean) {
   return readOnly ? "Read-only" : "Read and write";
+}
+
+/** The level an access gives now, or null while its application is not registered and gives none. */
+export function applicationAccessLevel(access: Pick<ApplicationAccess, "applicationAvailable" | "effectiveReadOnly">) {
+  return access.applicationAvailable ? applicationLevelLabel(access.effectiveReadOnly) : null;
 }
 
 /** What that level lets the application do, for the consent page. */
@@ -76,8 +81,9 @@ export type ApplicationAccessState = { label: string; tone: BadgeTone };
 
 /**
  * The one state shown for an access. A person's own list holds only connected
- * rows; an administrator also sees a row that was disconnected and kept
- * because it carries a restriction.
+ * rows; an administrator also sees a row that is not connected: one kept for
+ * its restriction after a disconnect, or a first approval the application has
+ * not finished connecting.
  */
 export function applicationAccessState(access: Pick<ApplicationAccess, "applicationAvailable" | "connect" | "enabled" | "connected">): ApplicationAccessState {
   if (!access.applicationAvailable) return { label: "Application unavailable", tone: "warning" };
@@ -92,9 +98,35 @@ export function applicationLevelSummary(connect: ApplicationAccess["connect"]) {
   if (connect === "read_write") return "Level: read and write";
   if (connect === "read_only") return "Level: read-only";
   if (connect === "none") return "Level: none";
-  return "Not registered";
+  return "Level: not available";
 }
 
 export function liveTokenSummary(count: number) {
   return `${count} live ${count === 1 ? "token" : "tokens"}`;
+}
+
+/** An administrator restricted this access; the restriction outlasts a disconnect. */
+export function applicationAccessRestricted(access: Pick<ApplicationAccess, "enabled" | "readOnly">) {
+  return !access.enabled || access.readOnly;
+}
+
+const RECONCILIATION_REASONS: Record<string, string> = {
+  registration_removed: "no longer registered",
+  connecting_disabled: "connecting turned off",
+  registration_narrowed: "registration narrowed"
+};
+
+/**
+ * What a reload did to application tokens, for the reload notice: null when
+ * it ended none. A failure leaves the new configuration active.
+ */
+export function applicationTokensNotice(outcome: ApplicationTokensOutcome | undefined): { failed: boolean; text: string } | null {
+  if (!outcome) return null;
+  if (outcome.status === "failed") return { failed: true, text: "Application tokens the new configuration no longer allows were not ended; the next reload or restart tries again." };
+  if (outcome.status !== "reconciled" || !Array.isArray(outcome.applications) || outcome.applications.length === 0) return null;
+  const ended = outcome.applications.map((application) => {
+    const reason = Object.hasOwn(RECONCILIATION_REASONS, application.reason) ? RECONCILIATION_REASONS[application.reason] : application.reason.replaceAll("_", " ");
+    return `${application.applicationId} ${application.revokedTokens} (${reason})`;
+  });
+  return { failed: false, text: `Ended application tokens: ${ended.join(", ")}` };
 }

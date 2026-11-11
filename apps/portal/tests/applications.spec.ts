@@ -3,7 +3,7 @@
 // Mocked UI contracts: every API call is answered by an explicit fixture and
 // no Broker runs. `applications-live.spec.ts` drives a real Broker.
 import { expect, test, type Page, type Request } from "@playwright/test";
-import type { ApplicationAccess, ApplicationAuthorization, PrincipalRole } from "../src/types";
+import type { ApplicationAccess, ApplicationAuthorization, ApplicationTokensOutcome, PrincipalRole } from "../src/types";
 import { servePortalAssets, type PortalAssets } from "./support/portal-assets";
 
 let assets: PortalAssets;
@@ -38,6 +38,8 @@ function newModel() {
     /** Answers a decision; the default approves or cancels back to the application. */
     decide: null as null | ((decision: string) => { status?: number; json: unknown } | Promise<{ status?: number; json: unknown }>),
     registered: true,
+    /** What the next configuration reload reports about application tokens. */
+    reloadTokens: undefined as ApplicationTokensOutcome | undefined,
     access: [] as ApplicationAccess[],
     adminAccess: [] as ApplicationAccess[],
     /** Fails the next administrator change with a stale version, after another administrator's change. */
@@ -145,7 +147,9 @@ async function fixture(page: Page, configure: (model: Model) => void = () => und
     if (path === "/v1/credentials") return route.fulfill(ok({ connections: [], retained: [] }));
     if (path === "/v1/tokens/options") return route.fulfill(ok({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "default", contexts: [] }, executionContexts: ["default"], services: [], resources: [], resourceGroups: [] }));
     if (path === "/v1/admin/policy/catalog") return route.fulfill(ok({ services: [], subjects: { users: [], groups: [], anonymous: false }, resources: [], resourceGroups: [], executionContexts: { allowedValues: ["default"], defaultContext: "default" } }));
-    if (path === "/v1/admin/config/status") return route.fulfill(ok({ identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp, configHash: "fixture" }));
+    const status = { identityAuthority: "managed", policyAuthority: "managed", generation: 1, loadedAt: stamp, configHash: "fixture", bodyHardCapBytes: 1024, reloadTimeoutMs: 1000, shutdownTimeoutMs: 1000 };
+    if (path === "/v1/admin/config/status") return route.fulfill(ok(status));
+    if (path === "/v1/admin/config/reload") return route.fulfill(ok({ ...status, generation: 2, previousGeneration: 1, previousConfigHash: "fixture", applicationTokens: model.reloadTokens }));
     if (path === "/v1/admin/principals/alex") {
       return route.fulfill(ok({ principalId: "alex", kind: "user", displayName: "Alex Example", status: "active", role: "user", selfServiceEnabled: false, groups: [], groupMemberships: [], activePolicyGroupSubjects: [], policyReferenceSections: [], signInMethods: { localPassword: "active", microsoft: "absent" }, agentTokenIssuance: { mode: "inherit", allowedExecutionContexts: [] }, agentTokenIssuancePolicy: { source: "default", contexts: [] }, createdAt: stamp, updatedAt: stamp, createdBy: "admin" }));
     }
@@ -258,6 +262,25 @@ test.describe("approval page", () => {
     await expect(request.getByRole("button")).toHaveCount(0);
     expect(model.callbacks).toEqual([]);
     expectNothingLeaked(model);
+  });
+
+  test("a request whose application or redirect address was removed is invalid for Approve and for Cancel", async ({ page }) => {
+    // The Broker answers the decision without an address to return to.
+    for (const [button, start] of [["Approve", null], ["Cancel", null], ["Return to Example Runner", "access_disabled"]] as const) {
+      const model = await fixture(page, (m) => {
+        m.decide = () => invalid;
+        if (start) m.authorization = { ...m.authorization!, canConnect: false, denialReason: start };
+      });
+      await page.goto(`${assets.baseUrl}${CONSENT_PATH}`);
+      const request = page.getByRole("main", { name: "Application request", exact: true });
+      await request.getByRole("button", { name: button, exact: true }).click();
+      await expect(request.getByRole("heading", { name: "This request is no longer valid", exact: true, level: 1 })).toBeVisible();
+      await expect(request.getByRole("button")).toHaveCount(0);
+      expect(new URL(page.url()).pathname).toBe(CONSENT_PATH);
+      expect(model.callbacks).toEqual([]);
+      expectNothingLeaked(model);
+      await page.unrouteAll({ behavior: "wait" });
+    }
   });
 
   test("a refused approval shows the reason and Cancel still returns to the application", async ({ page }) => {
@@ -408,7 +431,9 @@ test.describe("personal Applications list", () => {
     await expect(runner.getByRole("cell").nth(3)).toHaveText("2");
     await expect(table.getByRole("row", { name: /^Example Notes/ }).getByRole("cell")).toContainText(["Read-only", "Disabled by an administrator"]);
     await expect(table.getByRole("row", { name: /^Example Notes/ })).toContainText("Never");
-    await expect(table.getByRole("row", { name: /^retired-runner/ })).toContainText("Application unavailable");
+    const retired = table.getByRole("row", { name: /^retired-runner/ });
+    await expect(retired.getByRole("cell")).toContainText(["Not available", "Application unavailable"]);
+    await expect(retired).not.toContainText("Read and write");
     await runner.getByRole("button", { name: "Remove Example Runner", exact: true }).click();
     const confirm = page.getByRole("alertdialog", { name: "Remove application?", exact: true });
     await expect(confirm).toContainText("Remove Example Runner? This ends its access at once: every token it holds for you stops working, and it must ask for your approval again before it can act as you.");
@@ -420,6 +445,26 @@ test.describe("personal Applications list", () => {
     await expect(runner).toHaveCount(0);
     await expect(table.getByRole("row")).toHaveCount(3);
     expect(model.writes).toEqual([{ method: "DELETE", path: "/v1/applications/access/access-runner", query: "", body: null }]);
+    // Removing does not lift an administrator's restriction, and the confirmation says so.
+    await table.getByRole("row", { name: /^Example Notes/ }).getByRole("button", { name: "Remove Example Notes", exact: true }).click();
+    await expect(confirm).toContainText("it must ask for your approval again before it can act as you. The restriction an administrator set stays in place if you connect it again.");
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(model.errors).toEqual([]);
+  });
+
+  test("an application already disconnected elsewhere just leaves the list", async ({ page }) => {
+    const model = await fixture(page, (m) => { m.access = [access()]; });
+    await page.goto(`${assets.baseUrl}/ui/account`);
+    const section = page.getByRole("region", { name: "Applications", exact: true });
+    const runner = section.getByRole("row", { name: /^Example Runner/ });
+    await expect(runner).toBeVisible();
+    // The application revoked its own refresh token meanwhile.
+    model.access = [];
+    await page.route("**/v1/applications/access/access-runner", (route) => route.fulfill(refusal(404, "application_access_not_found", "application access was not found")));
+    await runner.getByRole("button", { name: "Remove Example Runner", exact: true }).click();
+    await page.getByRole("alertdialog", { name: "Remove application?", exact: true }).getByRole("button", { name: "Remove application", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(section.getByRole("heading", { name: "No applications connected", exact: true })).toBeVisible();
     expect(model.errors).toEqual([]);
   });
 
@@ -497,7 +542,7 @@ test.describe("administrator access paths", () => {
     await expect(kept.getByRole("switch", { name: "Application Example Reports read-only", exact: true })).toBeChecked();
     const retired = paths.getByRole("row", { name: /^retired-runner/ });
     await expect(retired).toContainText("Application unavailable");
-    await expect(retired).toContainText("Application · Not registered · 0 live tokens");
+    await expect(retired).toContainText("Application · Level: not available · 0 live tokens");
     await expect(retired.getByRole("switch")).toHaveCount(2);
     // Removing a connected application says its access ends at once.
     await runner.getByRole("button", { name: "Remove application Example Runner", exact: true }).click();
@@ -570,6 +615,31 @@ test.describe("administrator access paths", () => {
     await expect(paths.getByRole("row", { name: /^Example Notes/ }).getByRole("cell")).toHaveText(["Connected", "Enabled", /^Read-only\s*Fixed by the application’s level$/, "1", ""]);
     await expect(paths.getByRole("row", { name: /^Example Reports/ }).getByRole("cell")).toHaveText(["Not connected", "Enabled", "Read-only", "4", ""]);
     expect(model.writes).toEqual([]);
+    expect(model.errors).toEqual([]);
+  });
+});
+
+test.describe("configuration reload", () => {
+  async function reload(page: Page) {
+    await page.getByRole("button", { name: "Reload config", exact: true }).click();
+    await page.getByRole("alertdialog", { name: "Reload broker configuration?", exact: true }).getByRole("button", { name: "Reload config", exact: true }).click();
+  }
+
+  test("reports the application tokens it ended, and a failed token step", async ({ page }) => {
+    const model = await fixture(page, (m) => { m.role = "admin"; m.reloadTokens = { status: "reconciled", applications: [] }; });
+    await page.goto(`${assets.baseUrl}/ui/admin/system`);
+    await reload(page);
+    await expect(page.getByText("Config reloaded · generation 2", { exact: true })).toBeVisible();
+    model.reloadTokens = { status: "reconciled", applications: [
+      { applicationId: "example-runner", reason: "registration_narrowed", revokedTokens: 3 },
+      { applicationId: "retired-runner", reason: "registration_removed", revokedTokens: 1 }
+    ] };
+    await reload(page);
+    await expect(page.getByText("Config reloaded · generation 2. Ended application tokens: example-runner 3 (registration narrowed), retired-runner 1 (no longer registered)", { exact: true })).toBeVisible();
+    // The configuration is active even when the token step failed; the notice says so and what happens next.
+    model.reloadTokens = { status: "failed" };
+    await reload(page);
+    await expect(page.getByText("Config reloaded · generation 2. Application tokens the new configuration no longer allows were not ended; the next reload or restart tries again.", { exact: true })).toBeVisible();
     expect(model.errors).toEqual([]);
   });
 });

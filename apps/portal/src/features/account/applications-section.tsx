@@ -2,11 +2,11 @@
 // removing one. Self-service does not gate it. The section appears when the
 // person has an application, or when the broker's catalog shows that
 // applications are registered.
-import { brokerApi } from "../../api";
+import { ApiError, brokerApi } from "../../api";
 import { useModal } from "../../app/modal";
 import { useSession } from "../../app/session";
 import { useApplicationsRegistered, useOwnApplicationAccess } from "../../data/queries";
-import { applicationAccessName, applicationAccessState, applicationLevelLabel } from "../../lib/applications";
+import { applicationAccessLevel, applicationAccessName, applicationAccessRestricted, applicationAccessState } from "../../lib/applications";
 import type { ApplicationAccess } from "../../types";
 import { Badge, Button, EmptyState, ErrorState, SettingsSection, SkeletonBlock, Time, useToast } from "../../workbench";
 
@@ -24,13 +24,15 @@ export function ApplicationsSection() {
     const name = applicationAccessName(item);
     confirm({
       title: "Remove application?",
-      body: `Remove ${name}? This ends its access at once: every token it holds for you stops working, and it must ask for your approval again before it can act as you.`,
+      body: `Remove ${name}? This ends its access at once: every token it holds for you stops working, and it must ask for your approval again before it can act as you.${applicationAccessRestricted(item) ? " The restriction an administrator set stays in place if you connect it again." : ""}`,
       confirmLabel: "Remove application",
       onConfirm: async () => {
         try {
           await attempt((current) => brokerApi.removeApplicationAccess(current, item.accessId));
+        } catch (failure) {
+          // Already disconnected elsewhere: the list no longer holds it.
+          if (!(failure instanceof ApiError && failure.reasonCode === "application_access_not_found")) throw failure;
         } finally {
-          // Also after a failure: the access may already be gone.
           await query.refetch();
         }
         toast(`${name} removed`, { tone: "success" });
@@ -76,6 +78,7 @@ export function ApplicationAccessTable({ access, busy, onRemove }: { access: App
           {access.map((item) => {
             const name = applicationAccessName(item);
             const state = applicationAccessState(item);
+            const level = applicationAccessLevel(item);
             return (
               <tr key={item.accessId}>
                 <th scope="row" className="pt-identity-path">
@@ -84,7 +87,7 @@ export function ApplicationAccessTable({ access, busy, onRemove }: { access: App
                     Connected <Time value={item.connectedAt} format="date" />
                   </span>
                 </th>
-                <td className="whitespace-nowrap">{applicationLevelLabel(item.effectiveReadOnly)}</td>
+                <td className="whitespace-nowrap">{level ?? <span className="wb-muted">Not available</span>}</td>
                 <td>
                   <Badge tone={state.tone}>{state.label}</Badge>
                 </td>
