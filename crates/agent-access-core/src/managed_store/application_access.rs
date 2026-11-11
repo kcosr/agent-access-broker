@@ -1039,14 +1039,24 @@ fn mint_tx(
         token,
         record: broker_token_by_id(tx, &token_id)?,
         refresh_token,
-        principal_name: principal
-            .display_name
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| principal.principal_id.clone()),
+        principal_name: application_principal_name(
+            principal.display_name.as_deref(),
+            &principal.principal_id,
+        ),
         access,
         read_only,
         expires_in_seconds: terms.access_token_ttl_seconds,
     }))
+}
+
+/// The name an application shows for the person: their display name, at most
+/// 256 characters, or their principal ID when they have none. Never empty.
+fn application_principal_name(display_name: Option<&str>, principal_id: &str) -> String {
+    display_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| name.chars().take(256).collect())
+        .unwrap_or_else(|| principal_id.to_string())
 }
 
 pub(super) fn check_rows(conn: &Connection) -> Result<(), ManagedStoreError> {

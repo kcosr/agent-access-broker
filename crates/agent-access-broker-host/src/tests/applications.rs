@@ -147,6 +147,7 @@ impl Apps {
             .form("/v1/applications/token", Some(&basic(APP, SECRET)), body)
             .await;
         assert_eq!(headers["cache-control"], "no-store");
+        assert_eq!(headers[CONTENT_TYPE], "application/json");
         // Never a Broker envelope.
         assert!(body.get("reasonCode").is_none() && body.get("ok").is_none());
         (status, body)
@@ -305,6 +306,7 @@ async fn code_flow_mints_a_working_agent_token_and_refreshes_and_revokes() {
 
     let metadata = apps.get("/.well-known/oauth-authorization-server").await;
     assert_eq!(metadata.status(), StatusCode::OK);
+    assert_eq!(metadata.headers()[CONTENT_TYPE], "application/json");
     assert_eq!(
         response_json(metadata).await,
         json!({
@@ -368,6 +370,12 @@ async fn code_flow_mints_a_working_agent_token_and_refreshes_and_revokes() {
     let (status, second) = apps.refresh(&refresh_token).await;
     assert_eq!(status, StatusCode::OK, "{second}");
     assert!(second.get("refresh_token").is_none(), "{second}");
+    // A refresh repeats who the token is for.
+    assert_eq!(second["token_type"], "Bearer");
+    assert_eq!(second["expires_in"], 28800);
+    assert_eq!(second["principal_id"], "alice");
+    assert_eq!(second["principal_name"], "alice");
+    assert_eq!(second["read_only"], false);
     let second_token = second["access_token"].as_str().unwrap().to_string();
     assert_ne!(second_token, access_token);
     assert_eq!(apps.invoke(&access_token).await, StatusCode::OK);

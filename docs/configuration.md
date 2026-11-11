@@ -2788,7 +2788,7 @@ refresh_idle_ttl = "90d"
 | `client_secret_ref` | yes | An `env:` or `file:` reference to the client secret. |
 | `redirect_uris` | yes | 1 to 16 distinct absolute `https` URIs of at most 2,048 bytes, without fragment or credentials. Plain `http` is accepted only for a loopback host. A request's `redirect_uri` must equal one exactly. |
 | `connect` | yes | `none`, `read_only` or `read_write`: what everyone who connects receives. |
-| `allowed_execution_contexts` | yes | The context caveat of every minted token: one or more distinct values from the configured [execution contexts](#execution_context). |
+| `allowed_execution_contexts` | yes | The context caveat of every minted token: one or more distinct values from the configured [execution contexts](#execution_context). It must contain every context in which the application or its agents present a token. |
 | `allowed_services` | no | When set, the service caveat of every minted token: one or more distinct service names. A name no service has grants nothing. |
 | `access_token_ttl` | no | Lifetime of each minted token; default `8h`, at most `broker_tokens.max_self_issued_agent_invoke_ttl`. |
 | `refresh_idle_ttl` | no | How long a refresh token may go unused before it stops working; default `90d`, at most `3650d`. |

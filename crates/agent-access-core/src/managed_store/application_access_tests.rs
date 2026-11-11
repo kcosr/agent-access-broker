@@ -724,6 +724,35 @@ fn ended_tokens_are_deleted_after_the_retention_time() {
 }
 
 #[test]
+fn the_principal_name_is_never_empty_and_is_bounded() {
+    assert_eq!(
+        application_principal_name(Some(" Alex Example "), "alice"),
+        "Alex Example"
+    );
+    for absent in [None, Some(""), Some("   ")] {
+        assert_eq!(application_principal_name(absent, "alice"), "alice");
+    }
+    let long = "é".repeat(300);
+    assert_eq!(
+        application_principal_name(Some(&long), "alice")
+            .chars()
+            .count(),
+        256
+    );
+    // A person without a display name is named by their principal ID.
+    let (_temp, store) = fixture();
+    let minted = connect(&store, "bob");
+    assert_eq!(minted.principal_name, "bob");
+    let refreshed = refresh(
+        &store,
+        Some(&terms(false)),
+        minted.refresh_token.as_deref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(refreshed.principal_name, "bob");
+}
+
+#[test]
 fn pending_requests_are_bounded() {
     let (_temp, store) = fixture();
     request(&store);

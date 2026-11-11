@@ -26,7 +26,9 @@ is limited exactly as an issued agent token is:
 
 - The person's current grants decide what it may do. Connecting grants nothing.
 - `allowedExecutionContexts` is the application's
-  `allowed_execution_contexts`.
+  `allowed_execution_contexts`. List every execution context in which the
+  application's tokens will be presented, by the application itself and by
+  the agents it starts: a request in any other context is refused.
 - `allowedServices` is the application's `allowed_services` when set.
 - `readOnly` is true when the application's level is `read_only` **or** an
   administrator made this person's access read-only. Either one narrows; no
@@ -167,8 +169,10 @@ Success is 200 with `Cache-Control: no-store`:
   does not rotate.
 - Every successful call mints a new, independent access token. Earlier ones
   stay valid until they expire or are revoked.
-- `principal_name` is the person's display name, or their principal ID when
-  they have none.
+- `principal_id`, `principal_name` and `read_only` are in every answer,
+  including a refresh. `principal_name` is the person's display name, at most
+  256 characters, or their principal ID when they have none; it is never
+  empty.
 
 Failure is RFC 6749 section 5.2 JSON, `{"error": "..."}`, and never a Broker
 envelope:
@@ -202,9 +206,10 @@ form field `token`. The answer is 200 whether or not the token was known.
   `limits.auth_requests_per_source_per_minute` for the caller's address, as the
   sign-in routes do.
 - At most 1,000 authorization requests are pending at once.
-- One access holds at most 256 unexpired, unrevoked tokens. A request beyond
-  that is refused with `temporarily_unavailable`; revoke tokens that are no
-  longer needed.
+- One access holds at most 256 unexpired, unrevoked tokens, which leaves room
+  for an application that keeps one token per running agent session and
+  revokes each when its session ends. A request beyond that is refused with
+  `temporarily_unavailable`; revoke tokens that are no longer needed.
 - An application's tokens are not listed as individual tokens in the personal
   or administrative token lists. The access shows how many are live. The rows
   are deleted once they have been expired or revoked for 7 days, by the next
