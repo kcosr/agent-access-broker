@@ -196,7 +196,10 @@ All notable changes to this project are documented in this file.
   `read_write`); administrators make one person's access read-only, disable it
   or remove it with `admin principals application-access` or the matching
   routes, which ends its tokens at once. Application tokens are not listed
-  individually and are deleted 7 days after they end. See
+  individually and are deleted 7 days after they end. In the portal, the
+  person approves or declines on a dedicated page, reviews and removes their
+  applications under **Account > Applications**, and administrators manage each
+  application as a row of the person's **Access paths**. See
   [applications](docs/applications.md).
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to

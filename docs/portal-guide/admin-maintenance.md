@@ -20,7 +20,8 @@ local demonstration accounts and policy.
    **Policies** to review actions, contexts, credential modes, and resources.
 4. Review **Tokens**, including expiry, last use, paused/revoked status, and
    resource/action restrictions. Review **Credentials** and **Limits** where
-   applicable.
+   applicable, and the applications the person approved under
+   [**Access paths**](#review-application-access).
 5. Open **Admin > Audit** or the principal's **Activity** tab to investigate
    unexpected use or management changes.
 
@@ -141,6 +142,40 @@ upstream revocation or rotation when needed. See
 [personal OAuth setup](../administrator-guide.md#enable-personal-oauth-connections),
 [classless static credential rights](../administrator-guide.md#grant-personal-credential-rights)
 and the [end-user guide](../end-user-guide.md#rotate-pause-and-revoke).
+
+## Review application access
+
+A person approves a registered [application](../applications.md) in their own
+browser; an administrator cannot connect one for them. To review or limit what
+a person approved:
+
+1. Open **Admin > Principals > the person > Overview** and find **Access
+   paths** under **Identity access**. Each application the person approved is
+   one row, named **Application**, after the identity token and the username
+   bindings.
+2. Read the row: the application's level set by the operator (**Level: read and
+   write**, **read-only** or **none**), how many tokens it currently holds, and
+   its status. **Connected** means the application can obtain tokens; **Not
+   connected** means it holds none, either because it has not finished
+   connecting or because the person or the application ended the connection
+   and the row was kept for its settings; **Application unavailable** means
+   the application is no longer registered and obtains nothing.
+3. Turn **Read-only** on to limit the application to actions classified as
+   reads for this person. When the application's level is already read-only,
+   the column shows **Read-only, Fixed by the application’s level** instead of
+   a toggle: a person's setting only narrows the level.
+4. Turn **Enabled** off to stop the application for this person. It cannot
+   obtain tokens, and the person cannot connect it again until you turn it on.
+5. Choose **Remove**, then **Remove access**, to delete the row. The person may
+   connect the application again later, starting without restrictions.
+
+Expected result: every change ends the tokens the application holds for the
+person at once, and the row's version advances. If another administrator
+changed the row first, the portal refreshes it and asks you to repeat the
+change. Auditors see the same rows without controls. Application tokens are not
+listed on the person's **Tokens** tab; the row's live token count is their only
+listing. The CLI equivalents are in the
+[administrator guide](../administrator-guide.md#review-application-access).
 
 ## Offboard a user or workload
 

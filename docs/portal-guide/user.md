@@ -387,10 +387,35 @@ If a token may have been disclosed, revoke it promptly and issue a new one.
 Deleting a stored upstream credential removes the broker's encrypted copy; it
 does not revoke that credential with the upstream provider.
 
+## 9. Approve or remove an application
+
+An application your operator registered, such as a job runner, asks for your
+approval the first time it needs the Broker. It opens the Broker in your
+browser; you do not start this from the portal, and you need neither
+self-service nor permission to issue tokens.
+
+1. Sign in if asked. The portal returns to the request.
+2. Read **Connect _application_?**: check the application's name, the **Access
+   level** (**Read-only** or **Read and write**, set by an administrator) and
+   **Signed in as**. Choose **Use a different account** if the account is not
+   yours.
+3. Choose **Approve**, or **Cancel** to decline. Either returns you to the
+   application.
+4. To review or end the access later, open the account menu, choose **Account
+   settings** and find **Applications**. Choose **Remove** on the application's
+   row and confirm **Remove application**.
+
+Expected result: after **Approve**, the application continues without asking
+you for a token, and **Account > Applications** lists it as **Connected** with
+its access level, last use and live token count. After **Remove**, its tokens
+stop working at once and it must ask for your approval again.
+
 ## Troubleshooting
 
 | What you see | What to check |
 | --- | --- |
+| **This request is no longer valid** | An application's request expires after 10 minutes and can be answered once. Go back to the application and start again. |
+| **You can’t connect _application_** | The page gives the reason: connecting is turned off, an administrator disabled your access for it, or your account cannot connect applications. Ask your administrator; **Return to _application_** takes you back. |
 | My access is missing or `self_service_disabled` | Ask an administrator to enable self-service or manage credentials and tokens for you. |
 | No services, actions, or contexts to select | Ask the administrator to review active grants, group membership, and execution contexts. |
 | Credential is missing or unverified | Select the connection and, when it accepts several, the token type of your token; save the needed credential, then Verify when supported. |
