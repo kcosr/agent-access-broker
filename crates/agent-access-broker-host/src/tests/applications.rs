@@ -844,9 +844,11 @@ async fn level_none_connects_nobody_and_read_only_narrows_every_token() {
     assert_eq!(apps.admin_access().await[0]["effectiveReadOnly"], true);
     assert_eq!(apps.admin_access().await[0]["readOnly"], false);
 
-    // Back to `none`: the refresh token mints nothing until the level returns.
+    // Back to `none`: the reload ends the live token, and the refresh token
+    // mints nothing until the level returns.
     config.applications.get_mut(APP).unwrap().connect = ApplicationConnectLevel::None;
     apps.fixture._broker.reload_config(&config).await;
+    assert_eq!(apps.invoke(access_token).await, StatusCode::UNAUTHORIZED);
     assert_eq!(
         apps.refresh(&refresh_token).await,
         (StatusCode::BAD_REQUEST, json!({"error": "invalid_grant"}))
@@ -1158,10 +1160,14 @@ async fn reload_removing_an_application_keeps_its_access_and_mints_nothing() {
     let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
     let minted = apps.connect().await;
     let refresh_token = minted["refresh_token"].as_str().unwrap().to_string();
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
     let mut removed = apps.config.clone();
     removed.applications.clear();
     apps.fixture._broker.reload_config(&removed).await;
 
+    // The reload ended the token the application held.
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(apps.admin_access().await[0]["liveTokenCount"], 0);
     // The client is no longer registered.
     let (status, _, body) = apps
         .form(
@@ -1246,4 +1252,474 @@ async fn a_failed_mint_audit_keeps_the_committed_token_and_withholds_its_secret(
     let (status, body) = apps.refresh(&refresh_token).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(apps.admin_access().await[0]["liveTokenCount"], 3);
+}
+
+fn application_audit(apps: &Apps, action: &str) -> Vec<Value> {
+    read_audit_records(&apps.fixture.audit_path)
+        .into_iter()
+        .filter(|record| record["action"] == action)
+        .map(|record| record["providerAudit"]["application"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn disconnecting_keeps_an_administrator_restriction_for_the_next_approval() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let admin = apps.fixture.admin_token.clone();
+    let person = apps.fixture.management_token.clone();
+    let minted = apps.connect().await;
+    let access_id = apps.admin_access().await[0]["accessId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let route = format!("/v1/admin/principals/alice/application-access/{access_id}");
+    let own = format!("/v1/applications/access/{access_id}");
+    let (status, body) = apps
+        .bearer(
+            Method::PATCH,
+            &admin,
+            &route,
+            Some(r#"{"readOnly":true,"expectedVersion":1}"#),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, narrowed) = apps
+        .refresh(minted["refresh_token"].as_str().unwrap())
+        .await;
+    assert_eq!(narrowed["read_only"], true);
+
+    // The person removes their access: it leaves their list and its tokens
+    // end, but the administrator's restriction stays.
+    let (status, body) = apps.bearer(Method::DELETE, &person, &own, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["result"], json!({"removed": true}));
+    assert_eq!(
+        apps.invoke(narrowed["access_token"].as_str().unwrap())
+            .await,
+        StatusCode::UNAUTHORIZED
+    );
+    let (_, listed) = apps
+        .bearer(Method::GET, &person, "/v1/applications/access", None)
+        .await;
+    assert_eq!(listed["result"], json!({"access": []}));
+    let kept = apps.admin_access().await[0].clone();
+    assert_eq!(kept["accessId"], access_id.as_str());
+    assert_eq!(
+        (
+            &kept["connected"],
+            &kept["readOnly"],
+            &kept["enabled"],
+            &kept["version"]
+        ),
+        (&json!(false), &json!(true), &json!(true), &json!(2))
+    );
+    assert_eq!(kept["liveTokenCount"], 0);
+    // What is not connected is not the person's to remove.
+    let (status, body) = apps.bearer(Method::DELETE, &person, &own, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["reasonCode"], "application_access_not_found");
+
+    // Approving again cannot lift the restriction.
+    let request = apps.start().await;
+    let (_, pending) = apps.inspect(&request).await;
+    assert_eq!(pending["result"]["readOnly"], true);
+    assert_eq!(pending["result"]["canConnect"], true);
+    let (_, decided) = apps.decide(&request, "approve").await;
+    let (status, again) = apps.exchange(&redirect_parameters(&decided)["code"]).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["read_only"], true);
+    let reconnected = apps.admin_access().await[0].clone();
+    assert_eq!(reconnected["accessId"], access_id.as_str());
+    assert_eq!(
+        (
+            &reconnected["connected"],
+            &reconnected["readOnly"],
+            &reconnected["version"]
+        ),
+        (&json!(true), &json!(true), &json!(2))
+    );
+
+    // Nor can the application, by revoking its refresh token.
+    assert_eq!(
+        apps.revoke(again["refresh_token"].as_str().unwrap()).await,
+        StatusCode::OK
+    );
+    let kept = apps.admin_access().await[0].clone();
+    assert_eq!(
+        (&kept["connected"], &kept["readOnly"], &kept["accessId"]),
+        (&json!(false), &json!(true), &json!(access_id))
+    );
+    assert_eq!(apps.connect().await["read_only"], true);
+
+    // A disabled access stays disabled through a removal.
+    let (status, body) = apps
+        .bearer(
+            Method::PATCH,
+            &admin,
+            &route,
+            Some(r#"{"enabled":false,"readOnly":false,"expectedVersion":2}"#),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = apps.bearer(Method::DELETE, &person, &own, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let request = apps.start().await;
+    let (_, pending) = apps.inspect(&request).await;
+    assert_eq!(pending["result"]["denialReason"], "access_disabled");
+    let (status, body) = apps.decide(&request, "approve").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(apps.admin_access().await[0]["enabled"], false);
+
+    // Only an administrator's removal deletes a restricted access.
+    let (status, body) = apps
+        .bearer(
+            Method::DELETE,
+            &admin,
+            &format!("{route}?expectedVersion=3"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(apps.admin_access().await, json!([]));
+    assert_eq!(apps.connect().await["read_only"], false);
+}
+
+#[tokio::test]
+async fn a_redirect_uri_removed_at_reload_invalidates_pending_requests_and_codes() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let pending = apps.start().await;
+    let code = apps.approve().await;
+    let mut moved = apps.config.clone();
+    moved.applications.get_mut(APP).unwrap().redirect_uris =
+        vec!["https://runner.example.test/new-callback".into()];
+    apps.fixture._broker.reload_config(&moved).await;
+
+    // Nothing is returned to the removed address: not a code, not a cancel.
+    for (status, body) in [
+        apps.inspect(&pending).await,
+        apps.decide(&pending, "approve").await,
+        apps.decide(&pending, "cancel").await,
+    ] {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["reasonCode"], "application_authorization_invalid");
+        assert!(body["result"].get("redirectTo").is_none(), "{body}");
+        assert!(!body.to_string().contains("runner.example.test"), "{body}");
+    }
+    // A code approved for the removed address is refused at exchange.
+    assert_eq!(
+        apps.exchange(&code).await,
+        (StatusCode::BAD_REQUEST, json!({"error": "invalid_grant"}))
+    );
+    assert_eq!(
+        apps.get(&authorize_query("")).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    // The same holds when the registration itself is gone.
+    apps.fixture._broker.reload_config(&apps.config).await;
+    let pending = apps.start().await;
+    let mut removed = apps.config.clone();
+    removed.applications.clear();
+    apps.fixture._broker.reload_config(&removed).await;
+    for (status, body) in [
+        apps.decide(&pending, "cancel").await,
+        apps.decide(&pending, "approve").await,
+    ] {
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn reload_ends_tokens_the_narrowed_registration_no_longer_mints() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let minted = apps.connect().await;
+    let refresh_token = minted["refresh_token"].as_str().unwrap().to_string();
+    let first = minted["access_token"].as_str().unwrap().to_string();
+    let second = apps.refresh(&refresh_token).await.1["access_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // An unchanged registration ends nothing.
+    apps.fixture._broker.reload_config(&apps.config).await;
+    assert_eq!(apps.invoke(&first).await, StatusCode::OK);
+    assert!(application_audit(&apps, "applications.tokens.reconciled").is_empty());
+
+    // Read-only for everyone: the write-capable tokens end at the reload,
+    // and the application obtains a read-only one at its next request.
+    let mut config = apps.config.clone();
+    config.applications.get_mut(APP).unwrap().connect = ApplicationConnectLevel::ReadOnly;
+    apps.fixture._broker.reload_config(&config).await;
+    for token in [&first, &second] {
+        assert_eq!(apps.invoke(token).await, StatusCode::UNAUTHORIZED);
+    }
+    let (status, read_only) = apps.refresh(&refresh_token).await;
+    assert_eq!(status, StatusCode::OK, "{read_only}");
+    assert_eq!(read_only["read_only"], true);
+    let read_only = read_only["access_token"].as_str().unwrap().to_string();
+    assert_eq!(apps.invoke(&read_only).await, StatusCode::OK);
+
+    // A service ceiling the token was not minted with ends it too.
+    config.applications.get_mut(APP).unwrap().allowed_services = Some(vec!["fake".into()]);
+    apps.fixture._broker.reload_config(&config).await;
+    assert_eq!(apps.invoke(&read_only).await, StatusCode::UNAUTHORIZED);
+    let (_, limited) = apps.refresh(&refresh_token).await;
+    let limited = limited["access_token"].as_str().unwrap().to_string();
+    assert_eq!(apps.invoke(&limited).await, StatusCode::OK);
+    // Widening ends nothing, and no reconnect is needed.
+    apps.fixture._broker.reload_config(&config).await;
+    assert_eq!(apps.invoke(&limited).await, StatusCode::OK);
+
+    // One operator-visible record per application, with a count and no token.
+    let records = application_audit(&apps, "applications.tokens.reconciled");
+    assert_eq!(
+        records,
+        vec![
+            json!({"applicationId": APP, "trigger": "reload", "reason": "registration_narrowed", "revokedTokens": 2}),
+            json!({"applicationId": APP, "trigger": "reload", "reason": "registration_narrowed", "revokedTokens": 1}),
+        ]
+    );
+
+    // A restart with the registration removed ends what is still live.
+    let Apps {
+        fixture,
+        mut config,
+    } = apps;
+    let BrowserRateFixture {
+        _broker: broker,
+        app,
+        state,
+        ingress,
+        audit_path,
+        ..
+    } = fixture;
+    drop((app, state, ingress));
+    broker.stop().await;
+    config.applications.clear();
+    let restarted = TestBroker::start_config(&config).await;
+    let runtime = restarted.runtime();
+    assert!(matches!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .resolve_broker_token(runtime.broker_token_hasher().unwrap(), &limited),
+        Err(agent_access_core::ManagedStoreError::BrokerTokenRevoked)
+    ));
+    let startup = read_audit_records(&audit_path)
+        .into_iter()
+        .filter(|record| record["action"] == "applications.tokens.reconciled")
+        .map(|record| record["providerAudit"]["application"].clone())
+        .next_back()
+        .unwrap();
+    assert_eq!(
+        startup,
+        json!({"applicationId": APP, "trigger": "startup", "reason": "registration_removed", "revokedTokens": 1})
+    );
+}
+
+#[tokio::test]
+async fn every_refusal_after_client_authentication_is_audited_without_values() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    for body in [
+        "grant_type=refresh_token&refresh_token=a&client_secret=private-body-secret",
+        "refresh_token=private-refresh-value",
+        "grant_type=private-grant-value",
+        "grant_type=refresh_token",
+        "grant_type=authorization_code&code=private-code-value",
+        "grant_type=refresh_token&refresh_token=aar_private-unknown-value",
+    ] {
+        assert_eq!(apps.token(body).await.0, StatusCode::BAD_REQUEST, "{body}");
+    }
+    let (status, _, _) = apps
+        .form(
+            "/v1/applications/revoke",
+            Some(&basic(APP, SECRET)),
+            "hint=x",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = apps
+        .form(
+            "/v1/applications/token",
+            Some(&basic(APP, "private-wrong-secret-0123456789")),
+            "grant_type=refresh_token&refresh_token=a",
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let refusals = application_audit(&apps, "applications.token.refused");
+    let reasons = refusals
+        .iter()
+        .map(|refusal| {
+            assert_eq!(refusal["applicationId"], APP, "{refusal}");
+            (
+                refusal["endpoint"].as_str().unwrap().to_string(),
+                refusal["reason"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        ("applications.token", "request_malformed"),
+        ("applications.token", "grant_type_missing"),
+        ("applications.token", "grant_type_unsupported"),
+        ("applications.token", "grant_parameters_missing"),
+        ("applications.token", "grant_parameters_missing"),
+        ("applications.token", "grant_invalid"),
+        ("applications.revoke", "token_missing"),
+        ("applications.token", "client_authentication_failed"),
+    ];
+    assert_eq!(
+        reasons,
+        expected
+            .iter()
+            .map(|(endpoint, reason)| (endpoint.to_string(), reason.to_string()))
+            .collect::<Vec<_>>()
+    );
+
+    // A refused authorization request is audited like a failed sign-in start.
+    assert_eq!(
+        apps.get(&authorize_query("").replace(APP, "unknown-application"))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        apps.get(&authorize_query("&scope=private-scope-value"))
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        application_audit(&apps, "applications.authorize.refused"),
+        vec![
+            json!({"applicationId": null, "endpoint": "applications.authorize", "reason": "client_unknown"}),
+            json!({"applicationId": APP, "endpoint": "applications.authorize", "reason": "scope_not_supported"}),
+        ]
+    );
+    let audit = serde_json::to_string(&read_audit_records(&apps.fixture.audit_path)).unwrap();
+    assert!(
+        !audit.contains("private-"),
+        "a supplied value reached the audit log"
+    );
+    assert!(!audit.contains("unknown-application"));
+}
+
+fn protocol_headers(request_id: &'static str) -> axum::http::HeaderMap {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(REQUEST_ID_HEADER, request_id.parse().unwrap());
+    headers.insert("Authorization", basic(APP, SECRET).parse().unwrap());
+    headers.insert(
+        CONTENT_TYPE,
+        "application/x-www-form-urlencoded".parse().unwrap(),
+    );
+    headers
+}
+
+#[tokio::test]
+async fn mutation_owners_keep_their_admitted_capacity_after_the_waiter_is_cancelled() {
+    use crate::handlers::applications::{
+        committed_application_mint, committed_application_revocation, protocol_request,
+    };
+    use agent_access_core::ApplicationGrant;
+
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let minted = apps.connect().await;
+    let refresh_token = minted["refresh_token"].as_str().unwrap().to_string();
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
+    let state = crate::state::AppState {
+        reloadable: apps.fixture.state.clone(),
+    };
+    let hasher = apps
+        .fixture
+        .state
+        .current()
+        .runtime
+        .broker_token_hasher()
+        .unwrap()
+        .clone();
+    let remote: SocketAddr = "127.0.0.1:43210".parse().unwrap();
+    let ingress = apps.fixture.ingress.clone();
+    let idle = || async {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while ingress.global_in_flight_requests() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the owner releases its capacity when it has finished");
+    };
+    idle().await;
+
+    // A mint whose store work is blocked while its waiter goes away.
+    let request = protocol_request(
+        &state,
+        remote,
+        &protocol_headers("application-owner-mint"),
+        &axum::body::Bytes::new(),
+        "applications.token",
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the client authenticates"));
+    assert_eq!(ingress.global_in_flight_requests(), 1);
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let mint_hasher = hasher.clone();
+    let mint_refresh = refresh_token.clone();
+    let waiter = tokio::spawn(committed_application_mint(
+        state.clone(),
+        request,
+        "refresh_token",
+        move |store, registration| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            store.mint_application_token(
+                &mint_hasher,
+                APP,
+                registration,
+                ApplicationGrant::RefreshToken {
+                    refresh_token: &mint_refresh,
+                },
+            )
+        },
+    ));
+    entered_rx.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    // The cancelled request still counts against the global limit.
+    assert_eq!(ingress.global_in_flight_requests(), 1);
+    assert_eq!(apps.admin_access().await[0]["liveTokenCount"], 1);
+    release_tx.send(()).unwrap();
+    idle().await;
+    // The owner finished: the token is committed and audited.
+    assert_eq!(apps.admin_access().await[0]["liveTokenCount"], 2);
+    let issued = application_audit(&apps, "applications.token.issued");
+    assert_eq!(issued.len(), 2, "{issued:?}");
+
+    // The same for a revocation.
+    let request = protocol_request(
+        &state,
+        remote,
+        &protocol_headers("application-owner-revoke"),
+        &axum::body::Bytes::new(),
+        "applications.revoke",
+    )
+    .await
+    .unwrap_or_else(|_| panic!("the client authenticates"));
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let revoked = access_token.clone();
+    let waiter = tokio::spawn(committed_application_revocation(request, move |store| {
+        entered_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        store.revoke_application_token(&hasher, APP, &revoked)
+    }));
+    entered_rx.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert_eq!(ingress.global_in_flight_requests(), 1);
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::OK);
+    release_tx.send(()).unwrap();
+    idle().await;
+    assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        application_audit(&apps, "applications.token.revoked").len(),
+        1
+    );
 }

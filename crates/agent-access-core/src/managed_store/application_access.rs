@@ -3,7 +3,7 @@
 //! tokens minted through it. Raw request IDs, codes, verifiers and refresh
 //! tokens are never stored and never reach errors or `Debug` output.
 use super::*;
-use crate::ApplicationAccessTerms;
+use crate::ApplicationRegistration;
 use sha2::Digest;
 
 /// How long a pending authorization request can be approved.
@@ -219,11 +219,33 @@ pub enum ApplicationRevocation {
         access_id: String,
         token_id: String,
     },
-    /// The refresh token: the access is removed with its live tokens.
+    /// The refresh token: the consent ends with its live tokens. The row is
+    /// kept, disconnected, when it carries an administrator's restriction.
     Access {
         access: ApplicationAccessRecord,
         revoked_tokens: u64,
+        row_removed: bool,
     },
+}
+
+/// Live tokens a startup or reload ended because the application's current
+/// registration would no longer mint them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationTokenReconciliation {
+    pub application_id: String,
+    pub reason: ApplicationTokenReconciliationReason,
+    pub revoked_tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplicationTokenReconciliationReason {
+    /// The application is no longer registered.
+    RegistrationRemoved,
+    /// The application's level is `none`.
+    ConnectingDisabled,
+    /// The level became `read_only`, or the contexts or services changed.
+    RegistrationNarrowed,
 }
 
 fn generate_application_secret(prefix: &str) -> String {
@@ -385,6 +407,19 @@ fn purge(conn: &Connection, now: DateTime<Utc>) -> Result<(), ManagedStoreError>
         params![current],
     )
     .map_err(sql_unavailable)?;
+    // An access that is neither connected, awaiting its code exchange nor
+    // restricted by an administrator records nothing.
+    conn.execute(
+        "DELETE FROM application_access
+         WHERE refresh_token_hash IS NULL AND enabled = 1 AND read_only = 0
+           AND NOT EXISTS (SELECT 1 FROM application_authorization_codes c
+             WHERE c.access_id = application_access.access_id)
+           AND NOT EXISTS (SELECT 1 FROM broker_tokens t
+             WHERE t.application_access_id = application_access.access_id
+               AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > ?1))",
+        params![current],
+    )
+    .map_err(sql_unavailable)?;
     conn.execute(
         "DELETE FROM broker_tokens WHERE application_access_id IS NOT NULL
            AND ((revoked_at IS NOT NULL AND revoked_at <= ?1)
@@ -538,17 +573,21 @@ impl ManagedStore {
         Ok(denial)
     }
 
-    /// Consumes the pending request. An approval connects `principal` under
-    /// `terms`, the current registration of the request's application: it
-    /// creates the access or, for a reconnect, ends its refresh token and
-    /// live tokens, and issues the one-use code. A refused approval changes
-    /// nothing, so the person can still return to the application.
+    /// Consumes the pending request. `registration` gives an application's
+    /// current registration; a request whose application is no longer
+    /// registered with the request's exact redirect URI is invalid, for an
+    /// approval and a cancellation alike, so nothing is returned to an
+    /// address the operator removed. An approval connects `principal`: it
+    /// creates the access or reuses the existing one with its administrator
+    /// settings, ends its refresh token and live tokens, and issues the
+    /// one-use code. A refused approval changes nothing, so the person can
+    /// still return to the application.
     pub fn decide_application_authorization(
         &self,
         hasher: &BrokerTokenHasher,
         request_id: &str,
         principal: &str,
-        terms: Option<&ApplicationAccessTerms>,
+        registration: &dyn Fn(&str) -> Option<ApplicationRegistration>,
         approve: bool,
     ) -> Result<ApplicationAuthorizationDecision, ManagedStoreError> {
         validate_principal_id(principal)?;
@@ -559,6 +598,12 @@ impl ManagedStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
         let pending = pending_request(&tx, hasher, request_id, &current)?;
+        let registration = registration(&pending.application_id)
+            .filter(|registration| {
+                registration.application_id == pending.application_id
+                    && registration.accepts_redirect_uri(&pending.parameters.redirect_uri)
+            })
+            .ok_or(ManagedStoreError::ApplicationAuthorizationInvalid)?;
         let consumed = tx
             .execute(
                 "UPDATE application_authorization_requests SET consumed_at = ?2
@@ -580,12 +625,11 @@ impl ManagedStore {
             tx.commit().map_err(sql_unavailable)?;
             return Ok(decision);
         }
-        let terms = terms.filter(|terms| terms.application_id == pending.application_id);
         if let Some(denial) = connect_denial(
             &tx,
             principal,
             &pending.application_id,
-            terms.is_some(),
+            registration.terms.is_some(),
             &current,
         )? {
             return Err(ManagedStoreError::ApplicationAccessDenied(denial));
@@ -647,14 +691,16 @@ impl ManagedStore {
     }
 
     /// Exchanges a code or refresh token of `application_id` for a new agent
-    /// token. `terms` is the application's current registration; every
-    /// condition is checked again in this transaction. A code is consumed by
-    /// its first presentation, whatever the outcome.
+    /// token. `registration` is the application's current registration, or
+    /// `None` when it is not registered; every condition is checked again in
+    /// this transaction, including that a code's redirect URI is still
+    /// registered. A code is consumed by its first presentation, whatever the
+    /// outcome.
     pub fn mint_application_token(
         &self,
         hasher: &BrokerTokenHasher,
         application_id: &str,
-        terms: Option<&ApplicationAccessTerms>,
+        registration: Option<&ApplicationRegistration>,
         grant: ApplicationGrant<'_>,
     ) -> Result<Result<ApplicationTokenMint, ApplicationGrantRefused>, ManagedStoreError> {
         validate_application_id(application_id)?;
@@ -664,14 +710,16 @@ impl ManagedStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_unavailable)?;
         purge(&tx, now)?;
-        let outcome = mint_tx(&tx, hasher, application_id, terms, grant, now)?;
+        let registration =
+            registration.filter(|registration| registration.application_id == application_id);
+        let outcome = mint_tx(&tx, hasher, application_id, registration, grant, now)?;
         // A refusal still commits the code's consumption and retention.
         tx.commit().map_err(sql_unavailable)?;
         Ok(outcome)
     }
 
     /// RFC 7009 revocation by `application_id`: one of its access tokens, or
-    /// its refresh token, which removes the access and ends its live tokens.
+    /// its refresh token, which ends the consent and its live tokens.
     pub fn revoke_application_token(
         &self,
         hasher: &BrokerTokenHasher,
@@ -711,10 +759,11 @@ impl ManagedStore {
         } else if let Some(access) = access_by(&tx, "a.refresh_token_hash", &token_hash, &now)?
             .filter(|access| access.application_id == application_id)
         {
-            let revoked_tokens = remove_access(&tx, &access.access_id, &actor, &now)?;
+            let (revoked_tokens, row_removed) = disconnect_access(&tx, &access, &actor, &now)?;
             ApplicationRevocation::Access {
                 access,
                 revoked_tokens,
+                row_removed,
             }
         } else {
             ApplicationRevocation::Unknown
@@ -796,15 +845,17 @@ impl ManagedStore {
         Ok((before, after))
     }
 
-    /// Removes the access with its refresh token and ends its live tokens.
-    /// An administrator fences the removal with `expected_version`.
-    pub fn remove_application_access(
+    /// The person ends their own consent: the refresh token and live tokens
+    /// end. Returns the access as it was and whether its row was removed; a
+    /// row carrying an administrator's restriction is kept, disconnected, so
+    /// that removing and approving again cannot lift the restriction. An
+    /// access that is not connected is not found.
+    pub fn disconnect_application_access(
         &self,
         principal: &str,
         access_id: &str,
-        expected_version: Option<i64>,
         actor: &str,
-    ) -> Result<ApplicationAccessRecord, ManagedStoreError> {
+    ) -> Result<(ApplicationAccessRecord, bool), ManagedStoreError> {
         validate_principal_id(principal)?;
         validate_canonical_uuid(access_id, "application access ID")?;
         validate_actor(actor)?;
@@ -815,28 +866,172 @@ impl ManagedStore {
             .map_err(sql_unavailable)?;
         principal_by_id_without_groups(&tx, principal)?;
         let previous = access_for_principal(&tx, principal, access_id, &now)?;
-        if expected_version.is_some_and(|expected| expected != previous.version) {
+        if !previous.connected {
+            return Err(ManagedStoreError::ApplicationAccessNotFound);
+        }
+        let (_, row_removed) = disconnect_access(&tx, &previous, actor, &now)?;
+        tx.commit().map_err(sql_unavailable)?;
+        Ok((previous, row_removed))
+    }
+
+    /// An administrator removes the access, whatever its settings, with its
+    /// refresh token and live tokens, fenced by `expected_version`.
+    pub fn remove_application_access(
+        &self,
+        principal: &str,
+        access_id: &str,
+        expected_version: i64,
+        actor: &str,
+    ) -> Result<ApplicationAccessRecord, ManagedStoreError> {
+        validate_principal_id(principal)?;
+        validate_canonical_uuid(access_id, "application access ID")?;
+        validate_actor(actor)?;
+        if expected_version < 1 {
+            return Err(input_invalid("expectedVersion must be positive"));
+        }
+        let now = normalized_now_string();
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        principal_by_id_without_groups(&tx, principal)?;
+        let previous = access_for_principal(&tx, principal, access_id, &now)?;
+        if expected_version != previous.version {
             return Err(ManagedStoreError::VersionConflict);
         }
-        remove_access(&tx, access_id, actor, &now)?;
+        revoke_access_tokens(&tx, access_id, actor, &now)?;
+        tx.execute(
+            "DELETE FROM application_access WHERE access_id = ?1",
+            [access_id],
+        )
+        .map_err(sql_unavailable)?;
         tx.commit().map_err(sql_unavailable)?;
         Ok(previous)
     }
+
+    /// Ends every live application-minted token that its application's
+    /// current registration would no longer mint: the application is not
+    /// registered or its level is `none`; its level is `read_only` and the
+    /// token is not; or the token's contexts or services differ from the
+    /// registration's. Refresh tokens are untouched. Run at startup and under
+    /// the reload fence, so a narrowed registration takes effect at once.
+    pub fn reconcile_application_tokens(
+        &self,
+        registration: &dyn Fn(&str) -> Option<ApplicationRegistration>,
+    ) -> Result<Vec<ApplicationTokenReconciliation>, ManagedStoreError> {
+        let now = normalized_now_string();
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql_unavailable)?;
+        let live: Vec<(String, String, String)> = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT t.token_id, a.application_id, t.scopes_json FROM broker_tokens t
+                     JOIN application_access a ON a.access_id = t.application_access_id
+                     WHERE t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > ?1)
+                     ORDER BY a.application_id, t.token_id",
+                )
+                .map_err(sql_unavailable)?;
+            collect_rows(
+                statement
+                    .query_map([&now], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                    .map_err(sql_unavailable)?,
+            )?
+        };
+        let mut registrations = BTreeMap::<String, Option<ApplicationRegistration>>::new();
+        let mut ended = BTreeMap::<String, ApplicationTokenReconciliation>::new();
+        for (token_id, application_id, scopes) in live {
+            let current = registrations
+                .entry(application_id.clone())
+                .or_insert_with(|| {
+                    registration(&application_id)
+                        .filter(|current| current.application_id == application_id)
+                });
+            let reason = match current.as_ref().map(|current| current.terms.as_ref()) {
+                None => ApplicationTokenReconciliationReason::RegistrationRemoved,
+                Some(None) => ApplicationTokenReconciliationReason::ConnectingDisabled,
+                Some(Some(terms)) if !token_within_terms(&scopes, terms) => {
+                    ApplicationTokenReconciliationReason::RegistrationNarrowed
+                }
+                Some(Some(_)) => continue,
+            };
+            tx.execute(
+                "UPDATE broker_tokens SET revoked_at = ?2,
+                 revoked_by = 'system:application_registration'
+                 WHERE token_id = ?1 AND revoked_at IS NULL",
+                params![token_id, now],
+            )
+            .map_err(sql_unavailable)?;
+            ended
+                .entry(application_id.clone())
+                .or_insert(ApplicationTokenReconciliation {
+                    application_id,
+                    reason,
+                    revoked_tokens: 0,
+                })
+                .revoked_tokens += 1;
+        }
+        tx.commit().map_err(sql_unavailable)?;
+        Ok(ended.into_values().collect())
+    }
 }
 
-fn remove_access(
+/// Whether the registration would still mint a token with these caveats: a
+/// read-only level admits only read-only tokens, and the contexts and
+/// services are exactly the registration's. Unreadable caveats are not.
+fn token_within_terms(scopes: &str, terms: &crate::ApplicationAccessTerms) -> bool {
+    let Ok(caveats) = serde_json::from_str::<Value>(scopes)
+        .map_err(|_| ())
+        .and_then(|scopes| AgentInvokeTokenCaveats::parse_stored(&scopes).map_err(|_| ()))
+    else {
+        return false;
+    };
+    let set = |values: &[String]| values.iter().cloned().collect::<BTreeSet<_>>();
+    let contexts = caveats.allowed_execution_contexts.as_ref().map(|contexts| {
+        contexts
+            .iter()
+            .map(ToString::to_string)
+            .collect::<BTreeSet<_>>()
+    });
+    (caveats.read_only || !terms.read_only)
+        && contexts == Some(set(&terms.allowed_execution_contexts))
+        && caveats.allowed_services.as_deref().map(set)
+            == terms.allowed_services.as_deref().map(set)
+        && caveats.service_restrictions.is_none()
+}
+
+/// Ends a consent: its live tokens, codes and refresh token. The row goes
+/// too unless it carries an administrator's restriction (disabled or
+/// read-only), which then stays for a later approval to reuse. Returns the
+/// tokens ended and whether the row was removed.
+fn disconnect_access(
     conn: &Connection,
-    access_id: &str,
+    access: &ApplicationAccessRecord,
     actor: &str,
     now: &str,
-) -> Result<u64, ManagedStoreError> {
-    let revoked = revoke_access_tokens(conn, access_id, actor, now)?;
-    conn.execute(
-        "DELETE FROM application_access WHERE access_id = ?1",
-        [access_id],
-    )
-    .map_err(sql_unavailable)?;
-    Ok(revoked)
+) -> Result<(u64, bool), ManagedStoreError> {
+    let revoked = revoke_access_tokens(conn, &access.access_id, actor, now)?;
+    let unrestricted = access.enabled && !access.read_only;
+    if unrestricted {
+        conn.execute(
+            "DELETE FROM application_access WHERE access_id = ?1",
+            [&access.access_id],
+        )
+        .map_err(sql_unavailable)?;
+    } else {
+        conn.execute(
+            "DELETE FROM application_authorization_codes WHERE access_id = ?1",
+            [&access.access_id],
+        )
+        .map_err(sql_unavailable)?;
+        conn.execute(
+            "UPDATE application_access SET refresh_token_hash = NULL WHERE access_id = ?1",
+            [&access.access_id],
+        )
+        .map_err(sql_unavailable)?;
+    }
+    Ok((revoked, unrestricted))
 }
 
 fn pending_request(
@@ -887,7 +1082,7 @@ fn mint_tx(
     tx: &rusqlite::Transaction<'_>,
     hasher: &BrokerTokenHasher,
     application_id: &str,
-    terms: Option<&ApplicationAccessTerms>,
+    registration: Option<&ApplicationRegistration>,
     grant: ApplicationGrant<'_>,
     now: DateTime<Utc>,
 ) -> Result<Result<ApplicationTokenMint, ApplicationGrantRefused>, ManagedStoreError> {
@@ -926,6 +1121,9 @@ fn mint_tx(
             let computed = URL_SAFE_NO_PAD.encode(Sha256::digest(code_verifier.as_bytes()));
             if code_application != application_id
                 || code_redirect != redirect_uri
+                // The operator may have removed the address since approval.
+                || registration
+                    .is_some_and(|registration| !registration.accepts_redirect_uri(&code_redirect))
                 || !valid_code_verifier(code_verifier)
                 || !constant_time_eq(computed.as_bytes(), challenge.as_bytes())
             {
@@ -948,7 +1146,7 @@ fn mint_tx(
     let Some(access) = access.filter(|access| access.application_id == application_id) else {
         return refused(ApplicationGrantRefusal::GrantInvalid, None);
     };
-    let Some(terms) = terms.filter(|terms| terms.application_id == application_id) else {
+    let Some(terms) = registration.and_then(|registration| registration.terms.as_ref()) else {
         return refused(
             ApplicationGrantRefusal::ApplicationUnavailable,
             Some(&access),

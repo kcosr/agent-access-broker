@@ -97,6 +97,25 @@ pub(crate) async fn start_reloadable_state(
         .startup_snapshot(1, hash, runtime, state_locks)
         .await?;
     snapshot.reconcile_microsoft_oidc_provider()?;
+    // A registration narrowed while the broker was down applies from the start.
+    let reconciled = snapshot.reconcile_application_tokens().await?;
+    append_application_reconciliation_audit(
+        &snapshot,
+        ApplicationReconciliationAudit {
+            agent_request_id: "startup",
+            broker_request_id: &new_broker_request_id(),
+            trigger: "startup",
+            identity: None,
+            source: &SourceContext {
+                listener: "startup".to_string(),
+                remote: "process".to_string(),
+                proxy_chain: vec![],
+                agent_request_id_generated: None,
+            },
+        },
+        &reconciled,
+    )
+    .await;
     let state = ReloadableState::from_snapshot(
         config_path,
         backends,
@@ -574,6 +593,93 @@ fn admin_audit_record(snapshot: &RuntimeSnapshot, input: &AdminAuditInput<'_>) -
         execution_context: None,
         audit_inputs: Vec::new(),
         provider_audit: Some(provider_audit),
+    }
+}
+
+struct ApplicationReconciliationAudit<'a> {
+    agent_request_id: &'a str,
+    broker_request_id: &'a str,
+    trigger: &'static str,
+    /// The administrator who reloaded over HTTP; the system otherwise.
+    identity: Option<&'a agent_access_core::IdentityContext>,
+    source: &'a SourceContext,
+}
+
+/// Records, once per application, the live tokens a startup or reload ended
+/// because the application's registration no longer mints them. The
+/// revocations are committed, so a failed append is logged.
+async fn append_application_reconciliation_audit(
+    snapshot: &RuntimeSnapshot,
+    input: ApplicationReconciliationAudit<'_>,
+    reconciled: &[agent_access_core::ApplicationTokenReconciliation],
+) {
+    for application in reconciled {
+        tracing::info!(
+            event = "application_tokens_reconciled",
+            agentRequestId = input.agent_request_id,
+            brokerRequestId = input.broker_request_id,
+            configGeneration = snapshot.generation,
+            trigger = input.trigger,
+            applicationId = application.application_id.as_str(),
+            revokedTokens = application.revoked_tokens,
+            "ended application tokens the current registration no longer mints"
+        );
+        let (principal, principal_subject, groups, identity_source) = match input.identity {
+            Some(identity) => (
+                identity.principal.clone(),
+                identity.principal_subject.clone(),
+                identity.groups.clone(),
+                identity.source.clone(),
+            ),
+            None => ("system".to_string(), None, vec!["system".to_string()], None),
+        };
+        let record = AuditRecord {
+            caller_id: None,
+            search_authorization: None,
+            timestamp: Utc::now().to_rfc3339(),
+            agent_request_id: input.agent_request_id.to_string(),
+            broker_request_id: input.broker_request_id.to_string(),
+            config_generation: Some(snapshot.generation),
+            policy_generation: Some(snapshot.runtime.policy_generation()),
+            principal,
+            principal_subject,
+            groups,
+            service: "broker".to_string(),
+            action: crate::handlers::management::audit_actions::APPLICATIONS_TOKENS_RECONCILED
+                .to_string(),
+            resource_scopes: ResourceScopes::new(),
+            matched_grant: None,
+            credential_mode: Some(None),
+            credential_connection: None,
+            decision: Decision::Allow,
+            reason_code: None,
+            upstream_status: None,
+            upstream_duration_ms: None,
+            object_ids: None,
+            identity_source,
+            source: input.source.clone(),
+            execution_context: None,
+            audit_inputs: Vec::new(),
+            provider_audit: Some(json!({
+                "application": {
+                    "applicationId": application.application_id,
+                    "trigger": input.trigger,
+                    "reason": application.reason,
+                    "revokedTokens": application.revoked_tokens,
+                }
+            })),
+        };
+        if let Err(error) = snapshot.runtime.append_audit_record(&record).await {
+            tracing::error!(
+                event = "application_reconciliation_audit_append_failed",
+                agentRequestId = input.agent_request_id,
+                brokerRequestId = input.broker_request_id,
+                applicationId = application.application_id.as_str(),
+                reasonCode = ReasonCode::AuditUnavailable.as_str(),
+                error = %error,
+                "application tokens were ended but the audit record is unavailable"
+            );
+        }
     }
 }
 
@@ -1141,6 +1247,37 @@ impl ReloadableState {
                         )
                         .await;
                 }
+                // Still under the mutation fence: no token is minted from
+                // either generation until the new one is published.
+                let reconciled_applications =
+                    match new_snapshot.reconcile_application_tokens().await {
+                        Ok(reconciled) => reconciled,
+                        Err(error) => {
+                            self.shutdown_candidate_audit(&new_snapshot, self.reload_timeout)
+                                .await;
+                            let failure = ReloadFailure::new(
+                                AdminDecision::Error,
+                                ReasonCode::ConfigAdmissionFailed,
+                                vec![format!("application token reconciliation failed: {error}")],
+                                Some(candidate_hash),
+                            );
+                            return self
+                                .reload_failure_response(
+                                    ReloadFailureContext {
+                                        active: active.clone(),
+                                        trigger,
+                                        attempted_at: &attempted_at,
+                                        started,
+                                        agent_request_id: &agent_request_id,
+                                        broker_request_id: &broker_request_id,
+                                        source: &source,
+                                        identity: identity.as_ref(),
+                                    },
+                                    failure,
+                                )
+                                .await;
+                        }
+                    };
                 if let Err(error) = new_snapshot.runtime.activate_oauth() {
                     self.shutdown_candidate_audit(&new_snapshot, self.reload_timeout)
                         .await;
@@ -1171,6 +1308,21 @@ impl ReloadableState {
                     .runtime
                     .retire_superseded_import_dispatch(&new_snapshot.runtime);
                 let new_snapshot = self.publish_snapshot(new_snapshot);
+                append_application_reconciliation_audit(
+                    &new_snapshot,
+                    ApplicationReconciliationAudit {
+                        agent_request_id: &agent_request_id,
+                        broker_request_id: &broker_request_id,
+                        trigger: "reload",
+                        identity: match trigger {
+                            ReloadTrigger::AdminHttp => identity.as_ref(),
+                            ReloadTrigger::Signal => None,
+                        },
+                        source: &source,
+                    },
+                    &reconciled_applications,
+                )
+                .await;
                 new_snapshot.runtime.warn_aggregate_mcp_names();
                 self.active_lock_set
                     .store(Arc::clone(&new_snapshot.state_locks));

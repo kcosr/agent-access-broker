@@ -134,9 +134,13 @@ pub(crate) async fn authorization_inspect(
     let principal = context.identity.principal.clone();
     let read = management_store_call(&context, move |store| {
         let pending = store.application_authorization_request(&hasher, &request)?;
-        // A request whose application is no longer registered is not valid.
+        // A request is valid only while its application is registered with
+        // the request's exact redirect URI.
         let application = applications
             .get(&pending.application_id)
+            .filter(|application| {
+                application.accepts_redirect_uri(&pending.parameters.redirect_uri)
+            })
             .ok_or(ManagedStoreError::ApplicationAuthorizationInvalid)?;
         let connect = application.connect();
         let denial = store.application_connect_denial(
@@ -198,19 +202,17 @@ pub(crate) async fn authorization_decide(
     {
         return *response;
     }
-    // The reload fence keeps these registrations current for the approval.
+    // The reload fence keeps these registrations current for the decision,
+    // which the store checks the request's application and redirect URI
+    // against before it approves or returns anything.
     let applications = context.snapshot.runtime.applications().clone();
     let principal = context.identity.principal.clone();
     committed_identity_mutation(state, context, operation, target, move |store| {
-        let pending = store.application_authorization_request(&hasher, &request)?;
-        let terms = applications
-            .get(&pending.application_id)
-            .and_then(|application| application.terms());
         let decided = store.decide_application_authorization(
             &hasher,
             &request,
             &principal,
-            terms.as_ref(),
+            &|application_id| applications.registration(application_id),
             decision == ConsentDecision::Approve,
         )?;
         let parameters = &decided.parameters;
@@ -260,14 +262,18 @@ pub(crate) async fn list_own(
         Err(response) => return *response,
     };
     let principal = context.identity.principal.clone();
-    list(&context, operation, None, principal).await
+    list(&context, operation, None, principal, true).await
 }
 
+/// A principal's application access. The person's own list holds only what
+/// is connected; an administrator also sees an access kept, disconnected,
+/// for its restriction.
 async fn list(
     context: &ManagementContext,
     operation: &str,
     target: Option<Value>,
     principal: String,
+    connected_only: bool,
 ) -> Response {
     let applications = context.snapshot.runtime.applications().clone();
     match management_store_call(context, move |store| {
@@ -278,6 +284,7 @@ async fn list(
         Ok(records) => {
             let access = records
                 .into_iter()
+                .filter(|access| access.connected || !connected_only)
                 .map(|access| response(access, &applications))
                 .collect::<Vec<_>>();
             management_success_response(context, operation, target, json!({"access": access})).await
@@ -307,29 +314,20 @@ pub(crate) async fn remove_own(
     };
     let principal = context.identity.principal.clone();
     let target = Some(json!({"principal": principal, "accessId": access}));
-    remove(state, context, operation, target, principal, access, None).await
-}
-
-async fn remove(
-    state: AppState,
-    context: ManagementContext,
-    operation: &'static str,
-    target: Option<Value>,
-    principal: String,
-    access: String,
-    expected_version: Option<i64>,
-) -> Response {
     if let Err(response) =
         management_write_audit_preflight(&context, operation, target.clone()).await
     {
         return *response;
     }
-    let actor = context.identity.principal.clone();
     committed_identity_mutation(state, context, operation, target, move |store| {
-        let removed =
-            store.remove_application_access(&principal, &access, expected_version, &actor)?;
+        // The person ends their consent. A row an administrator restricted
+        // stays, disconnected, so removing it cannot lift the restriction.
+        let (removed, row_removed) =
+            store.disconnect_application_access(&principal, &access, &principal)?;
+        let after = (!row_removed).then(|| settings(&removed));
         let completion = json!({"principal": removed.principal_id, "accessId": removed.access_id,
-            "applicationId": removed.application_id, "before": settings(&removed), "after": null});
+            "applicationId": removed.application_id, "before": settings(&removed), "after": after,
+            "connected": false});
         Ok((json!({"removed": true}), completion))
     })
     .await
@@ -355,7 +353,7 @@ pub(crate) async fn admin_list(
         Err(response) => return *response,
     };
     let target = Some(json!({"principal": principal}));
-    list(&context, operation, target, principal).await
+    list(&context, operation, target, principal, false).await
 }
 
 pub(crate) async fn admin_patch(
@@ -471,14 +469,18 @@ pub(crate) async fn admin_delete(
         )
         .await;
     };
-    remove(
-        state,
-        context,
-        operation,
-        target,
-        principal,
-        access,
-        Some(expected_version),
-    )
+    if let Err(response) =
+        management_write_audit_preflight(&context, operation, target.clone()).await
+    {
+        return *response;
+    }
+    let actor = context.identity.principal.clone();
+    committed_identity_mutation(state, context, operation, target, move |store| {
+        let removed =
+            store.remove_application_access(&principal, &access, expected_version, &actor)?;
+        let completion = json!({"principal": removed.principal_id, "accessId": removed.access_id,
+            "applicationId": removed.application_id, "before": settings(&removed), "after": null});
+        Ok((json!({"removed": true}), completion))
+    })
     .await
 }

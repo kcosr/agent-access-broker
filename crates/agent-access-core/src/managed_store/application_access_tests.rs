@@ -1,4 +1,5 @@
 use super::*;
+use crate::ApplicationAccessTerms;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -93,6 +94,25 @@ fn terms(read_only: bool) -> ApplicationAccessTerms {
     }
 }
 
+fn registration(read_only: bool) -> ApplicationRegistration {
+    ApplicationRegistration {
+        application_id: APP.into(),
+        redirect_uris: vec![REDIRECT.into()],
+        terms: Some(terms(read_only)),
+    }
+}
+
+/// The lookup of a broker whose only registration is `registration`.
+fn registered(
+    registration: Option<ApplicationRegistration>,
+) -> impl Fn(&str) -> Option<ApplicationRegistration> {
+    move |id| {
+        registration
+            .clone()
+            .filter(|registration| registration.application_id == id)
+    }
+}
+
 fn parameters() -> ApplicationAuthorizationParameters {
     ApplicationAuthorizationParameters {
         redirect_uri: REDIRECT.into(),
@@ -113,7 +133,7 @@ fn approve(store: &ManagedStore, who: &str) -> ApplicationAuthorizationDecision 
             &hasher(),
             &request(store),
             who,
-            Some(&terms(false)),
+            &registered(Some(registration(false))),
             true,
         )
         .unwrap()
@@ -129,11 +149,11 @@ fn code_grant(code: &str) -> ApplicationGrant<'_> {
 
 fn mint(
     store: &ManagedStore,
-    terms: Option<&ApplicationAccessTerms>,
+    registration: Option<&ApplicationRegistration>,
     grant: ApplicationGrant<'_>,
 ) -> Result<ApplicationTokenMint, ApplicationGrantRefused> {
     store
-        .mint_application_token(&hasher(), APP, terms, grant)
+        .mint_application_token(&hasher(), APP, registration, grant)
         .unwrap()
 }
 
@@ -142,7 +162,7 @@ fn connect(store: &ManagedStore, who: &str) -> ApplicationTokenMint {
     let decision = approve(store, who);
     mint(
         store,
-        Some(&terms(false)),
+        Some(&registration(false)),
         code_grant(decision.code.as_deref().unwrap()),
     )
     .unwrap()
@@ -150,12 +170,12 @@ fn connect(store: &ManagedStore, who: &str) -> ApplicationTokenMint {
 
 fn refresh(
     store: &ManagedStore,
-    terms: Option<&ApplicationAccessTerms>,
+    registration: Option<&ApplicationRegistration>,
     refresh_token: &str,
 ) -> Result<ApplicationTokenMint, ApplicationGrantRefused> {
     mint(
         store,
-        terms,
+        registration,
         ApplicationGrant::RefreshToken { refresh_token },
     )
 }
@@ -199,7 +219,7 @@ fn code_exchange_and_refresh_mint_independent_agent_tokens_hidden_from_token_lis
             &hasher(),
             &request_id,
             "alice",
-            Some(&terms(false)),
+            &registered(Some(registration(false))),
             true,
         )
         .unwrap();
@@ -214,7 +234,7 @@ fn code_exchange_and_refresh_mint_independent_agent_tokens_hidden_from_token_lis
         Err(ManagedStoreError::ApplicationAuthorizationInvalid)
     ));
 
-    let first = mint(&store, Some(&terms(false)), code_grant(&code)).unwrap();
+    let first = mint(&store, Some(&registration(false)), code_grant(&code)).unwrap();
     let refresh_token = first.refresh_token.clone().unwrap();
     assert!(refresh_token.starts_with("aar_"));
     assert!(first.token.starts_with("aab_ai_"));
@@ -231,7 +251,7 @@ fn code_exchange_and_refresh_mint_independent_agent_tokens_hidden_from_token_lis
     assert_eq!(identity.principal_id, "alice");
     assert_eq!(identity.token_class, BrokerTokenClass::AgentInvoke);
 
-    let second = refresh(&store, Some(&terms(false)), &refresh_token).unwrap();
+    let second = refresh(&store, Some(&registration(false)), &refresh_token).unwrap();
     assert!(
         second.refresh_token.is_none(),
         "the refresh token does not rotate"
@@ -287,9 +307,9 @@ fn a_code_is_consumed_by_its_first_presentation_whatever_the_outcome() {
             .mint_application_token(
                 &hasher(),
                 application,
-                Some(&ApplicationAccessTerms {
+                Some(&ApplicationRegistration {
                     application_id: application.into(),
-                    ..terms(false)
+                    ..registration(false)
                 }),
                 ApplicationGrant::AuthorizationCode {
                     code: &code,
@@ -301,21 +321,25 @@ fn a_code_is_consumed_by_its_first_presentation_whatever_the_outcome() {
         assert_eq!(refusal(wrong), ApplicationGrantRefusal::GrantInvalid);
         // The correct presentation no longer works either.
         assert_eq!(
-            refusal(mint(&store, Some(&terms(false)), code_grant(&code))),
+            refusal(mint(&store, Some(&registration(false)), code_grant(&code))),
             ApplicationGrantRefusal::GrantInvalid
         );
     }
     let decision = approve(&store, "alice");
     let code = decision.code.unwrap();
-    assert!(mint(&store, Some(&terms(false)), code_grant(&code)).is_ok());
+    assert!(mint(&store, Some(&registration(false)), code_grant(&code)).is_ok());
     assert_eq!(
-        refusal(mint(&store, Some(&terms(false)), code_grant(&code))),
+        refusal(mint(&store, Some(&registration(false)), code_grant(&code))),
         ApplicationGrantRefusal::GrantInvalid,
         "a replayed code mints nothing"
     );
     for malformed in ["", "aac_short", "aab_ai_notacode", &"x".repeat(47)] {
         assert_eq!(
-            refusal(mint(&store, Some(&terms(false)), code_grant(malformed))),
+            refusal(mint(
+                &store,
+                Some(&registration(false)),
+                code_grant(malformed)
+            )),
             ApplicationGrantRefusal::GrantInvalid
         );
     }
@@ -339,7 +363,7 @@ fn expired_requests_and_codes_are_refused() {
             &hasher(),
             &request_id,
             "alice",
-            Some(&terms(false)),
+            &registered(Some(registration(false))),
             true
         ),
         Err(ManagedStoreError::ApplicationAuthorizationInvalid)
@@ -356,7 +380,7 @@ fn expired_requests_and_codes_are_refused() {
          expires_at = '2000-01-01T00:01:00Z'",
     );
     assert_eq!(
-        refusal(mint(&store, Some(&terms(false)), code_grant(&code))),
+        refusal(mint(&store, Some(&registration(false)), code_grant(&code))),
         ApplicationGrantRefusal::GrantInvalid
     );
 }
@@ -374,7 +398,16 @@ fn a_person_who_may_not_connect_is_refused_and_can_still_return() {
         Some(ApplicationConnectDenial::ConnectingDisabled)
     );
     assert!(matches!(
-        store.decide_application_authorization(&hasher(), &request_id, "alice", None, true),
+        store.decide_application_authorization(
+            &hasher(),
+            &request_id,
+            "alice",
+            &registered(Some(ApplicationRegistration {
+                terms: None,
+                ..registration(false)
+            })),
+            true
+        ),
         Err(ManagedStoreError::ApplicationAccessDenied(
             ApplicationConnectDenial::ConnectingDisabled
         ))
@@ -384,31 +417,52 @@ fn a_person_who_may_not_connect_is_refused_and_can_still_return() {
             &hasher(),
             &request_id,
             "robot",
-            Some(&terms(false)),
+            &registered(Some(registration(false))),
             true
         ),
         Err(ManagedStoreError::ApplicationAccessDenied(
             ApplicationConnectDenial::NotHuman
         ))
     ));
-    // Another application's terms never connect this request.
-    let other = ApplicationAccessTerms {
+    // Another application's registration never decides this request.
+    let other = ApplicationRegistration {
         application_id: "another-application".into(),
-        ..terms(false)
+        ..registration(false)
     };
     assert!(matches!(
-        store.decide_application_authorization(&hasher(), &request_id, "alice", Some(&other), true),
-        Err(ManagedStoreError::ApplicationAccessDenied(_))
+        store.decide_application_authorization(
+            &hasher(),
+            &request_id,
+            "alice",
+            &|_| Some(other.clone()),
+            true
+        ),
+        Err(ManagedStoreError::ApplicationAuthorizationInvalid)
     ));
     assert!(store.list_application_access("alice").unwrap().is_empty());
     // A refused approval leaves the request for the return to the application.
     let cancelled = store
-        .decide_application_authorization(&hasher(), &request_id, "alice", None, false)
+        .decide_application_authorization(
+            &hasher(),
+            &request_id,
+            "alice",
+            &registered(Some(ApplicationRegistration {
+                terms: None,
+                ..registration(false)
+            })),
+            false,
+        )
         .unwrap();
     assert!(cancelled.code.is_none() && cancelled.access.is_none());
     assert_eq!(cancelled.parameters, parameters());
     assert!(matches!(
-        store.decide_application_authorization(&hasher(), &request_id, "alice", None, false),
+        store.decide_application_authorization(
+            &hasher(),
+            &request_id,
+            "alice",
+            &registered(Some(registration(false))),
+            false
+        ),
         Err(ManagedStoreError::ApplicationAuthorizationInvalid)
     ));
 
@@ -437,7 +491,7 @@ fn a_person_who_may_not_connect_is_refused_and_can_still_return() {
             &hasher(),
             &request(&store),
             "alice",
-            Some(&terms(false)),
+            &registered(Some(registration(false))),
             true
         ),
         Err(ManagedStoreError::ApplicationAccessDenied(
@@ -495,7 +549,7 @@ fn settings_changes_advance_the_version_once_and_end_live_tokens() {
         resolves(&store, &minted.token),
         Err(ManagedStoreError::BrokerTokenRevoked)
     ));
-    let narrowed = refresh(&store, Some(&terms(false)), &refresh_token).unwrap();
+    let narrowed = refresh(&store, Some(&registration(false)), &refresh_token).unwrap();
     assert!(narrowed.read_only);
     assert_eq!(narrowed.record.scopes["readOnly"], true);
 
@@ -505,15 +559,15 @@ fn settings_changes_advance_the_version_once_and_end_live_tokens() {
     assert_eq!((after.version, after.enabled), (3, false));
     assert!(resolves(&store, &narrowed.token).is_err());
     assert_eq!(
-        refusal(refresh(&store, Some(&terms(false)), &refresh_token)),
+        refusal(refresh(&store, Some(&registration(false)), &refresh_token)),
         ApplicationGrantRefusal::AccessDisabled
     );
     update(Some(true), Some(false), 3).unwrap();
-    let restored = refresh(&store, Some(&terms(false)), &refresh_token).unwrap();
+    let restored = refresh(&store, Some(&registration(false)), &refresh_token).unwrap();
     assert!(!restored.read_only);
     // The application's own level also narrows.
     assert!(
-        refresh(&store, Some(&terms(true)), &refresh_token)
+        refresh(&store, Some(&registration(true)), &refresh_token)
             .unwrap()
             .read_only
     );
@@ -535,12 +589,12 @@ fn removal_reconnect_and_revocation_end_the_access_tokens() {
     );
     assert!(resolves(&store, &first.token).is_err());
     assert_eq!(
-        refusal(refresh(&store, Some(&terms(false)), &old_refresh)),
+        refusal(refresh(&store, Some(&registration(false)), &old_refresh)),
         ApplicationGrantRefusal::GrantInvalid
     );
     let second = mint(
         &store,
-        Some(&terms(false)),
+        Some(&registration(false)),
         code_grant(decision.code.as_deref().unwrap()),
     )
     .unwrap();
@@ -562,7 +616,7 @@ fn removal_reconnect_and_revocation_end_the_access_tokens() {
         ApplicationRevocation::Unknown
     );
     // An access token: only that token ends.
-    let third = refresh(&store, Some(&terms(false)), &refresh_token).unwrap();
+    let third = refresh(&store, Some(&registration(false)), &refresh_token).unwrap();
     assert!(matches!(
         store
             .revoke_application_token(&hasher(), APP, &second.token)
@@ -585,7 +639,7 @@ fn removal_reconnect_and_revocation_end_the_access_tokens() {
     assert!(resolves(&store, &third.token).is_err());
     assert!(store.list_application_access("alice").unwrap().is_empty());
     assert_eq!(
-        refusal(refresh(&store, Some(&terms(false)), &refresh_token)),
+        refusal(refresh(&store, Some(&registration(false)), &refresh_token)),
         ApplicationGrantRefusal::GrantInvalid
     );
     // Ended tokens of a removed access stay out of token lists.
@@ -599,16 +653,17 @@ fn removal_reconnect_and_revocation_end_the_access_tokens() {
     // Removal by the person or a version-checked administrator.
     let again = connect(&store, "alice");
     assert!(matches!(
-        store.remove_application_access("alice", &again.access.access_id, Some(7), "admin"),
+        store.remove_application_access("alice", &again.access.access_id, 7, "admin"),
         Err(ManagedStoreError::VersionConflict)
     ));
     assert!(matches!(
-        store.remove_application_access("bob", &again.access.access_id, None, "bob"),
+        store.disconnect_application_access("bob", &again.access.access_id, "bob"),
         Err(ManagedStoreError::ApplicationAccessNotFound)
     ));
-    store
-        .remove_application_access("alice", &again.access.access_id, None, "alice")
+    let (_, row_removed) = store
+        .disconnect_application_access("alice", &again.access.access_id, "alice")
         .unwrap();
+    assert!(row_removed, "an unrestricted access leaves no row");
     assert!(resolves(&store, &again.token).is_err());
     assert!(store.list_application_access("alice").unwrap().is_empty());
 }
@@ -624,7 +679,7 @@ fn mint_rechecks_the_application_the_person_idleness_and_the_live_bound() {
         ApplicationGrantRefusal::ApplicationUnavailable
     );
     // The same refresh token works again once the application returns.
-    assert!(refresh(&store, Some(&terms(false)), &refresh_token).is_ok());
+    assert!(refresh(&store, Some(&registration(false)), &refresh_token).is_ok());
 
     // Disabling the person ends the tokens at once; re-enabling does not
     // restore them, and the refresh token works again.
@@ -637,7 +692,7 @@ fn mint_rechecks_the_application_the_person_idleness_and_the_live_bound() {
         })
         .unwrap();
     assert_eq!(
-        refusal(refresh(&store, Some(&terms(false)), &refresh_token)),
+        refusal(refresh(&store, Some(&registration(false)), &refresh_token)),
         ApplicationGrantRefusal::PrincipalUnavailable
     );
     store
@@ -656,7 +711,7 @@ fn mint_rechecks_the_application_the_person_idleness_and_the_live_bound() {
         store.list_application_access("alice").unwrap()[0].live_token_count,
         0
     );
-    assert!(refresh(&store, Some(&terms(false)), &refresh_token).is_ok());
+    assert!(refresh(&store, Some(&registration(false)), &refresh_token).is_ok());
 
     // Idle expiry counts from the last use.
     sql(
@@ -664,18 +719,18 @@ fn mint_rechecks_the_application_the_person_idleness_and_the_live_bound() {
         "UPDATE application_access SET last_used_at = '2000-01-01T00:00:00Z'",
     );
     assert_eq!(
-        refusal(refresh(&store, Some(&terms(false)), &refresh_token)),
+        refusal(refresh(&store, Some(&registration(false)), &refresh_token)),
         ApplicationGrantRefusal::RefreshTokenIdle
     );
     sql(&store, "UPDATE application_access SET last_used_at = NULL");
-    assert!(refresh(&store, Some(&terms(false)), &refresh_token).is_ok());
+    assert!(refresh(&store, Some(&registration(false)), &refresh_token).is_ok());
 
     // The live-token bound.
     let live = store.list_application_access("alice").unwrap()[0].live_token_count;
     for _ in live..APPLICATION_ACCESS_MAX_LIVE_TOKENS {
-        assert!(refresh(&store, Some(&terms(false)), &refresh_token).is_ok());
+        assert!(refresh(&store, Some(&registration(false)), &refresh_token).is_ok());
     }
-    let limited = refresh(&store, Some(&terms(false)), &refresh_token).unwrap_err();
+    let limited = refresh(&store, Some(&registration(false)), &refresh_token).unwrap_err();
     assert_eq!(limited.refusal, ApplicationGrantRefusal::TokenLimit);
     assert_eq!(limited.principal_id.as_deref(), Some("alice"));
 }
@@ -685,8 +740,8 @@ fn ended_tokens_are_deleted_after_the_retention_time() {
     let (_temp, store) = fixture();
     let minted = connect(&store, "alice");
     let refresh_token = minted.refresh_token.clone().unwrap();
-    let kept = refresh(&store, Some(&terms(false)), &refresh_token).unwrap();
-    let recent = refresh(&store, Some(&terms(false)), &refresh_token).unwrap();
+    let kept = refresh(&store, Some(&registration(false)), &refresh_token).unwrap();
+    let recent = refresh(&store, Some(&registration(false)), &refresh_token).unwrap();
     let count = |store: &ManagedStore| -> i64 {
         store
             .connection
@@ -714,7 +769,7 @@ fn ended_tokens_are_deleted_after_the_retention_time() {
     );
     assert_eq!(count(&store), 3);
     // The next token request runs retention; a recently ended token stays.
-    assert!(refresh(&store, Some(&terms(false)), &refresh_token).is_ok());
+    assert!(refresh(&store, Some(&registration(false)), &refresh_token).is_ok());
     assert_eq!(count(&store), 2);
     assert!(store.broker_token(&recent.record.token_id).is_ok());
     assert!(matches!(
@@ -745,11 +800,336 @@ fn the_principal_name_is_never_empty_and_is_bounded() {
     assert_eq!(minted.principal_name, "bob");
     let refreshed = refresh(
         &store,
-        Some(&terms(false)),
+        Some(&registration(false)),
         minted.refresh_token.as_deref().unwrap(),
     )
     .unwrap();
     assert_eq!(refreshed.principal_name, "bob");
+}
+
+fn set_settings(
+    store: &ManagedStore,
+    access: &ApplicationAccessRecord,
+    enabled: Option<bool>,
+    read_only: Option<bool>,
+) -> ApplicationAccessRecord {
+    store
+        .update_application_access(
+            &access.principal_id,
+            &access.access_id,
+            ApplicationAccessUpdate { enabled, read_only },
+            access.version,
+            "admin",
+        )
+        .unwrap()
+        .1
+}
+
+fn only_access(store: &ManagedStore, who: &str) -> ApplicationAccessRecord {
+    let mut listed = store.list_application_access(who).unwrap();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    listed.remove(0)
+}
+
+#[test]
+fn disconnecting_never_lifts_an_administrator_restriction() {
+    let (_temp, store) = fixture();
+    // Read-only: the person removes their access and approves again.
+    let minted = connect(&store, "alice");
+    let restricted = set_settings(&store, &minted.access, None, Some(true));
+    assert_eq!((restricted.version, restricted.read_only), (2, true));
+    let token = refresh(
+        &store,
+        Some(&registration(false)),
+        minted.refresh_token.as_deref().unwrap(),
+    )
+    .unwrap();
+    let (before, row_removed) = store
+        .disconnect_application_access("alice", &restricted.access_id, "alice")
+        .unwrap();
+    assert!(before.connected && !row_removed);
+    let kept = only_access(&store, "alice");
+    assert_eq!(kept.access_id, restricted.access_id);
+    assert!(!kept.connected && kept.read_only && kept.enabled);
+    assert_eq!(kept.version, 2, "a disconnect is not a settings change");
+    assert_eq!(kept.live_token_count, 0);
+    assert!(resolves(&store, &token.token).is_err());
+    assert_eq!(
+        refusal(refresh(
+            &store,
+            Some(&registration(false)),
+            minted.refresh_token.as_deref().unwrap()
+        )),
+        ApplicationGrantRefusal::GrantInvalid
+    );
+    // A disconnected access is not the person's to remove again.
+    assert!(matches!(
+        store.disconnect_application_access("alice", &kept.access_id, "alice"),
+        Err(ManagedStoreError::ApplicationAccessNotFound)
+    ));
+    // Approving again reuses the row and its restriction.
+    let again = connect(&store, "alice");
+    assert_eq!(again.access.access_id, restricted.access_id);
+    assert!(again.read_only && again.access.read_only);
+    assert_eq!(again.access.version, 2);
+    assert_eq!(again.record.scopes["readOnly"], true);
+
+    // The application revoking its refresh token keeps the restriction too.
+    let ApplicationRevocation::Access {
+        row_removed,
+        revoked_tokens,
+        ..
+    } = store
+        .revoke_application_token(&hasher(), APP, again.refresh_token.as_deref().unwrap())
+        .unwrap()
+    else {
+        panic!("the refresh token names the access");
+    };
+    assert!(!row_removed);
+    assert_eq!(revoked_tokens, 1);
+    let kept = only_access(&store, "alice");
+    assert!(!kept.connected && kept.read_only);
+    assert!(connect(&store, "alice").read_only);
+
+    // Disabled: neither removal nor revocation lets the person back in.
+    let disabled = set_settings(
+        &store,
+        &only_access(&store, "alice"),
+        Some(false),
+        Some(false),
+    );
+    assert!(!disabled.enabled && disabled.connected);
+    let (_, row_removed) = store
+        .disconnect_application_access("alice", &disabled.access_id, "alice")
+        .unwrap();
+    assert!(!row_removed);
+    assert_eq!(
+        store
+            .application_connect_denial("alice", APP, true)
+            .unwrap(),
+        Some(ApplicationConnectDenial::AccessDisabled)
+    );
+    assert!(matches!(
+        store.decide_application_authorization(
+            &hasher(),
+            &request(&store),
+            "alice",
+            &registered(Some(registration(false))),
+            true
+        ),
+        Err(ManagedStoreError::ApplicationAccessDenied(
+            ApplicationConnectDenial::AccessDisabled
+        ))
+    ));
+    // Retention keeps a restricted row and its settings.
+    request(&store);
+    let kept = only_access(&store, "alice");
+    assert_eq!(
+        (kept.enabled, kept.connected, kept.version),
+        (false, false, 3)
+    );
+
+    // An administrator's edit made with the version read before a disconnect
+    // still applies, and only an administrator's removal deletes the row.
+    let enabled = set_settings(&store, &disabled, Some(true), None);
+    assert_eq!(enabled.version, 4);
+    let reconnected = connect(&store, "alice");
+    let narrowed = set_settings(&store, &reconnected.access, None, Some(true));
+    store
+        .disconnect_application_access("alice", &narrowed.access_id, "alice")
+        .unwrap();
+    assert!(matches!(
+        store.remove_application_access(
+            "alice",
+            &narrowed.access_id,
+            narrowed.version - 1,
+            "admin"
+        ),
+        Err(ManagedStoreError::VersionConflict)
+    ));
+    store
+        .remove_application_access("alice", &narrowed.access_id, narrowed.version, "admin")
+        .unwrap();
+    assert!(store.list_application_access("alice").unwrap().is_empty());
+    // With the row gone the person connects afresh.
+    let fresh = connect(&store, "alice");
+    assert!(!fresh.read_only);
+    assert_ne!(fresh.access.access_id, narrowed.access_id);
+}
+
+#[test]
+fn an_abandoned_approval_leaves_no_access() {
+    let (_temp, store) = fixture();
+    let decision = approve(&store, "alice");
+    let pending = only_access(&store, "alice");
+    assert!(!pending.connected);
+    // The code can still be exchanged while it is valid.
+    request(&store);
+    assert_eq!(only_access(&store, "alice").access_id, pending.access_id);
+    sql(
+        &store,
+        "UPDATE application_authorization_codes SET created_at = '2000-01-01T00:00:00Z',
+         expires_at = '2000-01-01T00:01:00Z'",
+    );
+    request(&store);
+    assert!(store.list_application_access("alice").unwrap().is_empty());
+    assert_eq!(
+        refusal(mint(
+            &store,
+            Some(&registration(false)),
+            code_grant(decision.code.as_deref().unwrap())
+        )),
+        ApplicationGrantRefusal::GrantInvalid
+    );
+}
+
+#[test]
+fn a_redirect_uri_removed_from_the_registration_is_never_used() {
+    let (_temp, store) = fixture();
+    let moved = ApplicationRegistration {
+        redirect_uris: vec!["https://runner.example.test/new-callback".into()],
+        ..registration(false)
+    };
+    // A pending request for the removed address is invalid for either decision.
+    let request_id = request(&store);
+    for approve in [true, false] {
+        for lookup in [registered(Some(moved.clone())), registered(None)] {
+            assert!(matches!(
+                store.decide_application_authorization(
+                    &hasher(),
+                    &request_id,
+                    "alice",
+                    &lookup,
+                    approve
+                ),
+                Err(ManagedStoreError::ApplicationAuthorizationInvalid)
+            ));
+        }
+    }
+    assert!(store.list_application_access("alice").unwrap().is_empty());
+    // The request itself was not consumed by the refusals.
+    let decision = store
+        .decide_application_authorization(
+            &hasher(),
+            &request_id,
+            "alice",
+            &registered(Some(registration(false))),
+            true,
+        )
+        .unwrap();
+    // A code approved before the address was removed is refused at exchange.
+    assert_eq!(
+        refusal(mint(
+            &store,
+            Some(&moved),
+            code_grant(decision.code.as_deref().unwrap())
+        )),
+        ApplicationGrantRefusal::GrantInvalid
+    );
+}
+
+#[test]
+fn reconciliation_ends_tokens_the_current_registration_would_not_mint() {
+    let (_temp, store) = fixture();
+    let alice = connect(&store, "alice");
+    let bob = connect(&store, "bob");
+    let alice_refresh = alice.refresh_token.clone().unwrap();
+    let reconcile = |registration: Option<ApplicationRegistration>| {
+        store
+            .reconcile_application_tokens(&registered(registration))
+            .unwrap()
+    };
+    let ended = |reason, revoked_tokens| {
+        vec![ApplicationTokenReconciliation {
+            application_id: APP.into(),
+            reason,
+            revoked_tokens,
+        }]
+    };
+    // Nothing changes while the registration still mints the same tokens,
+    // whatever the order of its lists.
+    assert_eq!(reconcile(Some(registration(false))), vec![]);
+    let mut wider = registration(false);
+    wider.terms.as_mut().unwrap().access_token_ttl_seconds = 60;
+    assert_eq!(reconcile(Some(wider)), vec![]);
+    assert!(resolves(&store, &alice.token).is_ok());
+
+    // Read-only for everyone: write-capable tokens end, and tokens that were
+    // already read-only, here by an administrator's setting, stay.
+    let narrowed = set_settings(&store, &bob.access, None, Some(true));
+    let bob_read_only = refresh(
+        &store,
+        Some(&registration(false)),
+        bob.refresh_token.as_deref().unwrap(),
+    )
+    .unwrap();
+    assert!(bob_read_only.read_only && narrowed.read_only);
+    assert_eq!(
+        reconcile(Some(registration(true))),
+        ended(
+            ApplicationTokenReconciliationReason::RegistrationNarrowed,
+            1
+        )
+    );
+    assert!(matches!(
+        resolves(&store, &alice.token),
+        Err(ManagedStoreError::BrokerTokenRevoked)
+    ));
+    assert!(resolves(&store, &bob_read_only.token).is_ok());
+    assert_eq!(
+        reconcile(Some(registration(true))),
+        vec![],
+        "it is idempotent"
+    );
+    // The refresh token is unaffected: the next request mints under the new level.
+    let alice_read_only = refresh(&store, Some(&registration(true)), &alice_refresh).unwrap();
+    assert!(alice_read_only.read_only);
+    // Widening again ends nothing.
+    assert_eq!(reconcile(Some(registration(false))), vec![]);
+
+    // Changed contexts or services end every token minted with the old ones.
+    for change in [
+        |terms: &mut ApplicationAccessTerms| {
+            terms.allowed_execution_contexts = vec!["other".into()]
+        },
+        |terms: &mut ApplicationAccessTerms| terms.allowed_services = None,
+        |terms: &mut ApplicationAccessTerms| {
+            terms.allowed_services = Some(vec!["jira".into(), "gitlab".into()])
+        },
+    ] {
+        let token = refresh(&store, Some(&registration(false)), &alice_refresh).unwrap();
+        let mut changed = registration(false);
+        change(changed.terms.as_mut().unwrap());
+        let report = reconcile(Some(changed));
+        assert_eq!(report.len(), 1);
+        assert_eq!(
+            report[0].reason,
+            ApplicationTokenReconciliationReason::RegistrationNarrowed
+        );
+        assert!(resolves(&store, &token.token).is_err());
+    }
+
+    // Level none, then a removed registration: every live token ends.
+    let first = refresh(&store, Some(&registration(false)), &alice_refresh).unwrap();
+    let second = refresh(&store, Some(&registration(false)), &alice_refresh).unwrap();
+    assert_eq!(
+        reconcile(Some(ApplicationRegistration {
+            terms: None,
+            ..registration(false)
+        })),
+        ended(ApplicationTokenReconciliationReason::ConnectingDisabled, 2)
+    );
+    assert!(resolves(&store, &first.token).is_err() && resolves(&store, &second.token).is_err());
+    let third = refresh(&store, Some(&registration(false)), &alice_refresh).unwrap();
+    assert_eq!(
+        reconcile(None),
+        ended(ApplicationTokenReconciliationReason::RegistrationRemoved, 1)
+    );
+    assert!(resolves(&store, &third.token).is_err());
+    // Ordinary tokens and the access rows are untouched, and registering the
+    // application again makes the same refresh token work.
+    assert_eq!(store.list_application_access("alice").unwrap().len(), 1);
+    assert!(refresh(&store, Some(&registration(false)), &alice_refresh).is_ok());
 }
 
 #[test]
@@ -796,12 +1176,12 @@ fn secrets_stay_out_of_debug_output_and_the_database() {
             &hasher(),
             &request_id,
             "alice",
-            Some(&terms(false)),
+            &registered(Some(registration(false))),
             true,
         )
         .unwrap();
     let code = decision.code.clone().unwrap();
-    let minted = mint(&store, Some(&terms(false)), code_grant(&code)).unwrap();
+    let minted = mint(&store, Some(&registration(false)), code_grant(&code)).unwrap();
     let refresh_token = minted.refresh_token.clone().unwrap();
     let debug = format!(
         "{pending:?} {decision:?} {minted:?} {:?}",

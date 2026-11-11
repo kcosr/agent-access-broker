@@ -228,6 +228,24 @@ pub struct ApplicationAccessTerms {
     pub refresh_idle_ttl_seconds: u64,
 }
 
+/// One application's current registration as the store checks it: where it
+/// may be returned to and what it may mint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationRegistration {
+    pub application_id: String,
+    pub redirect_uris: Vec<String>,
+    /// `None` while the application's level is `none`.
+    pub terms: Option<ApplicationAccessTerms>,
+}
+
+impl ApplicationRegistration {
+    pub fn accepts_redirect_uri(&self, redirect_uri: &str) -> bool {
+        self.redirect_uris
+            .iter()
+            .any(|registered| registered == redirect_uri)
+    }
+}
+
 /// One loaded application: its registration and client secret.
 #[derive(Clone)]
 pub struct RegisteredApplication {
@@ -269,6 +287,15 @@ impl RegisteredApplication {
 
     pub fn access_token_ttl_seconds(&self) -> u64 {
         self.access_token_ttl_seconds
+    }
+
+    /// What the store checks pending requests, codes and tokens against.
+    pub fn registration(&self) -> ApplicationRegistration {
+        ApplicationRegistration {
+            application_id: self.id.clone(),
+            redirect_uris: self.config.redirect_uris.clone(),
+            terms: self.terms(),
+        }
     }
 
     /// The terms of this registration, or `None` while its level is `none`.
@@ -348,6 +375,11 @@ impl RegisteredApplications {
 
     pub fn get(&self, id: &str) -> Option<&RegisteredApplication> {
         self.applications.get(id)
+    }
+
+    /// The current registration of `id`, or `None` when it is not registered.
+    pub fn registration(&self, id: &str) -> Option<ApplicationRegistration> {
+        self.get(id).map(RegisteredApplication::registration)
     }
 
     /// The application `client_id` names when `client_secret` is its secret.

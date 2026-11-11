@@ -5,14 +5,17 @@
 //! never reach logs, audit records or error text.
 use crate::handlers::auth::auth_request_ids;
 use crate::handlers::management::audit_actions::{
-    APPLICATIONS_TOKEN_ISSUED, APPLICATIONS_TOKEN_REFUSED, APPLICATIONS_TOKEN_REVOKED,
+    APPLICATIONS_AUTHORIZE_REFUSED, APPLICATIONS_TOKEN_ISSUED, APPLICATIONS_TOKEN_REFUSED,
+    APPLICATIONS_TOKEN_REVOKED,
 };
+use crate::ingress::guards::IngressPermit;
 use crate::ingress::source::auth_source_key;
 use crate::observability;
 use crate::state::{AppState, RuntimeSnapshot};
 use agent_access_core::{
     ApplicationAuthorizationParameters, ApplicationGrant, ApplicationGrantRefusal,
-    ApplicationRevocation, AuditRecord, ManagedStoreError, RegisteredApplication, SourceContext,
+    ApplicationGrantRefused, ApplicationRegistration, ApplicationRevocation, ApplicationTokenMint,
+    AuditRecord, ManagedStore, ManagedStoreError, RegisteredApplication, SourceContext,
     is_valid_application_code_challenge,
 };
 use agent_access_provider::{Decision, ReasonCode, ResourceScopes};
@@ -213,6 +216,13 @@ fn valid_state(state: &str) -> bool {
         && state.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
 }
 
+/// A refused authorization request: the fixed reason and, when the request
+/// named a registration, its application.
+struct AuthorizationRefusal {
+    application_id: Option<String>,
+    reason: &'static str,
+}
+
 pub(crate) async fn authorize(
     State(state): State<AppState>,
     ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -220,7 +230,7 @@ pub(crate) async fn authorize(
     RawQuery(raw_query): RawQuery,
 ) -> Response {
     let operation = "applications.authorize";
-    let (request_id, _broker_request_id) = match auth_request_ids(&headers, operation) {
+    let (request_id, broker_request_id) = match auth_request_ids(&headers, operation) {
         Ok(ids) => ids,
         Err(response) => return *response,
     };
@@ -248,55 +258,83 @@ pub(crate) async fn authorize(
     {
         return authorization_error_page(StatusCode::TOO_MANY_REQUESTS, &request_id);
     }
-    let refused = |reason: &'static str| {
-        tracing::info!(
-            event = "application_authorization_refused",
-            agentRequestId = request_id.as_str(),
-            reason,
-            "application authorization request refused"
-        );
-        authorization_error_page(StatusCode::BAD_REQUEST, &request_id)
+    let (response, refusal) =
+        authorization_response(&snapshot, &request_id, raw_query.as_deref()).await;
+    // Like a failed sign-in start, a refused authorization request is audited.
+    if let Some(refusal) = refusal {
+        observability::record_decision(Decision::Deny.as_str());
+        let _ = append_audit(
+            &snapshot,
+            AuditEvent {
+                request_id: &request_id,
+                broker_request_id: &broker_request_id,
+                source: &source,
+                action: APPLICATIONS_AUTHORIZE_REFUSED,
+                principal: None,
+                decision: Decision::Deny,
+                reason_code: None,
+                details: json!({
+                    "applicationId": refusal.application_id,
+                    "endpoint": operation,
+                    "reason": refusal.reason,
+                }),
+            },
+        )
+        .await;
+    }
+    response
+}
+
+async fn authorization_response(
+    snapshot: &RuntimeSnapshot,
+    request_id: &str,
+    raw_query: Option<&str>,
+) -> (Response, Option<AuthorizationRefusal>) {
+    let page = |application: Option<&RegisteredApplication>, reason: &'static str| {
+        (
+            authorization_error_page(StatusCode::BAD_REQUEST, request_id),
+            Some(AuthorizationRefusal {
+                application_id: application.map(|application| application.id().to_string()),
+                reason,
+            }),
+        )
     };
-    let Some(query) = parameters(
-        raw_query.as_deref().unwrap_or("").as_bytes(),
-        QUERY_LIMIT_BYTES,
-    ) else {
-        return refused("query_invalid");
+    let Some(query) = parameters(raw_query.unwrap_or("").as_bytes(), QUERY_LIMIT_BYTES) else {
+        return page(None, "query_invalid");
     };
     let Some(application) = query
         .get("client_id")
         .and_then(|client_id| snapshot.runtime.applications().get(client_id))
     else {
-        return refused("client_unknown");
+        return page(None, "client_unknown");
     };
     let Some(redirect_uri) = query
         .get("redirect_uri")
         .filter(|redirect_uri| application.accepts_redirect_uri(redirect_uri))
     else {
-        return refused("redirect_uri_unregistered");
+        return page(Some(application), "redirect_uri_unregistered");
     };
     // Every later outcome returns to the registered redirect URI.
     let state_parameter = query.get("state").filter(|value| valid_state(value));
-    let back = |error: &'static str| {
-        observability::record_decision(Decision::Deny.as_str());
-        tracing::info!(
-            event = "application_authorization_refused",
-            agentRequestId = request_id.as_str(),
-            applicationId = application.id(),
-            reason = error,
-            "application authorization request returned an error"
-        );
+    let back = |error: &'static str, reason: &'static str| {
         let mut response = vec![("error", error)];
         if let Some(state_parameter) = state_parameter {
             response.push(("state", state_parameter.as_str()));
         }
-        match application_redirect(redirect_uri, &response) {
+        let response = match application_redirect(redirect_uri, &response) {
             Some(location) => see_other(&location),
-            None => authorization_error_page(StatusCode::BAD_REQUEST, &request_id),
-        }
+            None => authorization_error_page(StatusCode::BAD_REQUEST, request_id),
+        };
+        (
+            response,
+            Some(AuthorizationRefusal {
+                application_id: Some(application.id().to_string()),
+                reason,
+            }),
+        )
     };
     if query.contains_key("scope") {
-        return back("invalid_scope");
+        return back("invalid_scope", "scope_not_supported");
     }
     let (Some(state_parameter), Some(code_challenge)) = (
         state_parameter,
@@ -304,15 +342,15 @@ pub(crate) async fn authorize(
             .get("code_challenge")
             .filter(|challenge| is_valid_application_code_challenge(challenge)),
     ) else {
-        return back("invalid_request");
+        return back("invalid_request", "parameters_invalid");
     };
     if query.get("response_type").map(String::as_str) != Some("code")
         || query.get("code_challenge_method").map(String::as_str) != Some("S256")
     {
-        return back("invalid_request");
+        return back("invalid_request", "parameters_invalid");
     }
     let Some(hasher) = snapshot.runtime.broker_token_hasher().cloned() else {
-        return back("server_error");
+        return back("server_error", "server_unavailable");
     };
     let application_id = application.id().to_string();
     let parameters = ApplicationAuthorizationParameters {
@@ -328,9 +366,9 @@ pub(crate) async fn authorize(
     {
         Ok(pending_id) => {
             observability::record_decision(Decision::Allow.as_str());
-            see_other(&format!("{CONSENT_PATH}/{pending_id}"))
+            (see_other(&format!("{CONSENT_PATH}/{pending_id}")), None)
         }
-        Err(_) => back("server_error"),
+        Err(_) => back("server_error", "server_unavailable"),
     }
 }
 
@@ -360,24 +398,80 @@ fn basic_credentials(headers: &HeaderMap) -> Option<(String, String)> {
     Some((decode(client_id)?, decode(client_secret)?))
 }
 
-struct ProtocolRequest {
+/// A token or revocation request from an authenticated application.
+pub(crate) struct ProtocolRequest {
     snapshot: Arc<RuntimeSnapshot>,
     request_id: String,
     broker_request_id: String,
     source: SourceContext,
+    endpoint: &'static str,
     application: RegisteredApplication,
-    form: BTreeMap<String, String>,
+    /// `None` when the body is not the form the endpoint accepts.
+    form: Option<BTreeMap<String, String>>,
+    /// The request's admitted capacity. A mutation owner keeps the request,
+    /// and so this permit, until its store work and audit have completed,
+    /// whether or not the response waiter is still there.
+    _permit: IngressPermit,
 }
 
-/// Authenticates the client and reads the form, or answers the refusal.
-async fn protocol_request(
+impl ProtocolRequest {
+    /// Refuses the request with a fixed, value-free reason, audited with
+    /// the application's ID.
+    async fn refuse(
+        &self,
+        status: StatusCode,
+        error: &'static str,
+        reason: &'static str,
+        grant_type: Option<&'static str>,
+    ) -> Response {
+        let decision = if status.is_server_error() {
+            Decision::Error
+        } else {
+            Decision::Deny
+        };
+        let _ = append_audit(
+            &self.snapshot,
+            AuditEvent {
+                request_id: &self.request_id,
+                broker_request_id: &self.broker_request_id,
+                source: &self.source,
+                action: APPLICATIONS_TOKEN_REFUSED,
+                principal: None,
+                decision,
+                reason_code: None,
+                details: json!({
+                    "applicationId": self.application.id(),
+                    "endpoint": self.endpoint,
+                    "grantType": grant_type,
+                    "reason": reason,
+                }),
+            },
+        )
+        .await;
+        protocol_error(status, error)
+    }
+
+    fn field(&self, name: &str) -> Option<String> {
+        self.form
+            .as_ref()?
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .cloned()
+    }
+}
+
+/// Admits the request and authenticates its client, or answers the refusal.
+/// Failed client authentication is audited, like a failed sign-in, with the
+/// claimed ID only when it names a registration. Every refusal after this
+/// point goes through [`ProtocolRequest::refuse`].
+pub(crate) async fn protocol_request(
     state: &AppState,
     remote_addr: SocketAddr,
     headers: &HeaderMap,
     body: &Bytes,
-    operation: &'static str,
+    endpoint: &'static str,
 ) -> Result<ProtocolRequest, Box<Response>> {
-    let (request_id, broker_request_id) = match auth_request_ids(headers, operation) {
+    let (request_id, broker_request_id) = match auth_request_ids(headers, endpoint) {
         Ok(ids) => ids,
         Err(_) => {
             return Err(Box::new(protocol_error(
@@ -390,6 +484,17 @@ async fn protocol_request(
     let source = snapshot
         .source_resolver
         .source_context(remote_addr, headers);
+    // The transport's own permit when it admitted this request.
+    let Ok(permit) = state
+        .reloadable
+        .shared_ingress
+        .try_global_concurrency(snapshot.runtime.limits().max_concurrent_requests)
+    else {
+        return Err(Box::new(protocol_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+        )));
+    };
     let credentials = basic_credentials(headers);
     let application = credentials.as_ref().and_then(|(client_id, client_secret)| {
         snapshot
@@ -399,7 +504,6 @@ async fn protocol_request(
             .cloned()
     });
     let Some(application) = application else {
-        // The claimed ID is recorded only when it names a registration.
         let claimed = credentials
             .as_ref()
             .map(|(client_id, _)| client_id.as_str())
@@ -416,7 +520,7 @@ async fn protocol_request(
                 reason_code: Some(ReasonCode::CallerAuthenticationInvalid),
                 details: json!({
                     "applicationId": claimed,
-                    "endpoint": operation,
+                    "endpoint": endpoint,
                     "reason": "client_authentication_failed",
                 }),
             },
@@ -441,19 +545,15 @@ async fn protocol_request(
         .flatten()
         // Credentials belong in the Authorization header only.
         .filter(|form| !form.contains_key("client_secret") && !form.contains_key("client_id"));
-    let Some(form) = form else {
-        return Err(Box::new(protocol_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_request",
-        )));
-    };
     Ok(ProtocolRequest {
         snapshot,
         request_id,
         broker_request_id,
         source,
+        endpoint,
         application,
         form,
+        _permit: permit,
     })
 }
 
@@ -509,14 +609,14 @@ async fn append_audit(snapshot: &RuntimeSnapshot, event: AuditEvent<'_>) -> Resu
 }
 
 /// A store failure a later attempt may not meet again, or one it will.
-fn store_failure(error: &ManagedStoreError) -> Response {
+fn store_failure(error: &ManagedStoreError) -> (StatusCode, &'static str) {
     match error {
         ManagedStoreError::Unavailable(_)
         | ManagedStoreError::VersionConflict
         | ManagedStoreError::ReloadInProgress => {
-            protocol_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable")
+            (StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable")
         }
-        _ => protocol_error(StatusCode::INTERNAL_SERVER_ERROR, "server_error"),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "server_error"),
     }
 }
 
@@ -531,75 +631,137 @@ pub(crate) async fn token(
             Ok(request) => request,
             Err(response) => return *response,
         };
-    let field = |name: &str| {
-        request
-            .form
-            .get(name)
-            .filter(|value| !value.is_empty())
-            .cloned()
-    };
     enum Presented {
         Code(String, String, String),
         Refresh(String),
     }
-    let presented = match request.form.get("grant_type").map(String::as_str) {
+    let Some(form) = &request.form else {
+        return request
+            .refuse(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "request_malformed",
+                None,
+            )
+            .await;
+    };
+    let presented = match form.get("grant_type").map(String::as_str) {
         Some("authorization_code") => {
-            match (field("code"), field("redirect_uri"), field("code_verifier")) {
+            match (
+                request.field("code"),
+                request.field("redirect_uri"),
+                request.field("code_verifier"),
+            ) {
                 (Some(code), Some(redirect_uri), Some(verifier)) => {
                     Presented::Code(code, redirect_uri, verifier)
                 }
-                _ => return protocol_error(StatusCode::BAD_REQUEST, "invalid_request"),
+                _ => {
+                    return request
+                        .refuse(
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request",
+                            "grant_parameters_missing",
+                            Some("authorization_code"),
+                        )
+                        .await;
+                }
             }
         }
-        Some("refresh_token") => match field("refresh_token") {
+        Some("refresh_token") => match request.field("refresh_token") {
             Some(refresh_token) => Presented::Refresh(refresh_token),
-            None => return protocol_error(StatusCode::BAD_REQUEST, "invalid_request"),
+            None => {
+                return request
+                    .refuse(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_request",
+                        "grant_parameters_missing",
+                        Some("refresh_token"),
+                    )
+                    .await;
+            }
         },
-        Some(_) => return protocol_error(StatusCode::BAD_REQUEST, "unsupported_grant_type"),
-        None => return protocol_error(StatusCode::BAD_REQUEST, "invalid_request"),
+        Some(_) => {
+            return request
+                .refuse(
+                    StatusCode::BAD_REQUEST,
+                    "unsupported_grant_type",
+                    "grant_type_unsupported",
+                    None,
+                )
+                .await;
+        }
+        None => {
+            return request
+                .refuse(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "grant_type_missing",
+                    None,
+                )
+                .await;
+        }
+    };
+    let grant_type = match &presented {
+        Presented::Code(..) => "authorization_code",
+        Presented::Refresh(_) => "refresh_token",
     };
     let Some(hasher) = request.snapshot.runtime.broker_token_hasher().cloned() else {
-        return protocol_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+        return request
+            .refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "server_unavailable",
+                Some(grant_type),
+            )
+            .await;
     };
-    // The token's commit and its completion audit belong to one owner that
-    // outlives the response waiter. The reload fence keeps the registration
-    // these terms come from current for the insertion.
+    let application_id = request.application.id().to_string();
+    committed_application_mint(state, request, grant_type, move |store, registration| {
+        let grant = match &presented {
+            Presented::Code(code, redirect_uri, code_verifier) => {
+                ApplicationGrant::AuthorizationCode {
+                    code,
+                    redirect_uri,
+                    code_verifier,
+                }
+            }
+            Presented::Refresh(refresh_token) => ApplicationGrant::RefreshToken { refresh_token },
+        };
+        store.mint_application_token(&hasher, &application_id, registration, grant)
+    })
+    .await
+}
+
+/// Owns a mint from its insertion to its completion audit, with the
+/// request's admitted capacity, independently of the response waiter. The
+/// reload fence keeps the registration `mint` receives the current one.
+pub(crate) async fn committed_application_mint<F>(
+    state: AppState,
+    request: ProtocolRequest,
+    grant_type: &'static str,
+    mint: F,
+) -> Response
+where
+    F: FnOnce(
+            &ManagedStore,
+            Option<&ApplicationRegistration>,
+        )
+            -> Result<Result<ApplicationTokenMint, ApplicationGrantRefused>, ManagedStoreError>
+        + Send
+        + 'static,
+{
     let owner = tokio::spawn(
         async move {
-            let ProtocolRequest {
-                snapshot,
-                request_id,
-                broker_request_id,
-                source,
-                application,
-                ..
-            } = request;
-            let application_id = application.id().to_string();
-            let terms = application.terms();
-            let grant_type = match &presented {
-                Presented::Code(..) => "authorization_code",
-                Presented::Refresh(_) => "refresh_token",
-            };
+            let application_id = request.application.id().to_string();
             let store_application = application_id.clone();
             let outcome = state
                 .reloadable
-                .token_store_call_from_snapshot(snapshot.clone(), move |runtime| {
+                .token_store_call_from_snapshot(request.snapshot.clone(), move |runtime| {
                     let store = runtime.managed_store().ok_or_else(|| {
                         ManagedStoreError::Unavailable("managed store is unavailable".into())
                     })?;
-                    let grant = match &presented {
-                        Presented::Code(code, redirect_uri, code_verifier) => {
-                            ApplicationGrant::AuthorizationCode {
-                                code,
-                                redirect_uri,
-                                code_verifier,
-                            }
-                        }
-                        Presented::Refresh(refresh_token) => {
-                            ApplicationGrant::RefreshToken { refresh_token }
-                        }
-                    };
-                    store.mint_application_token(&hasher, &store_application, terms.as_ref(), grant)
+                    let registration = runtime.applications().registration(&store_application);
+                    mint(store, registration.as_ref())
                 })
                 .await;
             match outcome {
@@ -614,11 +776,11 @@ pub(crate) async fn token(
                         "boundary": minted.record.scopes,
                     });
                     if append_audit(
-                        &snapshot,
+                        &request.snapshot,
                         AuditEvent {
-                            request_id: &request_id,
-                            broker_request_id: &broker_request_id,
-                            source: &source,
+                            request_id: &request.request_id,
+                            broker_request_id: &request.broker_request_id,
+                            source: &request.source,
                             action: APPLICATIONS_TOKEN_ISSUED,
                             principal: Some(&minted.record.principal_id),
                             decision: Decision::Allow,
@@ -632,8 +794,8 @@ pub(crate) async fn token(
                         // The committed token stays; its secret is withheld.
                         tracing::error!(
                             event = "application_token_audit_append_failed",
-                            agentRequestId = request_id.as_str(),
-                            brokerRequestId = broker_request_id.as_str(),
+                            agentRequestId = request.request_id.as_str(),
+                            brokerRequestId = request.broker_request_id.as_str(),
                             applicationId = application_id.as_str(),
                             reasonCode = ReasonCode::AuditUnavailable.as_str(),
                             "an application token was committed but its audit record is unavailable"
@@ -656,18 +818,18 @@ pub(crate) async fn token(
                 }
                 Ok(Err(refused)) => {
                     let _ = append_audit(
-                        &snapshot,
+                        &request.snapshot,
                         AuditEvent {
-                            request_id: &request_id,
-                            broker_request_id: &broker_request_id,
-                            source: &source,
+                            request_id: &request.request_id,
+                            broker_request_id: &request.broker_request_id,
+                            source: &request.source,
                             action: APPLICATIONS_TOKEN_REFUSED,
                             principal: refused.principal_id.as_deref(),
                             decision: Decision::Deny,
                             reason_code: None,
                             details: json!({
                                 "applicationId": application_id,
-                                "endpoint": "applications.token",
+                                "endpoint": request.endpoint,
                                 "grantType": grant_type,
                                 "accessId": refused.access_id,
                                 "reason": refused.refusal,
@@ -684,13 +846,16 @@ pub(crate) async fn token(
                 Err(error) => {
                     tracing::warn!(
                         event = "application_token_store_failed",
-                        agentRequestId = request_id.as_str(),
-                        brokerRequestId = broker_request_id.as_str(),
+                        agentRequestId = request.request_id.as_str(),
+                        brokerRequestId = request.broker_request_id.as_str(),
                         applicationId = application_id.as_str(),
                         reasonCode = error.reason_code().as_str(),
                         "application token request failed"
                     );
-                    store_failure(&error)
+                    let (status, code) = store_failure(&error);
+                    request
+                        .refuse(status, code, "store_unavailable", Some(grant_type))
+                        .await
                 }
             }
         }
@@ -713,27 +878,46 @@ pub(crate) async fn revoke(
             Ok(request) => request,
             Err(response) => return *response,
         };
-    let Some(token) = request
-        .form
-        .get("token")
-        .filter(|token| !token.is_empty())
-        .cloned()
-    else {
-        return protocol_error(StatusCode::BAD_REQUEST, "invalid_request");
+    let Some(token) = request.field("token") else {
+        let reason = if request.form.is_some() {
+            "token_missing"
+        } else {
+            "request_malformed"
+        };
+        return request
+            .refuse(StatusCode::BAD_REQUEST, "invalid_request", reason, None)
+            .await;
     };
     let Some(hasher) = request.snapshot.runtime.broker_token_hasher().cloned() else {
-        return protocol_error(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable");
+        return request
+            .refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "server_unavailable",
+                None,
+            )
+            .await;
     };
+    let application_id = request.application.id().to_string();
+    committed_application_revocation(request, move |store| {
+        store.revoke_application_token(&hasher, &application_id, &token)
+    })
+    .await
+}
+
+/// Owns a revocation from its commit to its audit, with the request's
+/// admitted capacity, independently of the response waiter.
+pub(crate) async fn committed_application_revocation<F>(
+    request: ProtocolRequest,
+    revoke: F,
+) -> Response
+where
+    F: FnOnce(ManagedStore) -> Result<ApplicationRevocation, ManagedStoreError> + Send + 'static,
+{
     let owner = tokio::spawn(
         async move {
             let application_id = request.application.id().to_string();
-            let store_application = application_id.clone();
-            let outcome = request
-                .snapshot
-                .managed_store_call(move |store| {
-                    store.revoke_application_token(&hasher, &store_application, &token)
-                })
-                .await;
+            let outcome = request.snapshot.managed_store_call(revoke).await;
             let (principal, details) = match outcome {
                 Ok(ApplicationRevocation::Unknown) => (None, None),
                 Ok(ApplicationRevocation::AccessToken {
@@ -752,6 +936,7 @@ pub(crate) async fn revoke(
                 Ok(ApplicationRevocation::Access {
                     access,
                     revoked_tokens,
+                    row_removed,
                 }) => (
                     Some(access.principal_id),
                     Some(json!({
@@ -759,9 +944,15 @@ pub(crate) async fn revoke(
                         "revoked": "refresh_token",
                         "accessId": access.access_id,
                         "revokedTokens": revoked_tokens,
+                        "accessRemoved": row_removed,
                     })),
                 ),
-                Err(error) => return store_failure(&error),
+                Err(error) => {
+                    let (status, code) = store_failure(&error);
+                    return request
+                        .refuse(status, code, "store_unavailable", None)
+                        .await;
+                }
             };
             // The revocation is committed; a missing audit record is logged.
             if let Some(details) = details

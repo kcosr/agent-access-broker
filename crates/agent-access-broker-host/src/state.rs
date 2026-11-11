@@ -668,6 +668,25 @@ impl RuntimeSnapshot {
         }))
     }
 
+    /// Ends the live application-minted tokens that this generation's
+    /// registrations would no longer mint, so that an operator's narrowing
+    /// takes effect when the generation is admitted. The caller holds the
+    /// mutation fence (startup, or a reload before it publishes).
+    pub(crate) async fn reconcile_application_tokens(
+        &self,
+    ) -> Result<Vec<agent_access_core::ApplicationTokenReconciliation>, ManagedStoreError> {
+        if self.runtime.managed_store().is_none() {
+            return Ok(Vec::new());
+        }
+        let applications = self.runtime.applications().clone();
+        self.managed_store_call(move |store| {
+            store.reconcile_application_tokens(&|application_id| {
+                applications.registration(application_id)
+            })
+        })
+        .await
+    }
+
     pub(crate) fn reconcile_microsoft_oidc_provider(&self) -> Result<(), ManagedStoreError> {
         self.reconcile_microsoft_oidc_provider_with_fallback(None)
     }
