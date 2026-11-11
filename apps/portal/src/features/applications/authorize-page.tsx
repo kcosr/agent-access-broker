@@ -68,7 +68,7 @@ export function InvalidRequest() {
 function PendingRequest({ requestId }: { requestId: string }) {
   const { session, attempt } = useSession();
   const { logout } = useAuthActions();
-  const query = useApplicationAuthorization(requestId, true);
+  const query = useApplicationAuthorization(requestId);
   const { refetch } = query;
   // Held from the first click until a decision fails; a decision that
   // succeeded keeps it while the browser leaves for the application.

@@ -170,10 +170,12 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
         setting ends the path’s open MCP sessions.
       </p>
       <p className="pt-prose mt-2">Usernames match exactly, including case. Disabled bindings reserve their names. To rename or reassign a name, delete its binding and create a new one.</p>
-      <p className="pt-prose mt-2">
-        An application the person approved obtains its own tokens for them. Its Read-only setting only narrows the application’s level, and changing a setting or removing the
-        access ends the tokens it holds at once.
-      </p>
+      {applications?.length ? (
+        <p className="pt-prose mt-2">
+          An application the person approved obtains its own tokens for them. Its Read-only setting only narrows the application’s level, and changing a setting or removing the
+          access ends the tokens it holds at once.
+        </p>
+      ) : null}
       {paused ? <p className="pt-prose mt-2">The shared identity pause currently blocks every access path.</p> : null}
       {loadFailure ? <ErrorState title="Couldn’t load access paths" error={loadFailure.error} onRetry={() => void loadFailure.refetch()} retrying={loadFailure.isFetching} /> : token && data && applications ? (
         <>

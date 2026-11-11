@@ -265,6 +265,8 @@ test("username bindings preserve exact names, namespace availability, read-only 
   const paths = identity.getByRole("table", { name: "Access paths", exact: true });
   await expect(paths.getByRole("row")).toHaveCount(2);
   await expect(identity.getByText("No username bindings.", { exact: true })).toBeVisible();
+  // Without an approved application nothing about applications is shown.
+  await expect(identity.getByText(/An application the person approved/)).toHaveCount(0);
   // The create fields are their own titled form below the table, not settings of the table.
   await expect(identity.getByRole("heading", { name: "Add username binding", exact: true, level: 4 })).toBeVisible();
   const create = identity.getByRole("form", { name: "Add username binding", exact: true });

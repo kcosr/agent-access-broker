@@ -456,11 +456,11 @@ export function useOwnApplicationAccess(enabled = true) {
  * refetched in the background: an answered or expired request must not
  * reappear, and a request that has been shown must not change on its own.
  */
-export function useApplicationAuthorization(requestId: string, enabled: boolean) {
+export function useApplicationAuthorization(requestId: string) {
   const { viewer, signedIn, runQuery } = useQueryAccess();
   return useQuery<ApplicationAuthorization>({
     queryKey: portalQueryKeys.applicationAuthorization(viewer, requestId),
-    enabled: signedIn && enabled,
+    enabled: signedIn,
     staleTime: Infinity,
     gcTime: 0,
     queryFn: () => runQuery((current) => brokerApi.applicationAuthorization(current, requestId))
