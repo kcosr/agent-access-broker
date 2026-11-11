@@ -524,6 +524,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A browser session that expires while a portal page is open now shows the
+  sign-in choices again, instead of "No browser sign-in method is enabled" until
+  the page was reloaded. Signing in returns to the same page.
+
 - Dependency updates clear RustSec advisories in `crypto-bigint` (through
   `openidconnect`, now 4.1.0), `h2`, `pulldown-cmark`, `quinn-proto`, `rustls`,
   `rustls-webpki`, `webpki-roots`, `anyhow` and Tokio. RUSTSEC-2023-0071
