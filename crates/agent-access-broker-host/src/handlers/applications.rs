@@ -102,7 +102,7 @@ pub(crate) async fn protocol_error_contract(request: Request, next: Next) -> Res
 fn issuer(snapshot: &RuntimeSnapshot) -> Option<String> {
     let config = snapshot.runtime.config();
     (!snapshot.runtime.applications().is_empty())
-        .then(|| config.browser_auth.public_origin.as_deref())
+        .then_some(config.browser_auth.public_origin.as_deref())
         .flatten()
         .map(|origin| origin.trim_end_matches('/').to_string())
 }
@@ -376,10 +376,15 @@ async fn protocol_request(
     headers: &HeaderMap,
     body: &Bytes,
     operation: &'static str,
-) -> Result<ProtocolRequest, Response> {
+) -> Result<ProtocolRequest, Box<Response>> {
     let (request_id, broker_request_id) = match auth_request_ids(headers, operation) {
         Ok(ids) => ids,
-        Err(_) => return Err(protocol_error(StatusCode::BAD_REQUEST, "invalid_request")),
+        Err(_) => {
+            return Err(Box::new(protocol_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+            )));
+        }
     };
     let snapshot = state.reloadable.current();
     let source = snapshot
@@ -417,7 +422,10 @@ async fn protocol_request(
             },
         )
         .await;
-        return Err(protocol_error(StatusCode::UNAUTHORIZED, "invalid_client"));
+        return Err(Box::new(protocol_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+        )));
     };
     let form_content = headers
         .get(CONTENT_TYPE)
@@ -434,7 +442,10 @@ async fn protocol_request(
         // Credentials belong in the Authorization header only.
         .filter(|form| !form.contains_key("client_secret") && !form.contains_key("client_id"));
     let Some(form) = form else {
-        return Err(protocol_error(StatusCode::BAD_REQUEST, "invalid_request"));
+        return Err(Box::new(protocol_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+        )));
     };
     Ok(ProtocolRequest {
         snapshot,
@@ -518,7 +529,7 @@ pub(crate) async fn token(
     let request =
         match protocol_request(&state, remote_addr, &headers, &body, "applications.token").await {
             Ok(request) => request,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     let field = |name: &str| {
         request
@@ -700,7 +711,7 @@ pub(crate) async fn revoke(
     let request =
         match protocol_request(&state, remote_addr, &headers, &body, "applications.revoke").await {
             Ok(request) => request,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     let Some(token) = request
         .form

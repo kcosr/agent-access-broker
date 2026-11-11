@@ -148,10 +148,10 @@ fn connect(store: &ManagedStore, who: &str) -> ApplicationTokenMint {
     .unwrap()
 }
 
-fn refresh<'a>(
+fn refresh(
     store: &ManagedStore,
     terms: Option<&ApplicationAccessTerms>,
-    refresh_token: &'a str,
+    refresh_token: &str,
 ) -> Result<ApplicationTokenMint, ApplicationGrantRefused> {
     mint(
         store,
@@ -790,10 +790,8 @@ fn secrets_stay_out_of_debug_output_and_the_database() {
     }
     drop(store);
     let mut stored = fs::read(temp.path().join("store.sqlite")).unwrap();
-    for sidecar in ["store.sqlite-wal"] {
-        if let Ok(bytes) = fs::read(temp.path().join(sidecar)) {
-            stored.extend(bytes);
-        }
+    if let Ok(bytes) = fs::read(temp.path().join("store.sqlite-wal")) {
+        stored.extend(bytes);
     }
     let contains = |needle: &str| stored.windows(needle.len()).any(|w| w == needle.as_bytes());
     for secret in [
