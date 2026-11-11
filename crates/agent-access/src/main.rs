@@ -1211,6 +1211,10 @@ enum AdminPrincipalsCommand {
         #[command(subcommand)]
         command: AdminIdentityBindingsCommand,
     },
+    ApplicationAccess {
+        #[command(subcommand)]
+        command: AdminApplicationAccessCommand,
+    },
     ServiceLimits {
         #[command(subcommand)]
         command: AdminPrincipalServiceLimitsCommand,
@@ -1308,6 +1312,28 @@ enum AdminIdentityBindingsCommand {
     Delete {
         principal: String,
         binding: String,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_version: i64,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AdminApplicationAccessCommand {
+    /// Show the applications a person connected, with each one's live token count.
+    List { principal: String },
+    /// Change an application access's Enabled and Read-only settings, ending its live tokens.
+    Update {
+        principal: String,
+        access: String,
+        #[command(flatten)]
+        settings: IdentityPathSettingsArgs,
+        #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
+        expected_version: i64,
+    },
+    /// Remove an application access with its refresh token and live tokens.
+    Delete {
+        principal: String,
+        access: String,
         #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
         expected_version: i64,
     },
@@ -10741,6 +10767,7 @@ fn reject_literal_identity_token_for_send_management(
         RouteAccess::UserManagement
             | RouteAccess::BrowserManagement
             | RouteAccess::UserTokenManagement
+            | RouteAccess::AccountManagement
             | RouteAccess::PolicyRead
             | RouteAccess::PolicyWrite
             | RouteAccess::AdminRead
@@ -12655,6 +12682,48 @@ async fn run_admin_identity_bindings_command(
     run_broker_json_method(ctx, method, &path, body).await
 }
 
+async fn run_admin_application_access_command(
+    ctx: &CliContext<'_>,
+    command: &AdminApplicationAccessCommand,
+) -> Result<()> {
+    let (principal, access, method, body, query) = match command {
+        AdminApplicationAccessCommand::List { principal } => {
+            (principal, None, reqwest::Method::GET, None, String::new())
+        }
+        AdminApplicationAccessCommand::Update {
+            principal,
+            access,
+            settings,
+            expected_version,
+        } => (
+            principal,
+            Some(access),
+            reqwest::Method::PATCH,
+            Some(settings.body("expectedVersion", *expected_version)),
+            String::new(),
+        ),
+        AdminApplicationAccessCommand::Delete {
+            principal,
+            access,
+            expected_version,
+        } => (
+            principal,
+            Some(access),
+            reqwest::Method::DELETE,
+            None,
+            format!("?expectedVersion={expected_version}"),
+        ),
+    };
+    let suffix = access
+        .map(|access| format!("/{}", encoded_path_segment(access)))
+        .unwrap_or_default();
+    let path = format!(
+        "/v1/admin/principals/{}/application-access{suffix}{query}",
+        encoded_path_segment(principal)
+    );
+    run_broker_json_method(ctx, method, &path, body).await
+}
+
 async fn run_admin_service_limits_command(
     ctx: &CliContext<'_>,
     command: &AdminPrincipalServiceLimitsCommand,
@@ -12721,6 +12790,9 @@ async fn run_admin_principals_command(
         }
         AdminPrincipalsCommand::IdentityBindings { command } => {
             run_admin_identity_bindings_command(ctx, command).await
+        }
+        AdminPrincipalsCommand::ApplicationAccess { command } => {
+            run_admin_application_access_command(ctx, command).await
         }
         AdminPrincipalsCommand::ServiceLimits { command } => {
             run_admin_service_limits_command(ctx, command).await
@@ -18013,6 +18085,27 @@ mod tests {
                 "--expected-version",
                 "3",
             ],
+            vec!["application-access", "list", "alice"],
+            vec![
+                "application-access",
+                "update",
+                "alice",
+                "access",
+                "--enabled",
+                "false",
+                "--read-only",
+                "true",
+                "--expected-version",
+                "1",
+            ],
+            vec![
+                "application-access",
+                "delete",
+                "alice",
+                "access",
+                "--expected-version",
+                "2",
+            ],
             vec![
                 "identity-token",
                 "update",
@@ -18044,6 +18137,25 @@ mod tests {
                 "0",
             ],
             vec!["identity-bindings", "delete", "alice", "binding"],
+            vec!["application-access", "delete", "alice", "access"],
+            vec![
+                "application-access",
+                "update",
+                "alice",
+                "access",
+                "--expected-version",
+                "1",
+            ],
+            vec![
+                "application-access",
+                "update",
+                "alice",
+                "access",
+                "--enabled",
+                "false",
+                "--expected-version",
+                "0",
+            ],
             // The update command replaced enable and disable outright.
             vec![
                 "identity-bindings",

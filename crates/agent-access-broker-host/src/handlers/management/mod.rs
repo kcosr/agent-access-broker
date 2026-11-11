@@ -1,4 +1,5 @@
 pub(crate) mod admin;
+pub(crate) mod application_access;
 pub(crate) mod audit;
 pub(crate) mod audit_actions;
 pub(crate) mod common;

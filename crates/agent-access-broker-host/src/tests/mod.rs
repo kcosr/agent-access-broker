@@ -62,6 +62,7 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 
 mod aggregate_limits;
+mod applications;
 mod atlassian_connections;
 mod audit_query;
 mod body_admission;

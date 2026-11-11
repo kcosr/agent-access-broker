@@ -1,3 +1,4 @@
+use crate::handlers::applications;
 use crate::handlers::auth::{auth_local_login, auth_logout, auth_password_change, auth_session};
 use crate::handlers::data::{
     broker_status, capabilities, healthz, invoke, me, readyz, resource_types, service,
@@ -26,6 +27,7 @@ use crate::handlers::management::admin::{
     admin_right_revoke, admin_rights_grant, admin_rights_list, admin_store_status, admin_token_get,
     admin_token_pause, admin_token_resume, admin_token_revoke, admin_tokens_list,
 };
+use crate::handlers::management::application_access;
 use crate::handlers::management::audit;
 use crate::handlers::management::imports;
 use crate::handlers::management::microsoft_enrollments;
@@ -138,6 +140,23 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             "/v1/auth/oidc/microsoft/callback",
             get(microsoft_oidc_callback),
         )
+        .route(applications::METADATA_PATH, get(applications::metadata))
+        .route(applications::AUTHORIZE_PATH, get(applications::authorize))
+        .route(applications::TOKEN_PATH, post(applications::token))
+        .route(applications::REVOKE_PATH, post(applications::revoke))
+        .route(
+            "/v1/applications/authorizations/{request}",
+            get(application_access::authorization_inspect),
+        )
+        .route(
+            "/v1/applications/authorizations/{request}/decision",
+            post(application_access::authorization_decide),
+        )
+        .route("/v1/applications/access", get(application_access::list_own))
+        .route(
+            "/v1/applications/access/{access}",
+            delete(application_access::remove_own),
+        )
         .route("/ui", get(portal_index))
         .route("/ui/{*path}", get(portal_asset))
         .route("/v1/me", get(me))
@@ -237,6 +256,14 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         .route(
             "/v1/admin/principals/{principal}/identity-bindings/{binding}",
             patch(identity_bindings::patch).delete(identity_bindings::delete),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/application-access",
+            get(application_access::admin_list),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/application-access/{access}",
+            patch(application_access::admin_patch).delete(application_access::admin_delete),
         )
         .route("/v1/admin/store/status", get(admin_store_status))
         .route("/v1/admin/config/status", get(admin_config_status))
@@ -486,6 +513,9 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             verify_caller_ingress,
+        ))
+        .layer(axum::middleware::from_fn(
+            applications::protocol_error_contract,
         ))
         .layer(axum::middleware::from_fn(
             crate::membership_renewal::scope_request_renewal,
