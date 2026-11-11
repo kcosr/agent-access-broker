@@ -7,17 +7,18 @@ use agent_access_cloudbees_ci::{CloudbeesCiControllerConfig, CloudbeesCiProvider
 use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig};
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
-    AggregateInvocationLimitConfig, AttributionConfig, AuditConfig, AuditDurability, BrokerConfig,
-    BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig,
-    ConnectionConfig, ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
-    CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
-    GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
-    IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
-    InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
-    ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
-    OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig, PolicyGrantConfig, PortalConfig,
-    PrincipalInvocationLimitConfig, ProvidersConfig, ResourceDefinition, ResourceGroupDefinition,
-    ResourceSelection, StaticPrincipalConfig, TrustedCallerConfig, TrustedCallerContextMode,
+    AggregateInvocationLimitConfig, ApplicationConfig, AttributionConfig, AuditConfig,
+    AuditDurability, BrokerConfig, BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig,
+    CommandImportConfig, ConnectionConfig, ConnectionOAuthConfig, CredentialConfig,
+    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig,
+    ExecutionContextConfig, GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig,
+    IdentityGroupConfig, IdentitySourceConfig, ImportsConfig, InitialAdminConfig,
+    InvocationLimitConfig, InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig,
+    ManagedStoreConfig, ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig,
+    OAuthConfig, OidcConfig, OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig,
+    PolicyGrantConfig, PortalConfig, PrincipalInvocationLimitConfig, ProvidersConfig,
+    ResourceDefinition, ResourceGroupDefinition, ResourceSelection, StaticPrincipalConfig,
+    TrustedCallerConfig, TrustedCallerContextMode,
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
@@ -105,6 +106,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         imports,
         command_imports,
         oauth,
+        applications,
         managed_store,
         credential_encryption,
         management,
@@ -134,6 +136,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
             keyed(command_imports, command_import_value),
         )
         .put("oauth", oauth_value(oauth))
+        .put("applications", keyed(applications, application_value))
         .opt(
             "managed_store",
             managed_store.as_ref().map(managed_store_value),
@@ -281,6 +284,32 @@ fn trusted_caller_value(caller: &TrustedCallerConfig) -> Value {
             allowed_execution_contexts.as_deref().map(strings),
         )
         .put("allow_forwarded_identity", *allow_forwarded_identity)
+        .value()
+}
+
+fn application_value(application: &ApplicationConfig) -> Value {
+    let ApplicationConfig {
+        display_name,
+        client_secret_ref,
+        redirect_uris,
+        connect,
+        allowed_execution_contexts,
+        allowed_services,
+        access_token_ttl,
+        refresh_idle_ttl,
+    } = application;
+    Fields::default()
+        .put("display_name", display_name.as_str())
+        .put("client_secret_ref", client_secret_ref.as_str())
+        .put("redirect_uris", strings(redirect_uris))
+        .put("connect", connect.as_str())
+        .put(
+            "allowed_execution_contexts",
+            strings(allowed_execution_contexts),
+        )
+        .opt("allowed_services", allowed_services.as_deref().map(strings))
+        .put("access_token_ttl", access_token_ttl.as_str())
+        .put("refresh_idle_ttl", refresh_idle_ttl.as_str())
         .value()
 }
 

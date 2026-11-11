@@ -1078,6 +1078,22 @@ durability = "write" # write | sync_data | sync_all
 # whitespace, distinct from each other and static principal credentials.
 # Direct secrets cannot start with aab_. See docs/trusted-callers.md.
 
+# Applications: operator-approved OAuth clients that obtain short-lived agent
+# tokens for a person who approved them in the portal. Requires managed
+# identity with a broker_tokens source, browser_auth with public_origin, and
+# management. The table name is the client ID. See docs/applications.md.
+# [applications.example-runner]
+# display_name = "Example Runner"
+# client_secret_ref = "file:/run/secrets/example-runner-client-secret"
+# redirect_uris = ["https://runner.example.test/auth/broker/callback"]
+# connect = "read_write"                    # none | read_only | read_write, for everyone
+# allowed_execution_contexts = ["internal"] # context caveat of every minted token
+# allowed_services = ["jira"]               # optional service ceiling of every minted token
+# access_token_ttl = "8h"                   # default; at most max_self_issued_agent_invoke_ttl
+# refresh_idle_ttl = "90d"                  # default; unused refresh tokens stop working
+# Client secrets are 16-1024 visible ASCII bytes, distinct from each other and
+# from trusted caller credentials, and cannot start with aab_.
+
 # Optional delegated OAuth test provider (non-production only). Requires managed
 # identity/store/encryption, browser auth, management and enable_fake_service.
 # The records backend and the stub registration point at the same test server;

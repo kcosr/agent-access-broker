@@ -48,6 +48,9 @@ pub enum ReasonCode {
     IdentityBindingConflict,
     IdentityVersionConflict,
     IdentityBindingNotFound,
+    ApplicationAuthorizationInvalid,
+    ApplicationAccessDenied,
+    ApplicationAccessNotFound,
     ExecutionContextRequired,
     ExecutionContextInvalid,
     ExecutionContextDenied,
@@ -182,6 +185,9 @@ impl ReasonCode {
             Self::IdentityBindingConflict => "identity_binding_conflict",
             Self::IdentityVersionConflict => "identity_version_conflict",
             Self::IdentityBindingNotFound => "identity_binding_not_found",
+            Self::ApplicationAuthorizationInvalid => "application_authorization_invalid",
+            Self::ApplicationAccessDenied => "application_access_denied",
+            Self::ApplicationAccessNotFound => "application_access_not_found",
             Self::ExecutionContextRequired => "execution_context_required",
             Self::ExecutionContextInvalid => "execution_context_invalid",
             Self::ExecutionContextDenied => "execution_context_denied",
@@ -330,6 +336,8 @@ impl ReasonCode {
             | Self::OidcSignInRequired => 401,
             Self::PrincipalNotFound
             | Self::IdentityBindingNotFound
+            | Self::ApplicationAuthorizationInvalid
+            | Self::ApplicationAccessNotFound
             | Self::GroupNotFound
             | Self::PolicyGrantNotFound
             | Self::ResourceNotFound
@@ -341,6 +349,7 @@ impl ReasonCode {
             | Self::AuditQueryUnavailable
             | Self::AuditRequestNotFound => 404,
             Self::ServiceActionDenied
+            | Self::ApplicationAccessDenied
             | Self::CallerUserAssertionDenied
             | Self::IdentityAssertionDenied
             | Self::WebhookDestinationDenied
@@ -434,6 +443,9 @@ impl ReasonCode {
             Self::IdentityBindingConflict,
             Self::IdentityVersionConflict,
             Self::IdentityBindingNotFound,
+            Self::ApplicationAuthorizationInvalid,
+            Self::ApplicationAccessDenied,
+            Self::ApplicationAccessNotFound,
             Self::ExecutionContextRequired,
             Self::ExecutionContextInvalid,
             Self::ExecutionContextDenied,

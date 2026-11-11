@@ -16521,6 +16521,7 @@ fn fake_config(audit_file: &str) -> BrokerConfig {
         imports: Default::default(),
         command_imports: Default::default(),
         oauth: Default::default(),
+        applications: Default::default(),
         deployment: DeploymentConfig {
             enable_fake_service: true,
             ..DeploymentConfig::default()

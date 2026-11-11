@@ -3410,6 +3410,7 @@ pub(super) fn test_forwarding_config(
         imports: Default::default(),
         command_imports: Default::default(),
         oauth: Default::default(),
+        applications: Default::default(),
         deployment: DeploymentConfig::default(),
         network: NetworkConfig::default(),
         execution_context: None,
