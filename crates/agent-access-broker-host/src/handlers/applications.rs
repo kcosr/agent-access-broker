@@ -412,6 +412,9 @@ pub(crate) struct ProtocolRequest {
     /// and so this permit, until its store work and audit have completed,
     /// whether or not the response waiter is still there.
     _permit: IngressPermit,
+    /// The request's place in the shutdown drain, held like the permit: the
+    /// owner's audit is written before the audit writers close.
+    _lease: crate::owner_drain::OwnerLease,
 }
 
 impl ProtocolRequest {
@@ -554,6 +557,7 @@ pub(crate) async fn protocol_request(
         application,
         form,
         _permit: permit,
+        _lease: state.reloadable.application_owners.register(),
     })
 }
 

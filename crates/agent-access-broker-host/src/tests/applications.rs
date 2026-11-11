@@ -209,7 +209,7 @@ impl Apps {
             .browser_request(
                 Method::POST,
                 &format!("/v1/applications/authorizations/{request}/decision"),
-                Some(json!({ "decision": decision })),
+                Some(json!({ "decision": decision, "principalId": "alice" })),
             )
             .await;
         (response.status(), response_json(response).await)
@@ -802,6 +802,24 @@ async fn consent_requires_a_browser_session_with_csrf_and_cancel_returns_access_
     );
     let (status, body) = apps.decide(&request, "maybe").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    // The decision names the account the page showed the request to. Without
+    // it the request is malformed; under another account's session it is
+    // refused, so a session that changed since cannot approve.
+    let decision_route = format!("/v1/applications/authorizations/{request}/decision");
+    let decision = |body: Value| {
+        apps.fixture
+            .browser_request(Method::POST, &decision_route, Some(body))
+    };
+    let missing = decision(json!({"decision": "approve"})).await;
+    assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+    for chosen in ["approve", "cancel"] {
+        let other = decision(json!({"decision": chosen, "principalId": "admin"})).await;
+        assert_eq!(other.status(), StatusCode::CONFLICT);
+        let other = response_json(other).await;
+        assert_eq!(other["reasonCode"], "version_conflict", "{other}");
+        assert!(other.get("result").is_none(), "{other}");
+    }
+    assert_eq!(apps.admin_access().await, json!([]));
 
     // None of that consumed the request. Cancel returns access_denied.
     let (status, body) = apps.decide(&request, "cancel").await;
@@ -1696,6 +1714,9 @@ async fn mutation_owners_keep_their_admitted_capacity_after_the_waiter_is_cancel
     assert!(waiter.await.unwrap_err().is_cancelled());
     // The cancelled request still counts against the global limit.
     assert_eq!(ingress.global_in_flight_requests(), 1);
+    // It is also in the shutdown drain until its audit is written.
+    let owners = apps.fixture.state.application_owners.clone();
+    assert_eq!(owners.drain(Duration::from_millis(20)).await, 1);
     assert_eq!(apps.admin_access().await[0]["liveTokenCount"], 1);
     release_tx.send(()).unwrap();
     idle().await;
@@ -1726,9 +1747,11 @@ async fn mutation_owners_keep_their_admitted_capacity_after_the_waiter_is_cancel
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
     assert_eq!(ingress.global_in_flight_requests(), 1);
+    assert_eq!(owners.drain(Duration::from_millis(20)).await, 1);
     assert_eq!(apps.invoke(&access_token).await, StatusCode::OK);
     release_tx.send(()).unwrap();
     idle().await;
+    assert_eq!(owners.drain(Duration::from_millis(20)).await, 0);
     assert_eq!(apps.invoke(&access_token).await, StatusCode::UNAUTHORIZED);
     assert_eq!(
         application_audit(&apps, "applications.token.revoked").len(),
@@ -2093,5 +2116,162 @@ async fn a_failed_reconciliation_is_reported_audited_and_retried_by_the_next_rel
         apps.invoke(refreshed["access_token"].as_str().unwrap())
             .await,
         StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn startup_does_not_serve_when_token_reconciliation_fails() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    let minted = apps.connect().await;
+    let access_token = minted["access_token"].as_str().unwrap().to_string();
+    // A second live token whose row the store will not be able to read.
+    let (status, _) = apps
+        .refresh(minted["refresh_token"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let live = |store_path: &Path| -> i64 {
+        rusqlite::Connection::open(store_path)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(1) FROM broker_tokens
+                 WHERE application_access_id IS NOT NULL AND revoked_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
+    // While the Broker is stopped the operator narrows the registration, and
+    // the reconciliation cannot read one of the application's live tokens.
+    let Apps {
+        fixture,
+        mut config,
+    } = apps;
+    let BrowserRateFixture {
+        _broker: broker,
+        app,
+        state,
+        ingress,
+        audit_path,
+        store_path,
+        ..
+    } = fixture;
+    drop((app, state, ingress));
+    broker.stop().await;
+    config.applications.get_mut(APP).unwrap().connect = ApplicationConnectLevel::ReadOnly;
+    let store = rusqlite::Connection::open(&store_path).unwrap();
+    let unreadable: String = store
+        .query_row(
+            "SELECT token_id FROM broker_tokens WHERE application_access_id IS NOT NULL
+             ORDER BY created_at DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    store
+        .execute(
+            "UPDATE broker_tokens SET scopes_json = x'00ff' WHERE token_id = ?1",
+            [&unreadable],
+        )
+        .unwrap();
+    let error = match TestBroker::try_start_with(TestBroker::config_builder(&config)).await {
+        Ok(_) => panic!("the Broker served although its write-capable token was not ended"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(
+        error.contains("application token reconciliation failed at startup"),
+        "{error}"
+    );
+    assert!(!error.contains(&access_token));
+    assert_eq!(live(&store_path), 2, "no token was ended");
+    let failed = read_audit_records(&audit_path)
+        .into_iter()
+        .rfind(|record| record["action"] == "applications.tokens.reconciled")
+        .unwrap();
+    assert_eq!(failed["decision"], "error");
+    assert_eq!(
+        failed["providerAudit"]["application"],
+        json!({"trigger": "startup", "reason": "reconciliation_failed"})
+    );
+
+    // With the unreadable row out of the way the same configuration starts,
+    // and the write-capable token is ended before anything is served.
+    store
+        .execute(
+            "UPDATE broker_tokens SET revoked_at = '2026-01-01T00:00:00Z', revoked_by = 'admin'
+             WHERE token_id = ?1",
+            [&unreadable],
+        )
+        .unwrap();
+    drop(store);
+    let restarted = TestBroker::start_config(&config).await;
+    assert_eq!(live(&store_path), 0);
+    let response =
+        invoke_fake_project_with_token(restarted.app(), "after-restart", &access_token, "TEST")
+            .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn shutdown_drains_a_reconciliation_whose_reload_caller_is_gone() {
+    let apps = apps_fixture(ApplicationConnectLevel::ReadWrite).await;
+    apps.connect().await;
+    let barrier = hold_reconciliation(&apps);
+    stage_config(&apps, &read_only_config(&apps));
+    let reloading = apps.fixture.state.clone();
+    let waiter = tokio::spawn(async move {
+        reloading.reload_from_signal().await;
+    });
+    tokio::time::timeout(Duration::from_secs(10), barrier.reached.notified())
+        .await
+        .expect("the reconciliation owner starts");
+    // The reload's caller disconnects while the owner is blocked.
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    let Apps { fixture, .. } = apps;
+    let BrowserRateFixture {
+        _broker: broker,
+        app,
+        state,
+        ingress,
+        audit_path,
+        store_path,
+        ..
+    } = fixture;
+    drop((app, state, ingress));
+    // Shutdown waits for the owner instead of closing the audit under it.
+    let stopping = tokio::spawn(broker.stop());
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !stopping.is_finished(),
+        "shutdown finished while the reconciliation owner was still running"
+    );
+    barrier.release();
+    let report = tokio::time::timeout(Duration::from_secs(30), stopping)
+        .await
+        .expect("shutdown completes once the owner has finished")
+        .unwrap();
+    assert_eq!(report.unfinished_application_owners(), 0);
+    assert!(report.is_clean(), "{report:?}");
+    // The owner's store work and its audit record both completed.
+    let live: i64 = rusqlite::Connection::open(&store_path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(1) FROM broker_tokens
+             WHERE application_access_id IS NOT NULL AND revoked_at IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(live, 0);
+    let reconciled = read_audit_records(&audit_path)
+        .into_iter()
+        .filter(|record| record["action"] == "applications.tokens.reconciled")
+        .map(|record| record["providerAudit"]["application"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reconciled,
+        vec![
+            json!({"applicationId": APP, "trigger": "reload", "reason": "registration_narrowed", "revokedTokens": 1})
+        ]
     );
 }

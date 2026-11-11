@@ -1476,8 +1476,9 @@ fn application_access_route_specs() -> Vec<HttpRouteSpec> {
         &mut routes,
         "POST",
         "/v1/applications/authorizations/{request}/decision",
-        json!({"type":"object", "additionalProperties":false, "required":["decision"],
-            "properties":{"decision":{"enum":["approve","cancel"]}}}),
+        json!({"type":"object", "additionalProperties":false, "required":["decision","principalId"],
+            "properties":{"decision":{"enum":["approve","cancel"]},
+                "principalId":{"type":"string","description":"The signed-in account the request was shown to: the principal of the inspect response. A decision sent under another account's session is refused with version_conflict."}}}),
     );
     for route in &mut routes {
         route.result_schema = match route.operation.as_str() {

@@ -100,8 +100,11 @@ pub(crate) async fn start_reloadable_state(
         .await?;
     snapshot.reconcile_microsoft_oidc_provider()?;
     // A registration narrowed while the broker was down applies from the start.
-    // A failure is logged and audited; the next reload or startup retries.
-    reconcile_application_tokens(
+    // Nothing is serving yet, and ordinary admission never consults the
+    // registration: a token minted under an earlier registration would keep
+    // its authority. So unlike a reload, which has already published its
+    // generation, startup does not continue when this fails.
+    let reconciliation = reconcile_application_tokens(
         &snapshot,
         ApplicationReconciliationAudit {
             agent_request_id: "startup",
@@ -117,6 +120,11 @@ pub(crate) async fn start_reloadable_state(
         },
     )
     .await;
+    if matches!(reconciliation, ApplicationTokenOutcome::Failed) {
+        anyhow::bail!(
+            "application token reconciliation failed at startup: tokens minted under an earlier application registration could keep authority the current configuration no longer grants; restore access to the managed store and start again"
+        );
+    }
     let state = ReloadableState::from_snapshot(
         config_path,
         backends,
@@ -767,6 +775,10 @@ struct ApplicationTokenFinalization {
     fence: tokio::sync::OwnedMutexGuard<()>,
     /// The reloading request's admitted capacity, when a request reloaded.
     permit: Option<crate::ingress::guards::IngressPermit>,
+    /// The owner's place in the shutdown drain, taken before the reload
+    /// yields after publication: shutdown waits for the store work and its
+    /// audit before the audit writers close.
+    lease: crate::owner_drain::OwnerLease,
     #[cfg(test)]
     barrier: Option<Arc<crate::state::McpBlockingBarrier>>,
 }
@@ -793,6 +805,7 @@ async fn finalize_application_tokens(
     )
     .await;
     drop(input.permit);
+    drop(input.lease);
     (input.fence, outcome)
 }
 
@@ -1419,6 +1432,7 @@ impl ReloadableState {
                                     .ok()
                             })
                             .flatten(),
+                        lease: self.application_owners.register(),
                         #[cfg(test)]
                         barrier: self
                             .application_reconciliation_barrier

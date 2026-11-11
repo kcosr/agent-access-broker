@@ -339,7 +339,7 @@ async fn an_application_connects_a_person_invokes_and_is_administered() {
         reqwest::Method::POST,
         format!("/v1/applications/authorizations/{request}/decision"),
     )
-    .json(&json!({"decision": "approve"}))
+    .json(&json!({"decision": "approve", "principalId": "alice"}))
     .send()
     .await
     .unwrap()
