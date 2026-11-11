@@ -243,6 +243,10 @@ enter the exact username, select **Read-only** for a read-only binding, and
 choose **Add binding**. Disabling keeps the name reserved; delete/create to
 rename or reassign. Auditors see the same table without controls or the form.
 
+The table also has one row for each
+[application the person approved](admin-maintenance.md#review-application-access),
+after the username bindings.
+
 **Identity token** retains reveal/copy, set, generate and remove controls. Removing
 inventory disables fingerprint access but leaves username bindings, shared pause
 and the token's Enabled and Read-only settings unchanged. Clients must initialize

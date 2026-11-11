@@ -334,7 +334,12 @@ approve one in their browser, and the application then obtains short-lived
 agent tokens for that person. Approving needs neither self-service nor
 permission to issue tokens, because the person never holds the tokens. The
 operator sets each application's level for everyone (`none`, `read_only` or
-`read_write`); you narrow or end one person's access:
+`read_write`); you narrow or end one person's access. In the portal, open
+**Admin > Principals > the person > Overview**: each application is a row of
+the **Access paths** table under **Identity access**, with **Enabled**,
+**Read-only** and **Remove**
+([walkthrough](portal-guide/admin-maintenance.md#review-application-access)).
+With the CLI:
 
 ```bash
 agent-access admin principals application-access list alice
@@ -358,7 +363,9 @@ reuses it with the same settings. The list shows how many tokens are live; they 
 not listed with the person's other tokens. An access whose application is no
 longer registered is shown as unavailable and mints nothing. Auditors can read
 the list. An application's tokens act within the person's grants, so review
-application access together with those grants.
+application access together with those grants. The person sees and removes
+their own applications under **Account > Applications**, with or without
+self-service.
 
 ## Enable personal OAuth connections
 

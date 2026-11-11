@@ -45,6 +45,7 @@ async function fixture(page: Page, role: PrincipalRole, selfServiceEnabled: bool
     else if (pathname.endsWith("/identity-token")) result = { principalId: "target", configured: true, enabled: false, readOnly: true, revision: 1, updatedAt: "2026-10-10T00:00:00Z" };
     else if (pathname.endsWith("/identity-access")) result = { principalId: "target", incarnation: "gate-fixture", paused: false, version: 1, updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin" };
     else if (pathname.endsWith("/identity-bindings")) result = { bindings: [{ bindingId: "binding-fixture", principalId: "target", namespace: "retired_namespace", username: "Alice", enabled: true, readOnly: false, version: 3, createdAt: "2026-10-10T00:00:00Z", createdBy: "admin", updatedAt: "2026-10-10T00:00:00Z", updatedBy: "admin", namespaceAvailable: false }], configuredNamespaces: [{ namespace: "managed_linux", credentialTransports: ["authorization_user", "caller_authorization"] }] };
+    else if (pathname.endsWith("/application-access")) result = { access: [] };
     else if (pathname === "/v1/admin/policy/status") result = { ...config, writable: true, policyGeneration: 1, counts: { active: 1, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };
     else if (pathname === "/v1/admin/policy/catalog") result = catalog;
     else if (pathname === "/v1/admin/policy/grants") result = [grant];
@@ -264,6 +265,8 @@ test("username bindings preserve exact names, namespace availability, read-only 
   const paths = identity.getByRole("table", { name: "Access paths", exact: true });
   await expect(paths.getByRole("row")).toHaveCount(2);
   await expect(identity.getByText("No username bindings.", { exact: true })).toBeVisible();
+  // Without an approved application nothing about applications is shown.
+  await expect(identity.getByText(/An application the person approved/)).toHaveCount(0);
   // The create fields are their own titled form below the table, not settings of the table.
   await expect(identity.getByRole("heading", { name: "Add username binding", exact: true, level: 4 })).toBeVisible();
   const create = identity.getByRole("form", { name: "Add username binding", exact: true });

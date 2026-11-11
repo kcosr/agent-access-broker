@@ -198,7 +198,11 @@ All notable changes to this project are documented in this file.
   routes, which ends its tokens at once; a person or the application can end
   the consent but not lift those restrictions. A reload or restart under a
   narrower registration ends the tokens it no longer mints. Application tokens
-  are not listed individually and are deleted 7 days after they end. See
+  are not listed individually and are deleted 7 days after they end. In the
+  portal, the person approves or declines on a dedicated page, reviews and
+  removes their applications under **Account > Applications**, and
+  administrators manage each application as a row of the person's **Access
+  paths**. See
   [applications](docs/applications.md).
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to
@@ -525,6 +529,10 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- A browser session that expires while a portal page is open now shows the
+  sign-in choices again, instead of "No browser sign-in method is enabled" until
+  the page was reloaded. Signing in returns to the same page.
 
 - Dependency updates clear RustSec advisories in `crypto-bigint` (through
   `openidconnect`, now 4.1.0), `h2`, `pulldown-cmark`, `quinn-proto`, `rustls`,

@@ -33,10 +33,11 @@ Select an action for its complete resource alternatives and exclusions. Filters
 only change this view. Account roles do not create invocation grants, and an
 empty access page needs administrator action before an agent token can be issued.
 
-The **Account** page shows account settings and service limits. Personal
+The **Account** page shows account settings, the
+[applications you approved](#approve-an-application) and service limits. Personal
 **Credentials**, **Tokens**, and **Activity** require self-service to be enabled.
 If it is disabled, ask an administrator to manage your credentials/tokens.
-Account and password settings remain available.
+Account and password settings and your applications remain available.
 
 Press **Ctrl+K / ⌘K** to jump to pages, your available services and actions, your
 tokens, and the credential connections you have stored a token for. Search uses
@@ -425,6 +426,41 @@ without storing another copy in Git. Never register this host-agnostic helper fo
 all HTTPS hosts: URL scoping prevents offering your Broker token elsewhere.
 Updating the saved invocation token affects later Git commands. Git `store` and
 `erase` do not change the Agent Access token file.
+
+## Approve an application
+
+Your operator can register an application, such as a job runner, that works
+with the Broker on your behalf. Instead of asking you for a token, the
+application sends your browser to the Broker the first time it needs access.
+You do not need self-service or permission to issue tokens: the application
+obtains its own short-lived tokens, and you never hold them.
+
+1. Sign in if the Broker asks you to. You return to the request afterwards.
+2. The page names the application, the access level it will have and the
+   account you are signed in as. **Read-only** means it can use only actions
+   classified as reads; **Read and write** means it can also make changes. In
+   both cases it stays within what you are already allowed to do. An
+   administrator sets the level; you cannot change it on this page.
+3. If the account is not yours, choose **Use a different account** and sign in
+   again; the request stays open.
+4. Choose **Approve** to connect the application, or **Cancel** to decline. Both
+   return you to the application.
+
+A request is valid for 10 minutes and can be answered once. After that the page
+says **This request is no longer valid**; go back to the application and start
+again. When you may not connect the application, the page says why, for example
+that an administrator disabled your access for it, and offers only the way back
+to the application.
+
+**Account > Applications** lists the applications you approved, with their
+access level, status, when each was connected and last used, and how many
+tokens each currently holds. Those tokens are not listed under **Tokens**.
+Choose **Remove** to end an application's access at once: every token it holds
+for you stops working, and it must ask for your approval again. The same list
+and removal are available to a `user_manage` client through the
+[application access routes](applications.md#managing-access). An
+administrator can also make your access for one application read-only, disable
+it or remove it.
 
 ## Rotate, pause, and revoke
 

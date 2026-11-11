@@ -71,7 +71,8 @@ export function useAuthActions() {
       invalidate.portal();
     }
 
-    async function logout() {
+    /** Signs out. `stay` keeps the current page, which then asks for sign-in and returns to itself. */
+    async function logout({ stay = false }: { stay?: boolean } = {}) {
       try {
         await brokerApi.logout(session);
       } catch {
@@ -82,7 +83,7 @@ export function useAuthActions() {
       clearPortalData();
       setModal(null);
       setSignInNotice(null);
-      navigate(ROUTE.root);
+      if (!stay) navigate(ROUTE.root);
       void invalidate.session();
     }
 

@@ -5,15 +5,17 @@ import { useSession } from "../../app/session";
 import { useModal } from "../../app/modal";
 import { AdminButton, AdminForm, AdminOnly } from "../../components/admin-access";
 import { FormError } from "../../components/form";
-import { useIdentityAccess, useIdentityBindings, useIdentityToken } from "../../data/queries";
+import { useAdminApplicationAccess, useIdentityAccess, useIdentityBindings, useIdentityToken } from "../../data/queries";
+import { applicationAccessName, applicationAccessState, applicationLevelSummary, liveTokenSummary } from "../../lib/applications";
 import { canWriteAdmin } from "../../lib/capabilities";
 import { errorMessage } from "../../lib/helpers";
 import { validIdentityUsername } from "../../lib/identity-access";
 import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
-import type { IdentityPathSettings, IdentityTokenMetadata, PrincipalUsernameBinding } from "../../types";
-import { Badge, Checkbox, ErrorState, Input, Select, SettingsRow, SettingsSection, SkeletonBlock, Switch, Time, useToast } from "../../workbench";
+import type { ApplicationAccess, IdentityPathSettings, IdentityTokenMetadata, PrincipalUsernameBinding } from "../../types";
+import { Badge, Button, Checkbox, ErrorState, Input, Select, SettingsRow, SettingsSection, SkeletonBlock, Switch, Time, useToast } from "../../workbench";
 
 const conflictMessage = "Identity settings changed. Review the refreshed state before trying again.";
+const applicationConflictMessage = "Application access changed. Review the refreshed state before trying again.";
 
 export function IdentityAccessSection({ principalId, principalActive }: { principalId: string; principalActive: boolean }) {
   const { session, attempt } = useSession();
@@ -65,7 +67,7 @@ export function IdentityAccessSection({ principalId, principalActive }: { princi
   );
 }
 
-/** The identity token, always first and never deletable, then each username binding. */
+/** The identity token, always first and never deletable, then each username binding and each application the person approved. */
 function AccessPaths({ principalId, paused }: { principalId: string; paused?: boolean | undefined }) {
   const { session, attempt } = useSession();
   const writable = canWriteAdmin(session);
@@ -74,6 +76,7 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
   const toast = useToast();
   const tokenQuery = useIdentityToken(principalId);
   const bindingsQuery = useIdentityBindings(principalId);
+  const applicationsQuery = useAdminApplicationAccess(principalId);
   const addHeading = useId();
   const addDescription = useId();
   const [namespace, setNamespace] = useState("");
@@ -83,7 +86,8 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
   const [error, setError] = useState<string | null>(null);
   const token = tokenQuery.data;
   const data = bindingsQuery.data;
-  const busy = pending !== null || tokenQuery.isFetching || bindingsQuery.isFetching;
+  const applications = applicationsQuery.data;
+  const busy = pending !== null || tokenQuery.isFetching || bindingsQuery.isFetching || applicationsQuery.isFetching;
   const namespaceAvailable = data?.configuredNamespaces.some((entry) => entry.namespace === namespace) ?? false;
   const usernameInvalid = username.length > 0 && !validIdentityUsername(username);
 
@@ -134,7 +138,30 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
     }
   }
 
-  const loadFailure = tokenQuery.isError ? tokenQuery : bindingsQuery.isError ? bindingsQuery : null;
+  async function mutateApplication(action: "update" | "delete", access: ApplicationAccess, change?: IdentityPathSettings) {
+    setPending(access.accessId);
+    setError(null);
+    try {
+      await attempt<unknown>((current) => action === "delete"
+        ? brokerApi.adminRemoveApplicationAccess(current, principalId, access.accessId, access.version)
+        : brokerApi.adminUpdateApplicationAccess(current, principalId, access.accessId, { ...change, expectedVersion: access.version }));
+      toast(action === "delete" ? "Application access removed" : "Application access updated", { tone: "success" });
+      await applicationsQuery.refetch();
+    } catch (failure) {
+      // A stale version, or an access that is already gone: show the current rows.
+      if (failure instanceof ApiError && (failure.status === 409 || failure.status === 404)) {
+        await applicationsQuery.refetch();
+        // A fresh version needs a fresh deliberate action, including a fresh removal confirmation.
+        if (action === "delete") closeModal();
+        setError(failure.status === 409 ? applicationConflictMessage : errorMessage(failure));
+      } else if (action === "delete") throw failure;
+      else setError(errorMessage(failure));
+    } finally {
+      setPending(null);
+    }
+  }
+
+  const loadFailure = tokenQuery.isError ? tokenQuery : bindingsQuery.isError ? bindingsQuery : applicationsQuery.isError ? applicationsQuery : null;
   return (
     <div className="mt-6">
       <h3 className="wb-settings-sec-title">Access paths</h3>
@@ -143,8 +170,14 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
         setting ends the path’s open MCP sessions.
       </p>
       <p className="pt-prose mt-2">Usernames match exactly, including case. Disabled bindings reserve their names. To rename or reassign a name, delete its binding and create a new one.</p>
+      {applications?.length ? (
+        <p className="pt-prose mt-2">
+          An application the person approved obtains its own tokens for them. Its Read-only setting only narrows the application’s level, and changing a setting or removing the
+          access ends the tokens it holds at once.
+        </p>
+      ) : null}
       {paused ? <p className="pt-prose mt-2">The shared identity pause currently blocks every access path.</p> : null}
-      {loadFailure ? <ErrorState title="Couldn’t load access paths" error={loadFailure.error} onRetry={() => void loadFailure.refetch()} retrying={loadFailure.isFetching} /> : token && data ? (
+      {loadFailure ? <ErrorState title="Couldn’t load access paths" error={loadFailure.error} onRetry={() => void loadFailure.refetch()} retrying={loadFailure.isFetching} /> : token && data && applications ? (
         <>
           <div className="wb-table-card overflow-x-auto mt-3">
             <table className="wb-table" aria-label="Access paths">
@@ -204,6 +237,24 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
                     </tr>
                   );
                 })}
+                {applications.map((access) => (
+                  <ApplicationAccessRow
+                    key={access.accessId}
+                    access={access}
+                    writable={writable}
+                    busy={busy}
+                    onChange={(change) => void mutateApplication("update", access, change)}
+                    onRemove={() => confirm({
+                      title: "Remove application access?",
+                      body: access.connected
+                        ? `Remove ${applicationAccessName(access)} for this person? This ends its access at once: every token it holds for them stops working. They can connect it again later.`
+                        : `Remove ${applicationAccessName(access)} for this person? It is not connected; this clears the settings kept for it, so a later connection starts afresh.`,
+                      confirmLabel: "Remove access",
+                      tone: "danger",
+                      onConfirm: () => mutateApplication("delete", access)
+                    })}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -234,6 +285,53 @@ function AccessPaths({ principalId, paused }: { principalId: string; paused?: bo
         </>
       ) : <SkeletonBlock lines={3} />}
     </div>
+  );
+}
+
+/**
+ * One application the person approved. Read-only only narrows: when the
+ * application's level is read-only the row is read-only whatever its own
+ * setting, so that is shown as fixed. A row that is not connected was kept
+ * for its settings, which stay editable; removing it clears them.
+ */
+export function ApplicationAccessRow({ access, writable, busy, onChange, onRemove }: {
+  access: ApplicationAccess;
+  writable: boolean;
+  busy: boolean;
+  onChange: (change: IdentityPathSettings) => void;
+  onRemove: () => void;
+}) {
+  const name = applicationAccessName(access);
+  const state = applicationAccessState(access);
+  return (
+    <tr>
+      <th scope="row" className="pt-identity-path">
+        <span className={access.applicationName === null ? "pt-identity-path-name wb-num" : "pt-identity-path-name"}>{name}</span>
+        <span className="wb-small wb-muted">Application · {applicationLevelSummary(access.connect)} · {liveTokenSummary(access.liveTokenCount)}</span>
+      </th>
+      <td><Badge tone={state.tone}>{state.label}</Badge></td>
+      <td>
+        <PathSetting writable={writable} label={`Application ${name} enabled`} checked={access.enabled} on="Enabled" off="Disabled" disabled={busy} onChange={(enabled) => onChange({ enabled })} />
+      </td>
+      <td>
+        {access.connect === "read_only" ? (
+          <span className="pt-identity-path">
+            <span>Read-only</span>
+            <span className="wb-small wb-muted">Fixed by the application’s level</span>
+          </span>
+        ) : (
+          <PathSetting writable={writable} label={`Application ${name} read-only`} checked={access.readOnly} on="Read-only" off="Full access" disabled={busy} onChange={(readOnly) => onChange({ readOnly })} />
+        )}
+      </td>
+      <td>{access.version}</td>
+      <td className="wb-cell-actions">
+        {writable ? (
+          <div className="flex justify-end gap-1">
+            <Button size="sm" variant="danger-ghost" disabled={busy} aria-label={`Remove application ${name}`} onClick={onRemove}>Remove</Button>
+          </div>
+        ) : null}
+      </td>
+    </tr>
   );
 }
 
