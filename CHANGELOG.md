@@ -6,6 +6,16 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Application access adds managed-store migration `037_application_access`.**
+  Back up first and upgrade Broker and CLI together; rollback requires the
+  matching pre-migration database and binary. The migration changes no existing
+  row. The runtime catalog gains the `account_management` route access for the
+  new personal routes, listed only while an application is registered, which an
+  older CLI cannot parse. Downstream code matching `ManagedStoreError` or
+  `RouteAccess` exhaustively must handle the new variants, and `BrokerConfig`
+  has a new `applications` field. See
+  [upgrade and rollback](docs/operator-guide.md#upgrade-and-rollback).
+
 - **Microsoft enrollment adds managed-store migration `036_microsoft_enrollments`.**
   Back up first and upgrade Broker, CLI and portal together; rollback requires
   the matching pre-migration database and binary. Existing principals are marked
@@ -175,6 +185,19 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Applications connect with OAuth instead of pasted tokens.** An operator
+  registers a client application in `[applications.<id>]`; a person approves it
+  once in their browser, and the application then obtains short-lived
+  `agent_invoke` tokens for them with the authorization-code flow (PKCE,
+  `client_secret_basic`, non-rotating refresh tokens, RFC 8414 metadata and
+  RFC 7009 revocation). Connecting needs neither self-service nor token-issuance
+  permission. The operator sets each application's level (`none`, `read_only`,
+  `read_write`); administrators make one person's access read-only, disable it
+  or remove it with `admin principals application-access` or the matching
+  routes, which ends its tokens at once. Application tokens are not listed
+  individually and are deleted 7 days after they end. See
+  [applications](docs/applications.md).
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to
   required Microsoft email, optional display name and access settings, with a

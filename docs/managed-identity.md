@@ -51,6 +51,9 @@ versions return distinguishable conflict errors; refresh state before making a
 new administrative decision. Metadata includes whether each namespace is
 available and the configured namespace/credential-transport choices, never
 caller credentials. See [management API](http-api.md#administrator-identity-access-and-bindings).
+A person's [application access](applications.md) is administered beside these
+paths with the same Enabled and Read-only settings, but is not a trusted
+identity path: the identity-access pause does not affect it.
 
 ## Access path controls
 

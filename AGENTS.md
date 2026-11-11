@@ -312,6 +312,49 @@ Token commit and completion audit belong to the cancellation-resistant mutation
 owner. A failed completion returns the existing audit-unavailable error without
 the secret while retaining the committed row; never retry issuance automatically.
 
+## Application access
+
+`docs/applications.md` is the contract for registered applications
+(`[applications.<id>]`, `applications_config.rs`,
+`managed_store/application_access.rs`, migration `037`, host
+`handlers/applications.rs` and `handlers/management/application_access.rs`).
+The wire contract is fixed for clients: metadata, authorization code with PKCE
+S256, `client_secret_basic`, non-rotating refresh tokens, revocation, and RFC
+6749 JSON errors on the token and revocation endpoints for every refusal,
+including those made before their handlers. In this repository "connection"
+means an outbound provider account; the inbound objects are an application and
+a person's application access.
+
+An application's token is an ordinary `agent_invoke` `broker_tokens` row, so
+every admission path works unchanged; never add an identity path or special
+admission for it. Its caveats are fixed at mint: the application's contexts
+and services, and `readOnly` when the level is `read_only` or the access is
+read-only. Per-person settings only narrow. Connecting is independent of
+self-service and of the agent-token issuance policy: the personal routes use
+`ManagementAccess::Account`, and consent requires a browser session with CSRF,
+never a bearer token.
+
+Approval, mint and refresh re-check inside their transaction that the
+application is registered and not `none`, the access is enabled, the person is
+an enabled human and the refresh token is not idle. Mint runs through the
+token-issuance reload fence in an owner that also writes the completion audit;
+a failed audit keeps the committed row, withholds the secret and is never
+retried. A settings change, removal, reconnect, refresh-token revocation or
+principal disable ends the access's live tokens in the same transaction; every
+actual settings change advances `version` once and a no-op writes nothing.
+Keep application-minted tokens out of the individual token lists (the access
+reports a live count), bounded per access and deleted 7 days after they end.
+`broker_tokens.application_access_id` is deliberately not a foreign key.
+
+Codes, refresh tokens and client secrets stay outside the `aab_` namespace and
+are never accepted as caller credentials. Store only keyed hashes of codes and
+refresh tokens and the hash of a request ID; keep them, verifiers, `state` and
+client secrets out of logs, audit, errors and `Debug`. Redirect URIs match
+exactly, and an unknown client or redirect URI gets an error page, never a
+redirect. Audit approval, denial, every mint, refusal, revocation and
+administrator change with the application ID. Never name a specific client
+product in code, tests or docs.
+
 ## Microsoft membership renewal
 
 `membership_renewal` keeps one encrypted Microsoft refresh-token record per
@@ -818,6 +861,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
+- `docs/applications.md`: registered client applications: registration and
+  levels, the OAuth authorization-server wire contract, consent routes,
+  personal and administrative management, limits, retention, audit and
+  security notes.
 - `docs/oauth.md`: delegated OAuth, production Google, GitLab and Atlassian
   dialects (including their administrator setup and scopes, and Atlassian's
   connection table, per-product registrations, quota and lifecycle), separate

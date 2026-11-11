@@ -957,6 +957,7 @@
             <li><b>Lifecycle.</b> User-issued tokens expire and can be paused or revoked. Revocation blocks new requests; prepared operations may finish.</li>
             <li><b>Storage.</b> Broker stores a keyed hash; the raw token is shown once.</li>
             <li><b>Policy updates.</b> Existing tokens remain subject to current grants. Their own restrictions are fixed at issuance.</li>
+            <li><b>Connected applications.</b> An operator-registered application can obtain short-lived <code>agent_invoke</code> tokens for a person who approved it in the portal, without the person issuing or holding a token. Administrators can make that access read-only, disable it or remove it.</li>
           </ul>
         </div>
       </div>

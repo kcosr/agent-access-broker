@@ -327,6 +327,35 @@ operations. Changing a path's settings ends its open MCP sessions; reinitialize
 MCP after an identity transition. Use [managed identity](managed-identity.md) for
 exact CLI commands, version checks and caller setup.
 
+## Review application access
+
+When the operator has registered [applications](applications.md), a person can
+approve one in their browser, and the application then obtains short-lived
+agent tokens for that person. Approving needs neither self-service nor
+permission to issue tokens, because the person never holds the tokens. The
+operator sets each application's level for everyone (`none`, `read_only` or
+`read_write`); you narrow or end one person's access:
+
+```bash
+agent-access admin principals application-access list alice
+agent-access admin principals application-access update alice ACCESS_ID --read-only true --expected-version 1
+agent-access admin principals application-access update alice ACCESS_ID --enabled false --expected-version 2
+agent-access admin principals application-access delete alice ACCESS_ID --expected-version 3
+```
+
+- **Read-only** limits the application's tokens for this person to actions
+  classified as reads, even when the application's level is `read_write`.
+- **Enabled** off stops the application for this person: it can no longer
+  refresh, and the person cannot connect it again until you enable it.
+- **Delete** removes the approval; the person may connect again later.
+
+Every change ends the tokens the application currently holds for that person,
+so it takes effect at once. The list shows how many tokens are live; they are
+not listed with the person's other tokens. An access whose application is no
+longer registered is shown as unavailable and mints nothing. Auditors can read
+the list. An application's tokens act within the person's grants, so review
+application access together with those grants.
+
 ## Enable personal OAuth connections
 
 For Gmail, GitLab (GitLab REST and GitLab Git gateways on one connection; see
@@ -707,7 +736,8 @@ person (see [revoking stored refresh tokens](operator-guide.md#revoking-stored-r
 
 Periodically review active administrators, auditors, service managers/assignments,
 service accounts and their owners, credential rights and expiry, enabled grants,
-resource-group membership, trusted username bindings and namespace availability,
+resource-group membership, connected applications and their per-person settings,
+trusted username bindings and namespace availability,
 shared identity-access pause state, each identity path's Enabled and Read-only
 settings, read-only classifications of granted imported actions, nonexpiring
 tokens, unused credentials,
@@ -719,6 +749,9 @@ For a departing user or suspected compromise:
 
 1. Disable the principal to deny its tokens immediately, then revoke affected
    tokens. Pause is temporary and preserves the disclosed token secret.
+   Disabling also ends, permanently, every token a connected application
+   holds for the principal; the applications cannot obtain new ones while the
+   principal stays disabled.
    Disabling also ends the principal's OAuth connections and, for GitLab,
    revokes their tokens in GitLab automatically. It deletes the stored
    Microsoft refresh token too, which Microsoft keeps honouring until its

@@ -387,6 +387,7 @@ and [changelog](CHANGELOG.md) when changing a deployment.
 | [Database](docs/database.md) | Storage, encryption, migrations, and keys |
 | [Providers](docs/providers.md) | Provider capabilities and individual contracts |
 | [OAuth](docs/oauth.md) | Supported delegated connections, consent, and recovery |
+| [Applications](docs/applications.md) | Registered client applications that obtain agent tokens for a person who approved them |
 | [Testing](docs/testing.md) | Offline suites and optional live-provider checks |
 | [Release readiness](docs/release-readiness.md) | Qualification, packaging, and deployment acceptance |
 

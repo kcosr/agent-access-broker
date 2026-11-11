@@ -63,7 +63,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `029_identity_access_path_controls`, `030_group_auto_enrollment`,
 `031_oidc_membership_renewal`, `032_imported_source_documents`,
 `033_agent_token_issuance`, `034_agent_token_issuance_contexts`,
-`035_imported_gateway_routes`, and `036_microsoft_enrollments` in order. The
+`035_imported_gateway_routes`, `036_microsoft_enrollments`, and
+`037_application_access` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -91,6 +92,9 @@ erDiagram
     PRINCIPALS ||--o{ PRINCIPAL_SERVICE_LIMITS : overrides
     PRINCIPALS ||--o{ BROWSER_SESSIONS : starts
     BROKER_TOKENS ||--o| BROWSER_SESSIONS : backs
+    PRINCIPALS ||--o{ APPLICATION_ACCESS : approves
+    APPLICATION_ACCESS ||--o{ APPLICATION_AUTHORIZATION_CODES : issues
+    APPLICATION_ACCESS ||--o{ BROKER_TOKENS : mints
     PRINCIPAL_LOGIN_METHODS ||--o| OIDC_MEMBERSHIP_REFRESH_STATE : refreshes
     PRINCIPAL_LOGIN_METHODS ||--o{ EXTERNAL_PRINCIPAL_GROUPS : receives
     EXTERNAL_GROUP_BINDINGS ||--o{ EXTERNAL_PRINCIPAL_GROUPS : contributes
@@ -126,6 +130,9 @@ erDiagram
 | `credential_secret_material` | Encrypted credential secret bytes. | `secret_ref`, `credential_id`, `secret_ciphertext`, `secret_nonce`, `key_id` |
 | `principal_login_methods` | Browser-login methods for managed principals. | `login_method_id`, `principal_id`, `method`, external subject fields, `status`, password hash metadata |
 | `pending_microsoft_enrollments` | Explicit tenant/email reservations for first Microsoft sign-in, separate from profile email and established methods. | `enrollment_id`, unique `principal_id`, unique (`tenant_id`, `match_email`), `revision`, create/update timestamps and actors |
+| `application_access` | One person's approval of one registered application; cascades on principal deletion. | `access_id`, unique (`principal_id`, `application_id`), `enabled`, `read_only`, `version`, nullable unique `refresh_token_hash`, `connected_at`, `last_used_at`, update metadata |
+| `application_authorization_requests` | Pending browser authorization requests: one use, 10 minutes, at most 1,000. | `request_sequence`, unique `request_hash`, `application_id`, `encrypted_payload`, `encryption_nonce`, `expires_at`, `consumed_at` |
+| `application_authorization_codes` | One-use authorization codes bound to client, redirect URI and PKCE challenge; cascade with their access. | `code_hash`, `access_id`, `application_id`, `redirect_uri`, `code_challenge`, `expires_at`, `consumed_at` |
 | `local_password_failures` | Failed local-password verifications and lockouts per principal and client source. | `principal_id`, `source`, `failed_attempts`, `last_failed_at`, `locked_until` |
 | `browser_sessions` | Browser cookie sessions backed by `user_manage` broker tokens. | `token_id`, `principal_id`, `login_method`, `login_method_id`, `auth_time` |
 | `resources` | Typed selector entries shared by grants and tokens. | `resource_id`, `resource_type`, `selector_kind`, `selector_value`, `display_name`, `allowed_execution_contexts_json`, `enabled`, `version`, actor metadata |
@@ -308,6 +315,44 @@ writes that existing shape only when `never` is explicitly requested and is an
 allowed option for that issuance surface. Issuance-policy configuration changes
 do not modify existing rows, and non-expiring tokens use the same revocation
 path as finite tokens.
+
+### Application access
+
+[Registered applications](applications.md) mint `agent_invoke` tokens for a
+person who approved them. Migration `037_application_access` adds three tables
+and the nullable `broker_tokens.application_access_id`, and changes no existing
+row.
+
+`application_access` holds one row per person and application. Its refresh
+token is stored only as the same keyed hash as broker tokens
+(`refresh_token_hash`), which is null between an approval and the
+application's first code exchange. Rows belong to humans (a trigger refuses
+other kinds) and their identity columns are immutable. `enabled`, `read_only`
+and `version` are the administrator's settings; `connected_at` and
+`last_used_at` date the refresh token's idle expiry.
+
+`application_authorization_requests` keeps the SHA-256 of a pending request's
+ID. The request's redirect URI, `state` and PKCE challenge are encrypted with
+AES-256-GCM under a key derived from the raw ID with the broker-token hash key,
+so the row cannot be read without the ID, which only the browser holds.
+`application_authorization_codes` keeps a code's keyed hash with the access,
+client, redirect URI and challenge it is bound to. Codes and refresh tokens use
+the prefixes `aac_` and `aar_`, outside the `aab_` token namespace, and no
+identity path resolves them.
+
+A token minted for an application is an ordinary `broker_tokens` row whose
+`application_access_id` names its access. The column is deliberately not a
+foreign key: tokens of a removed access keep the value, so they stay out of
+the token lists and are deleted by retention. The personal and administrative
+token lists select only rows where it is null; the access reports the count of
+its live tokens. The trigger `application_access_tokens_on_principal_disable`
+revokes a person's application-minted tokens whenever their status becomes
+`disabled`, on every path that changes it.
+
+Requests are deleted when used or expired, codes when expired, and
+application-minted token rows once expired or revoked for 7 days, each by the
+next authorization or token request. An older binary refuses the `037`
+ledger; rollback requires the matching pre-migration database and binary.
 
 ### Agent token issuance storage and upgrade
 
@@ -773,7 +818,12 @@ The managed store is stateful rather than append-only:
 - `agent_invoke` broker tokens are paused and resumed by nullable timestamps,
   while broker tokens and rights are permanently revoked by timestamps;
 - expired tokens, paused tokens, revoked tokens, expired rights, disabled
-  principals, and expired credentials are not automatically pruned;
+  principals, and expired credentials are not automatically pruned, except
+  that tokens an [application](#application-access) minted are deleted once
+  expired or revoked for 7 days;
+- removing an application access deletes its row, refresh-token hash and
+  codes and revokes its live tokens; used or expired authorization requests
+  and expired codes are deleted by the next authorization or token request;
 - credential deletion removes both metadata and encrypted material;
 - a pending OAuth revocation drops its encrypted tokens once each has a final
   outcome, and the revocation worker prunes the finished row 30 days later;

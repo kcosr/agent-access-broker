@@ -1501,6 +1501,17 @@ upgrade Broker, CLI and portal together. Older binaries reject the newer ledger;
 rollback requires the matching pre-migration database, configuration, keys and
 binary. Do not drop the new table/column or edit migration history.
 
+Migration `037_application_access` adds the tables behind
+[registered applications](applications.md) and the nullable
+`broker_tokens.application_access_id`. It changes no existing row, token or
+setting, and nothing uses it until an `[applications.<id>]` table is
+configured. Back up before startup with `auto_migrate = true` and upgrade
+Broker and CLI together: the runtime catalog gains the `account_management`
+route access, which an older CLI does not parse. Older binaries reject the
+newer ledger; rollback requires the matching pre-migration database,
+configuration, keys and binary. See
+[application access storage](database.md#application-access).
+
 Accepted HTTP gateway response declarations containing `*/*` or `type/*` require
 a Broker with [response media range support](http-gateway-setup.md#response-media-declarations),
 without another database migration. Older binaries cannot load any retained
@@ -2415,6 +2426,39 @@ SSH tunnel; hosted origins use HTTPS termination. Google reusable refresh materi
 survives transient failures with persisted cooldown; only a Google HTTP 429 is
 reported as `upstream_rate_limited`, while the cooldown after a 5xx or transport
 failure reports that failure's class. Invalid grants require owner reconnect. No Google credentials or account consent are provisioned by a build.
+
+## Application operations
+
+[Applications](applications.md) are registered in `[applications.<id>]` and
+loaded with their client secrets at startup and reload.
+
+- Create each client secret as 16 to 1,024 visible ASCII bytes, for example
+  `openssl rand -base64 48 | tr -d '\n'`, in a file only the Broker can read,
+  and give the same value to the application's operator out of band. It must
+  differ from every other application's secret and trusted caller credential.
+- Register the application's exact redirect URIs. Give its operator the
+  Broker's public origin; the application reads every endpoint from
+  `/.well-known/oauth-authorization-server`.
+- To rotate a secret, replace the file and reload; the old secret stops
+  working at once and refresh tokens are unaffected.
+- To stop an application for everyone, set `connect = "none"` or remove its
+  table and reload. People's access rows remain, mint nothing, and work again
+  with the same refresh tokens when the registration returns. Tokens already
+  minted run out within `access_token_ttl`; to end one person's tokens at once,
+  an administrator disables or removes that person's access.
+- A reload fences token requests: one admitted under the previous generation
+  answers `temporarily_unavailable` and the application retries.
+- The token, revocation and authorization endpoints share
+  `limits.auth_requests_per_source_per_minute` per client address. An
+  application that opens many agent sessions from one address may need a higher
+  value; a refused request answers `temporarily_unavailable`.
+- Refresh-token hashes, pending requests and codes are managed-store data and
+  are covered by its backups. Restoring an older backup can restore an access
+  a person or administrator had removed; review application access after a
+  restore.
+
+Audit records use the actions listed in
+[application audit](applications.md#audit).
 
 ## Imported service operations
 

@@ -1099,6 +1099,22 @@ authorization/CSRF, rollback, preflight refusal and committed-state retention
 after completion-audit failure. The API test
 `principal_creation_id_contract_projects_into_catalog_openapi_and_send` checks
 the same conditional input contract across all three projections.
+Application access is covered at three levels. Core
+`managed_store/application_access_tests.rs` exercises migration 037 from the
+previous schema, the request, code, refresh and revocation transactions, the
+settings version, the principal-disable trigger, idle expiry, the live-token
+bound, retention and that no raw secret reaches the database or `Debug`
+output; `lib_tests.rs` covers `[applications]` validation and client-secret
+loading. Host `tests/applications.rs` drives the authorization, token and
+revocation endpoints and the consent, personal and administrative routes
+through the router, including the RFC 6749 error contract for refusals made
+before the handlers, expired requests and codes, levels `none` and
+`read_only`, a person without self-service or issuance permission, reloads
+that remove and restore a registration, and a failed mint audit. CLI
+`tests/application_access.rs` runs the whole flow over HTTP against the real
+assembly, invokes a service with the minted token through the `agent-access`
+binary and administers the access with
+`admin principals application-access`.
 The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
 validated-email binding, claim fallback and refusals, immutable precedence,
 callback/admin/reload races and session rollback; no live Microsoft tenant is

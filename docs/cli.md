@@ -785,6 +785,22 @@ auditors; reveal and changes require the administrator role. See
 [managed identity](managed-identity.md) for lifecycle and
 [access path controls](managed-identity.md#access-path-controls).
 
+A person's access for [registered applications](applications.md) has one
+command group:
+
+| Command | Arguments |
+| --- | --- |
+| `admin principals application-access list` | `PRINCIPAL` |
+| `admin principals application-access update` | `PRINCIPAL ACCESS_ID [--enabled BOOL] [--read-only BOOL] --expected-version N` |
+| `admin principals application-access delete` | `PRINCIPAL ACCESS_ID --expected-version N` |
+
+`update` requires at least one of `--enabled` and `--read-only`, each taking
+`true` or `false`. Every actual change, and `delete`, ends the tokens the
+application holds for that person. Read the current version from `list` before
+a mutation; a stale one is refused with `version_conflict`. `list` permits
+auditors; changes require the administrator role. There is no command to
+connect an application: a person approves it in their own browser session.
+
 
 Administrative management of principals, rights, tokens, credentials, and
 policy, plus audit queries. Metadata reads also permit auditors; changes require global admin authority;
