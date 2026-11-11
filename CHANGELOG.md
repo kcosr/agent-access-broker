@@ -195,8 +195,10 @@ All notable changes to this project are documented in this file.
   permission. The operator sets each application's level (`none`, `read_only`,
   `read_write`); administrators make one person's access read-only, disable it
   or remove it with `admin principals application-access` or the matching
-  routes, which ends its tokens at once. Application tokens are not listed
-  individually and are deleted 7 days after they end. See
+  routes, which ends its tokens at once; a person or the application can end
+  the consent but not lift those restrictions. A reload or restart under a
+  narrower registration ends the tokens it no longer mints. Application tokens
+  are not listed individually and are deleted 7 days after they end. See
   [applications](docs/applications.md).
 
 - **Prepare Microsoft users by email.** The portal's **Create user** defaults to

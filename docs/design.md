@@ -1572,11 +1572,23 @@ secrets into each runtime generation beside the trusted callers
   and `readOnly` when the application's level is `read_only` or the access is
   read-only. The host runs it through the reload fence used for token issuance
   (`token_store_call_from_snapshot`), so the registration it was admitted with
-  is the current one, in an owner task that also writes the completion audit.
-  A failed audit withholds the committed token and is never retried.
+  is the current one, in an owner task that also writes the completion audit
+  and keeps the request's admission permit until it has finished, whether or
+  not the response waiter is still there. A failed audit withholds the
+  committed token and is never retried.
 - **Ending tokens.** A settings change, removal, reconnect or refresh-token
   revocation revokes the access's live tokens in its transaction; a database
-  trigger does the same when the person's status becomes `disabled`. Tokens
+  trigger does the same when the person's status becomes `disabled`. Startup,
+  and each reload under its mutation fence before the new generation is
+  published, revoke the live tokens the generation's registrations would no
+  longer mint, so an operator's narrowing never waits for token expiry.
+- **Restrictions outlive consent.** A disconnect by the person or the
+  application clears the refresh token but keeps a disabled or read-only row
+  for the next approval to reuse; only an administrator deletes it. The
+  settings version does not move for connecting or disconnecting.
+- **Current registration.** The decision and the code exchange check the
+  stored redirect URI against the fenced generation's registration, so nothing
+  is returned to an address removed at reload. Tokens
   carry `application_access_id`, which hides them from the individual token
   lists and selects them for deletion 7 days after they end.
 

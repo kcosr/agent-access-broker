@@ -2442,10 +2442,20 @@ loaded with their client secrets at startup and reload.
 - To rotate a secret, replace the file and reload; the old secret stops
   working at once and refresh tokens are unaffected.
 - To stop an application for everyone, set `connect = "none"` or remove its
-  table and reload. People's access rows remain, mint nothing, and work again
-  with the same refresh tokens when the registration returns. Tokens already
-  minted run out within `access_token_ttl`; to end one person's tokens at once,
-  an administrator disables or removes that person's access.
+  table and reload. The reload ends every token the application holds.
+  People's access rows remain, mint nothing, and work again with the same
+  refresh tokens when the registration returns.
+- Narrowing takes effect at the reload that admits it, and at startup.
+  Changing `connect` to `read_only` ends the application's write-capable
+  tokens; changing `allowed_execution_contexts` or `allowed_services` ends the
+  tokens minted with the previous lists. Clients obtain new tokens at their
+  next request, with their existing refresh tokens. Each reload or startup
+  that ended tokens writes one `applications.tokens.reconciled` audit record
+  per application with the count. A reload that cannot complete this step
+  fails with `config_admission_failed` and leaves the active generation
+  serving.
+- Removing a redirect URI invalidates the pending approval requests and
+  unexchanged codes issued for it.
 - A reload fences token requests: one admitted under the previous generation
   answers `temporarily_unavailable` and the application retries.
 - The token, revocation and authorization endpoints share

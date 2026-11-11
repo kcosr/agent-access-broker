@@ -347,10 +347,14 @@ agent-access admin principals application-access delete alice ACCESS_ID --expect
   classified as reads, even when the application's level is `read_write`.
 - **Enabled** off stops the application for this person: it can no longer
   refresh, and the person cannot connect it again until you enable it.
-- **Delete** removes the approval; the person may connect again later.
+- **Delete** removes the approval and its settings; the person may connect
+  again later, unrestricted.
 
 Every change ends the tokens the application currently holds for that person,
-so it takes effect at once. The list shows how many tokens are live; they are
+so it takes effect at once. A person can remove their own access, and the
+application can end it, but neither lifts your restriction: a disabled or
+read-only access stays in this list as not connected, and approving again
+reuses it with the same settings. The list shows how many tokens are live; they are
 not listed with the person's other tokens. An access whose application is no
 longer registered is shown as unavailable and mints nothing. Auditors can read
 the list. An application's tokens act within the person's grants, so review

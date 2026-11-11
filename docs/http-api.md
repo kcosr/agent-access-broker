@@ -3987,12 +3987,14 @@ envelope.
 | --- | --- | --- | --- |
 | GET | `/v1/applications/authorizations/{requestId}` | `applications.authorizations.inspect` | `{applicationId, applicationName, connect, readOnly, canConnect, denialReason, expiresAt}` |
 | POST | `/v1/applications/authorizations/{requestId}/decision` | `applications.authorizations.decide` | `{"decision":"approve"}` or `{"decision":"cancel"}`; `{decision, redirectTo}` |
-| GET | `/v1/applications/access` | `applications.access.list` | `{access: [...]}` |
+| GET | `/v1/applications/access` | `applications.access.list` | `{access: [...]}`, connected applications only |
 | DELETE | `/v1/applications/access/{accessId}` | `applications.access.remove` | `{removed: true}` |
 
 The two authorization routes additionally require a signed-in browser session
 and answer 403 `management_denied` to any bearer token. An unknown, used or
-expired request answers 404 `application_authorization_invalid`. A refused
+expired request answers 404 `application_authorization_invalid`, as does one
+whose application is no longer registered with the request's exact redirect
+URI, for an approval and a cancellation alike. A refused
 approval answers 403 `application_access_denied` with
 `details.denialReason` (`connecting_disabled`, `access_disabled`, `not_human` or
 `account_disabled`) and leaves the request pending. The decision's success audit
@@ -4030,7 +4032,19 @@ A stale version answers 409 `version_conflict`; an unknown access, or one owned
 by another principal, answers 404 `application_access_not_found`. Success audit
 targets are `{principal, accessId, applicationId, before, after}` with
 `{enabled, readOnly, version}` read inside the transaction (`after` is null on
-removal). The personal removal needs no version.
+removal). `connected` is false between an approval and the application's
+first code exchange and after a disconnect.
+
+The personal removal needs no version and applies only to a connected access;
+any other answers 404 `application_access_not_found`. It ends the consent (the
+refresh token and live tokens) and deletes the access unless an administrator
+disabled it or made it read-only. A restricted access is kept, disconnected,
+with its ID, settings and version, stays in the administrator's list with
+`connected: false`, and is reused by a later approval. The application's
+refresh-token revocation follows the same rule. `version` advances only for
+Enabled and Read-only changes, never for connecting or disconnecting. The
+personal removal's audit target carries `after: null` when the access was
+deleted and its kept settings otherwise.
 
 ## Administrator identity tokens
 

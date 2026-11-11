@@ -70,12 +70,25 @@ no group setting:
 | `read_only` | Every token is read-only. |
 | `read_write` | Tokens are limited only by the person's grants, unless an administrator made that person's access read-only. |
 
-A changed registration applies from the next reload. Tokens already minted
-keep the caveats and lifetime they were minted with until they expire or are
-ended; an administrator ends them at once by disabling or removing the
-person's access. Removing a registration keeps each person's access row, shown
-to administrators as unavailable; it mints nothing, and registering the same
-ID again makes the same refresh tokens work.
+A changed registration applies at startup and at the reload that admits it,
+to the tokens already minted as well. The Broker then ends every live token
+the registration would no longer mint:
+
+- all of the application's tokens when it is removed or its level becomes
+  `none`;
+- its write-capable tokens when its level becomes `read_only`;
+- every token whose execution contexts or services are not the
+  registration's current `allowed_execution_contexts` and `allowed_services`.
+
+Refresh tokens are unaffected, so the application obtains a token under the
+new registration at its next request and nobody reconnects; a later widening
+needs no reconnect either. A token that is merely narrower than the
+registration, or that has a different remaining lifetime, is left alone.
+Removing a registration keeps each person's access row, shown to
+administrators as unavailable; it mints nothing, and registering the same ID
+again makes the same refresh tokens work. A redirect URI removed from the
+registration is no longer used: pending approval requests and unexchanged
+codes for it become invalid.
 
 ## The flow
 
@@ -94,7 +107,9 @@ ID again makes the same refresh tokens work.
 
 Approving creates the person's access for that application. Approving again
 later (reconnecting) keeps the access and its administrator settings, ends
-every token minted through it, and replaces the refresh token.
+every token minted through it, and replaces the refresh token. Ending the
+consent, by the person or by the application, never lifts an administrator's
+restriction; see [managing access](#managing-access).
 
 ## Wire contract
 
@@ -197,8 +212,9 @@ the person to reconnect only when they want to continue.
 form field `token`. The answer is 200 whether or not the token was known.
 
 - An access token of this application: that token ends.
-- The refresh token: the person's access for this application is removed and
-  every token minted through it ends.
+- The refresh token: the person's consent for this application ends, with the
+  refresh token and every token minted through it. The person approves again
+  to reconnect.
 
 ## Limits and retention
 
@@ -214,6 +230,9 @@ form field `token`. The answer is 200 whether or not the token was known.
   or administrative token lists. The access shows how many are live. The rows
   are deleted once they have been expired or revoked for 7 days, by the next
   authorization or token request; audit records keep their token IDs.
+- An access that is neither connected nor restricted by an administrator,
+  such as an approval whose code was never exchanged, is deleted by the same
+  retention.
 
 ## What ends an application's tokens
 
@@ -225,10 +244,9 @@ Each of these ends the live tokens of the access at once:
 - the person connects the application again;
 - the application revokes its refresh token;
 - the person's account is disabled. Enabling the account again does not restore
-  the ended tokens; the application refreshes instead.
-
-Setting the level to `none` or removing the registration stops new tokens but
-does not end the ones already minted, which run out within `access_token_ttl`.
+  the ended tokens; the application refreshes instead;
+- a startup or reload under a registration that would no longer mint them, as
+  described under [registering an application](#registering-an-application).
 
 ## Managing access
 
@@ -251,9 +269,27 @@ agent-access admin principals application-access delete alice ACCESS_ID --expect
 
 **Enabled** and **Read-only** only narrow what the application's level allows.
 A disabled access cannot be refreshed or connected again until an
-administrator enables it; removing it lets the person connect afresh. Every
-actual settings change advances `version` once and ends the access's live
-tokens; a change that alters nothing writes nothing. See the
+administrator enables it. Every actual settings change advances `version` once
+and ends the access's live tokens; a change that alters nothing writes nothing.
+
+A person, and the application by revoking its refresh token, can end the
+consent but cannot remove an administrator's restriction. When they
+disconnect:
+
+- the refresh token and every live token end, and the access leaves the
+  person's own list, which holds only connected applications;
+- an access that is enabled and not read-only is deleted;
+- an access that is disabled or read-only is kept, disconnected, with its
+  settings and its ID. The administrator's list still shows it, with
+  `connected: false`. A later approval reuses it: a disabled access still
+  cannot be connected, and a read-only one stays read-only.
+
+Only an administrator's delete removes a restricted access, after which the
+person may connect afresh. `version` covers the Enabled and Read-only settings
+alone: connecting and disconnecting do not change it, so they never cause or
+hide a conflict with an administrator's edit. An edit to an access that was
+deleted answers not found, and a later approval creates a new access with a
+new ID, which a stale edit cannot reach. See the
 [HTTP API](http-api.md#application-access) for the routes and fields.
 
 ## The consent routes
@@ -286,7 +322,10 @@ always returns the application `error=access_denied`. A refused approval
 answers 403 `application_access_denied` with `details.denialReason` and leaves
 the request pending, so the person can still cancel back to the application.
 An unknown, used or expired request answers 404
-`application_authorization_invalid` on both routes.
+`application_authorization_invalid` on both routes. So does a request whose
+application is no longer registered with the request's exact redirect URI:
+neither an approval nor a cancellation returns the browser to an address the
+operator removed.
 
 ## Audit
 
@@ -294,8 +333,10 @@ An unknown, used or expired request answers 404
 | --- | --- |
 | `applications.authorizations.decide` | A person approves or cancels, or an approval is refused. |
 | `applications.token.issued` | Every minted token, with the grant type, access ID, token ID and caveats. |
-| `applications.token.refused` | A refused token request, including failed client authentication and every `invalid_grant`. |
-| `applications.token.revoked` | A revocation that ended a token or an access. |
+| `applications.authorize.refused` | A refused authorization request, with the application ID when the request named a registration. |
+| `applications.token.refused` | Every refused token or revocation request: failed client authentication, a malformed request, a missing or unsupported grant type, missing grant parameters, and every `invalid_grant`. The record carries a fixed reason and never a supplied value. |
+| `applications.token.revoked` | A revocation that ended a token or a consent. |
+| `applications.tokens.reconciled` | A startup or reload ended tokens the registration no longer mints: one record per application with the reason and the number of tokens. |
 | `applications.access.remove` | A person removes their own access. |
 | `admin.principals.application_access.patch`, `.delete` | An administrator changes or removes an access, with the settings before and after. |
 

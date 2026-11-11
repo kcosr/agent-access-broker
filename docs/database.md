@@ -326,7 +326,10 @@ row.
 `application_access` holds one row per person and application. Its refresh
 token is stored only as the same keyed hash as broker tokens
 (`refresh_token_hash`), which is null between an approval and the
-application's first code exchange. Rows belong to humans (a trigger refuses
+application's first code exchange and after a disconnect. A disconnect by the
+person or the application deletes the row only when it is enabled and not
+read-only; a restricted row stays, with a null hash, for a later approval to
+reuse, and only an administrator's removal deletes it. Rows belong to humans (a trigger refuses
 other kinds) and their identity columns are immutable. `enabled`, `read_only`
 and `version` are the administrator's settings; `connected_at` and
 `last_used_at` date the refresh token's idle expiry.
@@ -349,9 +352,12 @@ its live tokens. The trigger `application_access_tokens_on_principal_disable`
 revokes a person's application-minted tokens whenever their status becomes
 `disabled`, on every path that changes it.
 
-Requests are deleted when used or expired, codes when expired, and
-application-minted token rows once expired or revoked for 7 days, each by the
-next authorization or token request. An older binary refuses the `037`
+Requests are deleted when used or expired, codes when expired,
+application-minted token rows once expired or revoked for 7 days, and access
+rows that are neither connected, awaiting a code exchange nor restricted, each
+by the next authorization or token request. Startup and reload revoke the live
+tokens the current registrations no longer mint, with `revoked_by` set to
+`system:application_registration`. An older binary refuses the `037`
 ledger; rollback requires the matching pre-migration database and binary.
 
 ### Agent token issuance storage and upgrade

@@ -336,12 +336,28 @@ never a bearer token.
 
 Approval, mint and refresh re-check inside their transaction that the
 application is registered and not `none`, the access is enabled, the person is
-an enabled human and the refresh token is not idle. Mint runs through the
-token-issuance reload fence in an owner that also writes the completion audit;
-a failed audit keeps the committed row, withholds the secret and is never
-retried. A settings change, removal, reconnect, refresh-token revocation or
-principal disable ends the access's live tokens in the same transaction; every
-actual settings change advances `version` once and a no-op writes nothing.
+an enabled human and the refresh token is not idle. The decision (approve and
+cancel alike) and the code exchange also require the stored redirect URI to be
+registered still; never return a browser or a code to an address the fenced
+registration no longer lists. Mint and revocation run in owners that keep the
+request's admission permit through store completion and audit; mint also
+holds the token-issuance reload fence. A failed mint audit keeps the committed
+row, withholds the secret and is never retried. Audit every refusal after
+client authentication, and failed client authentication itself, with a fixed
+reason and no supplied value.
+
+A settings change, administrator removal, reconnect, disconnect or principal
+disable ends the access's live tokens in the same transaction; every actual
+settings change advances `version` once and a no-op writes nothing. Startup
+and every reload, under the mutation fence, end the live tokens the current
+registration would no longer mint (removed, `none`, `read_only` against a
+write-capable token, or different contexts or services) and audit one record
+per application; refresh tokens stay. A disconnect by the person or by the
+application's refresh-token revocation never lifts an administrator's
+restriction: it deletes only an enabled, not read-only row and otherwise keeps
+the row, disconnected, for the next approval to reuse. Only an administrator's
+delete removes a restricted row, the person's own list shows connected rows
+only, and connecting or disconnecting never moves `version`.
 Keep application-minted tokens out of the individual token lists (the access
 reports a live count), bounded per access and deleted 7 days after they end.
 `broker_tokens.application_access_id` is deliberately not a foreign key.
