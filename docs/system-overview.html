@@ -879,63 +879,74 @@
   <section id="unmanaged" class="wide">
     <div class="sec-head">
       <div><div class="num">06</div><h2>Unmanaged clients and tokens</h2></div>
-      <p>Clients authenticate with a user-issued Broker token. Direct clients use the configured default context; the illustrated path uses optional trusted ingress.</p>
+      <p>Clients use a manually issued Broker token or one obtained by an approved application. Both remain subject to the user's current grants.</p>
     </div>
     <div class="sec-body">
       <figure>
-        <svg viewBox="0 0 1060 170" role="img" aria-labelledby="f4t">
-          <title id="f4t">Token lifecycle for an unmanaged client from portal sign-in to broker evaluation</title>
+        <svg viewBox="0 0 1060 310" role="img" aria-labelledby="f4t" aria-describedby="f4d">
+          <title id="f4t">Manually issued and application-obtained tokens share the same Broker authorization</title>
+          <desc id="f4d">A user can issue a token in the portal and configure a client, or approve a registered application that obtains short-lived tokens. Both paths use agent_invoke tokens and the same context, grant and token-restriction checks.</desc>
           <defs>
             <marker id="arrow4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,1 L9,5 L0,9 z" class="d-head"/>
             </marker>
           </defs>
+
+          <!-- Manual token issuance and client setup -->
           <g>
-            <rect class="d-node" x="10" y="30" width="192" height="116" rx="6"/>
-            <text class="d-label" x="24" y="20">1 · SIGN IN</text>
+            <rect class="d-node" x="10" y="30" width="208" height="112" rx="6"/>
+            <text class="d-label" x="24" y="20">MANUAL SETUP</text>
             <text class="d-title" x="24" y="54">Portal</text>
-            <text class="d-small" x="24" y="76">Local or Microsoft sign-in</text>
-            <text class="d-small" x="24" y="96">management session</text>
+            <text class="d-small" x="24" y="78">Sign in and issue a token</text>
+            <text class="d-small" x="24" y="98">Choose limits and expiry</text>
           </g>
-          <path class="d-edge" d="M202 88 H228" marker-end="url(#arrow4)"/>
+          <path class="d-edge" d="M218 86 H258" marker-end="url(#arrow4)"/>
           <g>
-            <rect class="d-node" x="230" y="30" width="192" height="116" rx="6"/>
-            <text class="d-label" x="244" y="20">2 · ISSUE</text>
-            <text class="d-title" x="244" y="54">agent_invoke token</text>
-            <text class="d-small" x="244" y="76">allowed contexts (required)</text>
-            <text class="d-small" x="244" y="92">service / resource limits</text>
-            <text class="d-small" x="244" y="108">expiry, shown once</text>
-            <text class="d-small" x="244" y="124">stored only as HMAC</text>
+            <rect class="d-node" x="260" y="30" width="230" height="112" rx="6"/>
+            <text class="d-title" x="274" y="54">Client</text>
+            <text class="d-small" x="274" y="78">Configure the issued token</text>
+            <text class="d-small" x="274" y="98">CLI · MCP · gateways</text>
+            <text class="d-small" x="274" y="118">User handles the raw token</text>
           </g>
-          <path class="d-edge" d="M422 88 H448" marker-end="url(#arrow4)"/>
+
+          <!-- User consent lets a registered application obtain tokens -->
           <g>
-            <rect class="d-node" x="450" y="30" width="192" height="116" rx="6"/>
-            <text class="d-label" x="464" y="20">3 · CONFIGURE</text>
-            <text class="d-title" x="464" y="54">Client</text>
-            <text class="d-small" x="464" y="76">Cursor, Claude Code, CLI</text>
-            <text class="d-small" x="464" y="92">HTTP MCP or CLI</text>
-            <text class="d-small" x="464" y="108">bearer from environment</text>
+            <rect class="d-node" x="10" y="190" width="208" height="104" rx="6"/>
+            <text class="d-label" x="24" y="180">APPLICATION ACCESS</text>
+            <text class="d-title" x="24" y="214">User approval</text>
+            <text class="d-small" x="24" y="238">Sign in to Broker portal</text>
+            <text class="d-small" x="24" y="258">Approve registered application</text>
           </g>
-          <path class="d-edge" d="M642 88 H668" marker-end="url(#arrow4)"/>
+          <path class="d-edge" d="M218 242 H258" marker-end="url(#arrow4)"/>
           <g>
-            <rect class="d-group" x="670" y="30" width="192" height="116" rx="6"/>
-            <text class="d-label" x="684" y="20">4 · INGRESS</text>
-            <text class="d-title" x="684" y="54">Trusted ingress</text>
-            <text class="d-small" x="684" y="76">pinned-context listener</text>
-            <text class="d-small" x="684" y="92">forces context: workstation</text>
-            <text class="d-small" x="684" y="108">client value discarded</text>
+            <rect class="d-node-key" x="260" y="190" width="230" height="104" rx="6"/>
+            <text class="d-title" x="274" y="214">Connected application</text>
+            <text class="d-small" x="274" y="238">Obtains short-lived tokens</text>
+            <text class="d-small" x="274" y="258">User does not handle tokens</text>
           </g>
-          <path class="d-edge" d="M862 88 H888" marker-end="url(#arrow4)"/>
+
+          <!-- Both token paths share the same authorization -->
+          <path class="d-edge" d="M490 86 H530 V162"/>
+          <path class="d-edge" d="M490 242 H530 V162"/>
+          <circle class="d-dot" cx="530" cy="162" r="2.5"/>
+          <path class="d-edge" d="M530 162 H578" marker-end="url(#arrow4)"/>
           <g>
-            <rect class="d-broker" x="890" y="30" width="162" height="116" rx="6"/>
-            <text class="d-label d-label-accent" x="904" y="20">5 · EVALUATE</text>
-            <text class="d-title" x="904" y="54">Access Broker</text>
-            <text class="d-small" x="904" y="76">token lookup by HMAC</text>
-            <text class="d-small" x="904" y="92">context must be allowed</text>
-            <text class="d-small" x="904" y="108">by token and grant</text>
+            <rect class="d-node" x="580" y="106" width="220" height="112" rx="6"/>
+            <text class="d-title" x="594" y="130">agent_invoke token</text>
+            <text class="d-small" x="594" y="154">Allowed execution contexts</text>
+            <text class="d-small" x="594" y="174">Service / resource restrictions</text>
+            <text class="d-small" x="594" y="194">Expiry · stored as HMAC</text>
+          </g>
+          <path class="d-edge" d="M800 162 H848" marker-end="url(#arrow4)"/>
+          <g>
+            <rect class="d-broker" x="850" y="106" width="200" height="112" rx="6"/>
+            <text class="d-title" x="864" y="130">Access Broker</text>
+            <text class="d-small" x="864" y="154">Resolve token identity</text>
+            <text class="d-small" x="864" y="174">Enforce context and grants</text>
+            <text class="d-small" x="864" y="194">Apply token restrictions</text>
           </g>
         </svg>
-        <figcaption><b>Figure 3.</b> A token restricted to <code>internal</code> cannot authorize a <code>workstation</code> request. Direct clients use the Broker's configured default context.</figcaption>
+        <figcaption><b>Figure 3.</b> Two ways to obtain invocation tokens; the same authorization checks apply. Token contexts must match the resolved request context: the Broker's default for direct clients, or an approved context supplied by trusted ingress.</figcaption>
       </figure>
 
       <div class="cols2" style="margin-top:28px">
