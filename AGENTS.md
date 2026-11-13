@@ -41,7 +41,12 @@ actions and exposes typed wrappers for supported services.
   and profile spellings, and persisted import JSON are durable data contracts.
   Core golden tests freeze rows written by an earlier release; never regenerate
   them to make a refactor pass.
-- Update `README.md` for user-facing behavior, config, or workflow changes.
+- Keep `README.md` focused on project purpose, supported integrations, the access
+  model, getting started, and documentation navigation. Update it when those
+  entry points change. Put detailed behavior, configuration contracts, limits,
+  edge cases, and operational procedures in the relevant `docs/` guide or action
+  documentation; do not append feature-by-feature implementation notes to the
+  README. Link to the detailed source instead of duplicating it.
 - Service policy grants use the canonical plural `subjects` field everywhere;
   do not reintroduce singular grant `subject` config, API, CLI JSON, or store
   shapes unless an approved interface change explicitly changes the contract.
