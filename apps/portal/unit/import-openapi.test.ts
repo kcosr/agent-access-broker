@@ -43,7 +43,7 @@ describe("OpenAPI import configuration", () => {
 
   test.each(["url", "upload"] as const)("switching a %s draft to anonymous removes even an empty stored scheme", (source) => {
     const draft = { source, definitionUrl: "https://docs.example.test/api.json", definitionAuthKind: "bearer", definitionAuthHeader: "", securityScheme: "" };
-    const documentSettings = source === "upload" ? { definitionSource: "upload" } : { definitionUrl: draft.definitionUrl, definitionAuthKind: "bearer" };
+    const documentSettings: Record<string, string> = source === "upload" ? { definitionSource: "upload" } : { definitionUrl: draft.definitionUrl, definitionAuthKind: "bearer" };
     for (const securityScheme of ["", "apiKey"]) {
       const stored = { ...documentSettings, securityScheme };
       expect(openApiConnectionSettings(stored, true, draft, "anonymous")).toEqual(documentSettings);
