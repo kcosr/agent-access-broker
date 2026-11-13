@@ -96,6 +96,44 @@ fn both_formats_apply_effective_security_without_malformed_or_authenticated_fall
 }
 
 #[test]
+fn static_selection_ignores_unselected_security_alternatives_in_both_formats() {
+    for original in documents() {
+        let mut def = definition("https://api.example/api", "https://docs.example/spec.json");
+        if original.get("swagger").is_some() {
+            for binding in &mut def.execution_bindings {
+                binding.delivery = ImportedCredentialDelivery::Basic;
+            }
+        }
+        let baseline = discovered(original.clone(), &def);
+        assert!(baseline.unsupported_reason.is_none());
+        for alternatives in [
+            vec![json!({"access":[]}), json!({"oauth":vec!["scope";65]})],
+            vec![json!({"access":[]}), json!({"oauth":[""]})],
+            vec![json!({"access":[]}), json!(null)],
+            vec![json!({"access":[]}); 65],
+        ] {
+            let mut doc = original.clone();
+            doc["security"] = json!(alternatives);
+            let row = discovered(doc, &def);
+            assert!(
+                row.unsupported_reason.is_none(),
+                "{:?}",
+                row.unsupported_reason
+            );
+            assert_eq!(row.definition, baseline.definition);
+        }
+        // Anonymous admission still validates all alternatives, even beside {}.
+        let mut doc = original;
+        doc["security"] = json!([{}, {"oauth":vec!["scope";65]}]);
+        assert!(
+            discovered(doc, &anonymous_definition())
+                .unsupported_reason
+                .is_some()
+        );
+    }
+}
+
+#[test]
 fn anonymous_parameters_cannot_carry_declared_api_keys() {
     let def = anonymous_definition();
     for mut doc in documents() {

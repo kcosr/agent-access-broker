@@ -41,13 +41,23 @@ describe("OpenAPI import configuration", () => {
     expect(renderEditor(data)).toMatch(/<select[^>]*disabled=""[^>]*><option value="static">Static credential<\/option><option value="anonymous" selected="">Anonymous upstream/);
   });
 
+  test.each(["url", "upload"] as const)("switching a %s draft to anonymous removes even an empty stored scheme", (source) => {
+    const draft = { source, definitionUrl: "https://docs.example.test/api.json", definitionAuthKind: "bearer", definitionAuthHeader: "", securityScheme: "" };
+    const documentSettings = source === "upload" ? { definitionSource: "upload" } : { definitionUrl: draft.definitionUrl, definitionAuthKind: "bearer" };
+    for (const securityScheme of ["", "apiKey"]) {
+      const stored = { ...documentSettings, securityScheme };
+      expect(openApiConnectionSettings(stored, true, draft, "anonymous")).toEqual(documentSettings);
+      expect(openApiConnectionSettings(stored, false, draft, "anonymous")).toBe(stored);
+    }
+  });
+
   test("upload configuration excludes retained URL authentication drafts and preserves accepted settings", () => {
     const draft = { source: "upload" as const, definitionUrl: "https://docs.example.test/api.json", definitionAuthKind: "raw_header", definitionAuthHeader: "X-Document-Key", securityScheme: "basic" };
-    expect(openApiConnectionSettings(undefined, true, draft)).toEqual({ definitionSource: "upload", securityScheme: "basic" });
+    expect(openApiConnectionSettings(undefined, true, draft, "static")).toEqual({ definitionSource: "upload", securityScheme: "basic" });
     const stored = { definitionSource: "upload", securityScheme: "original" };
-    expect(openApiConnectionSettings(stored, false, draft)).toBe(stored);
-    expect(openApiConnectionSettings(stored, true, { ...draft, securityScheme: "original" })).toBe(stored);
-    expect(openApiConnectionSettings(stored, true, { ...draft, source: "url" })).toEqual({ definitionUrl: draft.definitionUrl, definitionAuthKind: "raw_header", definitionAuthHeader: "X-Document-Key", securityScheme: "basic" });
+    expect(openApiConnectionSettings(stored, false, draft, "static")).toBe(stored);
+    expect(openApiConnectionSettings(stored, true, { ...draft, securityScheme: "original" }, "static")).toBe(stored);
+    expect(openApiConnectionSettings(stored, true, { ...draft, source: "url" }, "static")).toEqual({ definitionUrl: draft.definitionUrl, definitionAuthKind: "raw_header", definitionAuthHeader: "X-Document-Key", securityScheme: "basic" });
   });
   test("retained uploaded documents expose a summary and no document URL or credential controls", () => {
     const data = fixture();
@@ -64,10 +74,10 @@ describe("OpenAPI import configuration", () => {
   });
   test("frozen label and limit edits preserve CLI-created settings with omitted defaults", () => {
     const stored = { definitionUrl: "https://docs.example.test/openapi.json", securityScheme: "apiKey" };
-    const settings = openApiConnectionSettings(stored, false, { source: "url", definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme });
+    const settings = openApiConnectionSettings(stored, false, { source: "url", definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme }, "static");
     expect(settings).toEqual(stored);
     expect(settings).not.toHaveProperty("definitionAuthKind");
-    expect(openApiConnectionSettings(stored, true, { source: "url", definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme })).toEqual(stored);
+    expect(openApiConnectionSettings(stored, true, { source: "url", definitionUrl: stored.definitionUrl, definitionAuthKind: "none", definitionAuthHeader: "", securityScheme: stored.securityScheme }, "static")).toEqual(stored);
     expect(renderEditor(fixture())).toContain("removes stored execution and discovery credentials");
   });
   test("public document onboarding separates API and document destinations and omits OAuth", () => {
@@ -179,7 +189,7 @@ describe("Swagger and Basic import presentation", () => {
     expect(html).toContain("Separate discovery Basic credential");
     expect(html).toContain("basicAuth · Authorization: Basic");
     expect(html).toContain("Credential delivery: Authorization: Basic");
-    expect(openApiConnectionSettings(undefined, true, { source: "url", definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", definitionAuthHeader: "X-Unused", securityScheme: "basicAuth" })).toEqual({ definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", securityScheme: "basicAuth" });
+    expect(openApiConnectionSettings(undefined, true, { source: "url", definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", definitionAuthHeader: "X-Unused", securityScheme: "basicAuth" }, "static")).toEqual({ definitionUrl: "https://docs.example.test/swagger.json", definitionAuthKind: "basic", securityScheme: "basicAuth" });
   });
   test("review shows source version, form encoding and empty response contracts without inferring read authority", () => {
     const data = fixture();

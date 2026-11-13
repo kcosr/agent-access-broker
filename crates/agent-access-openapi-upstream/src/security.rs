@@ -7,11 +7,45 @@ use crate::{
 use serde_json::Value;
 
 pub(crate) fn select(operation: &Operation, settings: &Settings) -> Result<Security, String> {
-    // Absence permits anonymous access. A present null (or another malformed
-    // value) does not: the readers retain the difference before normalization.
-    let requirements = operation
+    if settings.anonymous {
+        return select_anonymous(operation.security_requirements.as_ref());
+    }
+    let scheme = settings
+        .scheme
+        .as_ref()
+        .ok_or("select an execution security scheme, save the draft, and refresh discovery")?;
+    let security = operation
+        .security_schemes
+        .iter()
+        .find(|candidate| candidate.scheme() == Some(scheme.as_str()))
+        .ok_or("selected security scheme is missing or unsupported")?;
+    // Static selection depends only on the selected single-scheme alternative.
+    // Other alternatives must not invalidate an existing authenticated import.
+    if !operation
         .security_requirements
         .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|v| {
+            v.iter().any(|requirement| {
+                requirement.as_object().is_some_and(|map| {
+                    map.len() == 1
+                        && map
+                            .get(scheme)
+                            .and_then(Value::as_array)
+                            .is_some_and(Vec::is_empty)
+                })
+            })
+        })
+    {
+        return Err("operation security requires unsupported or combined credentials; a single selected Basic/bearer/header-key alternative is required".into());
+    }
+    Ok(security.clone())
+}
+
+fn select_anonymous(requirements: Option<&Value>) -> Result<Security, String> {
+    // Absence permits anonymous access. A present null (or another malformed
+    // value) does not: the readers retain the difference before normalization.
+    let requirements = requirements
         .map(|value| {
             value
                 .as_array()
@@ -38,39 +72,14 @@ pub(crate) fn select(operation: &Operation, settings: &Settings) -> Result<Secur
             }
         }
     }
-    if settings.anonymous {
-        if requirements.is_none_or(|v| {
-            v.is_empty()
-                || v.iter()
-                    .any(|v| v.as_object().is_some_and(|v| v.is_empty()))
-        }) {
-            return Ok(Security::Anonymous {});
-        }
-        return Err("operation security does not allow anonymous upstream access".into());
-    }
-    let scheme = settings
-        .scheme
-        .as_ref()
-        .ok_or("select an execution security scheme, save the draft, and refresh discovery")?;
-    let security = operation
-        .security_schemes
-        .iter()
-        .find(|candidate| candidate.scheme() == Some(scheme.as_str()))
-        .ok_or("selected security scheme is missing or unsupported")?;
-    if !requirements.is_some_and(|v| {
-        v.iter().any(|requirement| {
-            requirement.as_object().is_some_and(|map| {
-                map.len() == 1
-                    && map
-                        .get(scheme)
-                        .and_then(Value::as_array)
-                        .is_some_and(Vec::is_empty)
-            })
-        })
+    if requirements.is_none_or(|v| {
+        v.is_empty()
+            || v.iter()
+                .any(|v| v.as_object().is_some_and(|v| v.is_empty()))
     }) {
-        return Err("operation security requires unsupported or combined credentials; a single selected Basic/bearer/header-key alternative is required".into());
+        return Ok(Security::Anonymous {});
     }
-    Ok(security.clone())
+    Err("operation security does not allow anonymous upstream access".into())
 }
 
 /// An anonymous action cannot accept a declared API key as an ordinary input.

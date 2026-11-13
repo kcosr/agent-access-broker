@@ -251,8 +251,7 @@ All notable changes to this project are documented in this file.
   `[imports.gateway_bindings.<service>]` entries pin each service's Broker hosts
   and upstream endpoint. Gateway execution supports explicitly selected anonymous
   access with no execution bindings, or static Basic, bearer or header API-key
-  bindings. Existing MCP and OpenAPI actions/tools imports still require execution
-  credential bindings.
+  bindings. MCP imports require execution credential bindings.
   Gateway response declarations accept concrete media types and `*/*` or `type/*`
   ranges as review metadata while preserving raw upstream bytes and content type.
   Newly accepted wildcard plans require a compatible Broker; see

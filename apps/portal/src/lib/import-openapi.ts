@@ -33,10 +33,7 @@ export function gatewayIngressLabel(binding: ImportGatewayBinding): string {
 /** Preserve frozen settings exactly; anonymous execution never retains a static security scheme. */
 export function gatewayConnectionSettings(existing: Record<string, string> | undefined, mutable: boolean, draft: Parameters<typeof openApiConnectionSettings>[2], authentication: "anonymous" | "static"): Record<string, string> {
   if (existing && !mutable) return existing;
-  const selected = authentication === "anonymous" ? { ...draft, securityScheme: "" } : draft;
-  const settings = openApiConnectionSettings(existing, mutable, selected);
-  const { securityScheme: _scheme, ...withoutScheme } = settings;
-  return { ...(authentication === "anonymous" ? withoutScheme : settings), executionAuthentication: authentication };
+  return { ...openApiConnectionSettings(existing, mutable, draft, authentication), executionAuthentication: authentication };
 }
 
 export type OpenApiDocumentSource = "url" | "upload";
@@ -45,16 +42,19 @@ export function openApiDocumentSource(settings: Record<string, string> | undefin
   return settings?.definitionSource === "upload" ? "upload" : "url";
 }
 
-export function openApiConnectionSettings(existing: Record<string, string> | undefined, mutable: boolean, draft: { source: OpenApiDocumentSource; definitionUrl: string; definitionAuthKind: string; definitionAuthHeader: string; securityScheme: string }): Record<string, string> {
+export function openApiConnectionSettings(existing: Record<string, string> | undefined, mutable: boolean, draft: { source: OpenApiDocumentSource; definitionUrl: string; definitionAuthKind: string; definitionAuthHeader: string; securityScheme: string }, authentication: "anonymous" | "static"): Record<string, string> {
   // CLI-created services may omit defaults. Presentation and limit edits must
   // preserve a frozen definition exactly.
   const sameSource = draft.source === openApiDocumentSource(existing);
   const sameDocument = draft.source === "upload" || draft.definitionUrl.trim() === existing?.definitionUrl
     && draft.definitionAuthKind === (existing?.definitionAuthKind ?? "none")
     && draft.definitionAuthHeader.trim() === (existing?.definitionAuthHeader ?? "");
-  if (existing && (!mutable || sameSource && sameDocument && draft.securityScheme === (existing.securityScheme ?? ""))) return existing;
-  if (draft.source === "upload") return { definitionSource: "upload", ...(draft.securityScheme ? { securityScheme: draft.securityScheme } : {}) };
-  return { definitionUrl: draft.definitionUrl.trim(), definitionAuthKind: draft.definitionAuthKind, ...(draft.definitionAuthKind === "raw_header" ? { definitionAuthHeader: draft.definitionAuthHeader.trim() } : {}), ...(draft.securityScheme ? { securityScheme: draft.securityScheme } : {}) };
+  const securityScheme = authentication === "anonymous" ? "" : draft.securityScheme;
+  const sameScheme = securityScheme === (existing?.securityScheme ?? "")
+    && (authentication === "static" || !Object.hasOwn(existing ?? {}, "securityScheme"));
+  if (existing && (!mutable || sameSource && sameDocument && sameScheme)) return existing;
+  if (draft.source === "upload") return { definitionSource: "upload", ...(securityScheme ? { securityScheme } : {}) };
+  return { definitionUrl: draft.definitionUrl.trim(), definitionAuthKind: draft.definitionAuthKind, ...(draft.definitionAuthKind === "raw_header" ? { definitionAuthHeader: draft.definitionAuthHeader.trim() } : {}), ...(securityScheme ? { securityScheme } : {}) };
 }
 
 export function openApiSecuritySchemes(manifest?: ImportDiscovery): ImportSecurityScheme[] {

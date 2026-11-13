@@ -492,13 +492,13 @@ function OpenApiImportForm({
   const blocked = (!old && (!operatorEnabled || !availableKinds.includes(kind))) || (!anonymous && !shared && !personal) || Boolean(issues.binding) || unknownNewScheme || (affected.length > 0 && !confirmed) || (source === "upload" && !old && (documentFile.reading || Boolean(documentFile.error)));
 
   function definition(): ImportDefinition {
-    const draft = { source, definitionUrl, definitionAuthKind: documentAuth, definitionAuthHeader: documentHeader, securityScheme: anonymous ? "" : securityScheme };
+    const draft = { source, definitionUrl, definitionAuthKind: documentAuth, definitionAuthHeader: documentHeader, securityScheme };
     return {
       service: name.trim(),
       displayName: label.trim(),
       adapterKind: kind,
       endpoint: endpoint.trim(),
-      connectionSettings: gateway ? gatewayConnectionSettings(old?.connectionSettings, mutable, draft, authentication) : openApiConnectionSettings(old?.connectionSettings, mutable, draft),
+      connectionSettings: gateway ? gatewayConnectionSettings(old?.connectionSettings, mutable, draft, authentication) : openApiConnectionSettings(old?.connectionSettings, mutable, draft, authentication),
       executionBindings: bindings,
       discovery: { kind: source === "upload" || documentAuth === "none" ? "anonymous" : "slot" },
       transportAuth: false,
