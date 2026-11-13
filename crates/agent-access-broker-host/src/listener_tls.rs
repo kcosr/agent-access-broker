@@ -253,14 +253,24 @@ fn read_material(file: File, material: Material) -> Result<Zeroizing<Vec<u8>>, T
         .metadata()
         .map_err(|_| TlsMaterialError::Unavailable(material))?;
     validate_file(&before, material)?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    (&file)
-        .take(material.byte_limit() + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| TlsMaterialError::Unavailable(material))?;
-    if bytes.len() as u64 > material.byte_limit() {
-        return Err(TlsMaterialError::TooLarge(material));
+    // A fixed allocation prevents read_to_end growth from leaving private-key
+    // prefixes in freed, unwiped allocations. The extra byte detects overflow.
+    let mut bytes = Zeroizing::new(vec![0; (material.byte_limit() + 1) as usize]);
+    let mut length = 0;
+    loop {
+        match (&file).read(&mut bytes[length..]) {
+            Ok(0) => break,
+            Ok(read) => {
+                length += read;
+                if length == bytes.len() {
+                    return Err(TlsMaterialError::TooLarge(material));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(TlsMaterialError::Unavailable(material)),
+        }
     }
+    bytes.truncate(length);
     let after = file
         .metadata()
         .map_err(|_| TlsMaterialError::Unavailable(material))?;
@@ -310,7 +320,9 @@ fn pem_block(bytes: &[u8]) -> Result<PemBlock<'_>, ()> {
         .strip_prefix(b"-----BEGIN ")
         .and_then(|line| line.strip_suffix(b"-----"))
         .ok_or(())?;
-    let mut encoded = Zeroizing::new(Vec::new());
+    // Whitespace removal can only shrink this input, so extension never moves
+    // the allocation containing the private key's base64 representation.
+    let mut encoded = Zeroizing::new(Vec::with_capacity(bytes.len()));
     loop {
         if remaining.is_empty() {
             return Err(());

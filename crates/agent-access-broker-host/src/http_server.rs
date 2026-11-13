@@ -28,6 +28,7 @@ use tracing::instrument::WithSubscriber;
 
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_TLS_HANDSHAKES: usize = 64;
+const TLS_CAPACITY_WARNING_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Captures only the selected listener's current, already validated TLS
 /// identity. The identity stays fixed for the accepted connection; replacing
@@ -55,6 +56,7 @@ pub(crate) async fn serve_http(
     let _cancel_on_drop = connections.cancel.clone().drop_guard();
     let graceful = CancellationToken::new();
     let handshakes = Arc::new(Semaphore::new(MAX_TLS_HANDSHAKES));
+    let mut next_capacity_warning = tokio::time::Instant::now();
     let mut shutdown = pin!(shutdown);
     loop {
         tokio::select! {
@@ -67,7 +69,15 @@ pub(crate) async fn serve_http(
                         // Admission happens before a task is spawned. Saturation
                         // drops this socket; it never creates waiting tasks.
                         let Ok(permit) = handshakes.clone().try_acquire_owned() else {
-                            tracing::trace!(event = "tls_handshake_capacity_exhausted");
+                            let now = tokio::time::Instant::now();
+                            if now >= next_capacity_warning {
+                                tracing::warn!(
+                                    event = "tls_handshake_capacity_exhausted",
+                                    maxHandshakes = MAX_TLS_HANDSHAKES,
+                                    "TLS handshake capacity exhausted; rejecting new connections"
+                                );
+                                next_capacity_warning = now + TLS_CAPACITY_WARNING_INTERVAL;
+                            }
                             continue;
                         };
                         let acceptor = TlsAcceptor::from(tls());

@@ -547,11 +547,15 @@ The smoke covers the independent main/gateway HTTP and HTTPS combinations,
 TLS 1.2/1.3, HTTP/1.1 and HTTP/2 ALPN, issuer and hostname verification, route isolation,
 invalid TLS startup, occupied-listener failure, certificate-only rotation with
 unchanged TOML through signal and admin reload, rejected candidates preserving
-both identities, connections surviving rotation, bounded handshakes and shutdown.
+both identities, connections surviving rotation, bounded handshakes, throttled
+capacity warnings and shutdown.
 A managed browser-auth fixture checks the canonical HTTPS origin, Secure cookies
-and CSRF through HTTP requests; it does not render the portal in a browser.
-The smoke also invokes the fake service, uses HTTP MCP sessions, forwards Git
-requests to a synthetic upstream, and checks HTTP/2 stream cancellation.
+and CSRF over both HTTP/1.1 and HTTP/2; the HTTP/2 requests use `:authority`
+without `Host` and send the session and an unrelated cookie as separate fields.
+It does not render the portal in a browser. The smoke also invokes the fake
+service over both protocols, including an authenticated HTTP/2 POST without
+`Content-Length`, uses HTTP MCP sessions, forwards Git requests to a synthetic
+upstream, and checks HTTP/2 stream cancellation.
 This executable-level check is required because a Cargo test's development
 dependencies can enable HTTP/2 that a production dependency graph lacks.
 Host unit tests separately cover strict material loading, connection task

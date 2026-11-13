@@ -9,7 +9,7 @@ import test from "node:test";
 import { REQUIRED_RELEASE_CHECKS, validateQualification } from "./release-qualification.mjs";
 import { assertNoGitOverrides } from "./release-environment.mjs";
 import { assertQualificationSource, assertUnixSignalTestExecuted, parseQualificationArguments, qualificationOutputDirectory,
-  clearNextestJUnit, inspectNextestToolchain, MINIMUM_NEXTEST_VERSION, preserveNextestJUnit,
+  clearNextestJUnit, inspectNextestToolchain, inspectOpenSslToolchain, MINIMUM_NEXTEST_VERSION, preserveNextestJUnit,
   qualificationPlan, runQualification } from "./verify-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -24,6 +24,61 @@ const temporary = (t) => {
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 };
+
+test("OpenSSL preflight records its version and explains unavailable Unix installations", () => {
+  const env = { PATH: "/fixture/bin" };
+  const inspect = (output) => inspectOpenSslToolchain(root, {
+    platform: "linux", env,
+    run(command, args, options) {
+      assert.equal(command, "openssl");
+      assert.deepEqual(args, ["version"]);
+      assert.equal(options.cwd, root);
+      assert.equal(options.env, env);
+      assert.equal(options.timeout, 5_000);
+      if (output instanceof Error) throw output;
+      return output;
+    },
+  });
+  assert.equal(inspect("OpenSSL 3.5.5 27 Jan 2026\n"), "OpenSSL 3.5.5 27 Jan 2026");
+  for (const output of [new Error("ENOENT"), new Error("version command failed"),
+    new Error("ETIMEDOUT"), "\n"]) {
+    assert.throws(() => inspect(output), /OpenSSL is required.*install OpenSSL.*openssl version.*PATH/);
+  }
+  assert.equal(inspectOpenSslToolchain(root, { platform: "win32", run() {
+    assert.fail("Windows qualification must not require the Unix-only TLS prerequisite");
+  } }), null);
+});
+
+test("qualification checks and records OpenSSL before toolchain inspection or any gate", {
+  skip: process.platform === "win32" ? "OpenSSL is a Unix qualification prerequisite" : false,
+}, (t) => {
+  const directory = temporary(t);
+  const checkout = path.join(directory, "checkout");
+  const bin = path.join(directory, "bin");
+  mkdirSync(checkout);
+  mkdirSync(bin);
+  const git = (...args) => execFileSync("git", args, { cwd: checkout, stdio: "ignore" });
+  git("init");
+  writeFileSync(path.join(checkout, "source.txt"), "fixture intentionally has no Rust toolchain configuration\n");
+  git("add", "source.txt");
+  git("-c", "user.name=Qualification Test", "-c", "user.email=qualification@example.test", "commit", "-m", "fixture");
+  const openssl = path.join(bin, "openssl");
+  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
+  writeFileSync(openssl, `#!${process.execPath}\nprocess.exit(1);\n`, { mode: 0o700 });
+  const missingOutput = path.join(directory, "missing-evidence");
+  assert.throws(() => runQualification({ root: checkout, outputDir: missingOutput, env }), /OpenSSL is required.*install OpenSSL/);
+  const missing = JSON.parse(readFileSync(path.join(missingOutput, "qualification.json"), "utf8"));
+  assert.equal(missing.status, "failed");
+  assert.deepEqual(missing.checks, []);
+  assert.match(missing.error, /OpenSSL is required.*install OpenSSL/);
+
+  writeFileSync(openssl, `#!${process.execPath}\nconsole.log("OpenSSL fixture-version");\n`, { mode: 0o700 });
+  const recordedOutput = path.join(directory, "recorded-evidence");
+  assert.throws(() => runQualification({ root: checkout, outputDir: recordedOutput, env }), /rust-toolchain\.toml/);
+  const recorded = JSON.parse(readFileSync(path.join(recordedOutput, "qualification.json"), "utf8"));
+  assert.equal(recorded.prerequisites.opensslVersion, "OpenSSL fixture-version");
+  assert.deepEqual(recorded.checks, []);
+});
 
 test("nextest preflight records a supported version and explains missing or old installations", () => {
   const env = { PATH: "/fixture/bin" };

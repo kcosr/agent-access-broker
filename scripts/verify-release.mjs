@@ -19,6 +19,20 @@ const PROVENANCE_VARIABLES = ["AGENT_ACCESS_BUILD_COMMIT", "AGENT_ACCESS_BUILD_P
 const stamp = () => new Date().toISOString();
 export const MINIMUM_NEXTEST_VERSION = "0.9.150";
 
+export function inspectOpenSslToolchain(root, { platform = process.platform, env = process.env, run = execFileSync } = {}) {
+  if (platform === "win32") return null;
+  const required = "OpenSSL is required for the Unix listener-tls gate; install OpenSSL and ensure openssl version succeeds on PATH before running qualification";
+  let output;
+  try {
+    output = run("openssl", ["version"], {
+      cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5_000, maxBuffer: 16 * 1024,
+    }).trim();
+  } catch { throw new Error(required); }
+  if (!output) throw new Error(required);
+  return output;
+}
+
 export function inspectNextestToolchain(root, { cargo = "cargo", env = process.env, run = execFileSync } = {}) {
   const required = `cargo-nextest ${MINIMUM_NEXTEST_VERSION} or newer is required; install the tested version with cargo install --locked --version ${MINIMUM_NEXTEST_VERSION} cargo-nextest`;
   let output;
@@ -192,11 +206,14 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
     assertNoGitOverrides(baseEnv);
     report.commit = capture(root, "git", ["rev-parse", "HEAD"], baseEnv);
     assertQualificationSource(root, report.commit, baseEnv);
+    report.prerequisites = { opensslVersion: inspectOpenSslToolchain(root, { env: baseEnv }) };
     const toolchain = inspectLocalToolchain(root, { env: baseEnv });
     report.target = toolchain.host;
     const npmVersionCommand = npmCommand(process.platform, "--version");
-    report.prerequisites = JSON.parse(capture(root, "python3", ["-B", "scripts/release-prerequisites.py",
-      ...toolchain.cargoConfigs.filter((config) => config.selected).flatMap((config) => ["--cargo-config", config.path])], baseEnv));
+    report.prerequisites = { ...report.prerequisites,
+      ...JSON.parse(capture(root, "python3", ["-B", "scripts/release-prerequisites.py",
+        ...toolchain.cargoConfigs.filter((config) => config.selected).flatMap((config) => ["--cargo-config", config.path])], baseEnv)),
+    };
     report.toolchain = { ...toolchain, node: process.version,
       npm: capture(root, npmVersionCommand[0], npmVersionCommand.slice(1), baseEnv),
       python: capture(root, "python3", ["--version"], baseEnv),

@@ -656,6 +656,14 @@ async function listenerModes(material) {
           const session = await connectH2(running.public);
           try {
             check((await h2Request(session, running.public, "/v1/healthz")).status === 200, "HTTP/2 health must succeed");
+            // Normal HTTP/2 carries :authority without Host and frames its body
+            // without requiring Content-Length. Keep both absent in this POST.
+            const echo = await h2Request(session, running.public, "/v1/invoke/fake/echo", {
+              method: "POST", headers: { authorization: invocationAuth(running).Authorization },
+              body: { inputs: { project: "TEST", message: "HTTP/2 listener transport" } },
+            });
+            check(echo.status === 200 && json(echo).result?.message === "HTTP/2 listener transport",
+              "Authenticated invocation without Content-Length must succeed over HTTP/2");
             await mcpExchange(running, (path, init) => h2Request(session, running.public, path, {
               ...init, headers: Object.fromEntries(Object.entries(init.headers).map(([key, value]) => [key.toLowerCase(), value])),
             }));
@@ -792,16 +800,23 @@ async function transportAndRotation(material) {
       } finally { stalled.destroy(); }
     });
     await test("handshake concurrency cap rejects excess work and recovers", async () => {
+      const capacityWarnings = () => running.events.filter((event) => event.event === "tls_handshake_capacity_exhausted");
+      const warningsBefore = capacityWarnings().length;
       const stalled = await Promise.all(Array.from({ length: HANDSHAKE_CAPACITY }, () => tcp(running.public.port)));
       try {
         await delay(100);
         check(stalled.every((socket) => !socket.destroyed), "Capacity test must occupy all handshake slots");
-        const excess = await tcp(running.public.port);
-        try { await until(() => excess.destroyed, "Excess TLS handshake rejection", 1_500); }
-        finally { excess.destroy(); }
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const excess = await tcp(running.public.port);
+          try { await until(() => excess.destroyed, "Excess TLS handshake rejection", 1_500); }
+          finally { excess.destroy(); }
+        }
         check((await request(running.gateway, GIT_PATH, { headers: gatewayAuth(running) })).status === 200, "Public handshake saturation must not exhaust the gateway's separate budget");
         await until(() => stalled.every((socket) => socket.destroyed), "Bounded handshake release", HANDSHAKE_TIMEOUT + 3_000);
         check((await request(running.public, "/v1/healthz")).status === 200, "TLS listener must recover after handshake timeouts");
+        const warnings = capacityWarnings().slice(warningsBefore);
+        check(warnings.length === 1 && warnings[0].level === "WARN" && warnings[0].maxHandshakes === HANDSHAKE_CAPACITY,
+          "Repeated capacity rejection must emit exactly one throttled warning with the listener limit");
       } finally { for (const socket of stalled) socket.destroy(); }
     });
     await test("shutdown joins pending handshakes and active TLS streaming connections", async () => {
@@ -868,29 +883,42 @@ async function invalidStartups(material) {
 }
 
 async function browserContract(material) {
-  await test("HTTPS portal route, canonical origin, Secure cookie and CSRF", async () => {
-    const running = await start(await fixture(material, { publicTls: true, gateway: false, browser: true }));
-    try {
-      const page = await request(running.public, "/ui");
-      check(page.status === 200 && page.body.includes("Native TLS fixture"), "HTTPS listener must serve the portal route");
-      const body = { principalId: "admin", password: running.fixture.initialPassword, returnTo: "/ui" };
-      const wrongOrigin = await request(running.public, "/v1/auth/local/login", { method: "POST", headers: { Origin: "https://wrong.example.test" }, body });
-      check(wrongOrigin.status === 403, "Native TLS must preserve browser origin rejection");
-      const login = await request(running.public, "/v1/auth/local/login", { method: "POST", headers: { Origin: `https://${HOST}` }, body });
-      check(login.status === 200, "Browser login over native HTTPS must succeed");
-      const cookie = login.headers["set-cookie"]?.[0];
-      check(cookie?.includes("; Secure") && cookie.includes("HttpOnly") && cookie.includes("Path=/v1"), "HTTPS browser cookie must preserve Secure/HttpOnly/path attributes");
-      const sessionCookie = secret(cookie.split(";")[0]);
-      const csrf = secret(json(login).result.csrfToken);
-      const newPassword = secret(`fixture-updated-${randomBytes(18).toString("hex")}`);
-      const headers = { Cookie: sessionCookie, Origin: `https://${HOST}` };
-      const changeBody = { currentPassword: running.fixture.initialPassword, newPassword };
-      const refused = await request(running.public, "/v1/auth/local/password/change", { method: "POST", headers, body: changeBody });
-      check(refused.status === 403, "Cookie-authenticated mutation without CSRF must be rejected");
-      const changed = await request(running.public, "/v1/auth/local/password/change", { method: "POST", headers: { ...headers, "X-Agent-Access-CSRF": csrf }, body: changeBody });
-      check(changed.status === 200 && json(changed).result.passwordChangeRequired === false, "Cookie-authenticated mutation with CSRF must succeed over TLS");
-    } finally { await stop(running); }
-  });
+  for (const protocol of ["HTTP/1.1", "HTTP/2"]) {
+    await test(`HTTPS ${protocol} portal route, canonical origin, Secure cookie and CSRF`, async () => {
+      const running = await start(await fixture(material, { publicTls: true, gateway: false, browser: true }));
+      let session;
+      try {
+        if (protocol === "HTTP/2") session = await connectH2(running.public);
+        const send = (path, init) => session
+          ? h2Request(session, running.public, path, init)
+          : request(running.public, path, init);
+        const page = await send("/ui");
+        check(page.status === 200 && page.body.includes("Native TLS fixture"), "HTTPS listener must serve the portal route");
+        const body = { principalId: "admin", password: running.fixture.initialPassword, returnTo: "/ui" };
+        const wrongOrigin = await send("/v1/auth/local/login", { method: "POST", headers: { origin: "https://wrong.example.test" }, body });
+        check(wrongOrigin.status === 403, "Native TLS must preserve browser origin rejection");
+        const login = await send("/v1/auth/local/login", { method: "POST", headers: { origin: `https://${HOST}` }, body });
+        check(login.status === 200, "Browser login over native HTTPS must succeed");
+        const cookie = login.headers["set-cookie"]?.[0];
+        check(cookie?.includes("; Secure") && cookie.includes("HttpOnly") && cookie.includes("Path=/v1"), "HTTPS browser cookie must preserve Secure/HttpOnly/path attributes");
+        const sessionCookie = secret(cookie.split(";")[0]);
+        const csrf = secret(json(login).result.csrfToken);
+        const newPassword = secret(`fixture-updated-${randomBytes(18).toString("hex")}`);
+        // HTTP/2 permits separate cookie fields. Put the session second so a
+        // parser that reads only the first field cannot authenticate the write.
+        const headers = { cookie: session ? ["listener-unrelated=fixture", sessionCookie] : sessionCookie,
+          origin: `https://${HOST}` };
+        const changeBody = { currentPassword: running.fixture.initialPassword, newPassword };
+        const refused = await send("/v1/auth/local/password/change", { method: "POST", headers, body: changeBody });
+        check(refused.status === 403, "Cookie-authenticated mutation without CSRF must be rejected");
+        const changed = await send("/v1/auth/local/password/change", { method: "POST", headers: { ...headers, "x-agent-access-csrf": csrf }, body: changeBody });
+        check(changed.status === 200 && json(changed).result.passwordChangeRequired === false, "Cookie-authenticated mutation with CSRF must succeed over TLS");
+      } finally {
+        session?.destroy();
+        await stop(running);
+      }
+    });
+  }
 }
 
 async function cleanup() {
@@ -903,8 +931,8 @@ async function cleanup() {
   try {
     if (options?.output) {
       for (const [index, running] of [...children].entries()) {
-        const safeEvents = running.events.map(({ event, listener, address, generation, activeGeneration, reasonCode }) =>
-          ({ event, listener, address, generation, activeGeneration, reasonCode }));
+        const safeEvents = running.events.map(({ event, level, listener, address, generation, activeGeneration, reasonCode, maxHandshakes }) =>
+          ({ event, level, listener, address, generation, activeGeneration, reasonCode, maxHandshakes }));
         await writePrivate(join(options.output, `process-${index + 1}.json`), `${JSON.stringify({ exit: running.result, events: safeEvents }, null, 2)}\n`);
         if (report?.status === "failed") await writePrivate(join(options.output, `process-${index + 1}.log`), sanitized(running.log));
       }

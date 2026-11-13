@@ -583,6 +583,10 @@ deadline. A newly accepted socket is closed when capacity is full, without
 queuing another task. Successful handshakes release that capacity, so established
 HTTP/2 or MCP connections do not occupy handshake slots. Shutdown cancels pending
 handshakes and drains established connections through the normal bounded shutdown.
+Capacity is shared across all peers, including clients behind a proxy or NAT.
+The `tls_handshake_capacity_exhausted` warning reports rejections at most once
+per 30 seconds per listener. Use ingress network access and connection-rate
+controls when exposing listeners to untrusted clients.
 
 Replace the certificate and key files at their configured paths, then trigger
 [configuration reload](#config-reload-operations). Every reload reads both

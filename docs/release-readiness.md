@@ -65,6 +65,11 @@ checks the version and exercises table creation, insertion, and deletion, so
 required audit smoke coverage cannot silently skip on an older or feature-limited
 SQLite build.
 
+Unix qualification also requires the `openssl` executable on `PATH` for the
+native listener TLS gate. Preflight runs `openssl version` and records the
+version in `qualification.json` before any gate starts; install OpenSSL if
+that probe fails. The listener TLS gate is not applicable on Windows.
+
 The Rust test gate requires cargo-nextest 0.9.150 or newer. Install the tested
 version with `cargo install --locked --version 0.9.150 cargo-nextest`. Preflight
 records its version and fails with installation instructions when it is missing
@@ -94,7 +99,8 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 The output directory must be new or empty and outside the checkout. The driver
 runs the required standalone Rust, crate-boundary, public API, downstream
 consumer, portal build/unit/browser, script, documentation, changelog,
-sample-config, Unix signal, native release-provenance, and notice checks. It
+sample-config, Unix signal, native release-provenance, listener TLS, and notice
+checks. It
 writes `qualification.json`, per-gate logs, native Rust notices, and the downstream
 consumer evidence in `downstream-consumer/`. The Rust test gate preserves its
 JUnit report as `rust-tests.junit.xml` in the output directory and records its

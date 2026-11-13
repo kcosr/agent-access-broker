@@ -1085,15 +1085,16 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 
 The driver runs the required standalone Rust, crate-boundary, public API,
 downstream consumer, portal, script, documentation, changelog, sample-config,
-Unix signal, native release-provenance, and notice checks. It
+Unix signal, native release-provenance, listener TLS, and notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
 requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
 `contentless_delete`, the `nightly-2026-07-13` toolchain and `cargo-public-api`
 0.52.0 for the public API gate, cargo-nextest 0.9.150 or newer for the Rust
-test gate, and rejects Cargo target runners, including
-through configuration includes. The public API gate checks the candidate
+test gate, and `openssl` on `PATH` for Unix listener TLS. It records the
+`openssl version` result before any gate starts and rejects Cargo target runners,
+including through configuration includes. The public API gate checks the candidate
 against its own `api/` inventory; for a release on an existing compatible line,
 also review `git diff <previous-release-tag> -- api/`, where a patch release
 may not remove or change any line. See the
