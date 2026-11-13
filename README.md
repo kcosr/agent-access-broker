@@ -7,69 +7,15 @@ can use each action, which resources within a service it can affect, which
 execution contexts may use it, and whether it runs as the user or a shared service
 identity.
 
-Teams that run agent platforms can own the first layer of access control for
-their agents. The broker gives them one place to set and audit agent-specific
-policy across services, without relying solely on individual service owners to
-model each agent workflow. Service owners retain control of upstream permissions.
+Teams that run agent platforms can manage agent-specific policy across services
+in one place. Upstream account permissions and token scopes continue to apply;
+the broker adds restrictions, audit logging, rate limiting, and attribution.
 
-Agents can use individual user accounts or shared service accounts, with
-organization-level policy limiting permitted actions and supported resource
-scopes. Upstream permissions and token scopes continue to apply, while the broker
-adds further restrictions, audit logging, rate limiting, and attribution.
-[Invocation limits](docs/configuration.md#service-invocation-limits) combine
-per-caller allowances with optional shared service caps configured in TOML.
-Bounded waiting preserves each caller's request order and takes turns among
-eligible callers. The same caps apply to native, imported and command-backed
-services, and to Git gateway pack POSTs. Service describe commands expose
-invoke services' effective policy and live process-local admission estimates; see
-[live service limits](docs/http-api.md#live-service-limits).
-Imported services use the same TOML wait policy alongside their managed rate
-settings; see [import operator setup](docs/imported-services.md#operator-setup).
-
-This setup works best with organization-managed execution environments or network
-egress controls that limit direct access to upstream services. Through its
-trusted-caller integration, the broker can also receive verified execution context
-and, when configured, user identity from that infrastructure. An **execution
-context**, such as an internal workspace or external automation environment,
-helps determine permitted actions and resources. The agent cannot gain more
-access simply by claiming a different context or identity. Administrators can
-disable each trusted identity path or limit it to read actions without changing
-the person's grants; see [managed workspace identity](docs/managed-identity.md).
-
-Administrators separately control [agent token issuance](docs/roles.md#agent-token-issuance)
-for accounts and groups with a mode and explicit execution-context choices.
-Accounts can inherit group permission, resolved separately in each context, or
-use a Disabled, Read-only, or Write-capable override. Personal tokens require
-permission in every selected context; a mixed Read-only/Write-capable selection
-must be read-only. New contexts never expand saved permission automatically.
-A read-only token can **Follow current grants**, including future reads, while
-its stored restriction
-blocks writes. Changing issuance permission leaves existing tokens unchanged.
-
-The portal supports local account sign-in or optional
-[Microsoft Entra ID sign-in](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation)
-through OpenID Connect (OIDC), with Entra group mappings for access management.
-The portal's **Create user** defaults to
-[Microsoft email enrollment](docs/administrator-guide.md#microsoft-onboarding),
-with an optional display name and access settings. The Broker assigns a stable
-opaque principal ID; administrators can prepare groups and grants before first
-sign-in. Choose **Create a local account instead** to supply a username and set
-up local-password sign-in. Service accounts have their own creation flow with
-explicit IDs. The first matching validated Microsoft sign-in uses the prepared
-account without a further approval step or an Object ID lookup. Explicit
-enrollment is separate from profile email. Microsoft sign-in refreshes the display name and applies configured initial local groups
-once for accounts created after the enrollment migration. These memberships
-persist independently of Microsoft group evidence; unmatched JIT creation still
-requires an eligible mapped group.
-Optional [membership renewal](docs/operator-guide.md#microsoft-membership-renewal)
-keeps group-derived access working after one sign-in while people and their
-agents use the Broker.
-
-The [gateway SDK](docs/provider-sdk.md#gateway-protocols) also supports compiled
-protocol modules for native HTTP clients. The shipped Git smart HTTP gateway uses
-that contract; assemblies explicitly select its registration. The host retains
-identity, policy, credentials, admission, transfer limits and audit ownership.
-See [assembly selection](docs/downstream-assembly.md#selecting-modules).
+The broker works best with organization-managed execution environments or network
+egress controls that limit direct access to upstream services. Its trusted-caller
+integration can receive verified execution context and user identity from that
+infrastructure. An execution context, such as an internal workspace or external
+automation environment, helps determine permitted actions and resources.
 
 ## Supported integrations
 
@@ -85,151 +31,18 @@ Native integrations pair action permissions with the following resource controls
 | [Git HTTP gateway](docs/git-http-gateway.md) | Git fetch and push | Repositories and namespaces |
 | [Gmail](docs/providers-gmail.md) | Mail reads and management through Google OAuth | Actions within the connected user's mailbox; no resource filters |
 
-Confluence space keys preserve their exact case across listing, resource grants,
-and content access, including mixed-case, digit-leading, and single-character
-ordinary keys as well as personal-space keys.
-
-Jira’s separately grantable [`project.list`](docs/providers-jira.md#live-project-listing)
-action lists visible live projects within effective project grants. It needs only
-pagination inputs, supports service and personal credentials including OAuth,
-and returns confidential continuations when more scanning remains.
-[`project.view`](docs/providers-jira.md#project-details-and-searchable-fields)
-then describes an authorized project and its searchable fields. Use the returned
-stable JQL references, such as `cf[12345]`, in the existing issue search action;
-supported operators come from both Jira and Broker's bounded grammar. Project
-view and search have independent grants.
-
-Jira search supports direct-parent filters such as `parent = PROJ-100` and
-`parent IN (PROJ-100, 10001)` within authorized child projects. Parent references
-can be keys or numeric IDs; they do not trigger parent lookups or add parent
-metadata to results. See [parent filters](docs/providers-jira.md#direct-parent-filters).
-
-Jira and Confluence searches accept `!=` and `NOT IN` for project/space and
-issue-key/content-ID filters. Jira supports `!~` text negation on `summary`,
-`description`, and compatible custom fields; Confluence supports it on `title`
-and `text` for pages and blogs. Omit `projects` or `spaces` to search effective
-access, including token restrictions and policy exclusions; wildcard scope
-entries are unsupported. Caller exclusions only filter that authorized search.
-Jira queries containing only project/issue-key/parent exclusions, text negation,
-or a combination of those clauses need a finite project scope or an additional filter
-such as `updated >= -7d`. See the
-[JQL](docs/providers-jira.md#search-and-jql) and
-[CQL](docs/providers-confluence.md#search-and-cql) contracts.
-
-Jira and Confluence attachment downloads allow all media types by default within
-the caller's authorized resources and byte limits. Operators can set independent
-download allow and deny patterns, including `image/*` or `*/*`; uploads retain
-their separate exact allowlist. See [attachment media policy](docs/configuration.md#jira-and-confluence-attachment-media-policy).
-
-Jira [Markdown writes](docs/providers-jira.md#normalized-rich-content-writes)
-preserve inline code and safe links while removing incompatible bold, italic,
-and strikethrough formatting from code fragments.
-
-Native action schemas expose input fields directly. Field descriptions explain
-locator alternatives, paired content fields, content
-formats and mode requirements, and provider denials name the fields that need
-correction. See [Jira input arguments](docs/providers-jira.md#input-arguments),
-[Confluence input arguments](docs/providers-confluence.md#input-arguments),
-[GitLab input arguments](docs/providers-gitlab-rest.md#input-arguments),
-[CloudBees CI input arguments](docs/providers-cloudbees-ci.md#input-arguments) and
-[Teams input arguments](docs/providers-teams.md#input-arguments).
-
-Jira issue views include [resolution, dates, components, versions and status
-category](docs/providers-jira.md#standard-context), plus [supported custom-field
-values and Jira display names](docs/providers-jira.md#custom-fields), with typed
-JSON and readable Markdown. They can also include [linked issue details](docs/providers-jira.md#issue-links)
-and [the direct parent and subtasks](docs/providers-jira.md#parent-and-subtasks)
-when effective `issue.view` access covers every project in the selected credential
-mode. Gaps in that coverage withhold all three reference fields. Subtasks are
-not a complete list of epic children or descendants.
-
-Use `jira issue view PROJ-123 --include-comments` to read an issue with a page of
-full comment and reply bodies in chronological order. Comment lists remain
-metadata-only unless `--include-bodies` is supplied; follow the returned
-continuation to read longer discussions in batches, or use `comment view` for
-selected individual bodies. Included bodies require the existing comment-read
-authority in the same credential mode. See [comment reads](docs/providers-jira.md#reading-comment-bodies).
-
-GitLab's [live project listing](docs/providers-gitlab-rest.md#repository-discovery-and-content-search)
-action, `project.list`, returns authorized repositories, including namespace-granted
-projects without individual Broker resource registrations. It accepts only pagination,
-includes archived projects, and is separately grantable from `project.search`
-and object reads. `project.search` adds optional project filters; content actions
-search issues, merge requests, code, commits, project wikis, or comments. Each
-category is separately grantable. Omit `engine` to use the service's configured
-default. Engine and instance-wide availability are operator configured; basic code, commit, wiki,
-and comment search require a project. Search pages report bounded progress and
-incomplete retrieval coverage explicitly, and may return no items with a
-continuation.
-Repository discovery accepts GitLab's defaulted keyset pagination links while
-preserving the requested filters and repository authorization on every page.
-`project.view` includes description, last activity, and star count when supplied
-by GitLab. Wiki search returns snippets; full wiki-page reading is not currently
-supported, and `file.view` reads source-repository files only. File views return
-metadata by default; `includeContent: true` adds complete readable text within a
-64 KiB default budget. Callers can request larger files with `maxContentBytes`,
-up to the separately configured inline-text ceiling (1 MiB by default). The
-typed CLI uses `--include-content` and `--max-content-bytes`. HTTP MCP supports
-these inline reads; stdio MCP and CLI can use `file.raw.download` to save larger
-or binary files locally. See [repository file reads](docs/providers-gitlab-rest.md#repository-file-reads).
-
-Administrators can import [MCP HTTP servers](docs/imported-services.md),
-[OpenAPI 3.1 and Swagger 2.0 JSON definitions](docs/imported-openapi.md), and operator-approved
-[local commands](docs/command-imports.md) as reviewed actions, using the same
-identity, execution-context, credential, and audit controls. MCP and OpenAPI
-imports provide action-level authorization without resource or query
-containment. A command can declare resource types: the Broker checks resources
-named in an action's inputs before the command runs, and hands other actions
-the caller's grants to filter by.
-OpenAPI/Swagger imports share JSON and scalar URL-encoded request handling,
-including Basic authentication, through ordinary CLI and MCP actions. Import the
-definition from an approved URL or upload a JSON file; uploaded documents are
-retained for offline refresh and replaced through the same review process.
-Choose **HTTP gateway** exposure to connect a native HTTP client through an
-operator-approved host binding instead. Gateway imports authorize whole HTTP
-operations, stream raw request and response bodies, and remain outside ordinary
-agent discovery and MCP tools. Response declarations accept concrete media types
-and ranges such as `*/*` for variable downloads; the gateway preserves the upstream
-content type and bytes under its header and transfer limits. The portal separates
-upstream authentication from Broker ingress and makes the exposure immutable. See the
-[HTTP gateway setup guide](docs/http-gateway-setup.md), including a complete
-hand-authored OpenAPI example and its body-validation and route-guard limits.
-Commands can also declare file-download actions when the operator enables an
-explicit download byte cap. [`agent-access invoke --output`](docs/cli.md#save-action-results-to-a-file)
-saves native and imported downloads with size/hash verification, atomic local
-replacement and a metadata receipt. JSON `send` and local stdio MCP support the
-same downloads; HTTP MCP exposes their detail but excludes executable file tools.
-Imported MCP supports administrator-approved [personal OAuth](docs/imported-oauth.md)
-connections.
-
-Use [`resource-access describe`](docs/cli.md#resource-access), or MCP
-`resource_access_describe`, to see effective local access by action and resource
-type across these integrations. It separates access coverage from registered
-resource references and identifies explicitly declared live-listing actions.
-The summary reflects current policy and usable credentials without contacting
-upstream services; invocation still checks every target together.
-
-Native integrations are ordinary Rust crates built on the provider SDK. A team
-can write providers in its own repository and build its own Broker distribution
-that links them alongside upstream modules; see the
-[provider SDK guide](docs/provider-sdk.md) and the
-[downstream assembly guide](docs/downstream-assembly.md).
+Administrators can also import [MCP HTTP servers](docs/imported-services.md),
+[OpenAPI and Swagger definitions](docs/imported-openapi.md), and approved
+[local commands](docs/command-imports.md) as reviewed actions. MCP and OpenAPI
+imports authorize actions without resource or query containment; command imports
+can declare resource types. [HTTP gateways](docs/http-gateway-setup.md) let native
+clients use approved upstream operations through the broker.
 
 ## Access model
 
-The Rust broker, `agent-access` CLI, and administration portal share one
-permission model. Agents connect through typed CLI commands, JSON request files,
-HTTP, local stdio MCP, or authenticated HTTP MCP. Git clients use the Git smart
-HTTP gateway. MCP action tools publish their arguments as a plain object schema,
-and an unsupported argument is refused with an error that names it and lists the
-accepted ones; see [tool arguments](docs/mcp.md#tool-arguments).
-
-Gateway addresses and authentication come from administrator-provided client
-setup. Gateways are omitted from ordinary agent service/action discovery;
-their grants, credentials and token restrictions remain visible in management,
-and callers can inspect resource access for a known gateway service.
-Gateway uploads that fail after dispatch are reported as errors with a partial
-or uncertain upstream outcome; pack POSTs are never retried automatically.
+Agents connect through the `agent-access` CLI, HTTP API, local stdio MCP, or
+HTTP MCP. Git clients use the Git smart HTTP gateway. These interfaces and the
+administration portal share one permission model.
 
 ```mermaid
 flowchart LR
@@ -246,16 +59,9 @@ flowchart LR
 
 A principal identifies a person or workload. Grants select the services, actions,
 resources, execution contexts, and credential modes that principal can use.
-Resource groups combine reusable selections and exclusions. Resource types can
-opt out of exclusions; the portal hides those exclusion choices and the Broker
-rejects them. Agent tokens can narrow the granted access further. A stored credential provides upstream
-authentication; storing it does not grant permission to use it. A
-[credential connection](docs/configuration.md#credential-connections) lets
-several services share one personal credential, such as one GitLab token for
-GitLab REST and Git or one Atlassian API token for Jira and Confluence. It lists
-the token types principals may store, optionally others for service accounts,
-or none when its services accept only one, and people connect through OAuth
-where an administrator configures it.
+Resource groups combine reusable selections and exclusions. Agent tokens can
+narrow that access further. A stored credential provides upstream authentication;
+storing it does not grant permission to use it.
 
 Before executing an action, the broker checks current grants and resource
 selections and applies the authorized credential mode. Agents discover their
@@ -263,21 +69,18 @@ available actions and resources. Administrative roles and personal self-service
 are managed separately from permission to invoke service actions.
 
 The broker governs requests sent through it. Network controls establish whether
-agents can reach upstream services directly, and upstream account permissions
-continue to apply. Revocation blocks new admissions; operations already prepared
-may finish. See the [security model](docs/security-model.md),
+agents can reach upstream services directly. Revocation blocks new admissions;
+operations already prepared may finish. See the [security model](docs/security-model.md),
 [resource policy](docs/resources.md), [account roles](docs/roles.md), and
 [trusted ingress](docs/trusted-callers.md) for the detailed boundaries.
 
 ## Management portal
 
 Administrators manage accounts, resources, grants, credentials, and imported
-services in the portal. Users review their access and manage their own credentials
-and agent tokens. A dedicated token creation page reuses the grant builder’s
-read-only and write-capable action columns, with a live access preview and
-copy-ready HTTP MCP client setup after issuance. Auditors investigate recorded
-activity. Import review uses compact field labels and responsive rows so long
-operation names remain readable.
+services. Users review their access and manage their own credentials and agent
+tokens. Auditors investigate recorded activity. Sign-in supports local accounts
+or optional [Microsoft Entra ID](docs/operator-guide.md#microsoft-entra-oidc-setup-and-operation),
+with group mappings and [account enrollment](docs/administrator-guide.md#microsoft-onboarding).
 
 <table>
   <tr>
@@ -367,12 +170,6 @@ identity, protected state directories, encryption keys, and administrator access
 The sample grants no provider access; administrators add integrations and grants
 explicitly. Local demos and the general samples are development configurations.
 
-The main and optional gateway listeners independently support HTTP or native
-HTTPS with operator-provided PEM certificates and private keys. HTTPS supports
-TLS 1.2/1.3 and HTTP/1.1 or HTTP/2. Certificate replacements load through the existing
-configuration reload; listener settings require restart. See
-[listener TLS](docs/operator-guide.md#listener-tls) for configuration and rotation.
-
 Run one broker per managed-store, audit, and upload-spool state set. Back up both
 the managed and audit stores together with the keys needed to restore them.
 Deploy matching broker, CLI, and portal versions, and follow the
@@ -385,30 +182,24 @@ and [changelog](CHANGELOG.md) when changing a deployment.
 | --- | --- |
 | [Configuration](docs/configuration.md) | Broker and client settings, defaults, and validation |
 | [CLI](docs/cli.md) | Commands, discovery, input/output, and exit codes |
-| [HTTP API](docs/http-api.md) | Routes, request IDs, responses, and management API |
+| [HTTP API](docs/http-api.md) | Routes, responses, and management API |
 | [MCP](docs/mcp.md) | Local and HTTP connections, discovery, transfers, and sessions |
 | [Architecture](docs/design.md) | Components, crate layout, and request lifecycle |
-| [Provider SDK](docs/provider-sdk.md) | Writing native providers: supported API, trust model, contracts, testing, and compatibility |
-| [Downstream assembly](docs/downstream-assembly.md) | Building a distribution: composition, identity, pinning, assets, and qualification |
+| [Provider SDK](docs/provider-sdk.md) | Writing native integrations |
+| [Downstream assembly](docs/downstream-assembly.md) | Building a custom Broker distribution |
 | [Database](docs/database.md) | Storage, encryption, migrations, and keys |
 | [Providers](docs/providers.md) | Provider capabilities and individual contracts |
-| [OAuth](docs/oauth.md) | Supported delegated connections, consent, and recovery |
-| [Applications](docs/applications.md) | Registered client applications that obtain agent tokens for a person who approved them |
+| [OAuth](docs/oauth.md) | Delegated connections to upstream services |
+| [Applications](docs/applications.md) | Client applications that obtain agent tokens with user approval |
 | [Testing](docs/testing.md) | Offline suites and optional live-provider checks |
 | [Release readiness](docs/release-readiness.md) | Qualification, packaging, and deployment acceptance |
 
-Agent-facing instructions are organized by access surface under [skills/](skills/):
+Agent-facing instructions under [skills/](skills/) cover
 [typed CLI](skills/agent-access-cli-typed/SKILL.md),
 [canonical invoke](skills/agent-access-cli-invoke/SKILL.md),
 [JSON send](skills/agent-access-cli-send/SKILL.md),
 [HTTP](skills/agent-access-http/SKILL.md), and
-[MCP](skills/agent-access-mcp/SKILL.md). Each is a short guide to its interface.
-Service-specific examples, typed CLI usage and help commands, paging rules and
-companion permissions live in each action's extended `documentation`, available
-through action details such as
-`agent-access actions describe --service jira comment.list` or the client's
-action-description helper. Initial MCP tool lists stay concise; helper names
-may carry a client-specific prefix.
+[MCP](skills/agent-access-mcp/SKILL.md).
 
 ## Contributing
 
@@ -417,17 +208,6 @@ Use issues for focused feature requests and GitHub Discussions for larger ideas
 or proposals whose fit needs discussion. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for reporting, proposal, and pull-request guidance, and [AGENTS.md](AGENTS.md)
 for development checks.
-
-The Rust suite uses `cargo nextest run --locked --workspace` and a separate
-`cargo test --locked --workspace --doc --no-fail-fast` pass. The
-[testing guide](docs/testing.md#local-deterministic-suite) covers installation,
-bounded concurrency, and running the complete suite with plain Cargo.
-
-The [release procedure](AGENTS.md#release-procedure) separates preparation,
-qualification, and publication: review version and changelog changes first,
-qualify the final clean merged commit, and publish that exact commit. The
-[release checklist](docs/release-readiness.md) describes the required checks,
-distribution contents, and acceptance work.
 
 ## Project status
 
