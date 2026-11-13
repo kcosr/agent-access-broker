@@ -109,8 +109,7 @@ pub(crate) fn operation(
         security_requirements: value
             .get("security")
             .or_else(|| document.get("security"))
-            .cloned()
-            .unwrap_or(Value::Null),
+            .cloned(),
         parameters: super::parameters(document, item, value, Dialect::OpenApi31)?,
         body,
         responses,
@@ -140,23 +139,18 @@ pub(crate) fn security_schemes(document: &Value) -> Vec<Security> {
                 value.get("in").and_then(Value::as_str),
             ) {
                 (Some("http"), Some(scheme), _) if scheme.eq_ignore_ascii_case("bearer") => {
-                    Security {
+                    Security::Bearer {
                         scheme: name.into(),
-                        kind: "bearer".into(),
-                        header: None,
                     }
                 }
                 (Some("http"), Some(scheme), _) if scheme.eq_ignore_ascii_case("basic") => {
-                    Security {
+                    Security::Basic {
                         scheme: name.into(),
-                        kind: "basic".into(),
-                        header: None,
                     }
                 }
-                (Some("apiKey"), _, Some("header")) => Security {
+                (Some("apiKey"), _, Some("header")) => Security::RawHeader {
                     scheme: name.into(),
-                    kind: "raw_header".into(),
-                    header: Some(value.get("name")?.as_str()?.into()),
+                    header: value.get("name")?.as_str()?.into(),
                 },
                 _ => return None,
             };

@@ -101,7 +101,7 @@ impl Document {
             Dialect::Swagger2 => readers::swagger2::security_schemes(&value),
         };
         let metadata = json!({"openapiVersion":version,"title":text(value.pointer("/info/title"),256),"version":text(value.pointer("/info/version"),256),"apiBaseUrl":definition.endpoint,
-            "securitySchemes":schemes.iter().map(|s| { let mut v=json!({"name":s.scheme,"kind":s.kind}); if let Some(header)=&s.header { v["header"]=json!(header); } v }).collect::<Vec<_>>()});
+            "securitySchemes":schemes.iter().map(|s| { let mut v=json!({"name":s.scheme(),"kind":s.kind()}); if let Some(header)=s.header() { v["header"]=json!(header); } v }).collect::<Vec<_>>()});
         Ok(Self {
             value: Arc::new(value),
             operations,

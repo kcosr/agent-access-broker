@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import type { ImportAuthentication, ImportDefinition, ImportGatewayBinding, ImportPreviewResult } from "../../import-types";
 import { importSourceKey } from "../../lib/imports";
 import { importAuthenticationFor, importCredentialBindings, importOAuthError, matchingImportRegistrations, retainedImportBinding, type ImportPersonalAuth } from "../../lib/import-credentials";
-import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_ACTIONS_KIND, OPENAPI_GATEWAY_KIND, gatewayConnectionSettings, gatewayIngressLabel, isOpenApiImport, openApiBindings, openApiConnectionSettings, openApiDelivery, openApiDocumentSource, openApiExposureLabel, openApiSchemeLabel, openApiSecuritySchemes, type OpenApiExposure } from "../../lib/import-openapi";
+import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_ACTIONS_KIND, OPENAPI_GATEWAY_KIND, gatewayConnectionSettings, gatewayIngressLabel, isAnonymousOpenApi, isOpenApiImport, openApiBindings, openApiConnectionSettings, openApiDelivery, openApiDocumentSource, openApiExposureLabel, openApiSchemeLabel, openApiSecuritySchemes, type OpenApiExposure } from "../../lib/import-openapi";
 import type { OpenApiDocumentFile } from "../../lib/import-document";
 import { COMMAND_KIND, CREDENTIAL_KIND_LABEL, commandBindings, commandEndpoint, commandName, credentialModesText } from "../../lib/import-command";
 import { errorMessage } from "../../lib/helpers";
@@ -466,14 +466,14 @@ function OpenApiImportForm({
   const [securityScheme, setSecurityScheme] = useState(old?.connectionSettings.securityScheme ?? "");
   const [shared, setShared] = useState(!old || old.executionBindings.some((binding) => binding.ownerMode === "service"));
   const [personal, setPersonal] = useState(Boolean(old?.executionBindings.some((binding) => binding.ownerMode === "per_user")));
-  const [authentication, setAuthentication] = useState<"anonymous" | "static">(old?.connectionSettings.executionAuthentication === "anonymous" ? "anonymous" : "static");
+  const [authentication, setAuthentication] = useState<"anonymous" | "static">(old && isAnonymousOpenApi(old) ? "anonymous" : "static");
   const [requests, setRequests] = useState(String(old?.invocationLimit?.requests ?? ""));
   const [windowSeconds, setWindowSeconds] = useState(String(old?.invocationLimit?.windowSeconds ?? 60));
   const [confirmed, setConfirmed] = useState(false);
   const save = useSave(onSave, onClose);
   const busy = save.pending;
   const binding = gatewayBindings.find((candidate) => candidate.service === name);
-  const anonymous = gateway && authentication === "anonymous";
+  const anonymous = authentication === "anonymous";
 
   const schemes = openApiSecuritySchemes(data?.preview?.manifest);
   const selectedScheme = schemes.find((scheme) => scheme.name === securityScheme);
@@ -492,7 +492,7 @@ function OpenApiImportForm({
   const blocked = (!old && (!operatorEnabled || !availableKinds.includes(kind))) || (!anonymous && !shared && !personal) || Boolean(issues.binding) || unknownNewScheme || (affected.length > 0 && !confirmed) || (source === "upload" && !old && (documentFile.reading || Boolean(documentFile.error)));
 
   function definition(): ImportDefinition {
-    const draft = { source, definitionUrl, definitionAuthKind: documentAuth, definitionAuthHeader: documentHeader, securityScheme };
+    const draft = { source, definitionUrl, definitionAuthKind: documentAuth, definitionAuthHeader: documentHeader, securityScheme: anonymous ? "" : securityScheme };
     return {
       service: name.trim(),
       displayName: label.trim(),
@@ -592,13 +592,13 @@ function OpenApiImportForm({
         </Banner>
       ) : null}
       <fieldset className="pt-fieldset">
-        <legend>{gateway ? "Upstream API authentication" : "API execution credentials"}</legend>
-        {gateway ? <Field label="Upstream authentication" hint="Broker ingress still requires an authenticated caller and grants.">
+        <legend>Upstream API authentication</legend>
+        <Field label="Upstream authentication" hint="Broker ingress still requires an authenticated caller and grants.">
           <Select value={authentication} disabled={busy || !mutable} onChange={(event) => setAuthentication(event.target.value as "anonymous" | "static")}>
             <option value="static">Static credential</option>
             <option value="anonymous">Anonymous upstream</option>
           </Select>
-        </Field> : null}
+        </Field>
         {anonymous ? <p className="pt-prose wb-small">No upstream credential is sent. Accept only operations whose definition permits anonymous access; grants use service mode. Broker tokens and trusted identity remain local to the Broker.</p> : <>
         <Checkbox
           label="Shared service credential"

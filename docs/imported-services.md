@@ -4,7 +4,7 @@ Base administrators can connect a generic upstream MCP HTTP server, import an
 [OpenAPI document as actions/tools](imported-openapi.md), expose an
 [OpenAPI HTTP gateway](http-gateway-setup.md), or import an operator-approved
 [local command](command-imports.md), and review operations as broker actions.
-Each import is an independent service with a stable ID, its own credentials,
+Each import is an independent service with a stable ID, its own authentication,
 invocation limit, and accepted action catalog. Nothing in the importer depends
 on Grafana, Prometheus, or a particular vendor. This page describes the shared
 workflow and MCP imports; command imports add their own operator approval,
@@ -17,7 +17,7 @@ appropriate for that context. Command imports may also declare resource types,
 which the Broker checks before the command runs or passes to the command with the
 caller's grants; see [who checks resources](command-imports.md#who-checks-resources).
 An upstream search or generic API tool may reach everything its backend credential
-can access. Importing it does not create folder, project, namespace, or query-level
+can access, or everything available anonymously for a credential-free OpenAPI import. Importing it does not create folder, project, namespace, or query-level
 containment. Use a compiled provider, or a command import that declares resource
 types, when that containment is needed.
 

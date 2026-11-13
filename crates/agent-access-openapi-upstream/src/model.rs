@@ -14,7 +14,7 @@ pub(crate) enum Dialect {
 pub(crate) struct Operation {
     pub destinations: Option<Vec<Url>>,
     pub security_schemes: Vec<Security>,
-    pub security_requirements: Value,
+    pub security_requirements: Option<Value>,
     pub parameters: Vec<Value>,
     pub body: Body,
     pub responses: BTreeMap<String, Response>,
@@ -32,26 +32,57 @@ pub(crate) enum Body {
     },
 }
 
+/// The anonymous plan carries no invented scheme or credential destination.
+/// Authenticated variants preserve their existing serialized field names.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Security {
-    pub scheme: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub header: Option<String>,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Security {
+    Anonymous {},
+    Basic { scheme: String },
+    Bearer { scheme: String },
+    RawHeader { scheme: String, header: String },
 }
 impl Security {
-    pub fn delivery(&self) -> Result<ImportedCredentialDelivery, String> {
-        match (self.kind.as_str(), self.header.as_ref()) {
-            ("basic", None) => Ok(ImportedCredentialDelivery::Basic),
-            ("bearer", None) => Ok(ImportedCredentialDelivery::Bearer),
-            ("raw_header", Some(name)) => {
-                let delivery = ImportedCredentialDelivery::RawHeader { name: name.clone() };
-                crate::config::parameter_header(name)?;
-                Ok(delivery)
+    pub fn scheme(&self) -> Option<&str> {
+        match self {
+            Self::Anonymous {} => None,
+            Self::Basic { scheme } | Self::Bearer { scheme } | Self::RawHeader { scheme, .. } => {
+                Some(scheme)
             }
-            _ => Err("unsupported OpenAPI security mapping".into()),
         }
+    }
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Anonymous {} => "anonymous",
+            Self::Basic { .. } => "basic",
+            Self::Bearer { .. } => "bearer",
+            Self::RawHeader { .. } => "raw_header",
+        }
+    }
+    pub fn header(&self) -> Option<&str> {
+        match self {
+            Self::RawHeader { header, .. } => Some(header),
+            _ => None,
+        }
+    }
+    pub fn delivery(&self) -> Result<Option<ImportedCredentialDelivery>, String> {
+        if self
+            .scheme()
+            .is_some_and(|scheme| !crate::config::bounded(scheme, 256))
+        {
+            return Err("invalid execution security scheme".into());
+        }
+        Ok(match self {
+            Self::Anonymous {} => None,
+            Self::Basic { .. } => Some(ImportedCredentialDelivery::Basic),
+            Self::Bearer { .. } => Some(ImportedCredentialDelivery::Bearer),
+            Self::RawHeader { header, .. } => {
+                crate::config::parameter_header(header)?;
+                Some(ImportedCredentialDelivery::RawHeader {
+                    name: header.clone(),
+                })
+            }
+        })
     }
 }
 #[derive(Clone, Serialize, Deserialize)]

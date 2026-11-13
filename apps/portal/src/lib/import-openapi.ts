@@ -1,4 +1,4 @@
-import type { ImportActionDefinition, ImportBinding, ImportDelivery, ImportDiscovery, ImportGatewayBinding, ImportSecurityScheme } from "../import-types";
+import type { ImportActionDefinition, ImportDefinition, ImportBinding, ImportDelivery, ImportDiscovery, ImportGatewayBinding, ImportSecurityScheme } from "../import-types";
 
 export const OPENAPI_GATEWAY_KIND = "openapi_gateway";
 export const OPENAPI_ACTIONS_KIND = "openapi_http";
@@ -6,6 +6,13 @@ export type OpenApiExposure = typeof OPENAPI_ACTIONS_KIND | typeof OPENAPI_GATEW
 
 export function isOpenApiImport(kind: string): kind is OpenApiExposure {
   return kind === OPENAPI_ACTIONS_KIND || kind === OPENAPI_GATEWAY_KIND;
+}
+
+/** Each exposure uses its explicit credential-free import contract. */
+export function isAnonymousOpenApi(definition: ImportDefinition): boolean {
+  return definition.adapterKind === OPENAPI_GATEWAY_KIND
+    ? definition.connectionSettings.executionAuthentication === "anonymous"
+    : definition.adapterKind === OPENAPI_ACTIONS_KIND && definition.executionBindings.length === 0;
 }
 
 export function openApiExposureLabel(kind: OpenApiExposure): string {
@@ -146,6 +153,7 @@ export function openApiOperation(definition: ImportActionDefinition): OpenApiOpe
   const security = plan.security;
   return {
     method: plan.method.toUpperCase(), path: plan.path,
+    ...(security?.kind === "anonymous" ? { anonymous: true } : {}),
     ...(typeof plan.requestBody === "boolean" ? { requestMedia: plan.requestBody ? plan.formBody ? "application/x-www-form-urlencoded" : "application/json" : null } : {}),
     ...(plan.requestBody === true ? bodySummary(definition, plan.formBody) : {}),
     noContentStatuses: Object.entries(plan.responses ?? {}).filter(([, response]) => response?.contentType === null && response.schema === null).map(([status]) => status),

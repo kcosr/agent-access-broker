@@ -210,5 +210,5 @@ an action-only service. These instances reuse normal policy, credentials, limits
 audit, and generic clients. They
 do not provide resource or query containment. See [imported services](imported-services.md)
 for setup, reviewed tool mappings, credential modes, and refresh behavior.
-OpenAPI and Swagger share JSON and scalar URL-encoded requests with static Basic,
+OpenAPI and Swagger share JSON and scalar URL-encoded requests with anonymous upstream access or static Basic,
 Bearer or header API-key credentials; see their [supported profile](imported-openapi.md).

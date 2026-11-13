@@ -187,6 +187,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **OpenAPI Actions/tools imports support anonymous upstream access.** Choose
+  Anonymous upstream in the portal or supply an empty `executionBindings` array
+  without a security scheme. Broker authentication, grants and audit still apply;
+  authenticated imports never fall back when credentials are missing. See
+  [OpenAPI imports](docs/imported-openapi.md).
+
 - **Optional native HTTPS on the main and gateway listeners.** Configure each
   listener independently with an operator-provided PEM certificate chain and
   private key. HTTPS supports TLS 1.2/1.3 and HTTP/1.1 or HTTP/2; certificate replacements

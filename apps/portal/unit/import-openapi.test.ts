@@ -19,6 +19,28 @@ function renderEditor(data?: ImportPreviewResult, availableKinds = ["openapi_htt
   return renderToStaticMarkup(createElement(ImportEditor, { principal: "admin", data, availableKinds, authentication: [], onClose: () => {}, onSave: async () => true, frame: inlineFrame }));
 }
 describe("OpenAPI import configuration", () => {
+  test("anonymous actions retain their document auth and show no execution credential controls", () => {
+    const data = fixture();
+    data.service.definition.executionBindings = [];
+    data.service.definition.connectionSettings.definitionAuthKind = "bearer";
+    data.service.definition.discovery = { kind: "slot" };
+    const html = renderEditor(data);
+    expect(html).toContain("Anonymous upstream");
+    expect(html).toContain("No upstream credential is sent");
+    expect(html).toContain("Definition authentication");
+    expect(html).not.toContain("Shared service credential");
+    expect(html).not.toContain("Personal credentials for each user");
+    expect(html).not.toContain("API security scheme");
+    const action = data.preview!.manifest.tools[0].definition;
+    (action.annotations as { openapi: { security: unknown } }).openapi.security = { kind: "anonymous" };
+    expect(openApiOperation(action)).toMatchObject({ anonymous: true });
+    expect(openApiOperation(action)).not.toHaveProperty("security");
+    const review = renderToStaticMarkup(createElement(ImportReview, { data, onClose: () => {}, onAccept: async () => true, frame: inlineFrame }));
+    expect(review).toContain("Anonymous upstream");
+    data.service.actions.push({ definition: action, status: "enabled", version: 1, definitionHash: "hash" });
+    expect(renderEditor(data)).toMatch(/<select[^>]*disabled=""[^>]*><option value="static">Static credential<\/option><option value="anonymous" selected="">Anonymous upstream/);
+  });
+
   test("upload configuration excludes retained URL authentication drafts and preserves accepted settings", () => {
     const draft = { source: "upload" as const, definitionUrl: "https://docs.example.test/api.json", definitionAuthKind: "raw_header", definitionAuthHeader: "X-Document-Key", securityScheme: "basic" };
     expect(openApiConnectionSettings(undefined, true, draft)).toEqual({ definitionSource: "upload", securityScheme: "basic" });
