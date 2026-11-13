@@ -93,6 +93,49 @@ fn effective_gateway_host_rejects_spoofed_or_ambiguous_authority() {
     );
 }
 
+#[test]
+fn effective_gateway_host_accepts_http2_pseudo_headers_and_checks_host_agreement() {
+    for header in [None, Some("GIT.EXAMPLE.TEST:9443")] {
+        let mut request = Request::builder()
+            .version(axum::http::Version::HTTP_2)
+            .uri("https://git.example.test:9443/team/project.git/info/refs");
+        if let Some(header) = header {
+            request = request.header(HOST, header);
+        }
+        assert_eq!(
+            effective_gateway_host(&request.body(Body::empty()).unwrap()).unwrap(),
+            "git.example.test"
+        );
+    }
+    for header in [
+        "other.example.test:9443",
+        "git.example.test",
+        "git.example.test:443",
+    ] {
+        let request = Request::builder()
+            .version(axum::http::Version::HTTP_2)
+            .uri("https://git.example.test:9443/team/project.git/info/refs")
+            .header(HOST, header)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            effective_gateway_host(&request).unwrap_err(),
+            "gateway authority and Host header do not match"
+        );
+    }
+    let duplicate = Request::builder()
+        .version(axum::http::Version::HTTP_2)
+        .uri("https://git.example.test/team/project.git/info/refs")
+        .header(HOST, "git.example.test")
+        .header(HOST, "git.example.test")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        effective_gateway_host(&duplicate).unwrap_err(),
+        "gateway Host header is ambiguous"
+    );
+}
+
 #[tokio::test]
 async fn gateway_upstream_url_normalizes_clone_bases_for_every_git_operation() {
     for base_path in ["", "/", "/git/root", "/git/root/", "/git/root%20dir/"] {

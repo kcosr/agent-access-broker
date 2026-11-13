@@ -15,6 +15,32 @@ Two distinct config files exist:
 They are unrelated structs. The broker config has no listen-address or
 `[service]` block; the CLI config's `[service].url` is purely a client setting.
 
+## Listener transport
+
+Listener addresses and inbound TLS are `agent-access-broker serve` options,
+not TOML fields. The main listener always binds `--listen` (default
+`127.0.0.1:8787`); the gateway listener binds only with `--gateway-listen`.
+Each independently serves HTTP when its TLS pair is absent or HTTPS when both
+paths are present:
+
+| Listener | PEM certificate chain | PEM private key |
+| --- | --- | --- |
+| Main | `--tls-cert-chain <path>` | `--tls-private-key <path>` |
+| Gateway | `--gateway-tls-cert-chain <path>` | `--gateway-tls-private-key <path>` |
+
+An incomplete pair is invalid; gateway TLS also requires `--gateway-listen`.
+HTTPS replaces HTTP on the selected address. The listener does not accept both
+protocols on one port or fall back to HTTP. TLS settings do not create another
+listener or change its routes. The two listeners may share certificate/key
+files or use separate identities.
+
+Changing addresses, TLS mode, or file paths requires restart. Every configuration
+reload reads replacement material at the configured paths, even with unchanged
+TOML. Validation or admission failure before publication retains the previous
+runtime and both TLS identities. `config validate` checks the TOML document;
+`serve` checks the TLS files before serving. See [listener TLS](operator-guide.md#listener-tls)
+for file requirements, client trust, and rotation.
+
 ## Canonical broker config shape
 
 `BrokerConfig` and every nested struct use `#[serde(deny_unknown_fields)]`, so
@@ -222,8 +248,8 @@ including the staged `default` transition when introducing an explicit registry.
 ## `[mcp]`
 
 Optional downstream Streamable HTTP MCP uses `/mcp` and `/mcp/{service}` on the public listener.
-Terminate TLS at trusted ingress and preserve its public Host. The broker does
-not create a second listener. This setting controls downstream client connections;
+Use native HTTPS or terminate TLS at trusted ingress that preserves the public
+Host. Enabling MCP does not create another listener. This setting controls downstream client connections;
 upstream imports are configured separately. Keep `public_url` at `/mcp`; a
 service-specific connection appends its canonical service ID. No per-service
 listener, URL record or enable flag is needed. Proxy rules must permit both path
@@ -878,6 +904,10 @@ membership_renewal = false               # default
 - `public_origin`, when set, must be an `http` or `https` origin with no path,
   query, or fragment. Non-local `http` origins are rejected. Production
   deployments with `browser_auth.enabled = true` must set `public_origin`.
+  Set the canonical browser HTTPS origin, including any non-default port, for
+  native HTTPS too: it controls origin checks and `Secure` cookies independently
+  of listener TLS. When a reverse proxy serves that origin, changing its Broker
+  upstream to HTTPS does not change `public_origin`.
 - `session_cookie_name` must be a valid cookie name and may not use the
   `__Host-` or `__Secure-` prefixes, matched case-insensitively, because the
   browser session cookie is scoped to `Path=/v1` and loopback development may

@@ -65,6 +65,11 @@ checks the version and exercises table creation, insertion, and deletion, so
 required audit smoke coverage cannot silently skip on an older or feature-limited
 SQLite build.
 
+Unix qualification also requires the `openssl` executable on `PATH` for the
+native listener TLS gate. Preflight runs `openssl version` and records the
+version in `qualification.json` before any gate starts; install OpenSSL if
+that probe fails. The listener TLS gate is not applicable on Windows.
+
 The Rust test gate requires cargo-nextest 0.9.150 or newer. Install the tested
 version with `cargo install --locked --version 0.9.150 cargo-nextest`. Preflight
 records its version and fails with installation instructions when it is missing
@@ -94,7 +99,8 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 The output directory must be new or empty and outside the checkout. The driver
 runs the required standalone Rust, crate-boundary, public API, downstream
 consumer, portal build/unit/browser, script, documentation, changelog,
-sample-config, Unix signal, native release-provenance, and notice checks. It
+sample-config, Unix signal, native release-provenance, listener TLS, and notice
+checks. It
 writes `qualification.json`, per-gate logs, native Rust notices, and the downstream
 consumer evidence in `downstream-consumer/`. The Rust test gate preserves its
 JUnit report as `rust-tests.junit.xml` in the output directory and records its
@@ -154,6 +160,21 @@ that each child actually ran; an empty exact-name match fails the gate. Record
 this fixture as not applicable on non-Unix platforms. Portal unit and browser
 configurations also reject focused-only tests so they cannot silently narrow
 the required suites.
+
+The Unix `listener-tls` gate runs the separate production-executable HTTPS smoke
+with Node.js and OpenSSL. It verifies TLS and HTTP/2 on the normal build rather
+than relying on Cargo test dependency features. To run it directly against the
+native binary built above:
+
+```bash
+node scripts/verify-listener-tls.mjs \
+  --broker "$PWD/target/$BROKER_BUILD_TARGET/debug/agent-access-broker" \
+  --output-dir /absolute/new-or-empty/listener-tls-evidence
+```
+
+It creates synthetic certificates and isolated Broker instances, exercises
+certificate verification and transactional rotation, and terminates its own
+processes. See [native listener TLS tests](testing.md#native-listener-tls).
 
 Run the portal browser suite against the native candidate binaries produced by
 the explicit build above. The target directory and host triple keep inherited
@@ -327,12 +348,13 @@ compatibility with a different Linux distribution or architecture.
 Follow the [operator guide](operator-guide.md) and
 [administrator guide](administrator-guide.md) to verify the deployed environment:
 
-1. Confirm the HTTPS origin, restricted HTTP listener, immutable portal assets,
+1. Confirm the HTTPS origin, restricted listener access, immutable portal assets,
    owner-only state/key directories, and required identity. Confirm `/v1/healthz`
    and `/v1/readyz`, then check authenticated broker status and provenance.
-   Verify `network.trusted_proxies` names the exact ingress peers, ingress strips
-   client-supplied forwarded-address headers and sets verified addresses, and
-   audit distinguishes clients through that ingress. Confirm a client's failed
+   When using ingress, verify `network.trusted_proxies` names its exact peers,
+   ingress strips client-supplied forwarded-address headers and sets verified
+   addresses, and audit distinguishes clients through that ingress. Direct
+   connections retain their TCP peer address. Confirm a client's failed
    logins do not lock out the same account from a different resolved source.
 2. Bootstrap the first administrator, change its initial password, create a second
    recovery administrator, remove the bootstrap fields, and return

@@ -187,6 +187,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Optional native HTTPS on the main and gateway listeners.** Configure each
+  listener independently with an operator-provided PEM certificate chain and
+  private key. HTTPS supports TLS 1.2/1.3 and HTTP/1.1 or HTTP/2; certificate replacements
+  activate through configuration reload, with failed admission preserving the
+  active identities. See [listener TLS](docs/operator-guide.md#listener-tls).
+  ([#115](https://github.com/kcosr/agent-access-broker/pull/115))
+
 - **Applications connect with OAuth instead of pasted tokens.** An operator
   registers a client application in `[applications.<id>]`; a person approves it
   once in their browser, and the application then obtains short-lived

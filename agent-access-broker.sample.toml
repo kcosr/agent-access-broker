@@ -7,6 +7,10 @@
 # agent-access-broker.production.sample.toml and docs/operator-guide.md.
 # That template uses required identity, managed broker tokens, deny-by-default
 # policy, and dedicated broker-owned state directories.
+# Listener transport is selected with serve flags, not TOML. HTTP is the default.
+# To enable HTTPS on --listen, provide --tls-cert-chain and --tls-private-key.
+# The optional --gateway-listen uses its own --gateway-tls-cert-chain and
+# --gateway-tls-private-key pair. See docs/operator-guide.md#listener-tls.
 
 [deployment]
 environment = "development"
@@ -37,7 +41,7 @@ environment = "development"
 # username_ref = "env:EGRESS_PROXY_USERNAME"
 # password_ref = "env:EGRESS_PROXY_PASSWORD"
 
-# Optional downstream MCP on the public listener behind trusted TLS ingress.
+# Optional downstream MCP on the public listener with native HTTPS or TLS ingress.
 # Requires the Authorization Bearer identity source below. Local file tools stay
 # in `agent-access mcp serve`; HTTP exposes JSON actions and discovery helpers.
 # /mcp/<service> and `mcp serve --service <service>` expose one service with raw names.

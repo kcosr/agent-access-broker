@@ -78,6 +78,10 @@ parsing, logging, the Tokio runtime, `config validate`, `audit verify` and
 readiness, reload on `SIGUSR2` or the administrative reload, and bounded
 shutdown on `SIGTERM` or `SIGINT`. Library code never exits the process itself.
 
+The host's [listener TLS options](operator-guide.md#listener-tls) apply to every
+assembly: public and gateway listeners independently select HTTP or HTTPS,
+with certificate rotation through the same reload and connection lifecycle.
+
 From module selection to the exit status `main` returns:
 
 ```mermaid

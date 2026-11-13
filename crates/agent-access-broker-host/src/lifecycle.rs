@@ -3,6 +3,7 @@
 use crate::BrokerBuildStatus;
 use crate::composition::BrokerComposition;
 use crate::identity::AssemblyIdentity;
+use crate::listener_tls::ListenerTlsFiles;
 use crate::reload::{start_reloadable_state, validate_shutdown_timeout};
 use crate::router::{build_gateway_router, public_router};
 use crate::state::ReloadableState;
@@ -30,6 +31,7 @@ pub(crate) struct ServeOptions {
     pub(crate) config_path: PathBuf,
     pub(crate) listen: SocketAddr,
     pub(crate) gateway_listen: Option<SocketAddr>,
+    pub(crate) listener_tls_files: ListenerTlsFiles,
     pub(crate) body_hard_cap: Option<u64>,
     pub(crate) reload_timeout: Duration,
     pub(crate) shutdown_timeout: Duration,
@@ -381,11 +383,15 @@ async fn run_service(
         config_path,
         listen,
         gateway_listen,
+        listener_tls_files,
         body_hard_cap,
         reload_timeout,
         shutdown_timeout,
     } = options;
     validate_shutdown_timeout(shutdown_timeout)?;
+    if listener_tls_files.gateway.is_some() && gateway_listen.is_none() {
+        anyhow::bail!("gateway TLS requires --gateway-listen");
+    }
     #[cfg(any(test, feature = "test-support"))]
     let listening = startup.listening.take();
     #[cfg(any(test, feature = "test-support"))]
@@ -397,6 +403,7 @@ async fn run_service(
         body_hard_cap,
         reload_timeout,
         shutdown_timeout,
+        listener_tls_files,
         startup,
     )
     .await?;
@@ -432,31 +439,47 @@ async fn run_service(
     // The bound address, which names the assigned port when `listen` asks
     // for port 0.
     let public_address = public_listener.local_addr()?;
+    let public_tls = listener_tls_provider(&state, false);
     tracing::info!(
         event = "broker_listening",
         nodeId = node_id.as_str(),
         listener = "public",
         address = %public_address,
+        scheme = if public_tls.is_some() { "https" } else { "http" },
     );
     let (public_app, mcp) = public_router(state.clone());
     #[cfg(test)]
     let served_public_app = public_app.clone();
-    servers.serve(public_listener, public_app, coordinator.clone());
+    servers.serve(
+        public_listener,
+        public_app,
+        coordinator.clone(),
+        public_tls,
+        "public",
+    );
     #[cfg(test)]
     let mut served_gateway_app = None;
     if let Some((gateway_address, gateway_listener)) = gateway_listener {
+        let gateway_tls = listener_tls_provider(&state, true);
         tracing::info!(
             event = "broker_listening",
             nodeId = node_id.as_str(),
             listener = "gateway",
             address = %gateway_address,
+            scheme = if gateway_tls.is_some() { "https" } else { "http" },
         );
         let gateway_app = build_gateway_router(state.clone());
         #[cfg(test)]
         {
             served_gateway_app = Some(gateway_app.clone());
         }
-        servers.serve(gateway_listener, gateway_app, coordinator.clone());
+        servers.serve(
+            gateway_listener,
+            gateway_app,
+            coordinator.clone(),
+            gateway_tls,
+            "gateway",
+        );
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(listening) = listening {
@@ -486,6 +509,35 @@ type BoundListeners = (
     tokio::net::TcpListener,
     Option<(SocketAddr, tokio::net::TcpListener)>,
 );
+
+/// Each accept captures only the current TLS identity, not the runtime
+/// generation or its state locks. TLS enablement is fixed for this process.
+fn listener_tls_provider(
+    state: &Arc<ReloadableState>,
+    gateway: bool,
+) -> Option<crate::http_server::TlsConfigProvider> {
+    let enabled = if gateway {
+        state.listener_tls_files.gateway.is_some()
+    } else {
+        state.listener_tls_files.public.is_some()
+    };
+    enabled.then(|| {
+        let state = Arc::clone(state);
+        Arc::new(move || {
+            let snapshot = state.current();
+            let identity = if gateway {
+                &snapshot.listener_tls.gateway
+            } else {
+                &snapshot.listener_tls.public
+            };
+            Arc::clone(
+                identity
+                    .as_ref()
+                    .expect("an enabled TLS listener has an identity"),
+            )
+        }) as crate::http_server::TlsConfigProvider
+    })
+}
 
 /// Binds the public listener and, when configured, the gateway listener.
 async fn bind_listeners(
@@ -541,6 +593,8 @@ impl Servers {
         listener: tokio::net::TcpListener,
         app: axum::Router,
         coordinator: ShutdownCoordinator,
+        tls: Option<crate::http_server::TlsConfigProvider>,
+        listener_name: &'static str,
     ) {
         let shutdown = async move {
             let _ = coordinator.wait().await;
@@ -548,7 +602,8 @@ impl Servers {
         let force = self.force.clone();
         self.tasks.spawn(
             async move {
-                crate::http_server::serve_http(listener, app, shutdown, force).await;
+                crate::http_server::serve_http(listener, app, shutdown, force, tls, listener_name)
+                    .await;
                 Ok(())
             }
             .with_current_subscriber(),
@@ -1361,7 +1416,7 @@ mod tests {
         let public_addr = public_listener.local_addr().unwrap();
         let app = Router::new().route("/", get(|| async { "ok" }));
 
-        servers.serve(public_listener, app, coordinator.clone());
+        servers.serve(public_listener, app, coordinator.clone(), None, "public");
 
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
         assert!(
@@ -1399,7 +1454,7 @@ mod tests {
                 }
             }),
         );
-        servers.serve(listener, app, coordinator.clone());
+        servers.serve(listener, app, coordinator.clone(), None, "public");
         let client = tokio::spawn(raw_http_get(addr));
         entered_rx.await.unwrap();
 
@@ -1482,6 +1537,7 @@ path="{}"
             None,
             Duration::from_secs(1),
             Duration::from_secs(2),
+            ListenerTlsFiles::default(),
             StartupHooks::default(),
         )
         .await
@@ -1583,7 +1639,7 @@ path="{}"
                 }
             }),
         );
-        servers.serve(listener, app, coordinator.clone());
+        servers.serve(listener, app, coordinator.clone(), None, "public");
         let client = tokio::spawn(raw_http_get(addr));
         entered_rx.await.unwrap();
 
@@ -1918,6 +1974,7 @@ upload_spool_dir = "{}"
             None,
             Duration::from_secs(1),
             Duration::from_secs(1),
+            ListenerTlsFiles::default(),
             StartupHooks::default(),
         )
         .await

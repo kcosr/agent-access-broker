@@ -53,8 +53,8 @@ flowchart LR
 Prepare a supported host with the release `agent-access-broker` and `agent-access`
 executables, the matching portal assets, native certificate roots, and a service
 supervisor. Keep the broker, CLI/MCP agent images, and portal from the same reviewed
-source revision. The broker has no built-in inbound TLS listener; terminate HTTPS
-at controlled ingress and restrict direct access to the loopback/backend port.
+source revision. Use [native listener TLS](#listener-tls) or terminate HTTPS at
+controlled ingress and restrict direct access to the loopback/backend port.
 
 1. Provision a dedicated service account and broker-owned directories for managed
    state, audit, and upload spool. Use owner-only directory permissions (`0700`)
@@ -63,13 +63,14 @@ at controlled ingress and restrict direct access to the loopback/backend port.
 2. Copy the [production sample](../agent-access-broker.production.sample.toml) to
    `/etc/agent-access-broker/config.toml`. Set the stable node ID, public HTTPS
    browser origin, state paths (including the required
-   `[limits].upload_spool_dir`), secret paths, and portal static directory. Set
-   `network.trusted_proxies` to the exact ingress peer addresses; the sample uses
+   `[limits].upload_spool_dir`), secret paths, and portal static directory. When
+   using a reverse proxy, set `network.trusted_proxies` to its exact peer addresses; the sample uses
    `127.0.0.1/32`. Ingress must strip client-supplied `Forwarded` and
    `X-Forwarded-For`, then set the verified client address. Keep direct access to
    the backend restricted. Without proxy trust, clients share the ingress's
    authentication budgets and password-lockout source, and audit records its
-   address. Address forwarding grants no principal or execution-context authority.
+   address. Direct connections use their actual TCP peer address. Address
+   forwarding grants no principal or execution-context authority.
 3. Generate four independent keys for credential encryption, token hashing,
    browser CSRF, and local-password pepper. The sample uses protected files under
    `/etc/agent-access-broker/secrets`. See [secret keys](#secret-keys). Supply any
@@ -366,8 +367,8 @@ startup events.
 The public listener exposes health, discovery, authenticated runtime specs,
 invoke, self-service management, browser auth, and admin management routes under
 `/v1`; when `[portal]` is enabled it also serves the same-origin portal under
-`/ui`. Put TLS, external authentication, and network exposure policy at the
-deployment boundary around this listener.
+`/ui`. Configure [native TLS](#listener-tls) or controlled HTTPS ingress, and
+apply network exposure policy to this listener.
 
 ### Build provenance and deployed status
 
@@ -510,6 +511,96 @@ The gateway listener does not mount health or readiness endpoints. Use the
 public listener's `/v1/healthz` and `/v1/readyz` routes for process/runtime
 state, and use TCP or edge-proxy checks for gateway-port reachability.
 
+### Listener TLS
+
+The main listener (`--listen`, default `127.0.0.1:8787`) and optional gateway
+listener (`--gateway-listen`) independently use HTTP or HTTPS. Enable HTTPS by
+supplying both PEM paths for that listener:
+
+```bash
+agent-access-broker --config /etc/agent-access-broker/config.toml serve \
+  --listen 0.0.0.0:8787 \
+  --tls-cert-chain /etc/agent-access-broker/tls/public-chain.pem \
+  --tls-private-key /etc/agent-access-broker/tls/public-key.pem \
+  --gateway-listen 0.0.0.0:8788 \
+  --gateway-tls-cert-chain /etc/agent-access-broker/tls/gateway-chain.pem \
+  --gateway-tls-private-key /etc/agent-access-broker/tls/gateway-key.pem
+```
+
+Omit a listener's TLS pair to serve HTTP on its address. Either listener can
+use HTTPS while the other uses HTTP. Gateway TLS requires `--gateway-listen`;
+an incomplete certificate/key pair is rejected. The two listeners may name the
+same files if the certificate covers the names used by their clients. This
+creates no additional listener: each port accepts its selected transport only,
+with no protocol sniffing, redirect, or fallback from failed TLS to HTTP.
+Startup validates all configured identities and binds all listeners before
+serving any of them.
+
+HTTPS supports TLS 1.2 and TLS 1.3 with HTTP/1.1 or HTTP/2 selected through ALPN.
+A TLS client without ALPN uses HTTP/1.1. Plain HTTP listeners use HTTP/1.1.
+The main listener serves the same API,
+MCP endpoint, browser routes, portal and health checks over either transport;
+the gateway retains its own host-matched routes. TLS does not change
+authentication, authorization, execution contexts or trusted-caller rules.
+Client-address handling uses the actual TCP peer and the existing explicit
+`network.trusted_proxies` policy.
+
+Provide the leaf certificate first, followed by any intermediate certificates,
+in one certificate-chain file of at most 512 KiB. The private-key file is at most
+16 KiB and contains exactly one unencrypted PKCS#8 (`PRIVATE KEY`), PKCS#1
+(`RSA PRIVATE KEY`) or SEC1 (`EC PRIVATE KEY`) PEM block. Certificate files
+contain only `CERTIFICATE` blocks; both files allow only whitespace outside
+their PEM blocks. Broker validates the certificate encoding and that the leaf
+and private key match. It does not issue certificates, use ACME, or request
+client certificates.
+
+Both paths must name regular files and their final component must not be a
+symlink. On Unix, the key must belong to the service user, have exactly `0600`
+permissions and have one hard link. The certificate file must not be writable
+by group or others; it may be publicly readable. Prefer absolute paths;
+relative paths resolve from the process working directory. Keep key material
+out of command arguments, logs and configuration text: these flags carry paths,
+not PEM contents. `config validate` validates TOML, not these `serve` options;
+TLS-file validation happens at startup and reload.
+
+Private-CA and self-signed certificates are supported. Clients must trust the
+appropriate issuer or certificate and verify the server name and validity
+period. Broker does not require its own certificate to chain to its outbound
+trust store. For the CLI, configure
+[`service.tls.additional_ca_cert_files`](configuration.md#cli-client-config-and-config-validate)
+while keeping certificate verification enabled. A reverse proxy connecting to
+an HTTPS Broker listener likewise needs an HTTPS upstream with appropriate
+certificate trust and name verification; preserve the original public Host.
+
+For browser use, set `browser_auth.public_origin` to the canonical HTTPS origin,
+including its port when non-default. That setting governs origin checks and
+`Secure` cookies; listener TLS does not infer or replace it. When browsers use
+a reverse proxy's existing public origin, changing only the proxy-to-Broker
+transport does not change that origin or its browser-facing certificate.
+
+Each HTTPS listener allows at most 64 handshakes at once, each with a five-second
+deadline. A newly accepted socket is closed when capacity is full, without
+queuing another task. Successful handshakes release that capacity, so established
+HTTP/2 or MCP connections do not occupy handshake slots. Shutdown cancels pending
+handshakes and drains established connections through the normal bounded shutdown.
+Capacity is shared across all peers, including clients behind a proxy or NAT.
+The `tls_handshake_capacity_exhausted` warning identifies the `public` or
+`gateway` listener and reports rejections at most once per 30 seconds per
+listener. Use ingress network access and connection-rate
+controls when exposing listeners to untrusted clients.
+
+Replace the certificate and key files at their configured paths, then trigger
+[configuration reload](#config-reload-operations). Every reload reads both
+configured identities even when the TOML text is unchanged. The complete
+candidate, including all TLS material, must pass admission before the runtime
+and identities are published together. A failure before publication preserves
+the previous identities; post-publication reconciliation retains the ordinary
+reload semantics. Connections accepted after successful publication use the new
+identity; established connections continue normally. Changing bind addresses,
+enabling or disabling TLS, or changing either file path requires restart.
+
+### Process limits
+
 Optional `serve` flags tune request, reload, and shutdown behavior:
 
 | Flag | Default | Notes |
@@ -547,7 +638,8 @@ OAuth and private-resource dispatch checks remain independently enforced.
 
 On `SIGTERM` or `SIGINT`, the broker closes pending rate admission, removes
 queued tickets without dispatch, and finalizes their outcomes before audit
-shutdown. It stops accepting new public and gateway connections and lets already
+shutdown. It stops accepting new public and gateway connections, cancels pending
+TLS handshakes, and lets already
 admitted work drain within `--shutdown-timeout-ms`,
 then cuts off the connections still open. If the timeout is reached while
 streaming downloads are still open, those streams are canceled and their
@@ -690,6 +782,12 @@ not require an HTTP client.
 Reload is atomic for new requests: a successful reload swaps in a new snapshot,
 and a failed reload leaves the active snapshot unchanged. Concurrent reload
 attempts return `reload_in_progress`.
+
+The same reload path also rotates [listener TLS identities](#listener-tls) at
+the process's configured file paths, even when the TOML content is unchanged.
+If either identity or another candidate setting fails admission, neither TLS
+identity changes. Listener addresses, TLS mode and file paths are process
+settings and require restart.
 
 Reload cannot change the audit backend or the node ID. Changing `audit.type`
 (including adding or removing `[audit]`) or the effective
@@ -2422,7 +2520,7 @@ turn it into a Microsoft, Jira or GitLab adapter.
 
 For personal Gmail, follow [the Google client setup and live smoke](providers-gmail.md).
 A literal-loopback HTTP origin with explicit opt-in works through a browser-side
-SSH tunnel; hosted origins use HTTPS termination. Google reusable refresh material
+SSH tunnel; hosted origins use native HTTPS or trusted TLS ingress. Google reusable refresh material
 survives transient failures with persisted cooldown; only a Google HTTP 429 is
 reported as `upstream_rate_limited`, while the cooldown after a 5xx or transport
 failure reports that failure's class. Invalid grants require owner reconnect. No Google credentials or account consent are provisioned by a build.

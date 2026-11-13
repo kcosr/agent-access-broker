@@ -6,13 +6,17 @@ syntax is documented in `docs/cli.md`; provider behavior is documented in
 
 ## Test Taxonomy
 
-The repository uses five test categories:
+The repository uses six test categories:
 
 - Deterministic local tests run with nextest and a separate Cargo doctest pass,
   or with ordinary `cargo test`, and require no live upstream credentials.
 - The Unix process-signal smoke is deterministic and local but explicitly
   `#[ignore]`-gated because it sends real signals to isolated child processes.
   It is required separately on Unix and not applicable on non-Unix platforms.
+- The native listener TLS smoke starts a separately built production Broker
+  executable on isolated loopback ports. It requires Node.js and OpenSSL on Unix,
+  uses synthetic certificates, and does not obtain protocol features from Cargo
+  test dependencies.
 - The portal Playwright e2e harness is deterministic and local, but it runs
   separately from Cargo. It combines real-service integration fixtures with
   mocked API contracts for UI behavior. Real-service fixtures start a Broker
@@ -521,6 +525,44 @@ SIGTERM stops its child processes and removes the stage. The
 [fixture README](../tests/downstream-consumer/README.md) describes the templates,
 pin rules, lockfile review, offline dependency source and evidence. The pure
 functions of the driver are tested with the other script tests.
+
+### Native listener TLS
+
+On Unix, build the Broker executable without test features and run:
+
+```bash
+cargo build --locked --target-dir target -p agent-access-broker --bin agent-access-broker
+node scripts/verify-listener-tls.mjs \
+  --broker "$PWD/target/debug/agent-access-broker" \
+  --output-dir /absolute/new-or-empty/listener-tls-evidence
+```
+
+The `--broker` path is required; `--output-dir` is optional. Use a freshly built
+executable from the candidate revision. The harness uses Node.js built-ins and
+the `openssl` executable to create a temporary private CA and server identities;
+it needs no npm packages, external services or live credentials. Its signal
+tests require Unix and it rejects Windows instead of silently skipping them.
+
+The smoke covers the independent main/gateway HTTP and HTTPS combinations,
+TLS 1.2/1.3, HTTP/1.1 and HTTP/2 ALPN, issuer and hostname verification, route isolation,
+invalid TLS startup, occupied-listener failure, certificate-only rotation with
+unchanged TOML through signal and admin reload, rejected candidates preserving
+both identities, connections surviving rotation, bounded handshakes, throttled
+capacity warnings and shutdown.
+A managed browser-auth fixture checks the canonical HTTPS origin, Secure cookies
+and CSRF over both HTTP/1.1 and HTTP/2; the HTTP/2 requests use `:authority`
+without `Host` and send the session and an unrelated cookie as separate fields.
+It does not render the portal in a browser. The smoke also invokes the fake
+service over both protocols, including an authenticated HTTP/2 POST without
+`Content-Length`, uses HTTP MCP sessions, forwards Git requests to a synthetic
+upstream, and checks HTTP/2 stream cancellation.
+This executable-level check is required because a Cargo test's development
+dependencies can enable HTTP/2 that a production dependency graph lacks.
+Host unit tests separately cover strict material loading, connection task
+ownership and request/stream cancellation. The harness terminates its own
+processes and removes temporary state.
+
+### Unix process signals
 
 On Unix, run the real-signal parent fixture separately:
 
@@ -2326,15 +2368,16 @@ tests allow already accepted JSON request bodies to finish before dispatch.
 For native-client validation, run a disposable broker with the development
 `fake` backend (`deployment.enable_fake_service = true` plus `[providers.fake]`),
 a static bearer token file, one exact TEST resource grant, a private
-audit directory, and `/mcp` enabled. Place a streaming loopback TLS reverse proxy
-in front, issue a leaf certificate for localhost from a disposable CA, and trust
-that CA in the clients (never disable certificate verification). Use isolated
+audit directory, and `/mcp` enabled. Use native HTTPS or place a streaming
+loopback TLS reverse proxy in front. Issue a leaf certificate for localhost
+from a disposable CA and trust that CA in the clients (never disable certificate
+verification). Use isolated
 client configuration and temporary credentials, with the documented HTTP MCP
 settings. Have each client discover `services_list`, invoke the discovered
 `fake.echo` tool for TEST, and invoke it for an ungranted project. Verify one
 allow and one deny audit for each client. The synthetic action can be
 preauthorized in the client's tool approval policy. No real provider mutation
-is needed. Clean up the clients, broker, proxy, tokens, and CA after the run.
+is needed. Clean up the clients, broker, any proxy, tokens, and CA after the run.
 
 ## Trusted ingress and managed identity
 

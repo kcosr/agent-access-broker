@@ -3,6 +3,7 @@ use crate::ingress::guards::{IngressGuards, IngressPermit};
 use crate::ingress::invocation_limits::InvocationLimiter;
 use crate::ingress::source::SourceResolver;
 use crate::ingress::spool::UploadSpoolBudgets;
+use crate::listener_tls::{ListenerTlsFiles, ListenerTlsIdentities};
 use crate::reload::ReloadAttemptSummary;
 use agent_access_core::microsoft_oidc::renewal::TokenEndpointResponse;
 use agent_access_core::microsoft_oidc::{
@@ -37,6 +38,8 @@ pub(crate) struct AppState {
 
 pub(crate) struct ReloadableState {
     pub(crate) config_path: PathBuf,
+    /// Listener paths are fixed at startup; reload rereads their contents.
+    pub(crate) listener_tls_files: ListenerTlsFiles,
     /// Backends this process links; every reload parses with them.
     pub(crate) backends: Arc<BackendRegistry>,
     /// The linking assembly's build status, served at `/v1/broker/status`.
@@ -176,6 +179,8 @@ pub(crate) struct RuntimeSnapshot {
     pub(crate) readiness_cache: Arc<ReadinessCache>,
     pub(crate) state_locks: Arc<StateLockSet>,
     pub(crate) microsoft_oidc: Option<Arc<MicrosoftOidcProviderRuntime>>,
+    /// Both listener identities publish at the same boundary as this runtime.
+    pub(crate) listener_tls: ListenerTlsIdentities,
 }
 
 #[derive(Debug, Clone)]
@@ -566,6 +571,7 @@ impl RuntimeSnapshot {
             runtime,
             state_locks,
             microsoft_oidc: None,
+            listener_tls: ListenerTlsIdentities::default(),
         })
     }
 
@@ -674,6 +680,7 @@ impl RuntimeSnapshot {
             runtime,
             state_locks,
             microsoft_oidc,
+            listener_tls: ListenerTlsIdentities::default(),
         }))
     }
 
@@ -762,6 +769,7 @@ impl ReloadableState {
     ) -> Self {
         Self {
             config_path,
+            listener_tls_files: ListenerTlsFiles::default(),
             backends,
             build_status: Arc::new(build_status),
             active: ArcSwap::from(Arc::clone(&snapshot)),

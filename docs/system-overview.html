@@ -628,6 +628,7 @@
     <div class="sec-body">
       <p>Agents use CLI or MCP to discover and call actions such as view, search, create and update. Both interfaces use the same action catalog and authorization rules. Discovery reflects the caller's permissions and available credentials; the Broker authorizes every call.</p>
       <p>Native Git and HTTP clients use gateways with administrator-provided connection settings. Gateway operations are not exposed as CLI or MCP actions.</p>
+      <p>The main and optional gateway listeners independently support HTTP or native HTTPS. HTTPS uses operator-provided certificates; transport encryption does not change authentication, permissions or route isolation.</p>
       <table style="margin-top:20px">
         <thead>
           <tr><th>Interface</th><th>Runs as</th><th>Payloads</th><th>Typical use</th></tr>

@@ -362,10 +362,16 @@ Linux and macOS.
 ## Operate and upgrade
 
 Start with [the production sample](agent-access-broker.production.sample.toml)
-and follow the [operator guide](docs/operator-guide.md) to configure HTTPS ingress,
+and follow the [operator guide](docs/operator-guide.md) to configure HTTPS,
 identity, protected state directories, encryption keys, and administrator access.
 The sample grants no provider access; administrators add integrations and grants
 explicitly. Local demos and the general samples are development configurations.
+
+The main and optional gateway listeners independently support HTTP or native
+HTTPS with operator-provided PEM certificates and private keys. HTTPS supports
+TLS 1.2/1.3 and HTTP/1.1 or HTTP/2. Certificate replacements load through the existing
+configuration reload; listener settings require restart. See
+[listener TLS](docs/operator-guide.md#listener-tls) for configuration and rotation.
 
 Run one broker per managed-store, audit, and upload-spool state set. Back up both
 the managed and audit stores together with the keys needed to restore them.

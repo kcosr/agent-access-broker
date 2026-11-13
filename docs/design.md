@@ -309,6 +309,33 @@ that admitted them. Changing what is linked requires a new build and a restart.
 [Shutdown](#process-shutdown) drains listeners, closes HTTP MCP sessions, then
 drains operations, command-import processes and audit within a bounded budget.
 
+### Listener transport
+
+The host owns one public listener and an optional gateway listener. Each uses
+HTTP by default or HTTPS when its `serve` certificate-chain and private-key
+options are set. Transport selection preserves the listener's existing router,
+state, middleware and MCP endpoint ownership; the gateway never acquires public
+routes. Addresses, transport mode and file paths are process settings, while
+replacement file contents participate in ordinary configuration reload.
+
+The host loads bounded PEM files and prepares Rustls server configurations with
+the explicit ring crypto provider, TLS 1.2/1.3, no client-certificate
+authentication and ALPN for HTTP/2 and HTTP/1.1. A handshake captures only its
+selected immutable TLS identity from the active runtime snapshot; it does not
+hold an old runtime or state locks for the connection's lifetime. Neither
+certificate loading nor key parsing occurs on the request path. Clients own
+issuer trust, hostname and validity-period verification.
+
+Each listener owns its handshakes, connection tasks and Hyper child tasks. A
+five-second timeout and 64-handshake capacity bound pending TLS work; excess
+accepted sockets close without spawning waiting tasks. The handshake permit is
+released before established HTTP service begins. ALPN selects the HTTP protocol,
+and a TLS connection without ALPN uses HTTP/1.1. The existing tracked connection
+server preserves request-lifetime and HTTP/2 stream cancellation, streaming,
+upgrades and the original TCP peer address. Graceful shutdown cancels incomplete
+handshakes, drains established work and joins tasks on forced cancellation.
+See [listener TLS](operator-guide.md#listener-tls) for the operator contract.
+
 ### Core vs provider responsibilities
 
 The core runtime owns identity admission, the lookup-before-policy gate, scope
@@ -3017,6 +3044,14 @@ identities can use config reload/status without a managed store only when that
 bootstrap/recovery mode is explicitly enabled. The reload/status request and
 response shapes are in [docs/http-api.md](http-api.md).
 
+Both triggers reread every configured listener certificate/key pair, including
+when the configuration hash is unchanged. The prepared TLS identities live in
+the candidate host snapshot and publish at the same commit point as the runtime,
+after required pre-publication admission, audit and reconciliation. A rejected
+candidate leaves both active identities unchanged. Other snapshot publications
+preserve the current TLS identities. Post-publication housekeeping keeps its
+existing failure semantics and does not roll back a published identity.
+
 Reload is atomic and execution-context admission is generation-coherent with
 the candidate runtime snapshot. Removing a value still referenced by an active
 TOML or managed grant rejects the candidate. Disabled or deleted managed grants
@@ -3039,7 +3074,8 @@ Audit queries use the reader pool of the generation that admitted the request.
 ## Process shutdown
 
 On `SIGTERM` or `SIGINT`, the broker enters a single graceful shutdown path. The
-public listener stops accepting new connections, in-flight HTTP work drains
+public and gateway listeners stop accepting new connections and cancel pending
+TLS handshakes; in-flight HTTP work drains
 within `--shutdown-timeout-ms`, and `SIGUSR2` reload handling exits. Pending rate
 admission closes at drain start: no further rate grants occur, queued tickets
 are removed without dispatch, and tracked admission owners finalize before the

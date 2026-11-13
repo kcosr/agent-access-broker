@@ -74,8 +74,9 @@ The public origin and registered callback must agree exactly. A browser accessin
 that literal loopback address can use HTTP with the explicit opt-in, including
 through an SSH local port forward to a remote Broker. Google redirects the browser
 back; Google does not need inbound network access to the Broker. A normal hosted
-origin needs HTTPS with a certificate trusted by the browser. The Broker listener
-serves HTTP; terminate TLS at your deployment's reverse proxy.
+origin needs HTTPS with a certificate trusted by the browser. Use
+[native listener TLS](operator-guide.md#listener-tls) or terminate TLS at your
+deployment's reverse proxy.
 
 Enable the owner's self-service setting. The Gmail credential connection's OAuth
 binding and an active `per_user` action grant, assigned directly or through a current group,

@@ -19,6 +19,20 @@ const PROVENANCE_VARIABLES = ["AGENT_ACCESS_BUILD_COMMIT", "AGENT_ACCESS_BUILD_P
 const stamp = () => new Date().toISOString();
 export const MINIMUM_NEXTEST_VERSION = "0.9.150";
 
+export function inspectOpenSslToolchain(root, { platform = process.platform, env = process.env, run = execFileSync } = {}) {
+  if (platform === "win32") return null;
+  const required = "OpenSSL is required for the Unix listener-tls gate; install OpenSSL and ensure openssl version succeeds on PATH before running qualification";
+  let output;
+  try {
+    output = run("openssl", ["version"], {
+      cwd: root, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5_000, maxBuffer: 16 * 1024,
+    }).trim();
+  } catch { throw new Error(required); }
+  if (!output) throw new Error(required);
+  return output;
+}
+
 export function inspectNextestToolchain(root, { cargo = "cargo", env = process.env, run = execFileSync } = {}) {
   const required = `cargo-nextest ${MINIMUM_NEXTEST_VERSION} or newer is required; install the tested version with cargo install --locked --version ${MINIMUM_NEXTEST_VERSION} cargo-nextest`;
   let output;
@@ -94,6 +108,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
   const cargoCommand = (...args) => [cargo, ...compilerArgs, ...args];
   const native = ["--locked", "--target-dir", "target", "--target", target];
   const binaries = repositoryBinaries(root, "debug", target, platform);
+  const releaseBinaries = repositoryBinaries(root, "release", target, platform);
   const noticeDirectory = join(outputDir, "rust-notices");
   const nodeTests = readdirSync(join(root, "scripts")).filter((file) => file.endsWith(".test.mjs"))
     .sort().map((file) => `scripts/${file}`);
@@ -131,6 +146,10 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "cli-sample", command: [binaries.cliBinary, "--config", "agent-access.sample.toml", "config", "validate"] },
     { id: "portal-browser", command: portal("test:e2e"), binaries },
     { id: "release-provenance", command: [node, "scripts/verify-release-provenance.mjs", commit] },
+    // Exercise the production-only dependency graph built by provenance, so
+    // test feature unification cannot conceal missing HTTP/2 support.
+    { id: "listener-tls", command: [node, "scripts/verify-listener-tls.mjs", "--broker", releaseBinaries.brokerBinary,
+      "--output-dir", join(outputDir, "listener-tls")], notApplicable: platform === "win32" },
     { id: "rust-notices-generate", command: [python, "-B", "scripts/generate-rust-notices.py", "--target", target, "--output-dir", noticeDirectory] },
     { id: "rust-notices-check", command: [python, "-B", "scripts/generate-rust-notices.py", "--target", target, "--output-dir", noticeDirectory, "--check"] },
   ];
@@ -187,11 +206,14 @@ export function runQualification({ root = ROOT, outputDir, env = process.env } =
     assertNoGitOverrides(baseEnv);
     report.commit = capture(root, "git", ["rev-parse", "HEAD"], baseEnv);
     assertQualificationSource(root, report.commit, baseEnv);
+    report.prerequisites = { opensslVersion: inspectOpenSslToolchain(root, { env: baseEnv }) };
     const toolchain = inspectLocalToolchain(root, { env: baseEnv });
     report.target = toolchain.host;
     const npmVersionCommand = npmCommand(process.platform, "--version");
-    report.prerequisites = JSON.parse(capture(root, "python3", ["-B", "scripts/release-prerequisites.py",
-      ...toolchain.cargoConfigs.filter((config) => config.selected).flatMap((config) => ["--cargo-config", config.path])], baseEnv));
+    report.prerequisites = { ...report.prerequisites,
+      ...JSON.parse(capture(root, "python3", ["-B", "scripts/release-prerequisites.py",
+        ...toolchain.cargoConfigs.filter((config) => config.selected).flatMap((config) => ["--cargo-config", config.path])], baseEnv)),
+    };
     report.toolchain = { ...toolchain, node: process.version,
       npm: capture(root, npmVersionCommand[0], npmVersionCommand.slice(1), baseEnv),
       python: capture(root, "python3", ["--version"], baseEnv),

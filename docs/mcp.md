@@ -189,7 +189,8 @@ not raise these local client limits.
 ## HTTP endpoint
 
 The broker can also serve Streamable HTTP MCP at `https://broker.example.com/mcp`
-on its existing public listener, behind the existing trusted TLS ingress. Enable
+on its existing public listener using [native HTTPS](operator-guide.md#listener-tls)
+or trusted TLS ingress. Enable
 `[mcp]` with `public_url` and either an `Authorization: Bearer` identity source
 or a named trusted caller that permits username or fingerprint identity; see
 [configuration](configuration.md#mcp). It is disabled by default.

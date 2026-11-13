@@ -22,9 +22,11 @@ request lifecycle, identity, policy, credential, and audit models, see
 
 ## Listeners and route surface
 
-The broker always runs one public HTTP listener. It can also bind an optional
+The broker always runs one public listener. It can also bind an optional
 gateway listener with `agent-access-broker serve --gateway-listen <addr>` for
-host-matched protocol traffic.
+host-matched protocol traffic. Each independently supports HTTP or native HTTPS
+without changing its routes. HTTPS uses TLS 1.2/1.3 and negotiates HTTP/1.1 or
+HTTP/2 through ALPN; see [listener TLS](operator-guide.md#listener-tls).
 
 ```mermaid
 flowchart TB
@@ -94,7 +96,7 @@ the SDK transport.
 ### Downstream HTTP MCP
 
 Enable `[mcp]` with a canonical public URL such as `https://broker.example.com/mcp`.
-The same public listener serves the endpoint behind trusted HTTPS ingress. It is
+The same public listener serves the endpoint using native HTTPS or trusted HTTPS ingress. It is
 reserved and returns 404 when disabled; there is no `/v1/mcp` alias or separate
 MCP port. Existing local stdio MCP remains the interface for local request files,
 uploads, downloads and environment/file secret sources.

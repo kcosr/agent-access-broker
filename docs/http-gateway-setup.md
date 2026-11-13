@@ -21,9 +21,9 @@ by protocol-specific resources or constrained body fields.
 
 The operator configures the gateway listener and a binding for a reserved service
 identity. All gateways share that listener and are selected by HTTP host. Adding
-a binding does not allocate a new listener or port. Provision DNS, the external
-TLS endpoint and routing to the gateway listener as part of deployment; the main
-Broker API listener remains separate.
+a binding does not allocate a new listener or port. Provision DNS and use
+[native gateway HTTPS](operator-guide.md#listener-tls) or a TLS ingress that
+routes to the gateway listener. The main Broker API listener remains separate.
 
 For example, reserve `inventory` for an API whose base path is `/api`:
 

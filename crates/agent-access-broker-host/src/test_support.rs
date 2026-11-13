@@ -433,6 +433,7 @@ impl IsolatedBroker {
             config_path: config_path.clone(),
             listen: public_addr,
             gateway_listen: gateway_addr,
+            listener_tls_files: crate::listener_tls::ListenerTlsFiles::default(),
             body_hard_cap,
             reload_timeout,
             shutdown_timeout,

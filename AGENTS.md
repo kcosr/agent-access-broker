@@ -780,7 +780,8 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   command parsing, `config validate`, `audit verify`, exit statuses) and its
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
   bounded shutdown; `src/http_server.rs` serves each listener's connections and
-  owns their tasks; `src/oauth_revocations.rs` the OAuth revocation worker the
+  owns their tasks; `src/listener_tls.rs` loads bounded operator-provided TLS
+  identities; `src/oauth_revocations.rs` the OAuth revocation worker the
   lifecycle starts and drains; `src/membership_renewal.rs` the Microsoft
   membership renewal admission, flights and drain, sharing ID-token validation
   with sign-in through `src/oidc_id_token.rs`), HTTP routers and handlers,
@@ -993,6 +994,21 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `skills/agent-access-mcp/SKILL.md`: discovery and invocation through existing
   MCP connections, including argument shapes, pagination, and error handling.
 
+## Listener TLS
+
+Keep TLS optional and independent on the existing public and gateway listeners;
+transport selection never changes their routes or authentication. Prepare all
+configured identities before startup or reload publication, and publish them
+with the host runtime snapshot after all pre-publication checks. Both reload
+entry points reread unchanged file paths, even when configuration text is
+unchanged. Other snapshot publications preserve the identities. A TLS
+connection captures only its identity, not a retired runtime or state-lock set.
+Keep handshake capacity separate from established connections and acquire it
+before spawning work. Use the existing tracked Hyper executor, request-lifetime
+and shutdown handling, including pending handshake cancellation. Keep private
+key bytes out of diagnostics. Require the production-executable TLS smoke:
+test dependencies must not supply HTTP/2 support that a normal build lacks.
+
 ## Changelog
 
 Location: `CHANGELOG.md` (root)
@@ -1069,15 +1085,16 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 
 The driver runs the required standalone Rust, crate-boundary, public API,
 downstream consumer, portal, script, documentation, changelog, sample-config,
-Unix signal, native release-provenance, and notice checks. It
+Unix signal, native release-provenance, listener TLS, and notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
 requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
 `contentless_delete`, the `nightly-2026-07-13` toolchain and `cargo-public-api`
 0.52.0 for the public API gate, cargo-nextest 0.9.150 or newer for the Rust
-test gate, and rejects Cargo target runners, including
-through configuration includes. The public API gate checks the candidate
+test gate, and `openssl` on `PATH` for Unix listener TLS. It records the
+`openssl version` result before any gate starts and rejects Cargo target runners,
+including through configuration includes. The public API gate checks the candidate
 against its own `api/` inventory; for a release on an existing compatible line,
 also review `git diff <previous-release-tag> -- api/`, where a patch release
 may not remove or change any line. See the
