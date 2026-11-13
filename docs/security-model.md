@@ -365,13 +365,14 @@ surface is both easier for agents to use correctly and smaller to reason about.
 
 The supported production deployment uses a single broker process owning one managed
 store, audit store (a SQLite audit database or JSONL files), and upload-spool
-state set, serving one public HTTP listener
-behind the deployment's TLS and trusted-context-ingress boundary. That listener carries the agent invoke API,
+state set, serving one public listener with native HTTPS or behind controlled
+TLS ingress. TLS protects the transport; named trusted callers independently
+authenticate permitted identity and execution-context assertions. That listener carries the agent invoke API,
 discovery, browser authentication, the same-origin portal, self-service
 credential/token management, audit queries, DB-backed admin management, and
 config reload/status operations. Deployments that enable protocol gateways, such as Git
 smart HTTP, bind a separate gateway listener for host-matched protocol traffic;
-that listener does not mount `/v1` or `/ui` and authenticates with
+that listener independently selects HTTP or HTTPS, does not mount `/v1` or `/ui`, and authenticates with
 `agent_invoke` broker tokens carried by the protocol client or explicitly enabled
 managed identity through a named trusted caller. Unix deployments
 can also trigger config reload through `SIGUSR2` for service-manager hooks
@@ -1129,7 +1130,8 @@ route protocol state and confer no authority. Each request reauthenticates, and
 sessions bind to an exact credential, execution context, and endpoint/security
 configuration. Policy reloads preserve sessions while rechecking authority on
 each request.
-Public Host and explicit Origin validation complement trusted TLS ingress.
+Public Host and explicit Origin validation complement native HTTPS or trusted
+TLS ingress.
 
 HTTP exposes JSON actions and passes inline inputs through the canonical action
 schema, including sensitive fields. Such inputs and deliberately issued output

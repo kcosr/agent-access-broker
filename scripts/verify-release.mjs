@@ -94,6 +94,7 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
   const cargoCommand = (...args) => [cargo, ...compilerArgs, ...args];
   const native = ["--locked", "--target-dir", "target", "--target", target];
   const binaries = repositoryBinaries(root, "debug", target, platform);
+  const releaseBinaries = repositoryBinaries(root, "release", target, platform);
   const noticeDirectory = join(outputDir, "rust-notices");
   const nodeTests = readdirSync(join(root, "scripts")).filter((file) => file.endsWith(".test.mjs"))
     .sort().map((file) => `scripts/${file}`);
@@ -131,6 +132,10 @@ export function qualificationPlan({ root, outputDir, commit, target, platform = 
     { id: "cli-sample", command: [binaries.cliBinary, "--config", "agent-access.sample.toml", "config", "validate"] },
     { id: "portal-browser", command: portal("test:e2e"), binaries },
     { id: "release-provenance", command: [node, "scripts/verify-release-provenance.mjs", commit] },
+    // Exercise the production-only dependency graph built by provenance, so
+    // test feature unification cannot conceal missing HTTP/2 support.
+    { id: "listener-tls", command: [node, "scripts/verify-listener-tls.mjs", "--broker", releaseBinaries.brokerBinary,
+      "--output-dir", join(outputDir, "listener-tls")], notApplicable: platform === "win32" },
     { id: "rust-notices-generate", command: [python, "-B", "scripts/generate-rust-notices.py", "--target", target, "--output-dir", noticeDirectory] },
     { id: "rust-notices-check", command: [python, "-B", "scripts/generate-rust-notices.py", "--target", target, "--output-dir", noticeDirectory, "--check"] },
   ];

@@ -2195,7 +2195,10 @@ fn match_gateway(
 }
 
 fn effective_gateway_host(request: &Request<Body>) -> Result<String, &'static str> {
-    if request.uri().scheme().is_some() {
+    // Hyper represents HTTP/2's :scheme and :authority pseudo-headers in the
+    // URI. They are required origin request metadata, not an absolute-form
+    // HTTP/1 proxy target. Keep the common authority/Host checks below.
+    if request.version() != axum::http::Version::HTTP_2 && request.uri().scheme().is_some() {
         return Err("gateway requests must not use absolute-form targets");
     }
     let mut host_values = request.headers().get_all(HOST).iter();

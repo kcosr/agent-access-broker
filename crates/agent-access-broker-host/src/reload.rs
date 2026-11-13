@@ -5,6 +5,7 @@ use crate::handlers::management::common::{
     management_success_response,
 };
 use crate::lifecycle::StartupHooks;
+use crate::listener_tls::ListenerTlsFiles;
 use crate::observability;
 use crate::state::{AppState, ReloadableState, RuntimeSnapshot};
 use agent_access_core::{
@@ -47,6 +48,7 @@ pub(crate) struct ReloadAttemptSummary {
 /// Loads, validates and locks the startup configuration and builds its
 /// generation-1 state, with what `hooks` add for an isolated test
 /// application.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn start_reloadable_state(
     config_path: PathBuf,
     backends: Arc<BackendRegistry>,
@@ -54,6 +56,7 @@ pub(crate) async fn start_reloadable_state(
     body_hard_cap: Option<u64>,
     reload_timeout: Duration,
     shutdown_timeout: Duration,
+    listener_tls_files: ListenerTlsFiles,
     #[cfg_attr(not(test), allow(unused_mut))] mut hooks: StartupHooks,
 ) -> anyhow::Result<Arc<ReloadableState>> {
     validate_reload_timeout(reload_timeout)?;
@@ -71,6 +74,8 @@ pub(crate) async fn start_reloadable_state(
         anyhow::bail!("limits.max_http_body_bytes exceeds --max-http-body-hard-cap-bytes");
     }
     validate_broker_config(&config)?;
+    let files = listener_tls_files.clone();
+    let listener_tls = tokio::task::spawn_blocking(move || files.load()).await??;
     let node_id = resolve_node_id(&config.deployment)?;
     let hash = config_hash(&raw);
     let state_locks = StateLockSet::acquire_for_config(
@@ -95,9 +100,10 @@ pub(crate) async fn start_reloadable_state(
         })?
         .with_config_generation(1);
     runtime.local_state_readiness().await?;
-    let snapshot = hooks
+    let mut snapshot = hooks
         .startup_snapshot(1, hash, runtime, state_locks)
         .await?;
+    Arc::make_mut(&mut snapshot).listener_tls = listener_tls;
     snapshot.reconcile_microsoft_oidc_provider()?;
     // A registration narrowed while the broker was down applies from the start.
     // Nothing is serving yet, and ordinary admission never consults the
@@ -125,7 +131,7 @@ pub(crate) async fn start_reloadable_state(
             "application token reconciliation failed at startup: tokens minted under an earlier application registration could keep authority the current configuration no longer grants; restore access to the managed store and start again"
         );
     }
-    let state = ReloadableState::from_snapshot(
+    let mut state = ReloadableState::from_snapshot(
         config_path,
         backends,
         build_status,
@@ -135,6 +141,7 @@ pub(crate) async fn start_reloadable_state(
         shutdown_timeout,
         audit_registry,
     );
+    state.listener_tls_files = listener_tls_files;
     #[cfg(test)]
     let state = hooks.customize_state(state);
     Ok(Arc::new(state))
@@ -262,6 +269,7 @@ fn build_candidate_runtime(
     admission: CandidateAdmission,
     generation: u64,
     previous_runtime: BrokerRuntime,
+    listener_tls_files: &ListenerTlsFiles,
     deadline: ReloadDeadline,
 ) -> Result<CandidateRuntime, ReloadFailure> {
     let CandidateAdmission {
@@ -270,11 +278,23 @@ fn build_candidate_runtime(
         state_locks,
     } = admission;
     deadline.check_with_hash(Some(hash.clone()))?;
+    // Read both identities for every candidate, even when the TOML hash did
+    // not change. Nothing becomes visible until the runtime publishes.
+    let listener_tls = listener_tls_files.load().map_err(|error| {
+        ReloadFailure::new(
+            AdminDecision::Error,
+            ReasonCode::ConfigAdmissionFailed,
+            vec![error.to_string()],
+            Some(hash.clone()),
+        )
+    })?;
+    deadline.check_with_hash(Some(hash.clone()))?;
     let runtime = BrokerRuntime::new_for_reload(config, &previous_runtime)
         .map_err(|error| runtime_admission_failure(error, Some(hash.clone())))?
         .with_config_generation(generation);
     deadline.check_with_hash(Some(hash.clone()))?;
-    let snapshot = RuntimeSnapshot::new(generation, hash.clone(), runtime, state_locks);
+    let mut snapshot = RuntimeSnapshot::new(generation, hash.clone(), runtime, state_locks);
+    Arc::make_mut(&mut snapshot).listener_tls = listener_tls;
     Ok(CandidateRuntime {
         config_hash: hash,
         snapshot,
@@ -1562,6 +1582,7 @@ impl ReloadableState {
         let build_deadline = deadline.clone();
         let backends = Arc::clone(&self.backends);
         let build_status = Arc::clone(&self.build_status);
+        let listener_tls_files = self.listener_tls_files.clone();
         // The build reports to the dispatcher the reload runs under.
         let dispatch = tracing::dispatcher::get_default(tracing::Dispatch::clone);
         let mut build = tokio::task::spawn_blocking(move || {
@@ -1575,7 +1596,13 @@ impl ReloadableState {
                     &previous_runtime,
                     &build_deadline,
                 )?;
-                build_candidate_runtime(admission, generation, previous_runtime, build_deadline)
+                build_candidate_runtime(
+                    admission,
+                    generation,
+                    previous_runtime,
+                    &listener_tls_files,
+                    build_deadline,
+                )
             })
         });
         match tokio::time::timeout(self.reload_timeout, &mut build).await {
@@ -1629,10 +1656,14 @@ impl ReloadableState {
                         )
                         .await;
                         match prepared {
-                            Ok(Ok(snapshot)) => Ok(CandidateRuntime {
-                                config_hash: candidate.config_hash,
-                                snapshot,
-                            }),
+                            Ok(Ok(mut snapshot)) => {
+                                Arc::make_mut(&mut snapshot).listener_tls =
+                                    candidate.snapshot.listener_tls.clone();
+                                Ok(CandidateRuntime {
+                                    config_hash: candidate.config_hash,
+                                    snapshot,
+                                })
+                            }
                             Ok(Err(error)) => {
                                 self.shutdown_candidate_audit(&candidate.snapshot, remaining)
                                     .await;

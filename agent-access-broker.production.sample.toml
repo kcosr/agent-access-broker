@@ -5,8 +5,14 @@
 # Start the public listener on loopback behind HTTPS ingress:
 # agent-access-broker --config /etc/agent-access-broker/broker.toml serve \
 #   --listen 127.0.0.1:8787
-# The broker itself serves HTTP. Restrict access to its listener to the ingress
-# process. Never forward caller identity/context headers from arbitrary clients.
+# To use native HTTPS on that same listener, add both serve flags:
+#   --tls-cert-chain /etc/agent-access-broker/tls/server-chain.pem \
+#   --tls-private-key /etc/agent-access-broker/tls/server-key.pem
+# A separate --gateway-listen can independently use --gateway-tls-cert-chain
+# and --gateway-tls-private-key. Listener settings are serve flags, not TOML.
+# Reload replacement certificate/key contents; changing flags requires restart.
+# Restrict listener access to the intended peers. Never forward caller
+# identity/context headers from arbitrary clients.
 # No trusted callers, imported integrations, Git gateway, or HTTP MCP are
 # enabled by this baseline.
 

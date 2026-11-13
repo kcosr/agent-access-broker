@@ -780,7 +780,8 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   command parsing, `config validate`, `audit verify`, exit statuses) and its
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
   bounded shutdown; `src/http_server.rs` serves each listener's connections and
-  owns their tasks; `src/oauth_revocations.rs` the OAuth revocation worker the
+  owns their tasks; `src/listener_tls.rs` loads bounded operator-provided TLS
+  identities; `src/oauth_revocations.rs` the OAuth revocation worker the
   lifecycle starts and drains; `src/membership_renewal.rs` the Microsoft
   membership renewal admission, flights and drain, sharing ID-token validation
   with sign-in through `src/oidc_id_token.rs`), HTTP routers and handlers,
@@ -992,6 +993,21 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   runtime OpenAPI/catalog discovery.
 - `skills/agent-access-mcp/SKILL.md`: discovery and invocation through existing
   MCP connections, including argument shapes, pagination, and error handling.
+
+## Listener TLS
+
+Keep TLS optional and independent on the existing public and gateway listeners;
+transport selection never changes their routes or authentication. Prepare all
+configured identities before startup or reload publication, and publish them
+with the host runtime snapshot after all pre-publication checks. Both reload
+entry points reread unchanged file paths, even when configuration text is
+unchanged. Other snapshot publications preserve the identities. A TLS
+connection captures only its identity, not a retired runtime or state-lock set.
+Keep handshake capacity separate from established connections and acquire it
+before spawning work. Use the existing tracked Hyper executor, request-lifetime
+and shutdown handling, including pending handshake cancellation. Keep private
+key bytes out of diagnostics. Require the production-executable TLS smoke:
+test dependencies must not supply HTTP/2 support that a normal build lacks.
 
 ## Changelog
 

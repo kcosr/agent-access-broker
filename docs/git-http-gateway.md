@@ -76,7 +76,9 @@ token restrictions and local credential readiness. Git smart HTTP reference
 discovery (`info/refs`) is part of the Git protocol and remains available under
 normal gateway authorization.
 
-Git clients point at the gateway listener host. When prompted for HTTP Basic
+Git clients point at the gateway listener host, using
+[native gateway HTTPS](operator-guide.md#listener-tls) or a TLS ingress that
+routes to it. When prompted for HTTP Basic
 credentials, use the configured username (`agent-access` by default) and an
 `agent_invoke` broker token as the password:
 

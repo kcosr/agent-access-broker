@@ -155,6 +155,21 @@ this fixture as not applicable on non-Unix platforms. Portal unit and browser
 configurations also reject focused-only tests so they cannot silently narrow
 the required suites.
 
+The Unix `listener-tls` gate runs the separate production-executable HTTPS smoke
+with Node.js and OpenSSL. It verifies TLS and HTTP/2 on the normal build rather
+than relying on Cargo test dependency features. To run it directly against the
+native binary built above:
+
+```bash
+node scripts/verify-listener-tls.mjs \
+  --broker "$PWD/target/$BROKER_BUILD_TARGET/debug/agent-access-broker" \
+  --output-dir /absolute/new-or-empty/listener-tls-evidence
+```
+
+It creates synthetic certificates and isolated Broker instances, exercises
+certificate verification and transactional rotation, and terminates its own
+processes. See [native listener TLS tests](testing.md#native-listener-tls).
+
 Run the portal browser suite against the native candidate binaries produced by
 the explicit build above. The target directory and host triple keep inherited
 Cargo target settings from selecting an older artifact:
@@ -327,12 +342,13 @@ compatibility with a different Linux distribution or architecture.
 Follow the [operator guide](operator-guide.md) and
 [administrator guide](administrator-guide.md) to verify the deployed environment:
 
-1. Confirm the HTTPS origin, restricted HTTP listener, immutable portal assets,
+1. Confirm the HTTPS origin, restricted listener access, immutable portal assets,
    owner-only state/key directories, and required identity. Confirm `/v1/healthz`
    and `/v1/readyz`, then check authenticated broker status and provenance.
-   Verify `network.trusted_proxies` names the exact ingress peers, ingress strips
-   client-supplied forwarded-address headers and sets verified addresses, and
-   audit distinguishes clients through that ingress. Confirm a client's failed
+   When using ingress, verify `network.trusted_proxies` names its exact peers,
+   ingress strips client-supplied forwarded-address headers and sets verified
+   addresses, and audit distinguishes clients through that ingress. Direct
+   connections retain their TCP peer address. Confirm a client's failed
    logins do not lock out the same account from a different resolved source.
 2. Bootstrap the first administrator, change its initial password, create a second
    recovery administrator, remove the bootstrap fields, and return

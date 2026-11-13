@@ -118,6 +118,7 @@ test("publication rejects stale, failed, incomplete, duplicate, and skipped qual
   windows.platform = "win32";
   windows.target = "x86_64-pc-windows-msvc";
   Object.assign(windows.checks.find((check) => check.id === "unix-signals"), { status: "not-applicable", exitCode: null });
+  Object.assign(windows.checks.find((check) => check.id === "listener-tls"), { status: "not-applicable", exitCode: null });
   validateQualification(windows, { commit, version });
   windows.platform = "linux";
   assert.throws(() => validateQualification(windows, { commit, version }), /unix-signals/);
@@ -183,9 +184,14 @@ test("qualification uses required native/browser gates and fresh paths without p
   assert.equal(browser.binaries.brokerBinary, path.join(root, "target", nativeTarget, "debug", "agent-access-broker"));
   assert.ok(plan.find((entry) => entry.id === "browser-prerequisites").command.at(-1).includes("chromium.launch"));
   assert.ok(plan.find((entry) => entry.id === "release-provenance").command.includes(commit));
+  const tlsIndex = plan.findIndex((entry) => entry.id === "listener-tls");
+  assert.equal(tlsIndex, plan.findIndex((entry) => entry.id === "release-provenance") + 1);
+  assert.deepEqual(plan[tlsIndex].command, [process.execPath, "scripts/verify-listener-tls.mjs", "--broker",
+    path.join(root, "target", nativeTarget, "release", "agent-access-broker"),
+    "--output-dir", path.join(outputDir, "listener-tls")]);
   assert.ok(plan.every((entry) => !entry.command.some((argument) => argument === "gh" || argument === "push" || argument === "tag")));
   const windows = qualificationPlan({ root, outputDir, commit, target: "x86_64-pc-windows-msvc", platform: "win32" });
-  assert.equal(windows.filter((entry) => entry.notApplicable).map((entry) => entry.id).join(","), "unix-signals");
+  assert.equal(windows.filter((entry) => entry.notApplicable).map((entry) => entry.id).join(","), "unix-signals,listener-tls");
   assert.deepEqual(windows.find((entry) => entry.id === "portal-dependencies").command, ["cmd.exe", "/d", "/s", "/c", "npm --prefix apps/portal ci"]);
 });
 
