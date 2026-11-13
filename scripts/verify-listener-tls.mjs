@@ -801,23 +801,32 @@ async function transportAndRotation(material) {
     });
     await test("handshake concurrency cap rejects excess work and recovers", async () => {
       const capacityWarnings = () => running.events.filter((event) => event.event === "tls_handshake_capacity_exhausted");
-      const warningsBefore = capacityWarnings().length;
-      const stalled = await Promise.all(Array.from({ length: HANDSHAKE_CAPACITY }, () => tcp(running.public.port)));
-      try {
-        await delay(100);
-        check(stalled.every((socket) => !socket.destroyed), "Capacity test must occupy all handshake slots");
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          const excess = await tcp(running.public.port);
-          try { await until(() => excess.destroyed, "Excess TLS handshake rejection", 1_500); }
-          finally { excess.destroy(); }
-        }
-        check((await request(running.gateway, GIT_PATH, { headers: gatewayAuth(running) })).status === 200, "Public handshake saturation must not exhaust the gateway's separate budget");
-        await until(() => stalled.every((socket) => socket.destroyed), "Bounded handshake release", HANDSHAKE_TIMEOUT + 3_000);
-        check((await request(running.public, "/v1/healthz")).status === 200, "TLS listener must recover after handshake timeouts");
-        const warnings = capacityWarnings().slice(warningsBefore);
-        check(warnings.length === 1 && warnings[0].level === "WARN" && warnings[0].maxHandshakes === HANDSHAKE_CAPACITY,
-          "Repeated capacity rejection must emit exactly one throttled warning with the listener limit");
-      } finally { for (const socket of stalled) socket.destroy(); }
+      const probes = {
+        public: () => request(running.public, "/v1/healthz"),
+        gateway: () => request(running.gateway, GIT_PATH, { headers: gatewayAuth(running) }),
+      };
+      for (const name of ["public", "gateway"]) {
+        const warningsBefore = capacityWarnings().length;
+        const endpoint = running[name];
+        const other = name === "public" ? "gateway" : "public";
+        const stalled = await Promise.all(Array.from({ length: HANDSHAKE_CAPACITY }, () => tcp(endpoint.port)));
+        try {
+          await delay(100);
+          check(stalled.every((socket) => !socket.destroyed), "Capacity test must occupy all handshake slots");
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            const excess = await tcp(endpoint.port);
+            try { await until(() => excess.destroyed, "Excess TLS handshake rejection", 1_500); }
+            finally { excess.destroy(); }
+          }
+          check((await probes[other]()).status === 200, "Handshake saturation must preserve the other listener's separate budget");
+          await until(() => stalled.every((socket) => socket.destroyed), "Bounded handshake release", HANDSHAKE_TIMEOUT + 3_000);
+          check((await probes[name]()).status === 200, "TLS listener must recover after handshake timeouts");
+          const warnings = capacityWarnings().slice(warningsBefore);
+          check(warnings.length === 1 && warnings[0].level === "WARN"
+            && warnings[0].maxHandshakes === HANDSHAKE_CAPACITY && warnings[0].listener === name,
+          "Repeated capacity rejection must emit exactly one throttled warning identifying the listener and limit");
+        } finally { for (const socket of stalled) socket.destroy(); }
+      }
     });
     await test("shutdown joins pending handshakes and active TLS streaming connections", async () => {
       const pending = await tcp(running.public.port);

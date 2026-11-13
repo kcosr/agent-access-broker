@@ -450,7 +450,13 @@ async fn run_service(
     let (public_app, mcp) = public_router(state.clone());
     #[cfg(test)]
     let served_public_app = public_app.clone();
-    servers.serve(public_listener, public_app, coordinator.clone(), public_tls);
+    servers.serve(
+        public_listener,
+        public_app,
+        coordinator.clone(),
+        public_tls,
+        "public",
+    );
     #[cfg(test)]
     let mut served_gateway_app = None;
     if let Some((gateway_address, gateway_listener)) = gateway_listener {
@@ -472,6 +478,7 @@ async fn run_service(
             gateway_app,
             coordinator.clone(),
             gateway_tls,
+            "gateway",
         );
     }
     #[cfg(any(test, feature = "test-support"))]
@@ -587,6 +594,7 @@ impl Servers {
         app: axum::Router,
         coordinator: ShutdownCoordinator,
         tls: Option<crate::http_server::TlsConfigProvider>,
+        listener_name: &'static str,
     ) {
         let shutdown = async move {
             let _ = coordinator.wait().await;
@@ -594,7 +602,8 @@ impl Servers {
         let force = self.force.clone();
         self.tasks.spawn(
             async move {
-                crate::http_server::serve_http(listener, app, shutdown, force, tls).await;
+                crate::http_server::serve_http(listener, app, shutdown, force, tls, listener_name)
+                    .await;
                 Ok(())
             }
             .with_current_subscriber(),
@@ -1407,7 +1416,7 @@ mod tests {
         let public_addr = public_listener.local_addr().unwrap();
         let app = Router::new().route("/", get(|| async { "ok" }));
 
-        servers.serve(public_listener, app, coordinator.clone(), None);
+        servers.serve(public_listener, app, coordinator.clone(), None, "public");
 
         coordinator.trigger(ShutdownCause::Signal("SIGTERM"));
         assert!(
@@ -1445,7 +1454,7 @@ mod tests {
                 }
             }),
         );
-        servers.serve(listener, app, coordinator.clone(), None);
+        servers.serve(listener, app, coordinator.clone(), None, "public");
         let client = tokio::spawn(raw_http_get(addr));
         entered_rx.await.unwrap();
 
@@ -1630,7 +1639,7 @@ path="{}"
                 }
             }),
         );
-        servers.serve(listener, app, coordinator.clone(), None);
+        servers.serve(listener, app, coordinator.clone(), None, "public");
         let client = tokio::spawn(raw_http_get(addr));
         entered_rx.await.unwrap();
 

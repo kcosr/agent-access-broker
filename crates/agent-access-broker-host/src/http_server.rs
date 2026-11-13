@@ -47,6 +47,7 @@ pub(crate) async fn serve_http(
     shutdown: impl Future<Output = ()>,
     force: CancellationToken,
     tls: Option<TlsConfigProvider>,
+    listener_name: &'static str,
 ) {
     let connections = Connections {
         tracker: TaskTracker::new(),
@@ -73,6 +74,7 @@ pub(crate) async fn serve_http(
                             if now >= next_capacity_warning {
                                 tracing::warn!(
                                     event = "tls_handshake_capacity_exhausted",
+                                    listener = listener_name,
                                     maxHandshakes = MAX_TLS_HANDSHAKES,
                                     "TLS handshake capacity exhausted; rejecting new connections"
                                 );

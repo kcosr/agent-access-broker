@@ -93,6 +93,7 @@ impl TestServer {
             },
             force.clone(),
             tls,
+            "public",
         ));
         Self {
             address,
@@ -187,6 +188,7 @@ async fn detected_http1_connection_close_cancels_pending_request() {
         },
         CancellationToken::new(),
         None,
+        "public",
     ));
     let mut client = TcpStream::connect(address).await.unwrap();
     client
@@ -246,6 +248,7 @@ async fn tls_http2_stream_reset_cancels_only_its_pending_request() {
         },
         CancellationToken::new(),
         Some(tls_provider()),
+        "public",
     ));
     let stream = connect_tls(address, &[b"h2"]).await;
     assert_eq!(stream.get_ref().1.alpn_protocol(), Some(b"h2".as_slice()));
