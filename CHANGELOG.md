@@ -187,6 +187,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **OpenAPI Actions/tools imports support anonymous upstream access.** Choose
+  Anonymous upstream in the portal or supply an empty `executionBindings` array
+  without a security scheme. Broker authentication, grants and audit still apply;
+  authenticated imports never fall back when credentials are missing. See
+  [OpenAPI imports](docs/imported-openapi.md).
+  ([#117](https://github.com/kcosr/agent-access-broker/pull/117))
+
 - **Optional native HTTPS on the main and gateway listeners.** Configure each
   listener independently with an operator-provided PEM certificate chain and
   private key. HTTPS supports TLS 1.2/1.3 and HTTP/1.1 or HTTP/2; certificate replacements
@@ -245,8 +252,7 @@ All notable changes to this project are documented in this file.
   `[imports.gateway_bindings.<service>]` entries pin each service's Broker hosts
   and upstream endpoint. Gateway execution supports explicitly selected anonymous
   access with no execution bindings, or static Basic, bearer or header API-key
-  bindings. Existing MCP and OpenAPI actions/tools imports still require execution
-  credential bindings.
+  bindings. MCP imports require execution credential bindings.
   Gateway response declarations accept concrete media types and `*/*` or `type/*`
   ranges as review metadata while preserving raw upstream bytes and content type.
   Newly accepted wildcard plans require a compatible Broker; see
@@ -259,7 +265,7 @@ All notable changes to this project are documented in this file.
   as `OTHER` to keep caller-supplied method text out of diagnostics. See
   [managed gateway imports](docs/imported-services.md#openapi-http-gateway-imports)
   and the [HTTP gateway setup guide](docs/http-gateway-setup.md).
-  ([#104](https://github.com/kcosr/agent-access-broker/pull/104), [#105](https://github.com/kcosr/agent-access-broker/pull/105))
+  ([#104](https://github.com/kcosr/agent-access-broker/pull/104), [#105](https://github.com/kcosr/agent-access-broker/pull/105), [#117](https://github.com/kcosr/agent-access-broker/pull/117))
 
 - **Context-limited account/group issuance and read-only agent tokens.** A mode
   dropdown and dynamic context checklist define each enabled policy. Explicit

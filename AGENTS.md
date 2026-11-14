@@ -1378,8 +1378,13 @@ them atomically when an empty draft switches away from upload. Portal creation
 and upload are separate mutations: preserve the created draft after upload failure.
 Empty drafts may choose settings before accepting actions; accepted connection
 settings and delivery cannot change underneath existing action identities.
-Both source readers use the common compiler and executor. Preserve existing
-JSON plan bytes; strictly validate the optional form plan and reject duplicate
+OpenAPI actions with an explicitly empty `executionBindings` array use anonymous
+upstream access and service-mode grants; no selected scheme, execution credential
+or personal credential is allowed. Preserve caller authentication and policy.
+Validate effective source security, distinguishing absence from malformed null,
+and reserve source-declared credential parameters. Missing static credentials
+never select anonymous execution. Both source readers use the common compiler
+and executor. Preserve existing JSON plan bytes; strictly validate the optional form plan and reject duplicate
 JSON members during discovery. Resolve imported credential kinds and input rules
 through the adapter's offline credential contract, never by guessing token
 material or parsing protocol settings in core. Imported Basic validation belongs

@@ -23,15 +23,12 @@ pub(crate) fn security_schemes(document: &Value) -> Vec<Security> {
                 value.get("type").and_then(Value::as_str),
                 value.get("in").and_then(Value::as_str),
             ) {
-                (Some("basic"), _) => Security {
+                (Some("basic"), _) => Security::Basic {
                     scheme: name.clone(),
-                    kind: "basic".into(),
-                    header: None,
                 },
-                (Some("apiKey"), Some("header")) => Security {
+                (Some("apiKey"), Some("header")) => Security::RawHeader {
                     scheme: name.clone(),
-                    kind: "raw_header".into(),
-                    header: Some(value.get("name")?.as_str()?.into()),
+                    header: value.get("name")?.as_str()?.into(),
                 },
                 _ => return None,
             };
@@ -195,8 +192,7 @@ pub(crate) fn operation(
         security_requirements: value
             .get("security")
             .or_else(|| document.get("security"))
-            .cloned()
-            .unwrap_or(Value::Null),
+            .cloned(),
         parameters,
         body,
         responses,

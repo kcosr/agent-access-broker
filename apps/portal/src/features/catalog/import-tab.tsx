@@ -11,7 +11,7 @@ import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import type { ImportCredentialInput, ImportBinding, ImportListResult, ImportPreviewResult, ImportPurpose } from "../../import-types";
 import { errorMessage } from "../../lib/helpers";
 import { importItemNoun } from "../../lib/imports";
-import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_GATEWAY_KIND, gatewayIngressLabel, isOpenApiImport, openApiDocumentSource, openApiExposureLabel } from "../../lib/import-openapi";
+import { GATEWAY_AUTHORITY_NOTICE, GATEWAY_BODY_NOTICE, GATEWAY_TEMPLATE_NOTICE, OPENAPI_GATEWAY_KIND, gatewayIngressLabel, isAnonymousOpenApi, isOpenApiImport, openApiDocumentSource, openApiExposureLabel } from "../../lib/import-openapi";
 import { COMMAND_KIND, commandCredentialText, commandName } from "../../lib/import-command";
 import { formatServiceLimit } from "../../lib/service-limits";
 import {
@@ -122,7 +122,7 @@ export function ImportTab({
   const openapi = isOpenApiImport(definition.adapterKind);
   const gateway = definition.adapterKind === OPENAPI_GATEWAY_KIND;
   const gatewayBinding = gateway ? imports?.gatewayBindings.find((binding) => binding.service === definition.service) : undefined;
-  const anonymous = gateway && definition.connectionSettings.executionAuthentication === "anonymous";
+  const anonymous = isAnonymousOpenApi(definition);
   const uploaded = openapi && openApiDocumentSource(definition.connectionSettings) === "upload";
   const command = definition.adapterKind === COMMAND_KIND;
   const accepted = record.acceptedMetadata;

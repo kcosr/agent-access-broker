@@ -224,7 +224,7 @@ fn service_definition() -> Value {
             "service":service_name_schema(),"displayName":{"type":"string","minLength":1,"maxLength":256},
             "adapterKind":service_name_schema(),"endpoint":{"type":"string","format":"uri","maxLength":4096},
             "connectionSettings":{"type":"object","maxProperties":16,"propertyNames":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9._-]+$"},"additionalProperties":{"type":"string","maxLength":4096},"default":{}},
-            "executionBindings":{"type":"array","minItems":0,"maxItems":2,"description":"One or two static/delegated bindings, or none for an explicitly credential-free command or anonymous HTTP gateway.","items":{
+            "executionBindings":{"type":"array","minItems":0,"maxItems":2,"description":"One or two static/delegated bindings, or none for an explicitly credential-free command or anonymous OpenAPI import.","items":{
                 "type":"object","additionalProperties":false,"required":["ownerMode","mechanism","delivery","status"],"properties":{
                     "ownerMode":{"enum":["service","per_user"]},"mechanism":{"enum":["static_token","oauth"]},"delivery":delivery(),
                     "status":{"enum":["configured","unsupported"]},"adapterId":{"type":["string","null"],"minLength":1,"maxLength":256},

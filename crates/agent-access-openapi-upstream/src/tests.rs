@@ -654,4 +654,6 @@ fn accepted_download_semantics_are_rejected_by_openapi() {
     assert!(CompiledAction::new(&definition).is_err());
 }
 
+#[path = "tests/anonymous.rs"]
+mod anonymous;
 mod unified;

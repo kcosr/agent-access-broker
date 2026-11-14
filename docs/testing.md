@@ -47,6 +47,15 @@ the read smoke and the mutating write/download/verify smoke in that binary.
 
 ## Local Deterministic Suite
 
+OpenAPI anonymous-import tests exercise both Swagger and OpenAPI through real
+Broker/CLI, HTTP MCP and stdio MCP fixtures: credential-free setup, grant denials,
+service-only execution, source-security quarantine and offline restart. Adapter
+tests cover security inheritance, malformed declarations, declared credential
+parameters, independent private-document authentication and no authenticated
+fallback. The portal's `imports-openapi-anonymous-live.spec.ts` uses a real Broker
+and upstream recorder to verify onboarding and a query-parameter invocation with
+no upstream Authorization header.
+
 Security regressions cover pre-body concurrency/source admission, independent
 control-plane/metadata caps, anonymous and verified-principal body isolation,
 probe availability, idle

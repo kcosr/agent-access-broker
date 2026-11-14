@@ -7,6 +7,7 @@ mod json;
 mod model;
 mod readers;
 mod refs;
+mod security;
 mod transport;
 
 use agent_access_core::imports::*;
@@ -23,7 +24,7 @@ use transport::*;
 use url::Url;
 
 /// The `openapi_http` import selection. OpenAPI imports use static
-/// credentials only, so it declares no OAuth companion.
+/// or anonymous upstream authentication, so it declares no OAuth companion.
 pub fn registration() -> ImportedAdapterRegistration {
     imported_adapter_registration(
         agent_access_provider::module_metadata!(),
@@ -53,6 +54,9 @@ fn invalid_document(uploaded: bool, message: impl Into<String>) -> ProviderError
 impl ImportedAdapter for OpenApiAdapter {
     fn kind(&self) -> &'static str {
         "openapi_http"
+    }
+    fn supports_credential_free_execution(&self) -> bool {
+        true
     }
     fn development_only(&self) -> bool {
         false
@@ -168,10 +172,17 @@ impl ImportedAdapter for OpenApiAdapter {
             self.scoped_mcp_name(action)
                 .map_err(ProviderBuildError::invalid)?;
             let action = CompiledAction::new(action).map_err(ProviderBuildError::invalid)?;
-            if settings.scheme.as_deref() != Some(action.plan.security.scheme.as_str())
-                || definition.execution_bindings.iter().any(|binding| {
-                    action.plan.security.delivery().ok().as_ref() != Some(&binding.delivery)
-                })
+            let delivery = action
+                .plan
+                .security
+                .delivery()
+                .map_err(ProviderBuildError::invalid)?;
+            if settings.anonymous != delivery.is_none()
+                || settings.scheme.as_deref() != action.plan.security.scheme()
+                || definition
+                    .execution_bindings
+                    .iter()
+                    .any(|binding| delivery.as_ref() != Some(&binding.delivery))
             {
                 return Err(ProviderBuildError::invalid(
                     "accepted operation security no longer matches service credentials",
@@ -397,23 +408,32 @@ impl Provider for OpenApiProvider {
         }
         let action = self.actions.get(request.action()).ok_or_else(input_error)?;
         let prepared = action.request(&self.endpoint, request.inputs())?;
-        let binding = self
-            .definition
-            .execution_bindings
-            .iter()
-            .find(|binding| {
-                binding.owner_mode.as_str() == request.credential_mode().as_str()
-                    && binding.is_supported()
-                    && binding.mechanism == ImportedAuthMechanism::StaticToken
-            })
-            .ok_or_else(credential_error)?;
-        let authorization = auth(
-            &binding.delivery,
-            request
-                .execution()
-                .static_credential()
-                .ok_or_else(credential_error)?,
-        )?;
+        let authorization = if matches!(action.plan.security, model::Security::Anonymous {}) {
+            if request.credential_mode() != CredentialMode::Service
+                || !request.execution().is_none()
+            {
+                return Err(credential_error());
+            }
+            None
+        } else {
+            let binding = self
+                .definition
+                .execution_bindings
+                .iter()
+                .find(|binding| {
+                    binding.owner_mode.as_str() == request.credential_mode().as_str()
+                        && binding.is_supported()
+                        && binding.mechanism == ImportedAuthMechanism::StaticToken
+                })
+                .ok_or_else(credential_error)?;
+            Some(auth(
+                &binding.delivery,
+                request
+                    .execution()
+                    .static_credential()
+                    .ok_or_else(credential_error)?,
+            )?)
+        };
         // The client adds the credential when it sends the request, in place
         // of a parameter header of the same name.
         let mut upstream = self
@@ -440,25 +460,22 @@ impl Provider for OpenApiProvider {
         let mut status = None;
         let operation = async {
             dispatched = true;
-            let mut response = self
-                .client
-                .send(
-                    upstream,
-                    UpstreamCall::new(&action.definition.action).with_authorization(&authorization),
+            let mut call = UpstreamCall::new(&action.definition.action);
+            if let Some(authorization) = &authorization {
+                call = call.with_authorization(authorization);
+            }
+            let mut response = self.client.send(upstream, call).await.map_err(|error| {
+                if matches!(
+                    error,
+                    UpstreamError::NotAllowed | UpstreamError::NotSent { .. }
+                ) {
+                    dispatched = false;
+                }
+                ProviderError::error(
+                    error.reason_code(),
+                    "upstream HTTP operation did not complete",
                 )
-                .await
-                .map_err(|error| {
-                    if matches!(
-                        error,
-                        UpstreamError::NotAllowed | UpstreamError::NotSent { .. }
-                    ) {
-                        dispatched = false;
-                    }
-                    ProviderError::error(
-                        error.reason_code(),
-                        "upstream HTTP operation did not complete",
-                    )
-                })?;
+            })?;
             let code = response.status().as_u16();
             status = Some(code);
             let retry_after = UpstreamRetryAfter::from_headers(response.headers());

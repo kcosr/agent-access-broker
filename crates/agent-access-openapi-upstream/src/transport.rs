@@ -60,15 +60,7 @@ impl CompiledAction {
             return Err("unsupported HTTP method".into());
         }
         let path_variables = validate_path(&plan.path)?;
-        if !bounded(&plan.security.scheme, 256) {
-            return Err("invalid execution security scheme".into());
-        }
         plan.security.delivery()?;
-        if plan.security.kind == "basic"
-            && annotations["openapi"]["security"].get("header").is_some()
-        {
-            return Err("Basic security must not declare a header field".into());
-        }
         let source = definition
             .source
             .as_object()
@@ -113,8 +105,7 @@ impl CompiledAction {
                     crate::config::parameter_header(&parameter.name)?;
                     if plan
                         .security
-                        .header
-                        .as_ref()
+                        .header()
                         .is_some_and(|header| header.eq_ignore_ascii_case(&parameter.name))
                     {
                         return Err("parameter collides with credential header".into());
