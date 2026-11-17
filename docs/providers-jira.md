@@ -18,7 +18,7 @@ passing schema validation alone does not establish that a request is valid.
 Denials for missing or conflicting locators identify the fields without
 including their supplied values.
 
-Issue writes and enabled comment writes accept string content for `markdown`
+Issue description writes and enabled comment writes accept string content for `markdown`
 and `plain_text`, or an ADF document object for `adf`. The `comment_formats`
 setting controls comment-write availability; it does not restrict issue-write
 formats. Preserve the field names and nesting published by the action, and
@@ -206,7 +206,7 @@ Each action needs these Atlassian OAuth scopes:
 | Actions | Scopes |
 | --- | --- |
 | `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
-| `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
+| `issue.create`, `issue.child.create`, `issue.update`, `issue.url_field.set`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
 
 `read:jira-user` serves only token verification and is not needed. The
 registration also requests `read:me` and `offline_access`; see
@@ -235,6 +235,7 @@ agent-access --url http://127.0.0.1:8787 jira issue comment list --issue PROJ-12
 agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100
 agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --content-file description.md --content-format markdown
+agent-access --url http://127.0.0.1:8787 jira issue url-field set PROJ-123 --field-id customfield_12345 --value 'https://reports.example.com/issues/PROJ-123'
 agent-access --url http://127.0.0.1:8787 jira issue search --project PROJ --text 'deployment checklist' --max-results 10
 agent-access --url http://127.0.0.1:8787 jira issue comment add --issue PROJ-123 --content-file comment.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue attach PROJ-123 ./report.txt --content-type text/plain
@@ -866,7 +867,9 @@ ordered by the numeric field-ID suffix, without an integer-size limit. An empty
 array means no custom fields were returned, not that the project defines none.
 Custom fields are automatic: no label mapping, input flag, configuration, or
 additional credential is needed. Search and mutation readbacks do not include
-this array, and create/update do not accept custom-field writes.
+this array, and create/update do not accept custom-field writes. The separate
+[`issue.url_field.set`](#issueurl_fieldset) action writes an operator-allowed
+built-in URL field and returns only that field alongside the issue identity.
 
 Each entry has `id`, nullable `name`, nullable `type`, and `status`. `name` is
 Jira's display text, so duplicate names are valid; use `id` for identity. A
@@ -1236,6 +1239,115 @@ metadata; it excludes submitted summary text, source content, converted ADF,
 returned description ADF, and raw upstream error bodies. Content attribution for
 `issue.update` applies only when the request supplies `content`; it never
 mutates summaries.
+
+## `issue.url_field.set`
+
+`issue.url_field.set` writes one built-in URL custom field on an authorized
+issue. The operator must explicitly allow the field ID:
+
+```toml
+[providers.jira.url_fields]
+allowed_field_ids = ["customfield_12345"]
+```
+
+The default empty list permits no field writes. Allowlisting a field does not
+grant the action: callers need `issue.url_field.set` authority for the issue's
+current Jira project and an execution credential with Jira's Edit issues
+permission. The field must be associated with the applicable project and issue
+type. Broker verifies the exact built-in URL implementation and string schema;
+text fields, app-defined fields, missing fields and unknown schemas are refused.
+There is no arbitrary field-editing or field-clearing operation.
+
+Inputs are:
+
+- Exactly one `issue` key or tenant browser `url` locator.
+- Optional `expectedIssueId`, a positive decimal string identifying the known
+  immutable issue. A different resolved ID fails with `scope_unresolved` before
+  writing, including when a retained key resolves to a different issue.
+- `fieldId`, a canonical `customfield_[1-9][0-9]*` ID present in the operator's
+  allowlist. Display names do not identify fields.
+- `value`, an absolute HTTP or HTTPS URL of at most 255 characters, without
+  credentials, whitespace or control characters. Query strings and fragments
+  are preserved. The limit follows [Jira's URL field limit](https://support.atlassian.com/jira/kb/jira-throws-an-error-when-trying-to-insert-an-url-string-longer-than-255-characters-in-an-url-custom-field/).
+- `expectedValue`, a required string of at most 255 characters without controls,
+  or JSON null. Null requires the returned field value to be null; strings
+  compare exactly, without URL normalization.
+
+The typed CLI sends `expectedValue: null` when `--expected-value` is omitted:
+
+```bash
+agent-access jira issue url-field set PROJ-123 \
+  --field-id customfield_12345 \
+  --value 'https://reports.example.com/issues/PROJ-123'
+
+agent-access jira issue url-field set PROJ-123 \
+  --field-id customfield_12345 \
+  --value 'https://reports.example.com/issues/PROJ-123' \
+  --expected-value 'https://reports.example.com/previous/PROJ-123'
+```
+
+Use `--issue-url` instead of the issue argument for a browser URL, and
+`--expected-issue-id` to guard a known immutable issue ID. The generic
+form makes the required null explicit:
+
+```json
+{
+  "issue": "PROJ-123",
+  "fieldId": "customfield_12345",
+  "value": "https://reports.example.com/issues/PROJ-123",
+  "expectedValue": null
+}
+```
+
+Broker resolves and re-confirms the authorized issue, then reads its selected
+field and field metadata with the execution credential. If the desired value
+is already present, it succeeds with `changed: false`, even when `expectedValue`
+differs. Otherwise, a current value different from `expectedValue` produces
+`jira_url_field_conflict` without a write. A matching precondition permits one
+`PUT /rest/api/3/issue/{confirmedIssueId}` containing only the selected custom field,
+followed by a bounded readback that must confirm the issue identity, URL field
+type and desired value. Field reads and writes use the confirmed immutable ID,
+so later key reuse cannot redirect the write to another issue.
+
+This is a read/check/write precondition, not an atomic Jira compare-and-swap.
+Callers must coordinate field ownership; another application or person can
+change the field between the read and write. The action preserves Jira's
+default notification behavior and exposes no notification override.
+
+Success returns:
+
+```json
+{
+  "operation": "issue.url_field.set",
+  "issue": {
+    "id": "10001",
+    "key": "PROJ-123",
+    "project": "PROJ",
+    "webUrl": "https://example.atlassian.net/browse/PROJ-123"
+  },
+  "field": {
+    "id": "customfield_12345",
+    "name": "Report URL",
+    "type": "url",
+    "value": "https://reports.example.com/issues/PROJ-123"
+  },
+  "changed": true
+}
+```
+
+The display name is null when Jira omits it or returns null. Results do
+not include other custom fields or issue content. Audit records the issue
+identity, project, field ID and whether a write occurred, but excludes field
+values, expected values and display names.
+
+`jira_url_field_not_allowed` means the field ID is absent from the operator
+allowlist. `jira_url_field_not_settable` covers missing or non-URL fields and
+Jira's field-edit refusals; `jira_url_field_conflict` identifies a failed current
+value check. These are nonretryable configuration or precondition failures.
+An accepted write followed by failed readback retains the standard
+`applied_unverified` receipt. A failed response does not by itself prove the
+field was unchanged; repeating the same desired value checks for an already
+applied write before attempting another.
 
 ## `issue.parent.set`
 

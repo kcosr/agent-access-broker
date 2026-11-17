@@ -2116,6 +2116,10 @@ enum JiraIssueCommand {
         #[command(subcommand)]
         command: JiraIssueParentCommand,
     },
+    UrlField {
+        #[command(subcommand)]
+        command: JiraIssueUrlFieldCommand,
+    },
     Dependency {
         #[command(subcommand)]
         command: JiraIssueDependencyCommand,
@@ -2199,6 +2203,30 @@ enum JiraIssueParentCommand {
         parent: Option<String>,
         #[arg(long)]
         parent_url: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum JiraIssueUrlFieldCommand {
+    /// Set one operator-allowed URL custom field after checking its current value.
+    Set {
+        issue: Option<String>,
+        #[arg(long)]
+        issue_url: Option<String>,
+        #[arg(long, help = "Require this immutable Jira issue ID before writing")]
+        expected_issue_id: Option<String>,
+        #[arg(
+            long,
+            help = "Canonical URL custom-field ID, such as customfield_12345"
+        )]
+        field_id: String,
+        #[arg(long, help = "Absolute HTTP(S) URL, at most 255 characters")]
+        value: String,
+        #[arg(
+            long,
+            help = "Exact current value required before replacement; omit to require an unset (null) field"
+        )]
+        expected_value: Option<String>,
     },
 }
 
@@ -15298,6 +15326,40 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     run_invoke_value(
                         ctx,
                         "jira.issue.parent.set",
+                        serde_json::Value::Object(inputs),
+                    )
+                    .await
+                }
+            },
+            JiraIssueCommand::UrlField { command } => match command {
+                JiraIssueUrlFieldCommand::Set {
+                    issue,
+                    issue_url,
+                    expected_issue_id,
+                    field_id,
+                    value,
+                    expected_value,
+                } => {
+                    let mut inputs = jira_issue_argument_locator_inputs(
+                        issue.as_deref(),
+                        issue_url.as_deref(),
+                        "jira issue url-field set",
+                    );
+                    inputs.insert("fieldId".to_string(), serde_json::json!(field_id));
+                    inputs.insert("value".to_string(), serde_json::json!(value));
+                    inputs.insert(
+                        "expectedValue".to_string(),
+                        serde_json::json!(expected_value),
+                    );
+                    if let Some(expected_issue_id) = expected_issue_id {
+                        inputs.insert(
+                            "expectedIssueId".to_string(),
+                            serde_json::json!(expected_issue_id),
+                        );
+                    }
+                    run_invoke_value(
+                        ctx,
+                        "jira.issue.url_field.set",
                         serde_json::Value::Object(inputs),
                     )
                     .await

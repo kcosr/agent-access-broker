@@ -1058,7 +1058,7 @@ Each typed Jira command lowers to a generic `invoke` of the corresponding
 routes; typed commands only build the invoke input for you.
 
 The typed Jira family covers project listing and field discovery, issue view/create/update/search, parented child
-creation, parent assignment, dependency links, issue comments and comment
+creation, parent assignment, URL custom-field writes, dependency links, issue comments and comment
 properties, issue attachments, and verification helpers. Issue locators accept
 issue keys and, where documented, tenant browser URLs. Provider-specific
 actions, required inputs, typed examples, generic `invoke` payloads, JSON
@@ -1621,6 +1621,7 @@ agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://exa
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout'
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout' --content-file description.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --summary 'Clarify startup failure handling'
+agent-access --url http://127.0.0.1:8787 jira issue url-field set PROJ-123 --field-id customfield_12345 --value 'https://reports.example.com/issues/PROJ-123'
 agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100 --content 'Follow the deployment checklist.' --content-format plain_text
 agent-access --url http://127.0.0.1:8787 jira issue parent set PROJ-124 --parent PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue dependency add --blocking PROJ-123 --blocked PROJ-124
@@ -1648,6 +1649,13 @@ works only when the Epic and child issue types accept the narrow create fields;
 issue types requiring additional custom fields are unsupported by these create
 commands. Raw field passthrough is not available. To attach an existing issue to the
 Epic instead of creating a new child, use `jira issue parent set <issue> --parent <epic>`.
+
+Use `jira issue url-field set` for a built-in URL custom field that the operator
+has allowlisted. Omitting `--expected-value` sends `expectedValue: null` and
+requires an unset field; give `--expected-value` to replace that exact string.
+An already matching desired URL succeeds without another write. The check is
+not atomic with Jira's write, so callers must coordinate field ownership.
+See [URL custom fields](providers-jira.md#issueurl_fieldset) for setup and limits.
 
 See [providers-jira.md](providers-jira.md) for provider examples, canonical
 `jira.<action>` invoke inputs, JSON `send` payloads, and lookup-backed

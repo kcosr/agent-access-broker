@@ -108,6 +108,7 @@ fn parse_example(
         }
         "issue.view" => parse_issue_view_inputs(inputs, config).map(|_| ()),
         "issue.update" => parse_issue_update_inputs(inputs, config).map(|_| ()),
+        "issue.url_field.set" => url_field::parse_inputs(inputs, config).map(|_| ()),
         "issue.create" => parse_issue_create_inputs(inputs, config).map(|_| ()),
         "issue.child.create" => parse_issue_child_create_inputs(inputs, config).map(|_| ()),
         "issue.parent.set" => parse_issue_parent_set_inputs(inputs, config).map(|_| ()),

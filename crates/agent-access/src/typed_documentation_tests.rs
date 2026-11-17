@@ -12,6 +12,8 @@ fn descriptors() -> Vec<(&'static str, ServiceDescriptor)> {
 allowed_upstream_hosts = ["https://example.atlassian.net/**"]
 [content]
 comment_formats = ["adf"]
+[url_fields]
+allowed_field_ids = ["customfield_12345"]
 "#,
     )
     .unwrap();
@@ -120,7 +122,7 @@ fn published_typed_commands_match_clap_paths_and_usage() {
     }
     assert_eq!(
         actions.len(),
-        230,
+        231,
         "cover every native and OAuth fixture action"
     );
 }

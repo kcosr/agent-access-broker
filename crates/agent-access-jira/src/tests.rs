@@ -23,6 +23,9 @@ mod documentation_tests;
 #[path = "issue_type_tests.rs"]
 mod issue_type_tests;
 
+#[path = "url_field_tests.rs"]
+mod url_field_tests;
+
 #[path = "jql_custom_field_tests.rs"]
 mod jql_custom_field_tests;
 
@@ -9533,6 +9536,7 @@ fn jira_config_with_search_cap(max_results: u32) -> JiraProviderConfig {
         listing: Default::default(),
         comments: crate::JiraCommentsConfig::default(),
         issue_links: crate::JiraIssueLinksConfig::default(),
+        url_fields: Default::default(),
     }
 }
 

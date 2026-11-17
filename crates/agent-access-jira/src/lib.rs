@@ -19,6 +19,7 @@ mod search_continuation;
 mod search_diagnostics;
 #[cfg(test)]
 mod tests;
+mod url_field;
 mod validation;
 
 pub use backend::*;
@@ -776,6 +777,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
     ];
     actions.push(project_list::descriptor(&config.listing));
     actions.push(project_view::descriptor());
+    actions.push(url_field::descriptor(&config.url_fields));
     if !config
         .content
         .comment_formats
@@ -887,6 +889,7 @@ impl JiraProvider {
         match action {
             "issue.view"
             | "issue.update"
+            | "issue.url_field.set"
             | "issue.child.create"
             | "issue.parent.set"
             | "issue.dependency.add"
@@ -1023,6 +1026,7 @@ impl Provider for JiraProvider {
             "issue.create" => self.invoke_issue_create(request).await,
             "issue.child.create" => self.invoke_issue_child_create(request).await,
             "issue.update" => self.invoke_issue_update(request).await,
+            "issue.url_field.set" => self.invoke_issue_url_field_set(request).await,
             "issue.parent.set" => self.invoke_issue_parent_set(request).await,
             "issue.dependency.add" => self.invoke_issue_dependency_add(request).await,
             "search" => self.invoke_search(request).await,
@@ -3721,6 +3725,7 @@ fn issue_locator_for_action(
     match action {
         "issue.view" => parse_issue_view_inputs(inputs, config).map(|(locator, _)| locator),
         "issue.update" => parse_issue_update_inputs(inputs, config).map(|inputs| inputs.locator),
+        "issue.url_field.set" => url_field::scope_locator(inputs, config),
         "comment.list" => parse_comment_list_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.view" => {
             parse_comment_view_inputs(action, inputs, config).map(|inputs| inputs.locator)

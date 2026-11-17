@@ -823,6 +823,11 @@ dependency_link_type = "Blocks"
 dependency_outward = "blocks"
 dependency_inward = "is blocked by"
 
+[providers.jira.url_fields]
+# Only these built-in URL custom fields may be set through issue.url_field.set.
+# Empty by default; ordinary project/action grants remain required.
+allowed_field_ids = [] # for example ["customfield_12345"]
+
 # Visibility restrictions are denied unless explicitly allowlisted.
 # [[providers.jira.comments.allowed_visibility]]
 # type = "role"

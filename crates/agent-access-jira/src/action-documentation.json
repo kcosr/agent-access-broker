@@ -271,6 +271,35 @@
     ],
     "typedCommand": "Typed CLI wrapper: agent-access jira issue update [OPTIONS] [ISSUE]; run agent-access jira issue update --help for flags and input alternatives."
   },
+  "issue.url_field.set": {
+    "scope": "Authorization is by Jira project, independently of issue.update. The operator must allow fieldId in providers.jira.url_fields.allowed_field_ids; the default empty list permits no field writes. Use the issue key or accepted browser URL, not a policy resource ID.",
+    "workflow": "Set one built-in URL custom field without accepting arbitrary Jira fields. Supply exactly one issue or url locator, a canonical customfield_<positive decimal ID> fieldId, value, and expectedValue. value must be an absolute HTTP(S) URL of at most 255 characters, with no credentials, whitespace or controls. Optional expectedIssueId is a positive decimal string that must match the resolved immutable issue ID before writing; use it when retaining a link to a known issue across key changes. Field clearing is not exposed. Jira must return the field and its built-in URL schema for the selected issue; normal Jira project, issue-type and edit-permission rules still apply.",
+    "precondition": "expectedValue is required and must be null or an exact string. Null requires Jira to return a null current value; strings are compared without normalization. If the desired value is already present, the action succeeds with changed=false even when expectedValue differs. Otherwise a different current value is refused before writing. The precondition is a read/check/write guard, not an atomic Jira compare-and-swap: coordinate ownership in the caller, since external writers can race the check.",
+    "result": "Returns operation=issue.url_field.set, the confirmed issue identity, field {id, name, type: url, value}, and changed. An actual change sends one PUT containing only the selected field, then verifies it by a bounded readback. A successful existing-value check makes no PUT. Accepted writes whose readback fails keep the standard applied-unverified receipt; do not infer nonapplication from a failed response. Field values, expected values and display names are omitted from audit.",
+    "errors": "jira_url_field_not_allowed means the operator has not allowed this field ID; jira_url_field_not_settable covers unavailable or non-URL fields and Jira field-edit refusals; jira_url_field_conflict means the current value did not match expectedValue. These are nonretryable configuration or precondition errors. Correct the cause before invoking again.",
+    "inputExamples": [
+      {
+        "label": "Set an unset URL field",
+        "inputs": {
+          "issue": "PROJ-123",
+          "fieldId": "customfield_12345",
+          "value": "https://reports.example.com/issues/PROJ-123",
+          "expectedValue": null
+        }
+      },
+      {
+        "label": "Replace the exact previous URL",
+        "inputs": {
+          "issue": "PROJ-123",
+          "expectedIssueId": "10001",
+          "fieldId": "customfield_12345",
+          "value": "https://reports.example.com/issues/PROJ-123",
+          "expectedValue": "https://reports.example.com/previous/PROJ-123"
+        }
+      }
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue url-field set [OPTIONS] --field-id <FIELD_ID> --value <VALUE> [ISSUE]; run agent-access jira issue url-field set --help for flags and input alternatives."
+  },
   "issue.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
     "presentation": "Whole-result Markdown omits null standard context and shows None. for empty collections. Named values keep their IDs even when names are unavailable. Custom fields use readable names and IDs with explicit unsupported/withheld markers; custom-field nulls and empty arrays display as not set. An empty customFields array means no custom fields were returned, not that the project defines none. A returned null parent displays No parent returned. Embedded formatting retains native ADF and adds renderedBody beside the owning issue, comment or supported ADF custom-field value.",

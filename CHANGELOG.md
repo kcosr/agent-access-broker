@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- Downstream code constructing `JiraProviderConfig` must initialize `url_fields`;
+  its default disables URL custom-field writes.
+
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
   matching pre-migration database and binary. The migration changes no existing
@@ -186,6 +189,12 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- Jira URL custom fields can be set with an expected-value check and optional
+  immutable issue-ID check through `issue.url_field.set` and the typed CLI.
+  Administrators allowlist writable field IDs; conflicting values are refused,
+  and retries skip a field already containing the requested URL. See
+  [URL custom-field updates](docs/providers-jira.md#issueurl_fieldset).
 
 - **OpenAPI Actions/tools imports support anonymous upstream access.** Choose
   Anonymous upstream in the portal or supply an empty `executionBindings` array

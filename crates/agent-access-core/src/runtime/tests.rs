@@ -7791,6 +7791,7 @@ async fn attribution_validation_failure_during_reload_preserves_active_runtime()
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+            url_fields: Default::default(),
         });
     candidate
         .attribution
@@ -9195,6 +9196,7 @@ fn configure_lookup_trace_jira(config: &mut BrokerConfig) {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+            url_fields: Default::default(),
         });
     config.credentials.service.clear();
     config.credentials.lookup.clear();

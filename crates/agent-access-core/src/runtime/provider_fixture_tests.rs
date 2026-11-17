@@ -21,6 +21,7 @@ fn jira_configured(mut config: BrokerConfig) -> BrokerConfig {
             listing: Default::default(),
             comments: Default::default(),
             issue_links: Default::default(),
+            url_fields: Default::default(),
         });
     config
 }

@@ -1423,6 +1423,9 @@ allowed_property_key_prefixes = ["agent-access."]
 dependency_link_type = "Blocks"
 dependency_outward = "blocks"
 dependency_inward = "is blocked by"
+
+[providers.jira.url_fields]
+allowed_field_ids = [] # default: no writable URL custom fields
 ```
 
 - `tenant_host` is required and must be a lowercase, normalized bare host name
@@ -1552,6 +1555,12 @@ dependency_inward = "is blocked by"
   values must be non-empty and contain no control characters. At runtime the
   broker fetches Jira issue link types and validates the configured type and
   direction names before creating `issue.dependency.add` links.
+- `[providers.jira.url_fields].allowed_field_ids` limits `issue.url_field.set`
+  to explicit canonical IDs such as `customfield_12345`. The default empty
+  list disables all URL-field writes; duplicate or malformed IDs are rejected.
+  Ordinary action/project grants and Jira permissions are required separately.
+  Each operation confirms the field is Jira's built-in URL type and checks
+  its current value before changing it. See [URL custom-field updates](providers-jira.md#issueurl_fieldset).
 
 ### `[providers.confluence]`
 

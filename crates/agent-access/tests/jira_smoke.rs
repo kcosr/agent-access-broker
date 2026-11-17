@@ -10,6 +10,8 @@ mod project_view;
 mod search_access;
 #[path = "jira_smoke/search_exclusions.rs"]
 mod search_exclusions;
+#[path = "jira_smoke/url_field.rs"]
+mod url_field;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -3492,6 +3494,8 @@ struct StubJiraBackend {
     created_issue: Mutex<Option<JiraCreatedIssue>>,
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
+    url_fields: Mutex<BTreeMap<(String, String), serde_json::Value>>,
+    url_field_updates: Mutex<Vec<(String, String, String)>>,
     parent_updates: Mutex<Vec<(String, JiraIssueParentSetRequest)>>,
     issue_parent_readbacks: Mutex<BTreeMap<String, JiraIssueParentReadback>>,
     issue_link_types: Mutex<Vec<JiraIssueLinkType>>,
@@ -3698,6 +3702,52 @@ impl JiraBackend for StubJiraBackend {
             .lock()
             .unwrap()
             .push((issue_key.to_string(), request));
+        Ok(JiraBackendResponse {
+            value: (),
+            status: 204,
+            duration_ms: 4,
+        })
+    }
+
+    async fn issue_url_field(
+        &self,
+        issue_id: &str,
+        field_id: &str,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
+        self.record_credential("issue_url_field", credential);
+        let value = self
+            .url_fields
+            .lock()
+            .unwrap()
+            .get(&(issue_id.to_string(), field_id.to_string()))
+            .cloned()
+            .ok_or(JiraBackendError::NotFound)?;
+        Ok(JiraBackendResponse {
+            value,
+            status: 200,
+            duration_ms: 3,
+        })
+    }
+
+    async fn set_issue_url_field(
+        &self,
+        issue_id: &str,
+        field_id: &str,
+        value: &str,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        self.record_credential("set_issue_url_field", credential);
+        let mut fields = self.url_fields.lock().unwrap();
+        let field = fields
+            .get_mut(&(issue_id.to_string(), field_id.to_string()))
+            .ok_or(JiraBackendError::NotFound)?;
+        field["fields"][field_id] = serde_json::json!(value);
+        self.url_field_updates.lock().unwrap().push((
+            issue_id.to_string(),
+            field_id.to_string(),
+            value.to_string(),
+        ));
         Ok(JiraBackendResponse {
             value: (),
             status: 204,
@@ -4411,6 +4461,7 @@ fn jira_provider_config(max_results: u32) -> JiraProviderConfig {
         listing: Default::default(),
         comments: agent_access_jira::JiraCommentsConfig::default(),
         issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+        url_fields: Default::default(),
     }
 }
 

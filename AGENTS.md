@@ -553,7 +553,9 @@ The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
 backend as a provider fixture and drives typed `agent-access jira issue
 view/search`, live project listing, project details and searchable-field discovery,
 project issue-type discovery and its create workflow, and issue
-comment commands.
+comment commands. Its URL-field module also checks the dedicated action grant,
+typed/generic writes, expected-value conflicts, replay, projections and audit
+omission of URL field values and names.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
 
