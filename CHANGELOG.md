@@ -192,6 +192,7 @@ All notable changes to this project are documented in this file.
   Administrators allowlist writable field IDs; conflicting values are refused,
   and retries skip a field already containing the requested URL. See
   [URL custom-field updates](docs/providers-jira.md#issueurl_fieldset).
+  ([#118](https://github.com/kcosr/agent-access-broker/pull/118))
 
 - **OpenAPI Actions/tools imports support anonymous upstream access.** Choose
   Anonymous upstream in the portal or supply an empty `executionBindings` array
