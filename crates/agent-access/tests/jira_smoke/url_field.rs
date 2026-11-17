@@ -9,7 +9,7 @@ const ISSUE_ID: &str = "10001";
 const NAME: &str = "secret-url-field-name";
 const LINK: &str = "https://reports.example.com/secret-url-value#runs?run=latest";
 
-async fn start(backend: Arc<StubJiraBackend>) -> RunningBroker {
+async fn start(backend: Arc<StubJiraBackend>, allowed_field_ids: &[&str]) -> RunningBroker {
     let application = IsolatedBroker::new(
         agent_access_broker::composition().unwrap(),
         agent_access_broker::build_identity(),
@@ -25,7 +25,7 @@ async fn start(backend: Arc<StubJiraBackend>) -> RunningBroker {
         .unwrap()
         .insert(
             "url_fields".into(),
-            toml::Value::try_from(json!({"allowed_field_ids":[FIELD]})).unwrap(),
+            toml::Value::try_from(json!({"allowed_field_ids":allowed_field_ids})).unwrap(),
         );
     for grant in document["policy"]["grants"].as_array_mut().unwrap() {
         grant["actions"] = toml::Value::try_from(vec![ACTION]).unwrap();
@@ -51,9 +51,8 @@ fn run(base: &str, arguments: &[&str]) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn jira_url_field_set_projects_authority_and_preserves_idempotence_and_private_audit() {
-    let backend = Arc::new(StubJiraBackend {
+fn backend() -> Arc<StubJiraBackend> {
+    Arc::new(StubJiraBackend {
         issues: BTreeMap::from([(
             "PROJ-1".to_string(),
             JiraIssue {
@@ -83,8 +82,13 @@ async fn jira_url_field_set_projects_authority_and_preserves_idempotence_and_pri
             }),
         )])),
         ..Default::default()
-    });
-    let broker = start(backend.clone()).await;
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jira_url_field_set_projects_authority_and_preserves_idempotence_and_private_audit() {
+    let backend = backend();
+    let broker = start(backend.clone(), &[FIELD]).await;
     let base = broker.public_url();
     let catalog = run(&base, &["spec", "catalog"]);
     let actions = catalog["services"]
@@ -230,4 +234,53 @@ async fn jira_url_field_set_projects_authority_and_preserves_idempotence_and_pri
         );
     }
     stop(broker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn jira_url_field_allowlist_refusal_survives_admission_without_field_access() {
+    for (allowed, requested) in [
+        (&[] as &[&str], FIELD),
+        (&[FIELD] as &[&str], "customfield_99999"),
+    ] {
+        let backend = backend();
+        let broker = start(backend.clone(), allowed).await;
+        let inputs = json!({
+            "issue":"PROJ-1", "fieldId":requested,
+            "value":LINK, "expectedValue":null,
+        });
+        let output = authenticated_jira_cli(&broker.public_url())
+            .args([
+                "invoke",
+                "jira.issue.url_field.set",
+                "--input-json",
+                &inputs.to_string(),
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        let refused: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(refused["decision"], "deny");
+        assert_eq!(refused["reasonCode"], "jira_url_field_not_allowed");
+        assert!(refused["result"].is_null());
+        assert!(backend.url_field_updates.lock().unwrap().is_empty());
+        let observations = backend.credential_observations.lock().unwrap().clone();
+        assert_eq!(
+            observations.len(),
+            1,
+            "only project scope resolution is needed"
+        );
+        assert_eq!(observations[0].operation, "issue_metadata");
+        assert_eq!(
+            observations[0].credential,
+            jira_credential("jira-lookup-token")
+        );
+        let audit = broker.audit().unwrap().text();
+        assert!(audit.contains("jira_url_field_not_allowed"));
+        assert!(audit.contains(requested));
+        for hidden in [NAME, LINK] {
+            assert!(!audit.contains(hidden));
+            assert!(!refused.to_string().contains(hidden));
+        }
+        stop(broker).await;
+    }
 }

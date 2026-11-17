@@ -99,12 +99,24 @@ fn url_field_inputs_reject_ambiguous_unsafe_or_unbounded_values() {
     url_locator.as_object_mut().unwrap().remove("issue");
     url_locator["url"] = json!("https://example.atlassian.net/browse/PROJ-1");
     assert!(url_field::parse_inputs(&url_locator, &config).is_ok());
+    let schema = url_field::descriptor(&config.url_fields).input_schema;
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    url_locator["issue"] = Value::Null;
+    let mut nullable_url = inputs();
+    nullable_url["url"] = Value::Null;
+    for candidate in [url_locator, nullable_url] {
+        assert!(url_field::parse_inputs(&candidate, &config).is_ok());
+        assert!(validator.is_valid(&candidate));
+    }
     for (field, value) in [
         ("value", json!("javascript:alert(1)")),
         ("value", json!("https:reports.example")),
         ("value", json!("https://user:password@reports.example/")),
         ("value", json!("https://reports.example/line\nsecret")),
         ("value", json!("https://reports.example/with space")),
+        ("value", json!("https://reports.example/\u{202e}hidden")),
+        ("value", json!("https://reports.example/?q=\u{200b}hidden")),
+        ("value", json!("https://reports.example/#\u{2066}hidden")),
         ("value", json!("https://reports.example/\\x")),
         (
             "value",
@@ -273,7 +285,7 @@ async fn url_field_refuses_foreign_values_but_accepts_explicit_expected_previous
 }
 
 #[tokio::test]
-async fn url_field_default_allowlist_blocks_lookup_and_invocation_without_upstream_requests() {
+async fn url_field_default_allowlist_blocks_invocation_before_field_access() {
     let mut fixture = Fixture::new(
         field_response(Value::Null),
         field_response(json!(LINK)),
@@ -281,7 +293,7 @@ async fn url_field_default_allowlist_blocks_lookup_and_invocation_without_upstre
     )
     .await;
     fixture.provider.config.url_fields.allowed_field_ids.clear();
-    let lookup_error = fixture
+    let scopes = fixture
         .provider
         .lookup_scopes(
             "issue.url_field.set",
@@ -289,11 +301,8 @@ async fn url_field_default_allowlist_blocks_lookup_and_invocation_without_upstre
             Some(&AtlassianCredential::from_static(test_lookup_credential())),
         )
         .await
-        .unwrap_err();
-    assert_eq!(
-        lookup_error.reason_code().as_str(),
-        "jira_url_field_not_allowed"
-    );
+        .unwrap();
+    assert_eq!(scopes["project"], ["PROJ"]);
     let invoke_error = fixture
         .provider
         .invoke(invocation(inputs()))
@@ -303,7 +312,10 @@ async fn url_field_default_allowlist_blocks_lookup_and_invocation_without_upstre
         invoke_error.reason_code().as_str(),
         "jira_url_field_not_allowed"
     );
-    assert!(fixture.api.received_requests().await.unwrap().is_empty());
+    let requests = fixture.api.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.path().ends_with("/PROJ-1"));
+    assert_eq!(fixture.puts().await, 0);
 }
 
 #[tokio::test]

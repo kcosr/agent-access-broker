@@ -23,11 +23,11 @@ pub(super) fn descriptor(config: &JiraUrlFieldsConfig) -> ActionDescriptor {
             "type": "object",
             "required": ["fieldId", "value", "expectedValue"],
             "properties": {
-                "issue": {"type": "string", "description": "Issue key. Give exactly one of issue or url."},
-                "url": {"type": "string", "description": "Issue web URL. Give exactly one of issue or url."},
+                "issue": {"type": ["string", "null"], "description": "Issue key. Give exactly one non-null issue or url."},
+                "url": {"type": ["string", "null"], "description": "Issue web URL. Give exactly one non-null issue or url."},
                 "fieldId": {"type": "string", "pattern": "^customfield_[1-9][0-9]*$", "description": "Configured writable URL custom-field ID."},
                 "expectedIssueId": {"type": "string", "pattern": "^[1-9][0-9]*$", "description": "Optional immutable Jira issue ID to confirm before writing when a remembered issue key may have moved or been reused."},
-                "value": {"type": "string", "minLength": 1, "maxLength": MAX_URL_CHARACTERS, "description": "Absolute HTTP or HTTPS URL, without credentials, whitespace or control characters. The exact supplied value is stored."},
+                "value": {"type": "string", "minLength": 1, "maxLength": MAX_URL_CHARACTERS, "description": "Absolute HTTP or HTTPS URL, without credentials, whitespace, control characters or Unicode formatting characters. The exact supplied value is stored."},
                 "expectedValue": {"type": ["string", "null"], "maxLength": MAX_URL_CHARACTERS, "description": "Required current value to check before writing; null requires an unset field. A field already equal to value succeeds without writing. This read/check/write guard is not atomic against other Jira writers."}
             },
             "additionalProperties": false
@@ -127,9 +127,12 @@ fn validate_url(value: &str) -> Result<(), ProviderError> {
     let parsed = Url::parse(value).ok();
     if value.is_empty()
         || value.chars().count() > MAX_URL_CHARACTERS
-        || value
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
+        || value.chars().any(|character| {
+            character.is_whitespace()
+                || character.is_control()
+                || unicode_general_category::get_general_category(character)
+                    == unicode_general_category::GeneralCategory::Format
+        })
         || value.contains('\\')
         || !value.split_once("://").is_some_and(|(scheme, _)| {
             scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
@@ -166,9 +169,9 @@ pub(super) fn scope_locator(
     inputs: &Value,
     config: &JiraProviderConfig,
 ) -> Result<IssueLocator, ProviderError> {
-    let inputs = parse_inputs(inputs, config)?;
-    require_allowed(&inputs, config)?;
-    Ok(inputs.locator)
+    // Operator allowlist refusals belong after authorization: the host conceals
+    // domain errors from this pre-policy lookup hook as scope_unresolved.
+    Ok(parse_inputs(inputs, config)?.locator)
 }
 
 struct Field {

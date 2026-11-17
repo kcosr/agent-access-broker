@@ -471,7 +471,7 @@ separately authorized, paginated Create issues workflow.
 
 ## Actions and lookup requirements
 
-Twenty-four actions:
+Twenty-five actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
@@ -482,6 +482,7 @@ Twenty-four actions:
 | `issue.create` | `project` | no |
 | `issue.child.create` | `project` | yes |
 | `issue.update` | `project` | yes |
+| `issue.url_field.set` | `project` | yes |
 | `issue.parent.set` | `project` | yes |
 | `issue.dependency.add` | `project` | yes |
 | `search` | `project` | no |
@@ -539,7 +540,7 @@ remain hidden. A Jira HTTP 429 returns `upstream_rate_limited` with the bounded
 [http-api.md](http-api.md#reason-code-table). A 429 on a mutation request itself
 means Jira did not apply it. When the mutation was applied but the readback that
 verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
-`issue.parent.set`, and `issue.dependency.add`), the error is instead
+`issue.url_field.set`, `issue.parent.set`, and `issue.dependency.add`), the error is instead
 `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
 `retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
 `post_create_readback`), and `safeLocators` holding the created or changed issue
@@ -568,12 +569,12 @@ ordinary reason and message and reports what Jira may have done:
 | --- | --- |
 | The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
 | Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request, such as a created issue in another project | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
-| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
+| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.url_field.set`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback` or `post_url_field_readback`) |
 
 `safeLocators` name the target from the validated request and the reads before
 the write, never from the failed response: the `project` (and parent issue) of
 a create, the created issue IDs once the create response was validated, or the
-issue and comment IDs of an update. Inspect the issue before repeating a write
+issue, comment and selected URL-field IDs of an update. Inspect the issue before repeating a write
 with either receipt. A 4xx rejection and throttling of the write itself carry
 no receipt.
 
@@ -1260,14 +1261,16 @@ There is no arbitrary field-editing or field-clearing operation.
 
 Inputs are:
 
-- Exactly one `issue` key or tenant browser `url` locator.
+- Exactly one non-null `issue` key or tenant browser `url` locator; null is
+  treated as an omitted locator.
 - Optional `expectedIssueId`, a positive decimal string identifying the known
   immutable issue. A different resolved ID fails with `scope_unresolved` before
   writing, including when a retained key resolves to a different issue.
 - `fieldId`, a canonical `customfield_[1-9][0-9]*` ID present in the operator's
   allowlist. Display names do not identify fields.
 - `value`, an absolute HTTP or HTTPS URL of at most 255 characters, without
-  credentials, whitespace or control characters. Query strings and fragments
+  credentials, whitespace, control characters or Unicode formatting characters
+  such as bidi overrides and zero-width characters. Query strings and fragments
   are preserved. The limit follows [Jira's URL field limit](https://support.atlassian.com/jira/kb/jira-throws-an-error-when-trying-to-insert-an-url-string-longer-than-255-characters-in-an-url-custom-field/).
 - `expectedValue`, a required string of at most 255 characters without controls,
   or JSON null. Null requires the returned field value to be null; strings
@@ -1299,8 +1302,10 @@ form makes the required null explicit:
 }
 ```
 
-Broker resolves and re-confirms the authorized issue, then reads its selected
-field and field metadata with the execution credential. If the desired value
+Broker resolves the issue for project authorization, checks the field allowlist,
+re-confirms the authorized issue, then reads its selected field and field
+metadata with the execution credential. A disallowed field performs no field
+read or write. If the desired value
 is already present, it succeeds with `changed: false`, even when `expectedValue`
 differs. Otherwise, a current value different from `expectedValue` produces
 `jira_url_field_conflict` without a write. A matching precondition permits one

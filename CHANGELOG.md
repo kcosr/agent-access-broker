@@ -6,9 +6,6 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- Downstream code constructing `JiraProviderConfig` must initialize `url_fields`;
-  its default disables URL custom-field writes.
-
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
   matching pre-migration database and binary. The migration changes no existing

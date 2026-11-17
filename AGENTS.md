@@ -683,11 +683,17 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
   `project_view.rs` authorized project details and searchable-field discovery,
   `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
+  `url_field.rs` guarded writes to one operator-allowlisted built-in URL field,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
-  embedded hierarchy and custom fields belong only to `JiraIssueView`; search
+  embedded hierarchy and general custom-field projection belong only to `JiraIssueView`; search
   and mutation readbacks keep their own shapes. Hierarchy shares the existing
   universal same-mode issue-link gate and never triggers target fetches.
+  URL-field writes require an allowlist that defaults to empty; enforce it after
+  policy and before field access so the denial survives lookup concealment.
+  Preserve the confirmed immutable issue ID, exact built-in URL schema,
+  non-atomic expected-value guard, replay without a PUT, one-field mutation and
+  verified readback. Keep field values, expected values and names out of audit.
   Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
   or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   project discovery uses the selected execution credential after authorization,
