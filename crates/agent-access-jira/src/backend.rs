@@ -1382,7 +1382,7 @@ impl JiraBackend for HttpJiraBackend {
         )
         .await?;
         let status = response.status().as_u16();
-        jira_response_unit(response, self.limits.max_upstream_response_bytes)
+        custom_field_response_unit(response, self.limits.max_upstream_response_bytes)
             .await
             .map_err(accepted_if_success(status))?;
         Ok(JiraBackendResponse {
@@ -2304,6 +2304,23 @@ pub(crate) async fn jira_response_unit(
     jira_response_bytes_for_body(response, byte_cap)
         .await
         .map(|_| ())
+}
+
+// Custom-field validation errors deliberately discard Jira's body. Classify
+// their upstream trace with the same value-free domain reason as invocation.
+async fn custom_field_response_unit(
+    mut response: reqwest::Response,
+    byte_cap: u64,
+) -> Result<(), JiraBackendError> {
+    let trace = take_upstream_trace(&mut response);
+    let result = jira_response_unit(response, byte_cap).await;
+    if let Some(trace) = trace {
+        trace.complete(result.as_ref().err().map(|error| match error {
+            JiraBackendError::HttpStatus(400 | 422) => (&custom_field::REJECTED).into(),
+            error => jira_backend_reason_code(error).into(),
+        }));
+    }
+    result
 }
 
 #[cfg(test)]

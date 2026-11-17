@@ -569,7 +569,7 @@ ordinary reason and message and reports what Jira may have done:
 | What happened | Receipt |
 | --- | --- |
 | The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
-| Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request, or Broker could not construct a bounded acknowledgement result | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
+| Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request (such as a created issue in another project), or Broker could not construct a bounded acknowledgement result | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
 | The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
 
 `safeLocators` name the target from the validated request and the reads before
@@ -1343,7 +1343,9 @@ those reads separately; external writers can race such checks.
 allowlist. `jira_custom_field_rejected` means Jira rejected the edit with HTTP
 400 or 422. These fixed errors contain no raw Jira error content and require
 correcting the cause before invoking again. Standard authentication, permission
-and not-found errors retain their normal behavior.
+and not-found errors retain their normal behavior. An `expectedIssueId` mismatch
+or an issue that has left the admitted projects returns `scope_unresolved`
+before any write and carries no mutation receipt.
 
 A failed response does not prove the field was unchanged. An uncertain request
 retains the standard mutation receipt; accepted writes whose result construction

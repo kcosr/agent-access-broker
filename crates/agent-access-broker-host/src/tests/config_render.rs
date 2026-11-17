@@ -28,8 +28,8 @@ use agent_access_gitlab::{
 };
 use agent_access_gmail::GmailConfig;
 use agent_access_jira::{
-    JiraCommentVisibilityConfig, JiraCommentsConfig, JiraContentConfig, JiraIssueLinksConfig,
-    JiraProviderConfig,
+    JiraCommentVisibilityConfig, JiraCommentsConfig, JiraContentConfig, JiraCustomFieldsConfig,
+    JiraIssueLinksConfig, JiraProviderConfig,
 };
 use agent_access_provider::{
     AttachmentLimitsConfig, EgressProxyConfig, MediaTypePolicyConfig, SearchLimitsConfig,
@@ -1154,6 +1154,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         dependency_outward,
         dependency_inward,
     } = issue_links;
+    let JiraCustomFieldsConfig { allowed_field_ids } = custom_fields;
     Fields::default()
         .put("tenant_host", tenant_host.as_str())
         .opt("cloud_id", cloud_id.clone())
@@ -1219,10 +1220,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         .put(
             "custom_fields",
             Fields::default()
-                .put(
-                    "allowed_field_ids",
-                    strings(&custom_fields.allowed_field_ids),
-                )
+                .put("allowed_field_ids", strings(allowed_field_ids))
                 .value(),
         )
         .value()

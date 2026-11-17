@@ -27,7 +27,6 @@ pub struct JiraProviderConfig {
 
 /// Custom fields this provider may write or clear. Ordinary project/action grants
 /// still authorize each request; an empty allowlist disables all field writes.
-#[non_exhaustive]
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct JiraCustomFieldsConfig {

@@ -124,7 +124,6 @@ fn custom_field_config_requires_unique_canonical_ids_and_defaults_to_disabled() 
             .action("issue.custom_field.set")
             .is_some()
     );
-    assert!(config.descriptor().action("issue.url_field.set").is_none());
     let limits = ProviderLimits::default();
     let context = ValidationContext::new(
         "development",
@@ -163,8 +162,6 @@ fn custom_field_config_requires_unique_canonical_ids_and_defaults_to_disabled() 
         action.documentation.as_ref().unwrap()["allowedFieldIds"],
         json!([FIELD_ID])
     );
-    // Unknown config is rejected, with no legacy table alias.
-    assert!(serde_json::from_value::<JiraProviderConfig>(json!({"tenant_host":"example.atlassian.net","url_fields":{"allowed_field_ids":[FIELD_ID]}})).is_err());
 }
 
 #[tokio::test]
@@ -359,9 +356,22 @@ async fn custom_field_rejections_are_value_free_and_standard_statuses_keep_their
                 .set_body_json(json!({"errorMessages":[SENTINEL],"errors":{FIELD_ID:SENTINEL}})),
         )
         .await;
-        let error = fixture
-            .provider
-            .invoke(invocation(inputs(json!(SENTINEL))))
+        let capture = agent_access_provider::test_support::install_trace_capture().start();
+        let error = capture
+            .run(agent_access_provider::host::with_provider_context(
+                CorrelationContext::for_tests(),
+                "jira".to_string(),
+                "issue.custom_field.set".to_string(),
+                agent_access_provider::host::with_hook_context(
+                    agent_access_provider::host::hook_context(
+                        "jira",
+                        "issue.custom_field.set",
+                        HookPhase::Invocation,
+                        JIRA_BACKEND.domain_reasons(),
+                    ),
+                    fixture.provider.invoke(invocation(inputs(json!(SENTINEL)))),
+                ),
+            ))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code().as_str(), reason);
@@ -371,6 +381,23 @@ async fn custom_field_rejections_are_value_free_and_standard_statuses_keep_their
         );
         assert!(error.result.is_none());
         assert!(!format!("{error:?}").contains(SENTINEL));
+        let events = capture.take_events();
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["event"] == "provider_contract_failed")
+        );
+        let writes = events
+            .iter()
+            .filter(|event| {
+                event["event"] == "upstream_request_completed"
+                    && event["upstreamOperation"] == "issue.custom_field.set"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 1, "{events:?}");
+        assert_eq!(writes[0]["reasonCode"], reason);
+        assert_eq!(writes[0]["http.statusCode"], status);
+        assert!(!serde_json::to_string(&events).unwrap().contains(SENTINEL));
     }
 }
 

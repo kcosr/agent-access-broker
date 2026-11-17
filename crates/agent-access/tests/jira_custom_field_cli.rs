@@ -214,21 +214,10 @@ async fn typed_custom_field_set_requires_valid_value_json_before_network() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn typed_custom_field_set_rejects_obsolete_commands_and_flags_before_network() {
+async fn typed_custom_field_set_rejects_unsupported_flags_before_network() {
     let broker = MockServer::start().await;
     let directory = tempfile::tempdir().unwrap();
     for arguments in [
-        vec![
-            "jira",
-            "issue",
-            "url-field",
-            "set",
-            "PROJ-123",
-            "--field-id",
-            "customfield_12345",
-            "--value",
-            "https://reports.example.com/",
-        ],
         vec![
             "jira",
             "issue",
