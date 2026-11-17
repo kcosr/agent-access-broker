@@ -1424,8 +1424,8 @@ dependency_link_type = "Blocks"
 dependency_outward = "blocks"
 dependency_inward = "is blocked by"
 
-[providers.jira.url_fields]
-allowed_field_ids = [] # default: no writable URL custom fields
+[providers.jira.custom_fields]
+allowed_field_ids = [] # default: no writable custom fields
 ```
 
 - `tenant_host` is required and must be a lowercase, normalized bare host name
@@ -1555,12 +1555,16 @@ allowed_field_ids = [] # default: no writable URL custom fields
   values must be non-empty and contain no control characters. At runtime the
   broker fetches Jira issue link types and validates the configured type and
   direction names before creating `issue.dependency.add` links.
-- `[providers.jira.url_fields].allowed_field_ids` limits `issue.url_field.set`
+- `[providers.jira.custom_fields].allowed_field_ids` limits `issue.custom_field.set`
   to explicit canonical IDs such as `customfield_12345`. The default empty
-  list disables all URL-field writes; duplicate or malformed IDs are rejected.
-  Ordinary action/project grants and Jira permissions are required separately.
-  Each operation confirms the field is Jira's built-in URL type and checks
-  its current value before changing it. See [URL custom-field updates](providers-jira.md#issueurl_fieldset).
+  list disables writes; duplicate or malformed IDs are rejected. Ordinary
+  action/project grants and Jira permissions are required separately. Every
+  grantee of this action can set or clear every listed field using any JSON Jira
+  accepts. Verify the field's supported edit behavior and effects before listing
+  it; Jira or apps may attach workflow, hierarchy, notification or other effects.
+  The Broker adds no comment/description attribution to custom ADF values.
+  Serialized values must fit `content.max_body_bytes`. See
+  [custom-field updates](providers-jira.md#issuecustom_fieldset).
 
 ### `[providers.confluence]`
 

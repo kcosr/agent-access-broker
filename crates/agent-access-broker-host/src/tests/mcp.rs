@@ -1418,7 +1418,7 @@ async fn mcp_file_actions_remain_describable_but_are_not_native_http_tools() {
                     listing: Default::default(),
                     comments: Default::default(),
                     issue_links: Default::default(),
-                    url_fields: Default::default(),
+                    custom_fields: Default::default(),
                 });
         },
         vec![Arc::new(FileCatalogProvider)],

@@ -187,11 +187,11 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- Jira URL custom fields can be set with an expected-value check and optional
-  immutable issue-ID check through `issue.url_field.set` and the typed CLI.
-  Administrators allowlist writable field IDs; conflicting values are refused,
-  and retries skip a field already containing the requested URL. See
-  [URL custom-field updates](docs/providers-jira.md#issueurl_fieldset).
+- Jira custom fields can be set or cleared with arbitrary JSON through
+  `issue.custom_field.set` and the typed CLI, with an optional immutable issue-ID
+  guard. Administrators allowlist writable field IDs; Jira validates their values
+  and editability. Successful writes return a value-free acknowledgement. See
+  [custom-field updates](docs/providers-jira.md#issuecustom_fieldset).
   ([#118](https://github.com/kcosr/agent-access-broker/pull/118))
 
 - **OpenAPI Actions/tools imports support anonymous upstream access.** Choose

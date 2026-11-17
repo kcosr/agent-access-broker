@@ -12,7 +12,7 @@ fn descriptors() -> Vec<(&'static str, ServiceDescriptor)> {
 allowed_upstream_hosts = ["https://example.atlassian.net/**"]
 [content]
 comment_formats = ["adf"]
-[url_fields]
+[custom_fields]
 allowed_field_ids = ["customfield_12345"]
 "#,
     )

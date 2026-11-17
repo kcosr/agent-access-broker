@@ -1135,7 +1135,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         listing,
         comments,
         issue_links,
-        url_fields,
+        custom_fields,
     } = jira;
     let JiraContentConfig {
         comment_formats,
@@ -1217,9 +1217,12 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
                 .value(),
         )
         .put(
-            "url_fields",
+            "custom_fields",
             Fields::default()
-                .put("allowed_field_ids", strings(&url_fields.allowed_field_ids))
+                .put(
+                    "allowed_field_ids",
+                    strings(&custom_fields.allowed_field_ids),
+                )
                 .value(),
         )
         .value()

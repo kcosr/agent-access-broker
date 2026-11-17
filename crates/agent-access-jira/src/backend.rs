@@ -114,28 +114,16 @@ pub trait JiraBackend: Send + Sync {
         ))
     }
 
-    /// Read only project identity, the selected field and its name/type metadata.
-    async fn issue_url_field(
-        &self,
-        _issue_id: &str,
-        _field_id: &str,
-        _credential: &AtlassianCredential,
-    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
-        Err(JiraBackendError::Protocol(
-            "Jira URL custom-field reads are not supported by this backend".to_string(),
-        ))
-    }
-
     /// Set only the selected custom field on the confirmed immutable issue ID.
-    async fn set_issue_url_field(
+    async fn set_issue_custom_field(
         &self,
         _issue_id: &str,
         _field_id: &str,
-        _value: &str,
+        _value: &Value,
         _credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         Err(JiraBackendError::Protocol(
-            "Jira URL custom-field writes are not supported by this backend".to_string(),
+            "Jira custom-field writes are not supported by this backend".to_string(),
         ))
     }
 
@@ -1369,44 +1357,11 @@ impl JiraBackend for HttpJiraBackend {
         })
     }
 
-    async fn issue_url_field(
+    async fn set_issue_custom_field(
         &self,
         issue_id: &str,
         field_id: &str,
-        credential: &AtlassianCredential,
-    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
-        let mut url = self
-            .api_base(credential)?
-            .join(&format!("issue/{issue_id}"))
-            .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
-        url.query_pairs_mut()
-            .append_pair("fields", &format!("project,{field_id}"))
-            .append_pair("expand", "names,schema");
-        let started = Instant::now();
-        let client = self.request_client(credential)?;
-        let response = send_jira_request(
-            client,
-            credential,
-            client
-                .request(Method::GET, url)
-                .header("Accept", "application/json"),
-            UpstreamCall::new("issue.url_field.get"),
-        )
-        .await?;
-        let status = response.status().as_u16();
-        let value = jira_response_value(response, self.limits.max_upstream_response_bytes).await?;
-        Ok(JiraBackendResponse {
-            value,
-            status,
-            duration_ms: elapsed_ms(started),
-        })
-    }
-
-    async fn set_issue_url_field(
-        &self,
-        issue_id: &str,
-        field_id: &str,
-        value: &str,
+        value: &Value,
         credential: &AtlassianCredential,
     ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
         let url = self
@@ -1423,7 +1378,7 @@ impl JiraBackend for HttpJiraBackend {
                 .request(Method::PUT, url)
                 .header("Accept", "application/json")
                 .json(&body),
-            UpstreamCall::new("issue.url_field.set"),
+            UpstreamCall::new("issue.custom_field.set"),
         )
         .await?;
         let status = response.status().as_u16();

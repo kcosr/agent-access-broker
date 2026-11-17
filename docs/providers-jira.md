@@ -206,7 +206,7 @@ Each action needs these Atlassian OAuth scopes:
 | Actions | Scopes |
 | --- | --- |
 | `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
-| `issue.create`, `issue.child.create`, `issue.update`, `issue.url_field.set`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
+| `issue.create`, `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
 
 `read:jira-user` serves only token verification and is not needed. The
 registration also requests `read:me` and `offline_access`; see
@@ -235,7 +235,7 @@ agent-access --url http://127.0.0.1:8787 jira issue comment list --issue PROJ-12
 agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100
 agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --content-file description.md --content-format markdown
-agent-access --url http://127.0.0.1:8787 jira issue url-field set PROJ-123 --field-id customfield_12345 --value 'https://reports.example.com/issues/PROJ-123'
+agent-access --url http://127.0.0.1:8787 jira issue custom-field set PROJ-123 --field-id customfield_12345 --value-json '"https://reports.example.com/issues/PROJ-123"'
 agent-access --url http://127.0.0.1:8787 jira issue search --project PROJ --text 'deployment checklist' --max-results 10
 agent-access --url http://127.0.0.1:8787 jira issue comment add --issue PROJ-123 --content-file comment.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue attach PROJ-123 ./report.txt --content-type text/plain
@@ -482,7 +482,7 @@ Twenty-five actions:
 | `issue.create` | `project` | no |
 | `issue.child.create` | `project` | yes |
 | `issue.update` | `project` | yes |
-| `issue.url_field.set` | `project` | yes |
+| `issue.custom_field.set` | `project` | yes |
 | `issue.parent.set` | `project` | yes |
 | `issue.dependency.add` | `project` | yes |
 | `search` | `project` | no |
@@ -533,14 +533,15 @@ returns `body_format_unsupported`, rather than either being hidden as
 allowlisted fields in Jira's structured error map. Body/description validation
 is classified as `body_malformed`; other recognized safe field validation is
 `input_invalid`. The broker ignores Jira's free-form error-message list and
-never returns the raw response body. Lookup, readback, authentication,
-permission, existence, scope, conflict, throttling, and server-error bodies
+never returns the raw response body. Custom-field writes use only the fixed
+`jira_custom_field_rejected` message for 400/422 responses. Lookup, readback,
+authentication, permission, existence, scope, conflict, throttling, and server-error bodies
 remain hidden. A Jira HTTP 429 returns `upstream_rate_limited` with the bounded
 `Retry-After` wait when Jira sends one; see
 [http-api.md](http-api.md#reason-code-table). A 429 on a mutation request itself
 means Jira did not apply it. When the mutation was applied but the readback that
 verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
-`issue.url_field.set`, `issue.parent.set`, and `issue.dependency.add`), the error is instead
+`issue.parent.set`, and `issue.dependency.add`), the error is instead
 `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
 `retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
 `post_create_readback`), and `safeLocators` holding the created or changed issue
@@ -568,14 +569,14 @@ ordinary reason and message and reports what Jira may have done:
 | What happened | Receipt |
 | --- | --- |
 | The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
-| Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request, such as a created issue in another project | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
-| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.url_field.set`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback` or `post_url_field_readback`) |
+| Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request, or Broker could not construct a bounded acknowledgement result | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
+| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
 
 `safeLocators` name the target from the validated request and the reads before
 the write, never from the failed response: the `project` (and parent issue) of
 a create, the created issue IDs once the create response was validated, or the
-issue, comment and selected URL-field IDs of an update. Inspect the issue before repeating a write
-with either receipt. A 4xx rejection and throttling of the write itself carry
+issue, comment and selected custom-field IDs of an update. Inspect the issue
+before repeating a write with either receipt. A 4xx rejection and throttling of the write itself carry
 no receipt.
 
 ## Read response formats
@@ -869,8 +870,9 @@ array means no custom fields were returned, not that the project defines none.
 Custom fields are automatic: no label mapping, input flag, configuration, or
 additional credential is needed. Search and mutation readbacks do not include
 this array, and create/update do not accept custom-field writes. The separate
-[`issue.url_field.set`](#issueurl_fieldset) action writes an operator-allowed
-built-in URL field and returns only that field alongside the issue identity.
+[`issue.custom_field.set`](#issuecustom_fieldset) action writes an operator-allowed
+custom field and returns its ID and an acceptance acknowledgement alongside the
+issue identity.
 
 Each entry has `id`, nullable `name`, nullable `type`, and `status`. `name` is
 Jira's display text, so duplicate names are valid; use `id` for identity. A
@@ -1241,118 +1243,112 @@ returned description ADF, and raw upstream error bodies. Content attribution for
 `issue.update` applies only when the request supplies `content`; it never
 mutates summaries.
 
-## `issue.url_field.set`
+## `issue.custom_field.set`
 
-`issue.url_field.set` writes one built-in URL custom field on an authorized
-issue. The operator must explicitly allow the field ID:
+`issue.custom_field.set` writes one operator-allowed custom field on an authorized
+issue. Configure the canonical field IDs in TOML:
 
 ```toml
-[providers.jira.url_fields]
+[providers.jira.custom_fields]
 allowed_field_ids = ["customfield_12345"]
 ```
 
-The default empty list permits no field writes. Allowlisting a field does not
-grant the action: callers need `issue.url_field.set` authority for the issue's
-current Jira project and an execution credential with Jira's Edit issues
-permission. The field must be associated with the applicable project and issue
-type. Broker verifies the exact built-in URL implementation and string schema;
-text fields, app-defined fields, missing fields and unknown schemas are refused.
-There is no arbitrary field-editing or field-clearing operation.
+The default empty list permits no custom-field writes. Configuration does not
+grant the action: callers need `issue.custom_field.set` authority for the issue's
+project. A grant for `issue.update` alone does not grant this action. The
+provider-wide allowlist applies to every caller with matching action and project
+authority: each such caller may write every listed field. The action stays in
+discovery even with an empty allowlist; action documentation reports the
+configured IDs.
+
+An allowlisted field delegates every value and clear that Jira accepts for that
+field, together with its field-specific effects. Operators must verify the
+field's behavior before listing it. Those effects may include workflow,
+hierarchy, notification or app-defined behavior, depending on the field and Jira
+configuration. Configured comment/description attribution does not add attribution
+to custom ADF fields.
 
 Inputs are:
 
-- Exactly one non-null `issue` key or tenant browser `url` locator; null is
-  treated as an omitted locator.
-- Optional `expectedIssueId`, a positive decimal string identifying the known
-  immutable issue. A different resolved ID fails with `scope_unresolved` before
-  writing, including when a retained key resolves to a different issue.
-- `fieldId`, a canonical `customfield_[1-9][0-9]*` ID present in the operator's
-  allowlist. Display names do not identify fields.
-- `value`, an absolute HTTP or HTTPS URL of at most 255 characters, without
-  credentials, whitespace, control characters or Unicode formatting characters
-  such as bidi overrides and zero-width characters. Query strings and fragments
-  are preserved. The limit follows [Jira's URL field limit](https://support.atlassian.com/jira/kb/jira-throws-an-error-when-trying-to-insert-an-url-string-longer-than-255-characters-in-an-url-custom-field/).
-- `expectedValue`, a required string of at most 255 characters without controls,
-  or JSON null. Null requires the returned field value to be null; strings
-  compare exactly, without URL normalization.
+- Exactly one `issue` key or `url` browser URL; null locators count as omitted.
+- Optional `expectedIssueId`, a positive decimal string that must match the
+  resolved immutable issue ID before writing.
+- `fieldId`, a canonical `customfield_<positive decimal ID>` identifier.
+- Required `value`, any JSON type, including null to request clearing. Omitting
+  `value` is invalid. Strings are passed unchanged, never parsed as nested JSON.
 
-The typed CLI sends `expectedValue: null` when `--expected-value` is omitted:
+Jira determines field type, context, editability and requiredness, and can reject
+any value or clear it does not accept. Broker bounds the serialized JSON value by
+`content.max_body_bytes`; excess returns `body_size_denied`. Ordinary transport
+and request-body limits also apply.
+
+The typed CLI requires an explicit JSON value:
 
 ```bash
-agent-access jira issue url-field set PROJ-123 \
+agent-access jira issue custom-field set PROJ-123 \
   --field-id customfield_12345 \
-  --value 'https://reports.example.com/issues/PROJ-123'
+  --value-json '"https://reports.example.com/issues/PROJ-123"'
 
-agent-access jira issue url-field set PROJ-123 \
-  --field-id customfield_12345 \
-  --value 'https://reports.example.com/issues/PROJ-123' \
-  --expected-value 'https://reports.example.com/previous/PROJ-123'
+agent-access jira issue custom-field set PROJ-123 \
+  --field-id customfield_12345 --value-json null
+
+agent-access jira issue custom-field set PROJ-123 \
+  --expected-issue-id 10001 --field-id customfield_12345 \
+  --value-json '{"id":"10002"}'
 ```
 
-Use `--issue-url` instead of the issue argument for a browser URL, and
-`--expected-issue-id` to guard a known immutable issue ID. The generic
-form makes the required null explicit:
+Use `--issue-url` instead of the issue argument for a browser URL. The generic
+invoke input for clearing is:
 
 ```json
 {
   "issue": "PROJ-123",
   "fieldId": "customfield_12345",
-  "value": "https://reports.example.com/issues/PROJ-123",
-  "expectedValue": null
+  "value": null
 }
 ```
 
 Broker resolves the issue for project authorization, checks the field allowlist,
-re-confirms the authorized issue, then reads its selected field and field
-metadata with the execution credential. A disallowed field performs no field
-read or write. If the desired value
-is already present, it succeeds with `changed: false`, even when `expectedValue`
-differs. Otherwise, a current value different from `expectedValue` produces
-`jira_url_field_conflict` without a write. A matching precondition permits one
-`PUT /rest/api/3/issue/{confirmedIssueId}` containing only the selected custom field,
-followed by a bounded readback that must confirm the issue identity, URL field
-type and desired value. Field reads and writes use the confirmed immutable ID,
-so later key reuse cannot redirect the write to another issue.
+and reconfirms the authorized issue. A disallowed field performs no field write.
+The selected execution credential sends one
+`PUT /rest/api/3/issue/{confirmedIssueId}` containing only the selected custom
+field. Immutable ID addressing prevents later key reuse from redirecting the
+write. The action preserves Jira's default notification behavior and exposes no
+notification, transition or override controls.
 
-This is a read/check/write precondition, not an atomic Jira compare-and-swap.
-Callers must coordinate field ownership; another application or person can
-change the field between the read and write. The action preserves Jira's
-default notification behavior and exposes no notification override.
-
-Success returns:
+A successful response acknowledges acceptance by Jira:
 
 ```json
 {
-  "operation": "issue.url_field.set",
+  "operation": "issue.custom_field.set",
   "issue": {
     "id": "10001",
     "key": "PROJ-123",
     "project": "PROJ",
     "webUrl": "https://example.atlassian.net/browse/PROJ-123"
   },
-  "field": {
-    "id": "customfield_12345",
-    "name": "Report URL",
-    "type": "url",
-    "value": "https://reports.example.com/issues/PROJ-123"
-  },
-  "changed": true
+  "fieldId": "customfield_12345",
+  "status": "set"
 }
 ```
 
-The display name is null when Jira omits it or returns null. Results do
-not include other custom fields or issue content. Audit records the issue
-identity, project, field ID and whether a write occurred, but excludes field
-values, expected values and display names.
+There is no prior field read, current-value guard, duplicate-write suppression or
+mandatory readback. The acknowledgement does not assert equality with a later
+Jira read. It omits the value, field name and other custom data. Audit records the
+issue identity, project and field ID, and excludes field values and names.
+Callers requiring ownership checks or verification must perform and authorize
+those reads separately; external writers can race such checks.
 
-`jira_url_field_not_allowed` means the field ID is absent from the operator
-allowlist. `jira_url_field_not_settable` covers missing or non-URL fields and
-Jira's field-edit refusals; `jira_url_field_conflict` identifies a failed current
-value check. These are nonretryable configuration or precondition failures.
-An accepted write followed by failed readback retains the standard
-`applied_unverified` receipt. A failed response does not by itself prove the
-field was unchanged; repeating the same desired value checks for an already
-applied write before attempting another.
+`jira_custom_field_not_allowed` means the field ID is absent from the operator
+allowlist. `jira_custom_field_rejected` means Jira rejected the edit with HTTP
+400 or 422. These fixed errors contain no raw Jira error content and require
+correcting the cause before invoking again. Standard authentication, permission
+and not-found errors retain their normal behavior.
+
+A failed response does not prove the field was unchanged. An uncertain request
+retains the standard mutation receipt; accepted writes whose result construction
+or local output fails retain the corresponding applied or succeeded status.
+Do not replay a write just to recover a missing acknowledgement or save output.
 
 ## `issue.parent.set`
 

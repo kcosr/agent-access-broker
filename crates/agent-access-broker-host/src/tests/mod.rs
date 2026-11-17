@@ -1382,7 +1382,7 @@ async fn direct_http_jira_parent_set_invokes_route_policy_and_audit() {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-            url_fields: Default::default(),
+            custom_fields: Default::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -1492,7 +1492,7 @@ async fn direct_http_jira_child_create_invokes_route_policy_and_audit() {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-            url_fields: Default::default(),
+            custom_fields: Default::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -13879,7 +13879,7 @@ async fn jira_normalized_write_content_is_absent_from_tracing_and_audit() {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-            url_fields: Default::default(),
+            custom_fields: Default::default(),
         });
     config.policy.grants = vec![PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -15135,7 +15135,7 @@ fn managed_jira_verify_config(
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-            url_fields: Default::default(),
+            custom_fields: Default::default(),
         });
     use_token_connection(&mut config, "jira", "atlassian-api-token", &["jira"]);
     // Verification probes as the owner, through a consumer it holds a
@@ -16472,7 +16472,7 @@ fn download_config(audit_file: &str) -> BrokerConfig {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-            url_fields: Default::default(),
+            custom_fields: Default::default(),
         });
     config.credentials.service.insert(
         "jira".to_string(),
@@ -16658,7 +16658,7 @@ async fn jira_read_presentation_fixture(audit_file: &str) -> JiraReadPresentatio
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-            url_fields: Default::default(),
+            custom_fields: Default::default(),
         });
     config.policy.grants.push(PolicyGrantConfig {
         subjects: vec!["group:anonymous".to_string()],
@@ -16935,7 +16935,7 @@ async fn spec_token_fixture_with_restrictions(
                 listing: Default::default(),
                 comments: agent_access_jira::JiraCommentsConfig::default(),
                 issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-                url_fields: Default::default(),
+                custom_fields: Default::default(),
             });
         config.policy.grants.push(PolicyGrantConfig {
             subjects: vec!["user:spec-user".to_string()],
@@ -18157,7 +18157,7 @@ fn jira_capabilities_omit_content_writes_without_a_native_comment_target() {
         listing: Default::default(),
         comments: agent_access_jira::JiraCommentsConfig::default(),
         issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
-        url_fields: Default::default(),
+        custom_fields: Default::default(),
     };
     let descriptor = agent_access_jira::jira_descriptor(&config);
     for action in ["comment.add", "comment.reply", "comment.update"] {

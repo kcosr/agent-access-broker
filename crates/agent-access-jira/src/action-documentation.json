@@ -271,34 +271,42 @@
     ],
     "typedCommand": "Typed CLI wrapper: agent-access jira issue update [OPTIONS] [ISSUE]; run agent-access jira issue update --help for flags and input alternatives."
   },
-  "issue.url_field.set": {
-    "scope": "Authorization is by Jira project, independently of issue.update. The operator must allow fieldId in providers.jira.url_fields.allowed_field_ids; the default empty list permits no field writes. Use the issue key or accepted browser URL, not a policy resource ID.",
-    "workflow": "Set one built-in URL custom field without accepting arbitrary Jira fields. Supply exactly one issue or url locator, a canonical customfield_<positive decimal ID> fieldId, value, and expectedValue. value must be an absolute HTTP(S) URL of at most 255 characters, with no credentials, whitespace, control or Unicode formatting characters. Null issue/url locators are treated as omitted; exactly one non-null locator is required. Optional expectedIssueId is a positive decimal string that must match the resolved immutable issue ID before writing; use it when retaining a link to a known issue across key changes. Field clearing is not exposed. Jira must return the field and its built-in URL schema for the selected issue; normal Jira project, issue-type and edit-permission rules still apply.",
-    "precondition": "expectedValue is required and must be null or an exact string. Null requires Jira to return a null current value; strings are compared without normalization. If the desired value is already present, the action succeeds with changed=false even when expectedValue differs. Otherwise a different current value is refused before writing. The precondition is a read/check/write guard, not an atomic Jira compare-and-swap: coordinate ownership in the caller, since external writers can race the check.",
-    "result": "Returns operation=issue.url_field.set, the confirmed issue identity, field {id, name, type: url, value}, and changed. An actual change sends one PUT containing only the selected field, then verifies it by a bounded readback. A successful existing-value check makes no PUT. Accepted writes whose readback fails keep the standard applied-unverified receipt; do not infer nonapplication from a failed response. Field values, expected values and display names are omitted from audit.",
-    "errors": "jira_url_field_not_allowed means the operator has not allowed this field ID; jira_url_field_not_settable covers unavailable or non-URL fields and Jira field-edit refusals; jira_url_field_conflict means the current value did not match expectedValue. These are nonretryable configuration or precondition errors. Correct the cause before invoking again.",
+  "issue.custom_field.set": {
+    "scope": "Authorization is by Jira project; a grant for issue.update alone does not grant this action. The operator must allow fieldId in providers.jira.custom_fields.allowed_field_ids; the default empty list permits no custom-field writes. The provider-wide allowlist applies to every caller with matching action and project authority, allowing each caller to write every listed field. Use the issue key or accepted browser URL, not a policy resource ID.",
+    "workflow": "Set one operator-allowed custom field. Supply exactly one issue or url locator, a canonical customfield_<positive decimal ID> fieldId, and a present value of any JSON type, including null to request clearing. JSON strings are passed unchanged, never parsed again. Null issue/url locators are treated as omitted; exactly one non-null locator is required. Optional expectedIssueId is a positive decimal string that must match the resolved immutable issue ID before writing. Jira decides the field type, context, editability and requiredness; it may reject a value or null.",
+    "authority": "Allowlisting a field delegates any value or clear that Jira accepts for that field, together with its field-specific effects. Operators must verify those effects before listing it. Configured comment/description attribution does not add attribution to custom ADF fields. The action exposes no transition, notification or override controls and preserves Jira notification defaults.",
+    "result": "Returns operation=issue.custom_field.set, the confirmed issue identity, fieldId and status=set after one PUT containing only the selected field and addressed by the confirmed immutable issue ID. This acknowledges Jira acceptance; it does not read back or return the field value, field name or raw custom data. No current-value check or duplicate-write suppression is performed. Field values and names are omitted from audit. Accepted writes whose result cannot be completed retain the standard applied_unverified receipt, and uncertain requests are not safe to replay blindly.",
+    "errors": "jira_custom_field_not_allowed means the operator has not allowed this field ID. jira_custom_field_rejected means Jira refused the edit with HTTP 400 or 422; no raw Jira error content is returned. These are nonretryable configuration or value errors. The serialized JSON value is bounded by content.max_body_bytes; an excess returns body_size_denied. Ordinary transport and request-body limits also apply.",
     "inputExamples": [
       {
-        "label": "Set an unset URL field",
-        "inputs": {
-          "issue": "PROJ-123",
-          "fieldId": "customfield_12345",
-          "value": "https://reports.example.com/issues/PROJ-123",
-          "expectedValue": null
-        }
-      },
-      {
-        "label": "Replace the exact previous URL",
+        "label": "Set a string value",
         "inputs": {
           "issue": "PROJ-123",
           "expectedIssueId": "10001",
           "fieldId": "customfield_12345",
-          "value": "https://reports.example.com/issues/PROJ-123",
-          "expectedValue": "https://reports.example.com/previous/PROJ-123"
+          "value": "https://reports.example.com/issues/PROJ-123"
+        }
+      },
+      {
+        "label": "Clear an allowed field when Jira permits null",
+        "inputs": {
+          "issue": "PROJ-123",
+          "fieldId": "customfield_12345",
+          "value": null
+        }
+      },
+      {
+        "label": "Set an object value accepted by the selected field",
+        "inputs": {
+          "issue": "PROJ-123",
+          "fieldId": "customfield_12345",
+          "value": {
+            "id": "10002"
+          }
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access jira issue url-field set [OPTIONS] --field-id <FIELD_ID> --value <VALUE> [ISSUE]; run agent-access jira issue url-field set --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue custom-field set [OPTIONS] --field-id <FIELD_ID> --value-json <VALUE_JSON> [ISSUE]; run agent-access jira issue custom-field set --help for flags and input alternatives."
   },
   "issue.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",

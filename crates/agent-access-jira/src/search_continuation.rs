@@ -223,7 +223,7 @@ mod tests {
                 listing: Default::default(),
                 comments: JiraCommentsConfig::default(),
                 issue_links: JiraIssueLinksConfig::default(),
-                url_fields: Default::default(),
+                custom_fields: Default::default(),
             };
             Self {
                 request: InvocationBuilder::new("jira", "search")
