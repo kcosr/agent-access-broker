@@ -395,7 +395,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         }
       }
     ],
-    [connections, actions, writable, confirm, subject, principal]
+    [connections, actions, writable, confirm, subject.administered, principal]
   );
   return (
     <>

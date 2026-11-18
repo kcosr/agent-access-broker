@@ -280,6 +280,36 @@ async fn administrator_disconnect_works_without_target_self_service_and_invalida
 }
 
 #[tokio::test]
+async fn admin_delete_never_connected_owner_leaves_no_oauth_slot() {
+    let fixture = oauth_fixture().await;
+    let database = rusqlite::Connection::open_with_flags(
+        &fixture.config.managed_store.as_ref().unwrap().path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let slot_count = || {
+        database
+            .query_row(
+                "SELECT COUNT(*) FROM oauth_slots WHERE owner_principal_id = ?1 AND registration_id = ?2",
+                ["alice", "stub"],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(slot_count(), 0);
+    for request_id in ["admin-never-connected", "admin-never-connected-repeat"] {
+        let (status, response) = admin_request(&fixture, Method::DELETE, DELETE, request_id).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(
+            response["result"],
+            json!({"disconnected": true, "remoteRevocation": "not_requested"})
+        );
+        assert_eq!(slot_count(), 0, "a no-op disconnect must not create a slot");
+    }
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn admin_delete_without_a_connection_preserves_pending_initial_consent() {
     let fixture = oauth_fixture().await;
     fixture

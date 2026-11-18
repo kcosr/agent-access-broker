@@ -160,6 +160,7 @@ function affectedServices(target: AdminOAuthConnectionTarget) {
 export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedService?: string, subject?: AccountSubject) {
   const { session, attempt, reportError } = useSession();
   const principal = subject?.administered ? subject.principalId : undefined;
+  const writable = !subject || canWriteSubject(session, subject);
   const { confirm } = useModal();
   const toast = useToast();
   const invalidate = usePortalInvalidation();
@@ -210,7 +211,7 @@ export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedS
     }
 
     function disconnect(target: AdminOAuthConnectionTarget) {
-      if (subject && !canWriteSubject(session, subject)) return;
+      if (!writable) return;
       confirm({
         title: "Disconnect account?",
         body: `Disconnect ${principal ? `${principal}'s ${target.displayName} connection` : target.displayName} from the broker? ${affectedServices(target)} Where the provider supports it, the broker also revokes the account's tokens there.${principal ? " The user can connect again while permitted by their account settings and grants." : ""}`,
@@ -227,7 +228,7 @@ export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedS
     }
 
     return { connect, disconnect, pending };
-  }, [attempt, reportError, confirm, toast, invalidate, returnPath, importedService, pending, principal, subject, session]);
+  }, [attempt, reportError, confirm, toast, invalidate, returnPath, importedService, pending, principal, writable]);
 }
 
 export type OAuthConnectionActions = ReturnType<typeof useOAuthConnectionActions>;

@@ -859,7 +859,7 @@ impl OAuthManager {
             owner,
             registration,
             &r.fingerprint,
-            change,
+            |conn, current| change(conn, current).map(|(next, result)| (Some(next), result)),
         )
     }
     fn lock(&self, owner: &str, registration: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -1337,20 +1337,28 @@ impl OAuthManager {
     ) -> Result<RemoteRevocation, OAuthError> {
         self.active()?;
         let r = self.registration(registration)?;
-        let kept = self.update(owner, registration, |conn, current| {
-            let current =
-                current.unwrap_or_else(|| SlotState::empty(&r.fingerprint, &r.credential_revision));
-            let Some(connection) = current.connection.as_ref() else {
-                // The previous connection may have ended after a handler
-                // inspected it. Preserve any new initial consent in this slot.
-                return Ok((current, None));
-            };
-            let kept = self.keep_family(conn, owner, r, connection, RevocationCause::Disconnect)?;
-            Ok((
-                SlotState::empty(&r.fingerprint, &r.credential_revision),
-                kept,
-            ))
-        })?;
+        let kept = self.inner.store.oauth_update(
+            &self.inner.ring,
+            owner,
+            registration,
+            &r.fingerprint,
+            |conn, current| {
+                let Some(connection) = current.as_ref().and_then(|slot| slot.connection.as_ref())
+                else {
+                    // Recheck inside the transaction: a previous connection
+                    // may have ended since the handler inspected it. Preserve
+                    // pending initial consent or the absence of a slot without
+                    // encrypting or writing anything.
+                    return Ok((None, None));
+                };
+                let kept =
+                    self.keep_family(conn, owner, r, connection, RevocationCause::Disconnect)?;
+                Ok((
+                    Some(SlotState::empty(&r.fingerprint, &r.credential_revision)),
+                    kept,
+                ))
+            },
+        )?;
         if let Some(id) = kept {
             tracing::info!(target:"agent_access_core::oauth",event="remote_revocation_requested",owner,registration,revocation_id=%id,cause=RevocationCause::Disconnect.as_str());
             self.revoke_records(&[id]).await;
@@ -5045,8 +5053,35 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn disconnect_without_a_slot_does_not_create_one_or_retain_an_encryption_key() {
+        let (_dir, store, _ring, manager, _server) = fixture().await;
+        let database = rusqlite::Connection::open_with_flags(
+            store.path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let slots = || {
+            database
+                .query_row("SELECT count(*) FROM oauth_slots", [], |row| {
+                    row.get::<_, usize>(0)
+                })
+                .unwrap()
+        };
+        assert_eq!(slots(), 0);
+        assert!(store.active_credential_key_ids().unwrap().is_empty());
+        for _ in 0..2 {
+            assert_eq!(
+                manager.disconnect("user", "stub").await.unwrap(),
+                RemoteRevocation::NotRequested
+            );
+        }
+        assert_eq!(slots(), 0);
+        assert!(store.active_credential_key_ids().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn disconnect_without_a_current_connection_preserves_pending_initial_consent() {
-        let (_dir, _store, _ring, manager, server) = fixture().await;
+        let (_dir, store, _ring, manager, server) = fixture().await;
         connected(&manager, &server).await;
         let previous = manager.status("user", "stub").unwrap().connection_id;
         assert!(previous.is_some());
@@ -5059,6 +5094,21 @@ pub(crate) mod tests {
                 .connection_id
                 .is_none()
         );
+        // Give the timestamp a deterministic older value: a rapid rewrite
+        // must fail this assertion even when wall-clock timestamps coincide.
+        test_sql(
+            &store,
+            "UPDATE oauth_slots SET updated_at='2001-01-01T00:00:00Z'",
+        );
+        let database = rusqlite::Connection::open_with_flags(
+            store.path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let snapshot = || {
+            database.query_row("SELECT hex(ciphertext)||'|'||hex(nonce)||'|'||updated_at||'|'||generation||'|'||config_fingerprint||'|'||key_id||'|'||payload_version||'|'||discovery_revision FROM oauth_slots WHERE owner_principal_id='user' AND registration_id='stub'",[],|row|row.get::<_,String>(0)).unwrap()
+        };
+        let before = snapshot();
         let requests = server.received_requests().await.unwrap().len();
         // A handler could have observed the previous connection before its
         // owner disconnected and started this new consent. The transaction
@@ -5069,6 +5119,7 @@ pub(crate) mod tests {
                 RemoteRevocation::NotRequested
             );
         }
+        assert_eq!(snapshot(), before);
         assert_eq!(server.received_requests().await.unwrap().len(), requests);
         let connected = manager
             .complete(
