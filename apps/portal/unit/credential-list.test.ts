@@ -26,6 +26,7 @@ vi.mock("../src/data/queries", () => ({
     tokens: [],
     loading: false
   }),
+  useAdminOAuthConnections: () => ({ data: [], isError: false, error: null, refetch: vi.fn() }),
   useOAuthConnections: () => ({ data: mocks.oauth, isError: false, error: null, refetch: vi.fn() })
 }));
 import { CredentialDrawer, CredentialRows, CredentialToolbar, useCredentialList } from "../src/features/credentials/credential-list";
@@ -141,8 +142,9 @@ describe("the Credentials list", () => {
   ] as const)("leaves a %s remote revocation to the drawer", (state, label) => {
     const html = render([gitlab(state, connection("ready"))], "oauth:gitlab");
     const row = tableRow(html, "oauth:gitlab");
-    // A ready connection stays the quiet normal state, with no badge.
-    expect(statusCell(row)).toContain("wb-state-cell--quiet");
+    // A ready connection still spells out Connected, without a cleanup badge.
+    expect(statusCell(row)).not.toContain("wb-state-cell--quiet");
+    expect(statusCell(row)).toContain('<span class="wb-state-cell-label">Connected</span>');
     expect(statusCell(row)).not.toContain("wb-badge");
     expect(row).not.toContain("Revocation");
     expect(row).not.toContain("Revoked at provider");

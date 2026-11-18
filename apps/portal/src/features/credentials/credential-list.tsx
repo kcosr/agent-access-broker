@@ -3,14 +3,13 @@
 // connection with a stored token form, one per OAuth registration, and one per
 // retained stored credential the configuration no longer selects. A drawer
 // stores, replaces, verifies, deletes, connects or disconnects; an
-// administered principal's OAuth registrations are read-only.
+// administrator can also disconnect a principal's OAuth account.
 import { canWriteSubject } from "../../lib/capabilities";
 import { useSession } from "../../app/session";
 import { useEffect, useMemo, useState } from "react";
-import type { ConnectionCredential, CredentialConnection, CredentialList, CredentialMetadata, CredentialTarget, CredentialTokenProfile, OAuthConnectionTarget, RetainedCredential } from "../../types";
+import type { ConnectionCredential, CredentialConnection, CredentialList, CredentialMetadata, CredentialTarget, CredentialTokenProfile, AdminOAuthConnectionTarget, OAuthConnectionTarget, RetainedCredential } from "../../types";
 import { credentialStatus, credentialTone, errorMessage } from "../../lib/helpers";
 import {
-  administeredOAuthRegistrations,
   chosenTokenType,
   connectionTokenType,
   consumerSummary,
@@ -21,8 +20,7 @@ import {
   retainedRowKey,
   tokenFormReady,
   tokenTypeName,
-  tokenTypeValues,
-  type AdministeredOAuth
+  tokenTypeValues
 } from "../../lib/credentials";
 import { urlParam } from "../../lib/url-state";
 import {
@@ -55,18 +53,14 @@ import type { AccountSubject } from "../../app/active-route";
 import { useActionRunner } from "../../app/actions";
 import { useTableUrlState } from "../../app/list-state";
 import { useModal } from "../../app/modal";
-import { useConsoleData, useOAuthConnections } from "../../data/queries";
+import { useConsoleData, useOAuthConnections, useAdminOAuthConnections } from "../../data/queries";
 import { useCredentialActions } from "../../mutations/credentials";
 import { CredentialFields } from "../../components/credential-fields";
 import { FormError } from "../../components/form";
 import {
-  ADMINISTERED_OAUTH_NOTICE,
-  ADMINISTERED_OAUTH_STATUS,
   AUTHORIZATION_TAB_NOTICE,
-  AdministeredOAuthDetails,
   OAuthConnectionButtons,
   OAuthConnectionDetails,
-  administeredRemoteRevocation,
   oauthAccountLabel,
   oauthConnected,
   oauthConnectionStatus,
@@ -88,13 +82,12 @@ export const CREDENTIAL_STATE = {
  * One list row: a connection storing a token (`key` is the connection ID), a
  * connection offering this principal no method, an OAuth registration
  * (`oauth:<registration>`: the signed-in user's own, or an administered
- * principal's, read-only), or a retained stored row (`retained:<credentialId>`).
+ * principal's), or a retained stored row (`retained:<credentialId>`).
  */
 export type CredentialRow =
   | { kind: "token"; key: string; connection: CredentialConnection; target: CredentialTarget | undefined }
   | { kind: "unavailable"; key: string; connection: CredentialConnection }
-  | { kind: "oauth"; key: string; oauth: OAuthConnectionTarget }
-  | { kind: "administered-oauth"; key: string; oauth: AdministeredOAuth }
+  | { kind: "oauth"; key: string; oauth: OAuthConnectionTarget | AdminOAuthConnectionTarget }
   | { kind: "retained"; key: string; credential: RetainedCredential };
 
 function rowName(row: CredentialRow) {
@@ -103,7 +96,6 @@ function rowName(row: CredentialRow) {
     case "unavailable":
       return row.connection.displayName;
     case "oauth":
-    case "administered-oauth":
       return row.oauth.displayName;
     case "retained":
       return `${row.credential.service}/${row.credential.name}`;
@@ -116,7 +108,6 @@ function rowConsumers(row: CredentialRow) {
     case "unavailable":
       return consumerSummary(row.connection.consumers, row.connection.otherConsumers);
     case "oauth":
-    case "administered-oauth":
       return consumerSummary(row.oauth.consumers, row.oauth.otherConsumers);
     case "retained":
       return "";
@@ -124,9 +115,7 @@ function rowConsumers(row: CredentialRow) {
 }
 
 /**
- * The row's status; an administered principal's OAuth connection status is not
- * listed, so its row names who manages it. A ready connection is quiet unless
- * a revocation problem stands beside it.
+ * The row's status; OAuth always spells out the connection state.
  */
 function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boolean } {
   switch (row.kind) {
@@ -138,10 +127,8 @@ function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boole
       return { label: "Unavailable", tone: "neutral", quiet: false };
     case "oauth": {
       const status = oauthConnectionStatus(row.oauth);
-      return { label: status.label, tone: status.tone, quiet: row.oauth.connection?.status === "ready" && !rowRevocationProblem(row) };
+      return { label: status.label, tone: status.tone, quiet: false };
     }
-    case "administered-oauth":
-      return { ...ADMINISTERED_OAUTH_STATUS, quiet: false };
     case "retained":
       return { label: "Not used", tone: "neutral", quiet: false };
   }
@@ -153,9 +140,8 @@ function rowState(row: CredentialRow): { label: string; tone: Tone; quiet: boole
  * its explanation as the tooltip. Pending and successful revocations show
  * only in the drawer.
  */
-function rowRevocationProblem(row: CredentialRow) {
-  if (row.kind === "oauth") return oauthRevocationNeedsAttention(row.oauth.remoteRevocation) ? oauthRemoteRevocation(row.oauth) : null;
-  if (row.kind === "administered-oauth") return oauthRevocationNeedsAttention(row.oauth.remoteRevocation) ? administeredRemoteRevocation(row.oauth.remoteRevocation) : null;
+function rowRevocationProblem(row: CredentialRow, principal?: string) {
+  if (row.kind === "oauth") return oauthRevocationNeedsAttention(row.oauth.remoteRevocation) ? oauthRemoteRevocation(row.oauth, principal) : null;
   return null;
 }
 
@@ -170,11 +156,10 @@ export function needsAttention(row: CredentialRow) {
     if (oauthRevocationNeedsAttention(row.oauth.remoteRevocation)) return true;
     return row.oauth.connection?.status === "reconnect_required" || row.oauth.connection?.status === "operator_action_required";
   }
-  if (row.kind === "administered-oauth") return oauthRevocationNeedsAttention(row.oauth.remoteRevocation);
   return false;
 }
 
-/** Whether the row counts toward "set up": an administered principal's OAuth connection does not, as its status is not listed. */
+/** Whether the row counts toward "set up". */
 function isSettable(row: CredentialRow) {
   return row.kind === "token" || row.kind === "oauth";
 }
@@ -201,16 +186,15 @@ function rowSearchText(row: CredentialRow) {
     const { credential, tokenProfiles } = row.connection;
     detail = [...(credential ? [credential] : []), ...tokenProfiles].map(tokenTypeSearchText).join(" ");
   } else if (row.kind === "retained") detail = tokenTypeSearchText(row.credential);
-  else if (row.kind === "administered-oauth") detail = row.oauth.connections.join(" ");
   return `${row.key} ${rowName(row)} ${rowConsumers(row)} ${detail}`.toLowerCase();
 }
 
 /**
  * The list rows: token and unavailable connections, OAuth registrations (the
- * signed-in user's from `GET /v1/oauth/connections`; an administered
- * principal's from its credential list), then retained stored rows.
+ * signed-in user's or the administered principal's dedicated OAuth list),
+ * then retained stored rows.
  */
-export function credentialRows(administered: boolean, targets: CredentialTarget[], credentials: CredentialList, oauth: OAuthConnectionTarget[] | undefined): CredentialRow[] {
+export function credentialRows(targets: CredentialTarget[], credentials: CredentialList, oauth: Array<OAuthConnectionTarget | AdminOAuthConnectionTarget> | undefined): CredentialRow[] {
   const byConnection = new Map(targets.map((target) => [target.connection, target]));
   return [
     ...credentials.connections.flatMap<CredentialRow>((connection) => {
@@ -219,9 +203,7 @@ export function credentialRows(administered: boolean, targets: CredentialTarget[
       // OAuth connections appear once per registration, from the OAuth rows.
       return [];
     }),
-    ...(administered
-      ? administeredOAuthRegistrations(credentials).map<CredentialRow>((registration) => ({ kind: "administered-oauth", key: oauthRowKey(registration.registration), oauth: registration }))
-      : (oauth ?? []).map<CredentialRow>((target) => ({ kind: "oauth", key: oauthRowKey(target.registration), oauth: target }))),
+    ...(oauth ?? []).map<CredentialRow>((target) => ({ kind: "oauth", key: oauthRowKey(target.registration), oauth: target })),
     ...credentials.retained.map<CredentialRow>((credential) => ({ kind: "retained", key: retainedRowKey(credential.credentialId), credential }))
   ];
 }
@@ -239,11 +221,13 @@ export function credentialCounts(rows: CredentialRow[]) {
 
 export function useCredentialList(subject: AccountSubject) {
   const data = useConsoleData(subject);
-  const oauth = useOAuthConnections(!subject.administered);
-  const connections = useOAuthConnectionActions("/ui/credentials");
+  const ownOAuth = useOAuthConnections(!subject.administered);
+  const adminOAuth = useAdminOAuthConnections(subject.principalId, subject.administered);
+  const oauth = subject.administered ? adminOAuth : ownOAuth;
+  const connections = useOAuthConnectionActions("/ui/credentials", undefined, subject);
   const rows = useMemo(
-    () => credentialRows(subject.administered, data.targets, data.credentials, oauth.data),
-    [data.targets, data.credentials, oauth.data, subject.administered]
+    () => credentialRows(data.targets, data.credentials, oauth.isError ? undefined : oauth.data),
+    [data.targets, data.credentials, oauth.data, oauth.isError]
   );
   const filter = (state: { status: (typeof FILTERS)[number]; q: string }) => {
     const query = state.q.trim().toLowerCase();
@@ -285,7 +269,6 @@ export function CredentialToolbar({ model }: { model: CredentialListModel }) {
           ]}
         />
         <FilterInput value={list.state.q} onChange={(q) => list.setState({ q })} placeholder="Filter credentials…" debounceMs={150} />
-        {/* An administered principal's OAuth rows alone leave nothing to set up here. */}
         {counts.settable ? (
           <ToolbarSummary grow>
             <b>{counts.settable - counts.missing}</b> of {counts.settable} set up
@@ -302,7 +285,10 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
   const writable = canWriteSubject(useSession().session, subject);
   const { confirm } = useModal();
   const filtered = Boolean(list.state.q || list.state.status !== "all");
-  const administeredOAuth = rows.some((row) => row.kind === "administered-oauth");
+  const principal = subject.administered ? subject.principalId : undefined;
+  const oauthError = oauth.isError ? (
+    <ErrorState compact title="OAuth connection status unavailable" error={oauth.error} onRetry={() => void oauth.refetch()} retrying={oauth.isFetching} />
+  ) : undefined;
   const columns = useMemo<DataColumn<CredentialRow>[]>(
     () => [
       {
@@ -310,10 +296,10 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         header: "Status",
         cell: (row) => {
           const state = rowState(row);
-          return <StateCell label={state.label} tone={state.tone} quiet={state.quiet} title={row.kind === "administered-oauth" ? ADMINISTERED_OAUTH_NOTICE : undefined} />;
+          return <StateCell label={state.label} tone={state.tone} quiet={state.quiet} />;
         },
         extra: (row) => {
-          const revocation = rowRevocationProblem(row);
+          const revocation = rowRevocationProblem(row, principal);
           return revocation ? (
             <Badge tone={revocation.tone} title={revocation.message}>
               {revocation.label}
@@ -339,7 +325,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         cell: (row) => {
           if (row.kind === "retained") return <span className="wb-muted">Not used</span>;
           // Without an entitled service, the drawer counts the others.
-          const entitled = row.kind === "oauth" || row.kind === "administered-oauth" ? row.oauth.consumers : row.connection.consumers;
+          const entitled = row.kind === "oauth" ? row.oauth.consumers : row.connection.consumers;
           return entitled.length ? rowConsumers(row) : <span className="wb-muted">No current grants</span>;
         }
       },
@@ -357,13 +343,6 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
             return (
               <span>
                 OAuth · <span>{oauthAccountLabel(row.oauth)}</span>
-              </span>
-            );
-          }
-          if (row.kind === "administered-oauth") {
-            return (
-              <span title={`OAuth registration ${row.oauth.registration}`}>
-                OAuth · <span className="wb-mono">{row.oauth.registration}</span>
               </span>
             );
           }
@@ -400,8 +379,11 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         className: "wb-cell-actions",
         hideWhenEmpty: true,
         cell: (row) => {
-          // Only its owner acts on an OAuth account; an administered row has no actions.
-          if (row.kind === "oauth") return <OAuthConnectionButtons target={row.oauth} connections={connections} />;
+          // Owners connect/reconnect; administrators can also disconnect.
+          if (row.kind === "oauth") {
+            if (subject.administered && (!writable || !row.oauth.canDisconnect || !oauthConnected(row.oauth))) return null;
+            return <OAuthConnectionButtons target={row.oauth} connections={connections} subject={subject} />;
+          }
           if (row.kind === "retained" && writable) {
             return (
               <Button size="sm" variant="danger-ghost" icon="trash" onClick={() => confirmRetainedDelete(confirm, row.credential, () => actions.removeRetained(row.credential))}>
@@ -413,7 +395,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         }
       }
     ],
-    [connections, actions, writable, confirm]
+    [connections, actions, writable, confirm, subject, principal]
   );
   return (
     <>
@@ -422,7 +404,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
           Finish or close the open authorization tab before connecting another account. {AUTHORIZATION_TAB_NOTICE}
         </p>
       ) : null}
-      {administeredOAuth ? <p className="wb-small wb-muted">OAuth connections are read-only here: only the user can connect, reconnect or disconnect them, from their own Credentials page.</p> : null}
+      {subject.administered && rows.some((row) => row.kind === "oauth") ? <p className="wb-small wb-muted">Only the user can connect or reconnect an OAuth account. Administrators can disconnect it; auditors can view its status.</p> : null}
       <DataTable
         label="Credentials"
         rows={shown}
@@ -435,14 +417,14 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         onRowFollow={(row) => list.open(row.key, "replace")}
         cursorResetKey={`${list.state.status}|${list.state.q}|${list.state.sort?.key ?? ""}:${list.state.sort?.dir ?? ""}`}
         rowDim={(row) => row.kind === "retained" || row.kind === "unavailable" || isMissing(row)}
-        loading={data.loading || (data.query.isError && data.query.isFetching)}
+        loading={data.loading || (rows.length === 0 && oauth.isLoading) || (data.query.isError && data.query.isFetching)}
         error={
           data.query.isError ? (
             <ErrorState compact title="Couldn’t load credentials" error={data.query.error} onRetry={() => void data.query.refetch()} retrying={data.query.isFetching} />
           ) : undefined
         }
         empty={
-          filtered && rows.length > 0 ? (
+          oauth.isError && rows.length === 0 ? oauthError : filtered && rows.length > 0 ? (
             <EmptyState
               compact
               icon="search"
@@ -464,9 +446,7 @@ export function CredentialRows({ model }: { model: CredentialListModel }) {
         bleed
       />
       {shown.length > 0 ? <ListFooter /> : null}
-      {!subject.administered && oauth.isError ? (
-        <ErrorState compact title="Couldn’t load OAuth connections" error={oauth.error} onRetry={() => void oauth.refetch()} />
-      ) : null}
+      {rows.length > 0 || data.query.isError ? oauthError : null}
     </>
   );
 }
@@ -489,7 +469,7 @@ export function CredentialDrawer({ model }: { model: CredentialListModel }) {
       <>
         <Icon name="lock" /> Stored credential <span className="wb-num">{open.credential.credentialId}</span>
       </>
-    ) : open.kind === "oauth" || open.kind === "administered-oauth" ? (
+    ) : open.kind === "oauth" ? (
       <>
         <Icon name="link" /> OAuth registration <span className="wb-num">{open.oauth.registration}</span>
       </>
@@ -526,8 +506,7 @@ function DrawerActions({ model, row }: { model: CredentialListModel; row: Creden
   const writable = canWriteSubject(useSession().session, subject);
   const { confirm } = useModal();
   const runner = useActionRunner();
-  if (row.kind === "oauth") return <OAuthConnectionButtons target={row.oauth} connections={connections} />;
-  if (row.kind === "administered-oauth") return null;
+  if (row.kind === "oauth") return <OAuthConnectionButtons target={row.oauth} connections={connections} subject={subject} />;
   if (row.kind === "retained") {
     return writable ? (
       <Button variant="danger-ghost" icon="trash" onClick={() => confirmRetainedDelete(confirm, row.credential, () => actions.removeRetained(row.credential))}>
@@ -594,29 +573,14 @@ function DrawerBody({ model, row }: { model: CredentialListModel; row: Credentia
     return (
       <>
         <DrawerSection title="Account">
-          <OAuthConnectionDetails target={target} pending={connections.pending === target.registration} />
+          <OAuthConnectionDetails target={target} pending={connections.pending === target.registration} principal={subject.administered ? subject.principalId : undefined} />
         </DrawerSection>
         <UsedBy consumers={target.consumers} otherConsumers={target.otherConsumers} administered={subject.administered} />
         <DrawerSection title="How this works">
           <p className="wb-small wb-fg-2">
+            {subject.administered ? "Only the user can connect or reconnect this account. Administrators can disconnect it. " : null}
             Connecting authorizes the broker for every service using this connection. Disconnecting removes the broker’s copy for all of them. Where the provider supports it, the broker
             also revokes the disconnected tokens there; otherwise consent at the provider is not removed.
-          </p>
-        </DrawerSection>
-      </>
-    );
-  }
-  if (row.kind === "administered-oauth") {
-    return (
-      <>
-        <DrawerSection title="OAuth connection">
-          <AdministeredOAuthDetails oauth={row.oauth} />
-        </DrawerSection>
-        <UsedBy consumers={row.oauth.consumers} otherConsumers={row.oauth.otherConsumers} administered />
-        <DrawerSection title="How this works">
-          <p className="wb-small wb-fg-2">
-            {ADMINISTERED_OAUTH_NOTICE} This view does not show its connection status or connected account. When the broker ends a connection, including when this account
-            is disabled, it revokes the connection’s tokens at a provider that supports it; the remote revocation shows how that went.
           </p>
         </DrawerSection>
       </>

@@ -1338,12 +1338,14 @@ impl OAuthManager {
         self.active()?;
         let r = self.registration(registration)?;
         let kept = self.update(owner, registration, |conn, current| {
-            let kept = match current.as_ref().and_then(|slot| slot.connection.as_ref()) {
-                Some(connection) => {
-                    self.keep_family(conn, owner, r, connection, RevocationCause::Disconnect)?
-                }
-                None => None,
+            let current =
+                current.unwrap_or_else(|| SlotState::empty(&r.fingerprint, &r.credential_revision));
+            let Some(connection) = current.connection.as_ref() else {
+                // The previous connection may have ended after a handler
+                // inspected it. Preserve any new initial consent in this slot.
+                return Ok((current, None));
             };
+            let kept = self.keep_family(conn, owner, r, connection, RevocationCause::Disconnect)?;
             Ok((
                 SlotState::empty(&r.fingerprint, &r.credential_revision),
                 kept,
@@ -5039,6 +5041,51 @@ pub(crate) mod tests {
         assert_eq!(
             changed.acquire("user", &binding()).await.unwrap_err(),
             OAuthError::ReconnectRequired
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_without_a_current_connection_preserves_pending_initial_consent() {
+        let (_dir, _store, _ring, manager, server) = fixture().await;
+        connected(&manager, &server).await;
+        let previous = manager.status("user", "stub").unwrap().connection_id;
+        assert!(previous.is_some());
+        manager.disconnect("user", "stub").await.unwrap();
+        let state = start(&manager, OAuthConnectIntent::Connect).await;
+        assert!(
+            manager
+                .status("user", "stub")
+                .unwrap()
+                .connection_id
+                .is_none()
+        );
+        let requests = server.received_requests().await.unwrap().len();
+        // A handler could have observed the previous connection before its
+        // owner disconnected and started this new consent. The transaction
+        // must recheck ownership instead of invalidating the new flow.
+        for _ in 0..2 {
+            assert_eq!(
+                manager.disconnect("user", "stub").await.unwrap(),
+                RemoteRevocation::NotRequested
+            );
+        }
+        assert_eq!(server.received_requests().await.unwrap().len(), requests);
+        let connected = manager
+            .complete(
+                "user",
+                "session",
+                "stub",
+                &state,
+                "new-consent-code",
+                runtime(&manager),
+            )
+            .await
+            .unwrap();
+        assert_eq!(connected.status, OAuthConnectionStatus::Ready);
+        assert_ne!(connected.connection_id, previous);
+        assert_eq!(
+            manager.acquire("user", &binding()).await.unwrap().token(),
+            "protected-access-0"
         );
     }
 

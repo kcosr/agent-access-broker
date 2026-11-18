@@ -107,6 +107,9 @@ export type OAuthConnectionTarget = {
     targets: Array<{ id: string; name: string; audience: string; scopes: string[] }>;
   };
 };
+/** Administrative OAuth metadata omits the owner-only consent controls. */
+export type AdminOAuthConnectionTarget = Omit<OAuthConnectionTarget, "canConnect" | "connectUnavailableReason">;
+
 export type ResourceSelector = { kind: "exact" | "namespace"; value: string } | { kind: "all" };
 export type ResourceSelection = { resourceIds: string[]; resourceGroupIds: string[] };
 export type ResourceDefinition = {

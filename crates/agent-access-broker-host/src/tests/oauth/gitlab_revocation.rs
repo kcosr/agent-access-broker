@@ -508,3 +508,77 @@ fn revocation_rows_at(config: &BrokerConfig) -> Vec<(String, String, bool)> {
         .collect::<Result<_, _>>()
         .unwrap()
 }
+
+/// An administrator uses the same revocation path and receives its actual
+/// outcome. Failure at GitLab never restores the target's Broker connection.
+#[tokio::test]
+async fn administrator_disconnect_reports_gitlab_revocation_and_ends_local_access() {
+    use super::super::admin_connections::admin_request;
+    for (provider_status, expected) in [(200, "revoked"), (400, "failed")] {
+        let (gitlab, _consumer, fixture) = connected_gitlab().await;
+        mount_revoke(&gitlab, ResponseTemplate::new(provider_status)).await;
+        let (status, response) = admin_request(
+            &fixture,
+            Method::DELETE,
+            "/v1/admin/principals/alice/oauth/connections/gitlab",
+            "admin-gitlab-disconnect",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(
+            response["result"],
+            json!({"disconnected": true, "remoteRevocation": expected})
+        );
+        assert_eq!(revoked_tokens(&gitlab).await, first_family());
+        assert!(fixture.gitlab_status().connection_id.is_none());
+        let rows = fixture.gitlab_rows("owner-after-admin-disconnect").await;
+        assert_eq!(rows[0]["connection"]["status"], "disconnected");
+        assert_eq!(rows[0]["remoteRevocation"], expected);
+        let (status, response) = fixture
+            .invoke("account.view", "after-admin-disconnect", json!({}))
+            .await;
+        assert_ne!(status, StatusCode::OK, "{response}");
+    }
+}
+
+/// Disable has already ended local access. Administrative metadata still
+/// exposes its pending provider cleanup although the owner cannot sign in.
+#[tokio::test]
+async fn administrator_reads_disabled_owner_cleanup_without_live_connection() {
+    use super::super::admin_connections::admin_request;
+    let (gitlab, _consumer, fixture) = connected_gitlab().await;
+    mount_revoke(&gitlab, ResponseTemplate::new(503)).await;
+    fixture
+        .runtime
+        .managed_store()
+        .unwrap()
+        .set_principal_enabled("alice", false)
+        .unwrap();
+    let (status, response) = admin_request(
+        &fixture,
+        Method::GET,
+        "/v1/admin/principals/alice/oauth/connections",
+        "admin-disabled-cleanup",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let rows = response["result"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["registration"], "gitlab");
+    assert_eq!(rows[0]["remoteRevocation"], "pending");
+    assert_eq!(rows[0]["canDisconnect"], false);
+    assert_eq!(rows[0]["connection"]["status"], "disconnected");
+    assert!(rows[0]["connection"]["connectionId"].is_null());
+    let (status, response) = admin_request(
+        &fixture,
+        Method::DELETE,
+        "/v1/admin/principals/alice/oauth/connections/gitlab",
+        "admin-disabled-idempotent",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(
+        response["result"],
+        json!({"disconnected":true,"remoteRevocation":"pending"})
+    );
+}

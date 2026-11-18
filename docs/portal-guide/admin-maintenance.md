@@ -115,14 +115,18 @@ Review the breadth of the delegation before saving it. Use the
    before entering the fields it asks for; a replacement starts on the stored
    token's type, and choosing another replaces the token with one of that type.
    Delete unused rows by ID.
-   A person's OAuth connections are listed read-only, one row per OAuth
-   registration marked **Managed by user**, with the services using it. Its
-   drawer shows the remote revocation of the connections the Broker ended:
+   A person's OAuth connections show their current status and connected account,
+   one row per registration, with the services using it. Administrators can
+   select **Disconnect** and confirm the person and affected services, just as
+   in the personal Credentials view. Auditors can inspect but cannot disconnect.
+   Only the person can connect or reconnect; disconnecting does not change their
+   permissions to do so. An administrator can disconnect even when the person's
+   self-service is disabled or its last grant has been removed. The drawer
+   shows the remote revocation of connections the Broker ended:
    **Revoked at provider**, **Revocation pending**, **Revocation failed** or
    **Revocation unconfirmed**; the row's status also shows the last two, with
-   the explanation as a tooltip. The tab does not show their connection
-   status or connected account, and only the person can connect, reconnect or
-   disconnect them.
+   the explanation as a tooltip. If OAuth state cannot be loaded, the tab
+   reports it as unavailable.
    A registration whose revocation is pending, failed or unconfirmed stays
    listed after the person lost its grants, and **Needs attention** includes
    every one whose revocation failed or is unconfirmed.

@@ -15,6 +15,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use wiremock::matchers::{body_string_contains, header as header_is, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+#[path = "oauth/admin_connections.rs"]
+mod admin_connections;
 #[path = "oauth/atlassian_dialect.rs"]
 pub(super) mod atlassian_dialect;
 #[path = "oauth/atlassian_products.rs"]

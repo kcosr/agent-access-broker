@@ -20,6 +20,7 @@ import type {
   LoginMethodRecord,
   MeResult,
   OAuthConnectionTarget,
+  AdminOAuthConnectionTarget,
   PolicyCatalogResult,
   PolicyGrantRecord,
   PolicyStatusResult,
@@ -422,6 +423,16 @@ export function useOAuthConnections(enabled = true) {
     queryKey: portalQueryKeys.oauthConnections(viewer),
     enabled: selfService && enabled,
     queryFn: () => runQuery((current) => brokerApi.oauthConnections(current))
+  });
+}
+
+/** An administered principal's OAuth registrations, independently of stored tokens. */
+export function useAdminOAuthConnections(principalId: string, enabled = true) {
+  const { viewer, admin, runQuery } = useQueryAccess();
+  return useQuery<AdminOAuthConnectionTarget[]>({
+    queryKey: portalQueryKeys.adminOAuthConnections(viewer, principalId),
+    enabled: admin && enabled && Boolean(principalId),
+    queryFn: () => runQuery((current) => brokerApi.adminPrincipalOAuthConnections(current, principalId))
   });
 }
 

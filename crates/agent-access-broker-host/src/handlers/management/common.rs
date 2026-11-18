@@ -1059,6 +1059,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "admin.imports.preview"
             | "credentials.list"
             | "oauth.connections.list"
+            | "admin.principals.oauth_connections.list"
             | "oauth.connections.callback"
             | "credentials.inspect"
             | "credentials.input_schema"
@@ -1274,6 +1275,7 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "audit.events.list",
     "audit.requests.inspect",
     // Administration and status.
+    "admin.principals.oauth_connections.list",
     "admin.imports.list",
     "admin.imports.inspect",
     "admin.imports.preview",

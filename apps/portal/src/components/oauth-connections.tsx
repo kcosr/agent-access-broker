@@ -1,17 +1,19 @@
 // OAuth connections for the signed-in user, one per registration that their
 // credential connections use: connect, reconnect, replace an account without
 // identity evidence, and disconnect. Used on Credentials and on an imported
-// service's Import tab. An administered principal's registrations are shown
-// read-only, with their remote revocation.
+// service's Import tab. Administrators can inspect and disconnect a principal's
+// connections; only the owner can connect or reconnect.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { brokerApi, type OAuthReturnPath } from "../api";
-import type { OAuthConnectionTarget, RemoteRevocation } from "../types";
+import type { AdminOAuthConnectionTarget, OAuthConnectionTarget, RemoteRevocation } from "../types";
 import { Badge, Button, KeyValue, ListRow, useToast, type Tone } from "../workbench";
 import { useSession } from "../app/session";
 import { useModal } from "../app/modal";
 import { usePortalInvalidation } from "../data/invalidation";
 import { refreshOAuthOnReturn, reserveOAuthWindow } from "../lib/oauth-window";
-import { consumerSummary, type AdministeredOAuth } from "../lib/credentials";
+import { consumerSummary } from "../lib/credentials";
+import type { AccountSubject } from "../app/active-route";
+import { canWriteSubject } from "../lib/capabilities";
 
 const STATUS: Record<string, { label: string; tone: Tone }> = {
   ready: { label: "Connected", tone: "success" },
@@ -35,9 +37,9 @@ const PROVIDER_APPLICATIONS = "in GitLab: Preferences › Applications › Autho
 // by a lost renewal. It never describes the current connection, which may
 // use another account.
 const REVOKE_ENDED = `Revoke the broker application's access at the provider, signed in to the account that connection used (${PROVIDER_APPLICATIONS}).`;
-// An administrator cannot act on the person's account and does not see its
-// current connection.
-const REVOKE_ENDED_ADMINISTERED = `The user must revoke the broker application's access at the provider, signed in to the account that connection used (${PROVIDER_APPLICATIONS}), or a provider administrator must revoke it. That also ends a current connection of the same account, which the user then reconnects.`;
+function administeredProviderCleanup(principal: string) {
+  return `The user ${principal} must revoke the broker application's access at the provider, signed in to the account that connection used (${PROVIDER_APPLICATIONS}), or a provider administrator must revoke it.`;
+}
 function remoteRevocationStates(revokeEnded: string): Record<Exclude<RemoteRevocation, "not_requested">, { label: string; tone: Tone; message: string }> {
   return {
     pending: {
@@ -59,18 +61,16 @@ function remoteRevocationStates(revokeEnded: string): Record<Exclude<RemoteRevoc
   };
 }
 const REMOTE_REVOCATION = remoteRevocationStates(REVOKE_ENDED);
-const ADMINISTERED_REVOCATION = remoteRevocationStates(REVOKE_ENDED_ADMINISTERED);
-/** The status of an administered principal's registration, whose connection only its owner sees. */
-export const ADMINISTERED_OAUTH_STATUS: { label: string; tone: Tone } = { label: "Managed by user", tone: "neutral" };
-export const ADMINISTERED_OAUTH_NOTICE = "Only the user can connect, reconnect or disconnect this account, from their own Credentials page.";
 // After a disconnect, the result also covers the account just disconnected.
 const REVOKE_AT_PROVIDER = `Revoke the broker application's access in your account settings at the provider (${PROVIDER_APPLICATIONS}).`;
-const DISCONNECT_REVOCATION: Record<Exclude<RemoteRevocation, "not_requested">, string> = {
-  pending: "Access through the broker has ended. The broker is still revoking the account's tokens at the provider and retries while it is unavailable.",
-  revoked: "Access through the broker has ended, and the provider revoked every token the broker held for the account.",
-  failed: `Access through the broker has ended, but the provider did not revoke every token. ${REVOKE_AT_PROVIDER}`,
-  unconfirmed: `Access through the broker has ended, but a token renewal's outcome was lost, so the provider may hold a token the broker never received. ${REVOKE_AT_PROVIDER}`
-};
+function disconnectRevocation(revokeAtProvider: string): Record<Exclude<RemoteRevocation, "not_requested">, string> {
+  return {
+    pending: "Access through the broker has ended. The broker is still revoking the account's tokens at the provider and retries while it is unavailable.",
+    revoked: "Access through the broker has ended, and the provider revoked every token the broker held for the account.",
+    failed: `Access through the broker has ended, but the provider did not revoke every token. ${revokeAtProvider}`,
+    unconfirmed: `Access through the broker has ended, but a token renewal's outcome was lost, so the provider may hold a token the broker never received. ${revokeAtProvider}`
+  };
+}
 const IDENTITY_UNAVAILABLE = "Upstream account identity unavailable; reconnecting asks to confirm replacing the connection.";
 
 /** Why Connect is unavailable; it offers disconnect only when there is an owned connection to disconnect. */
@@ -80,7 +80,7 @@ export function oauthConnectUnavailableMessage(target: OAuthConnectionTarget) {
   return target.canDisconnect ? `${unavailable.reason} ${unavailable.disconnect}` : unavailable.reason;
 }
 
-export function oauthConnectionStatus(target: OAuthConnectionTarget) {
+export function oauthConnectionStatus(target: AdminOAuthConnectionTarget) {
   return STATUS[target.connection?.status ?? "disconnected"] ?? { label: (target.connection?.status ?? "unknown").replaceAll("_", " "), tone: "neutral" as Tone };
 }
 
@@ -89,7 +89,7 @@ export function oauthConnected(target: Pick<OAuthConnectionTarget, "connection">
 }
 
 /** The connected upstream account, or why there is none. */
-export function oauthAccountLabel(target: OAuthConnectionTarget) {
+export function oauthAccountLabel(target: AdminOAuthConnectionTarget) {
   return target.connection?.displayName ?? (oauthConnected(target) ? "Connection authorized" : "No account connected");
 }
 
@@ -100,14 +100,15 @@ export function oauthAccountLabel(target: OAuthConnectionTarget) {
  * which no remote revocation concerns: revoking at the provider also ends
  * it when it uses the same account.
  */
-export function oauthRemoteRevocation(target: Pick<OAuthConnectionTarget, "remoteRevocation" | "connection">) {
+export function oauthRemoteRevocation(target: Pick<AdminOAuthConnectionTarget, "remoteRevocation" | "connection">, principal?: string) {
   const state = target.remoteRevocation;
-  const revocation = state && state !== "not_requested" ? REMOTE_REVOCATION[state] ?? null : null;
+  const states = principal ? remoteRevocationStates(administeredProviderCleanup(principal)) : REMOTE_REVOCATION;
+  const revocation = state && state !== "not_requested" ? states[state] ?? null : null;
   if (!revocation) return null;
   if (!oauthConnected(target) || target.connection?.status !== "ready") return revocation;
   const current =
     state === "failed" || state === "unconfirmed"
-      ? "The current connection keeps working, but revoking at the provider ends it too when it uses the same account; reconnect afterwards."
+      ? `The current connection keeps working, but revoking at the provider ends it too when it uses the same account; ${principal ? "the user must reconnect afterwards" : "reconnect afterwards"}.`
       : "The current connection is not affected.";
   return { ...revocation, message: `${revocation.message} ${current}` };
 }
@@ -117,35 +118,28 @@ export function oauthRevocationNeedsAttention(state: RemoteRevocation | null) {
   return state === "failed" || state === "unconfirmed";
 }
 
-/**
- * The remote revocation of an administered principal's registration, worded
- * for administrators and auditors; none when nothing was kept to revoke or
- * the state is unknown. It makes no claim about a current connection.
- */
-export function administeredRemoteRevocation(state: RemoteRevocation | null) {
-  return state && state !== "not_requested" ? ADMINISTERED_REVOCATION[state] ?? null : null;
-}
-
 /** The notice after a disconnect, by its remote revocation result. */
-export function oauthDisconnectNotice(state: RemoteRevocation): { message: string; tone: "success" | "error" } {
-  if (state === "not_requested" || !(state in DISCONNECT_REVOCATION)) return { message: "Account disconnected. Consent at the provider is not removed.", tone: "success" };
-  return { message: `Account disconnected. ${DISCONNECT_REVOCATION[state]}`, tone: state === "failed" || state === "unconfirmed" ? "error" : "success" };
+export function oauthDisconnectNotice(state: RemoteRevocation, principal?: string): { message: string; tone: "success" | "error" } {
+  const ended = principal ? `Account disconnected for ${principal}.` : "Account disconnected.";
+  const revocation = disconnectRevocation(principal ? administeredProviderCleanup(principal) : REVOKE_AT_PROVIDER);
+  if (state === "not_requested" || !(state in revocation)) return { message: `${ended} Consent at the provider is not removed.`, tone: "success" };
+  return { message: `${ended} ${revocation[state]}`, tone: state === "failed" || state === "unconfirmed" ? "error" : "success" };
 }
 
 /** A note when the provider does not identify the connected account. */
-export function oauthIdentityNote(target: OAuthConnectionTarget) {
+export function oauthIdentityNote(target: AdminOAuthConnectionTarget) {
   return oauthConnected(target) && !target.connection?.subjectId ? IDENTITY_UNAVAILABLE : null;
 }
 
 /** Scope evidence may be retained from consent when a refresh omits scope. */
-export function oauthScopeEvidence(target: OAuthConnectionTarget) {
+export function oauthScopeEvidence(target: AdminOAuthConnectionTarget) {
   if (!target.connection?.connectionId) return null;
   const scopes = target.connection.targets.find((entry) => entry.id === target.target)?.scopes ?? [];
   return scopes.length ? `Known scopes: ${scopes.join(", ")}` : "Scope details unavailable";
 }
 
 /** What connecting allows; none for a cleanup-only row, whose profile is unknown. */
-export function oauthConnectionPermissions(target: OAuthConnectionTarget) {
+export function oauthConnectionPermissions(target: AdminOAuthConnectionTarget) {
   if (target.scopeMode === null) return null;
   if (target.scopeMode === "explicit") return target.connectionDescription ?? "Permissions are shown during connection.";
   const evidence = oauthScopeEvidence(target);
@@ -153,7 +147,7 @@ export function oauthConnectionPermissions(target: OAuthConnectionTarget) {
 }
 
 /** The services an OAuth connection serves, for the disconnect confirmation. */
-function affectedServices(target: OAuthConnectionTarget) {
+function affectedServices(target: AdminOAuthConnectionTarget) {
   const services = consumerSummary(target.consumers, target.otherConsumers);
   return services ? `${services} ${target.consumers.length + target.otherConsumers === 1 ? "stops" : "stop"} using this account.` : "Every service using this account stops working.";
 }
@@ -163,8 +157,9 @@ function affectedServices(target: OAuthConnectionTarget) {
  * stays mounted. `importedService` names the import whose administrator
  * discovery the connection serves (the Import tab).
  */
-export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedService?: string) {
-  const { attempt, reportError } = useSession();
+export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedService?: string, subject?: AccountSubject) {
+  const { session, attempt, reportError } = useSession();
+  const principal = subject?.administered ? subject.principalId : undefined;
   const { confirm } = useModal();
   const toast = useToast();
   const invalidate = usePortalInvalidation();
@@ -198,6 +193,7 @@ export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedS
     }
 
     function connect(target: OAuthConnectionTarget) {
+      if (principal) return;
       if (focusActive(target)) return;
       // Without identity evidence a new authorization may be a different account.
       if (target.connection?.connectionId && !target.connection.subjectId) {
@@ -213,14 +209,17 @@ export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedS
       start(target, false).catch(reportError);
     }
 
-    function disconnect(target: OAuthConnectionTarget) {
+    function disconnect(target: AdminOAuthConnectionTarget) {
+      if (subject && !canWriteSubject(session, subject)) return;
       confirm({
         title: "Disconnect account?",
-        body: `Disconnect ${target.displayName} from the broker? ${affectedServices(target)} Where the provider supports it, the broker also revokes the account's tokens there.`,
+        body: `Disconnect ${principal ? `${principal}'s ${target.displayName} connection` : target.displayName} from the broker? ${affectedServices(target)} Where the provider supports it, the broker also revokes the account's tokens there.${principal ? " The user can connect again while permitted by their account settings and grants." : ""}`,
         confirmLabel: "Disconnect",
         onConfirm: async () => {
-          const result = await attempt((current) => brokerApi.oauthDisconnect(current, target.registration));
-          const notice = oauthDisconnectNotice(result.remoteRevocation);
+          const result = await attempt((current) =>
+            principal ? brokerApi.adminPrincipalOAuthDisconnect(current, principal, target.registration) : brokerApi.oauthDisconnect(current, target.registration)
+          );
+          const notice = oauthDisconnectNotice(result.remoteRevocation, principal);
           toast(notice.message, { tone: notice.tone });
           invalidate.portal();
         }
@@ -228,28 +227,33 @@ export function useOAuthConnectionActions(returnPath: OAuthReturnPath, importedS
     }
 
     return { connect, disconnect, pending };
-  }, [attempt, reportError, confirm, toast, invalidate, returnPath, importedService, pending]);
+  }, [attempt, reportError, confirm, toast, invalidate, returnPath, importedService, pending, principal, subject, session]);
 }
 
 export type OAuthConnectionActions = ReturnType<typeof useOAuthConnectionActions>;
 
 /** Connect/Reconnect and Disconnect for one registration. */
-export function OAuthConnectionButtons({ target, connections }: { target: OAuthConnectionTarget; connections: OAuthConnectionActions }) {
+export function OAuthConnectionButtons({ target, connections, subject }: { target: OAuthConnectionTarget | AdminOAuthConnectionTarget; connections: OAuthConnectionActions; subject?: AccountSubject }) {
+  const { session } = useSession();
+  const ownerTarget = !subject?.administered && "canConnect" in target ? target : null;
+  const writable = !subject || canWriteSubject(session, subject);
   const connected = oauthConnected(target);
   const pending = connections.pending === target.registration;
   const otherPending = connections.pending !== null && !pending;
   return (
     <span className="wb-btn-group">
-      <Button
-        size="sm"
-        variant={connected ? "default" : "primary"}
-        disabled={otherPending || (!pending && !target.canConnect)}
-        title={pending ? "Return to the open authorization tab" : otherPending ? OTHER_AUTHORIZATION_OPEN : oauthConnectUnavailableMessage(target) ?? "Opens in a new tab"}
-        onClick={() => connections.connect(target)}
-      >
-        {pending ? "Return to authorization tab" : connected ? "Reconnect" : "Connect account"}
-      </Button>
-      {connected ? (
+      {ownerTarget ? (
+        <Button
+          size="sm"
+          variant={connected ? "default" : "primary"}
+          disabled={otherPending || (!pending && !ownerTarget.canConnect)}
+          title={pending ? "Return to the open authorization tab" : otherPending ? OTHER_AUTHORIZATION_OPEN : oauthConnectUnavailableMessage(ownerTarget) ?? "Opens in a new tab"}
+          onClick={() => connections.connect(ownerTarget)}
+        >
+          {pending ? "Return to authorization tab" : connected ? "Reconnect" : "Connect account"}
+        </Button>
+      ) : null}
+      {connected && writable && (ownerTarget || target.canDisconnect) ? (
         <Button size="sm" variant="danger-ghost" disabled={!target.canDisconnect || pending} onClick={() => connections.disconnect(target)}>
           Disconnect
         </Button>
@@ -303,11 +307,11 @@ export function OAuthConnectionRow({ target, connections }: { target: OAuthConne
 }
 
 /** Account, permissions and availability of one registration (the Credentials drawer). */
-export function OAuthConnectionDetails({ target, pending }: { target: OAuthConnectionTarget; pending: boolean }) {
-  const unavailable = oauthConnectUnavailableMessage(target);
-  const identity = oauthIdentityNote(target);
+export function OAuthConnectionDetails({ target, pending, principal }: { target: OAuthConnectionTarget | AdminOAuthConnectionTarget; pending: boolean; principal?: string }) {
+  const unavailable = !principal && "canConnect" in target ? oauthConnectUnavailableMessage(target) : null;
+  const identity = principal ? (oauthConnected(target) && !target.connection?.subjectId ? "Upstream account identity unavailable." : null) : oauthIdentityNote(target);
   const permissions = oauthConnectionPermissions(target);
-  const revocation = oauthRemoteRevocation(target);
+  const revocation = oauthRemoteRevocation(target, principal);
   return (
     <KeyValue
       items={[
@@ -318,29 +322,6 @@ export function OAuthConnectionDetails({ target, pending }: { target: OAuthConne
         identity ? { label: "Identity", value: identity } : null,
         unavailable ? { label: "Connect", value: unavailable } : null,
         pending ? { label: "Authorization", value: AUTHORIZATION_TAB_NOTICE } : null
-      ]}
-    />
-  );
-}
-
-/**
- * Registration, connections and remote revocation of an administered
- * principal's registration (the Credentials drawer). The administrator list
- * carries no connection status or account, so neither is shown.
- */
-export function AdministeredOAuthDetails({ oauth }: { oauth: AdministeredOAuth }) {
-  const revocation = administeredRemoteRevocation(oauth.remoteRevocation);
-  const remote = revocation
-    ? `${revocation.label}. ${revocation.message}`
-    : oauth.remoteRevocation === "not_requested"
-      ? "Not requested: the broker kept nothing to revoke at the provider."
-      : "Unknown: OAuth is inactive or its state is unavailable.";
-  return (
-    <KeyValue
-      items={[
-        { label: "Registration", value: <span className="wb-mono">{oauth.registration}</span> },
-        { label: oauth.connections.length === 1 ? "Connection" : "Connections", value: <span className="wb-mono">{oauth.connections.join(", ")}</span> },
-        { label: "Remote revocation", value: remote }
       ]}
     />
   );

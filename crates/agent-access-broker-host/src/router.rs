@@ -437,6 +437,14 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             put(service_limits::set).delete(service_limits::clear),
         )
         .route(
+            "/v1/admin/principals/{principal}/oauth/connections",
+            get(crate::handlers::management::oauth::admin_list),
+        )
+        .route(
+            "/v1/admin/principals/{principal}/oauth/connections/{registration}",
+            delete(crate::handlers::management::oauth::admin_disconnect),
+        )
+        .route(
             "/v1/admin/principals/{principal}/credentials",
             get(admin_principal_credentials_list),
         )

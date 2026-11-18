@@ -187,6 +187,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Administrators can inspect and disconnect personal OAuth connections.**
+  Administrators and auditors see current status and nonsecret connected-account
+  metadata in Credentials; only administrators can disconnect, using the same
+  confirmation and revocation reporting as the owner. Cleanup remains available
+  after grant loss or with self-service disabled. Connect/reconnect remains with
+  the user. See [OAuth administration](docs/oauth.md#administrator-management-api).
+
 - Jira custom fields can be set or cleared with arbitrary JSON through
   `issue.custom_field.set` and the typed CLI, with an optional immutable issue-ID
   guard. Administrators allowlist writable field IDs; Jira validates their values

@@ -109,7 +109,11 @@ registration.
 Disconnecting ends access through the Broker at once. For GitLab, the Broker
 also revokes the connection's tokens in GitLab, and so it does for the previous
 connection when you reconnect or replace the account, or when an administrator
-disables your account. The disconnect notice shows how revoking the
+disconnects the connection or disables your account. Administrators and auditors
+can see your connection status and the upstream account identity the provider
+supplies. An administrator can disconnect it, but only you can connect or
+reconnect; a disconnect does not change your permissions to connect again.
+The disconnect notice shows how revoking the
 disconnected account's tokens went. The connection's drawer shows the same for
 the connections the Broker ended, for up to 30 days, and the row's status shows
 **Revocation failed** or **Revocation unconfirmed** beside the current

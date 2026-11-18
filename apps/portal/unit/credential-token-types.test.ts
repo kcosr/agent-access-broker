@@ -41,6 +41,7 @@ vi.mock("../src/data/queries", () => ({
     tokens: [],
     loading: false
   }),
+  useAdminOAuthConnections: () => ({ data: [], isError: false, error: null, refetch: vi.fn() }),
   useOAuthConnections: () => ({ data: [], isError: false, error: null, refetch: vi.fn() })
 }));
 import { CredentialDrawer, CredentialRows, CredentialToolbar, useCredentialList } from "../src/features/credentials/credential-list";
