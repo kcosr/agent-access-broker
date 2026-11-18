@@ -14,6 +14,7 @@ mod documentation;
 mod download_media_policy;
 mod personal_spaces;
 mod plain_inputs;
+mod result_schemas;
 mod search_exclusions;
 mod space_aliases;
 mod space_keys;
@@ -525,7 +526,7 @@ async fn page_create_uses_requested_parent_or_space_homepage_and_verifies_readba
             )]))
             .build();
 
-        let result = provider.invoke(request).await.unwrap();
+        let result = provider.invoke_checked(request).await.unwrap();
 
         assert_eq!(result.result["parentPageId"], expected_parent);
         assert_eq!(result.result["placement"], expected_placement);
@@ -548,7 +549,10 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         ProviderLimits::default(),
         backend.clone(),
     );
-    let result = provider.invoke(page_move_invocation()).await.unwrap();
+    let result = provider
+        .invoke_checked(page_move_invocation())
+        .await
+        .unwrap();
     assert_eq!(result.result["pageId"], "100");
     assert_eq!(result.result["position"], "append");
     assert_eq!(result.result["targetPageId"], "200");
@@ -587,7 +591,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         moved_from_folder_backend,
     );
     let result = moved_from_folder_provider
-        .invoke(page_move_invocation())
+        .invoke_checked(page_move_invocation())
         .await
         .unwrap();
     assert_eq!(result.result["previousParentId"], "folder-abc");
@@ -608,7 +612,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         cycle_backend.clone(),
     );
     let error = cycle_provider
-        .invoke(page_move_invocation())
+        .invoke_checked(page_move_invocation())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
@@ -624,7 +628,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         mismatch_backend.clone(),
     );
     let error = mismatch_provider
-        .invoke(page_move_invocation())
+        .invoke_checked(page_move_invocation())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -648,7 +652,7 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
         );
 
         let result = provider
-            .invoke(sibling_page_move_invocation(position))
+            .invoke_checked(sibling_page_move_invocation(position))
             .await
             .unwrap();
 
@@ -682,7 +686,7 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
         mismatch_backend,
     );
     let error = mismatch_provider
-        .invoke(sibling_page_move_invocation("before"))
+        .invoke_checked(sibling_page_move_invocation("before"))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -745,7 +749,7 @@ async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
             ProviderLimits::default(),
             backend,
         )
-        .invoke(request)
+        .invoke_checked(request)
         .await
         .unwrap_err();
         assert_unverified_after_throttling(&error, "post_create_readback", locators);
@@ -783,7 +787,7 @@ async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
             ProviderLimits::default(),
             backend.clone(),
         )
-        .invoke(page_move_invocation())
+        .invoke_checked(page_move_invocation())
         .await
         .unwrap_err();
         assert_unverified_after_throttling(&error, stage, move_locators.clone());
@@ -819,7 +823,10 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         )]))
         .build();
 
-    let create_error = create_provider.invoke(create_request).await.unwrap_err();
+    let create_error = create_provider
+        .invoke_checked(create_request)
+        .await
+        .unwrap_err();
 
     assert_eq!(create_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
@@ -868,7 +875,10 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         )]))
         .build();
 
-    let draft_error = draft_provider.invoke(draft_request).await.unwrap_err();
+    let draft_error = draft_provider
+        .invoke_checked(draft_request)
+        .await
+        .unwrap_err();
 
     assert_eq!(draft_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
@@ -899,7 +909,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
     );
 
     let move_error = move_provider
-        .invoke(page_move_invocation())
+        .invoke_checked(page_move_invocation())
         .await
         .unwrap_err();
 
@@ -1242,7 +1252,7 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
         .lookup_credential(credential_with_token("lookup-token"))
         .build();
 
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_checked(request).await.unwrap();
 
     assert_eq!(
         result.result["comment"]["body"]["storage"]["value"],
@@ -1310,7 +1320,7 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
         ))
         .build();
 
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_checked(request).await.unwrap();
 
     let audit = result.audit.as_ref().unwrap();
     assert_eq!(audit["attribution"]["applied"], true);
@@ -1359,7 +1369,7 @@ async fn page_create_applies_configured_adf_attribution_footer_and_dedupes() {
         ))
         .build();
 
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_checked(request).await.unwrap();
 
     let audit = result.audit.as_ref().unwrap();
     assert_eq!(audit["attribution"]["applied"], true);
@@ -1414,7 +1424,7 @@ async fn page_update_enforces_adf_body_cap_after_attribution() {
         ))
         .build();
 
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
@@ -1457,7 +1467,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let page_create_result = provider.invoke(page_create).await.unwrap();
+    let page_create_result = provider.invoke_checked(page_create).await.unwrap();
 
     let mut page_update = invocation(
         "page.update",
@@ -1484,7 +1494,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let page_update_result = provider.invoke(page_update).await.unwrap();
+    let page_update_result = provider.invoke_checked(page_update).await.unwrap();
 
     let mut blog_create = invocation(
         "blog.create",
@@ -1511,7 +1521,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let blog_create_result = provider.invoke(blog_create).await.unwrap();
+    let blog_create_result = provider.invoke_checked(blog_create).await.unwrap();
 
     let mut blog_update = invocation(
         "blog.update",
@@ -1538,7 +1548,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let blog_update_result = provider.invoke(blog_update).await.unwrap();
+    let blog_update_result = provider.invoke_checked(blog_update).await.unwrap();
 
     assert_storage_attribution_audit(&page_create_result, "add");
     assert_storage_attribution_audit(&page_update_result, "update");
@@ -1610,7 +1620,7 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             broker_request_id.to_string(),
         ))
         .build();
-    provider.invoke(page_request).await.unwrap();
+    provider.invoke_checked(page_request).await.unwrap();
 
     let mut blog_request = invocation(
         "blog.create",
@@ -1633,7 +1643,7 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             broker_request_id.to_string(),
         ))
         .build();
-    provider.invoke(blog_request).await.unwrap();
+    provider.invoke_checked(blog_request).await.unwrap();
 
     let page_body = backend.page_create_requests.lock().unwrap()[0]
         .body
@@ -1679,7 +1689,10 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             vec!["ENG".to_string()],
         )]))
         .build();
-    let error = capped_provider.invoke(capped_request).await.unwrap_err();
+    let error = capped_provider
+        .invoke_checked(capped_request)
+        .await
+        .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(
@@ -1758,7 +1771,7 @@ async fn comment_execution_reconfirms_parent_chain_after_lookup() {
         )))
         .build();
 
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_checked(request).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
@@ -1784,7 +1797,11 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         )]))
         .build();
     assert_eq!(
-        provider.invoke(denied).await.unwrap_err().reason_code(),
+        provider
+            .invoke_checked(denied)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1839,7 +1856,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         .build();
     assert_eq!(
         provider
-            .invoke(wrong_container)
+            .invoke_checked(wrong_container)
             .await
             .unwrap_err()
             .reason_code(),
@@ -1868,7 +1885,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         .build();
     assert_eq!(
         provider
-            .invoke(non_current)
+            .invoke_checked(non_current)
             .await
             .unwrap_err()
             .reason_code(),
@@ -1885,7 +1902,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .invoke(invocation(
+            .invoke_checked(invocation(
                 "page.footer_comment.add",
                 json!({
                     "pageId": "0",
@@ -1914,7 +1931,11 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
         )]))
         .build();
     assert_eq!(
-        provider.invoke(body_cap).await.unwrap_err().reason_code(),
+        provider
+            .invoke_checked(body_cap)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::BodySizeDenied
     );
 
@@ -2584,7 +2605,7 @@ async fn all_except_confluence_search_checks_returned_containment() {
                 SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
             ))
             .build();
-        let result = provider.invoke(request).await;
+        let result = provider.invoke_checked(request).await;
         assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
         if let Err(error) = result {
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -2985,7 +3006,7 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
         .build();
     assert_eq!(
         provider
-            .invoke(page_request)
+            .invoke_checked(page_request)
             .await
             .unwrap_err()
             .reason_code(),
@@ -3023,7 +3044,7 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
         .build();
     assert_eq!(
         provider
-            .invoke(blog_request)
+            .invoke_checked(blog_request)
             .await
             .unwrap_err()
             .reason_code(),
@@ -4598,7 +4619,7 @@ async fn verify_missing_page_returns_sanitized_mismatch() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "verify",
             json!({
                 "pageId": "999999",
@@ -4622,7 +4643,7 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "verify",
             json!({
                 "pageId": "123456",
@@ -4643,7 +4664,7 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "verify",
             json!({
                 "pageId": "123456",
@@ -4699,7 +4720,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         }),
     );
     let first = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 1}),
         ))
@@ -4712,7 +4733,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
     assert!(!token.contains("start=1"));
 
     let second = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4727,7 +4748,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
     assert_eq!(second.result["hasMore"], false);
 
     let clamped = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 99}),
         ))
@@ -4738,7 +4759,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
     assert!(clamped.result["nextPageToken"].is_null());
 
     let zero = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 0}),
         ))
@@ -4748,7 +4769,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
 
     let tampered = format!("{token}x");
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4861,7 +4882,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
     );
 
     let first = first_provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 1}),
         ))
@@ -4869,7 +4890,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
         .unwrap();
     let stable_token = first.result["nextPageToken"].as_str().unwrap();
     let second = second_provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4889,7 +4910,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
     let process_local_second =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let first = process_local_first
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 1}),
         ))
@@ -4897,7 +4918,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
         .unwrap();
     let process_local_token = first.result["nextPageToken"].as_str().unwrap();
     let error = process_local_second
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4931,7 +4952,7 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
         .lookup_credential(credential_with_token("lookup-token"))
         .build();
 
-    provider.invoke(request).await.unwrap();
+    provider.invoke_checked(request).await.unwrap();
 
     assert_eq!(
         *backend.credential_observations.lock().unwrap(),
@@ -4989,7 +5010,7 @@ async fn search_rejects_pages_outside_requested_space() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "search",
             json!({
                 "spaces": ["ENG"],
@@ -5050,7 +5071,7 @@ async fn search_rejects_non_current_pages() {
             backend,
         );
         let error = provider
-            .invoke(invocation(
+            .invoke_checked(invocation(
                 "search",
                 json!({
                     "spaces": ["ENG"],
@@ -5094,7 +5115,7 @@ async fn page_view_enforces_response_byte_cap() {
     });
     let provider = ConfluenceProvider::with_backend(confluence_config(), limits, backend);
     let error = provider
-        .invoke(invocation("page.view", json!({ "pageId": "123456" })))
+        .invoke_checked(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -5128,7 +5149,7 @@ async fn page_view_enforces_configured_body_byte_cap() {
     });
     let provider = ConfluenceProvider::with_backend(config, ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation("page.view", json!({ "pageId": "123456" })))
+        .invoke_checked(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -5161,7 +5182,7 @@ async fn page_view_rejects_body_response_outside_authorized_scope() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation("page.view", json!({ "pageId": "123456" })))
+        .invoke_checked(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -5198,7 +5219,7 @@ async fn blog_view_rejects_non_current_execution_response() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation("blog.view", json!({ "blogId": "123456" })))
+        .invoke_checked(invocation("blog.view", json!({ "blogId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.decision(), Decision::Deny);
@@ -6335,7 +6356,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6356,7 +6377,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6389,7 +6410,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6410,7 +6431,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6434,7 +6455,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let result = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6469,7 +6490,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let result = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6662,6 +6683,8 @@ struct CommentStubConfluenceBackend {
     update_requests: std::sync::Mutex<Vec<ConfluenceCommentUpdateRequest>>,
     /// Throttle comment reads once a comment write has applied.
     throttle_reads_after_write: bool,
+    /// Confluence rejects every comment update with a version conflict.
+    conflict_on_update: bool,
 }
 
 impl CommentStubConfluenceBackend {
@@ -6737,6 +6760,7 @@ impl CommentStubConfluenceBackend {
             create_requests: std::sync::Mutex::new(Vec::new()),
             update_requests: std::sync::Mutex::new(Vec::new()),
             throttle_reads_after_write: false,
+            conflict_on_update: false,
         }
     }
 
@@ -6800,6 +6824,8 @@ struct AttributionStubConfluenceBackend {
     blog_create_requests: std::sync::Mutex<Vec<ConfluenceBlogCreateRequest>>,
     blog_update_requests: std::sync::Mutex<Vec<ConfluenceBlogUpdateRequest>>,
     backend_calls: std::sync::Mutex<u64>,
+    /// Confluence rejects every page and blog update with a version conflict.
+    conflict_on_update: bool,
 }
 
 impl AttributionStubConfluenceBackend {
@@ -6841,6 +6867,7 @@ impl AttributionStubConfluenceBackend {
             blog_create_requests: std::sync::Mutex::new(Vec::new()),
             blog_update_requests: std::sync::Mutex::new(Vec::new()),
             backend_calls: std::sync::Mutex::new(0),
+            conflict_on_update: false,
         }
     }
 }
@@ -7135,6 +7162,9 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
             .get(&request.comment_id)
             .cloned()
             .ok_or(ConfluenceBackendError::NotFound)?;
+        if self.conflict_on_update {
+            return Err(ConfluenceBackendError::Conflict);
+        }
         self.update_requests.lock().unwrap().push(request.clone());
         comment.version = Some(request.base_version + 1);
         comment.bodies = BTreeMap::from([(request.body.representation, request.body.value)]);
@@ -7890,6 +7920,9 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
         if request.page_id != self.page.id {
             return Err(ConfluenceBackendError::NotFound);
         }
+        if self.conflict_on_update {
+            return Err(ConfluenceBackendError::Conflict);
+        }
         self.page_update_requests
             .lock()
             .unwrap()
@@ -7986,6 +8019,9 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         if request.blog_id != self.blog.id {
             return Err(ConfluenceBackendError::NotFound);
+        }
+        if self.conflict_on_update {
+            return Err(ConfluenceBackendError::Conflict);
         }
         self.blog_update_requests
             .lock()
@@ -8607,6 +8643,45 @@ async fn credential_verification_uses_current_user_probe() {
     assert_eq!(verification.audit["provider"], "confluence");
 }
 
+impl ConfluenceProvider {
+    /// [`Provider::invoke`], asserting that the outcome strictly matches the
+    /// action's result schemas. Unit tests invoke the provider only through
+    /// this, so every stub-driven outcome is checked.
+    pub(crate) async fn invoke_checked(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = request.action().to_string();
+        let outcome = Provider::invoke(self, request).await;
+        assert_conforms(&self.config, &action, &outcome);
+        outcome
+    }
+}
+
+/// Asserts that `outcome` strictly matches `action`'s result schemas as the
+/// descriptor for `config` publishes them. An action `config` does not
+/// publish is checked against its bundled schemas, and an unknown action must
+/// carry no result.
+pub(crate) fn assert_conforms(
+    config: &ConfluenceProviderConfig,
+    action: &str,
+    outcome: &Result<ProviderResult, ProviderError>,
+) {
+    let descriptor = confluence_descriptor(config);
+    if let Some(published) = descriptor.action(action) {
+        agent_access_provider::test_support::assert_result_conforms(published, outcome);
+    } else if RESULT_SCHEMAS.actions().contains(&action) {
+        let unpublished = ActionDescriptor::new(action, "unpublished", json!({"type": "object"}))
+            .result_schemas(RESULT_SCHEMAS.action(action));
+        agent_access_provider::test_support::assert_result_conforms(&unpublished, outcome);
+    } else {
+        assert!(
+            outcome.as_ref().is_err_and(|error| error.result.is_none()),
+            "unknown Confluence action {action} returned a result"
+        );
+    }
+}
+
 fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     let mut resource_scopes = ResourceScopes::new();
     if matches!(action, "page.view" | "blog.view") {
@@ -9186,7 +9261,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         Arc::new(http_confluence_backend_for_server(&server)),
     );
     let error = provider
-        .invoke(page_attachment_add_invocation(&[
+        .invoke_checked(page_attachment_add_invocation(&[
             "first", "second", "third",
         ]))
         .await
@@ -9386,7 +9461,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
             ProviderLimits::default(),
             Arc::new(backend),
         )
-        .invoke(request)
+        .invoke_checked(request)
         .await
         .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
@@ -9408,7 +9483,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
         ProviderLimits::default(),
         Arc::new(backend),
     )
-    .invoke(space_scope(invocation(
+    .invoke_checked(space_scope(invocation(
         "page.create",
         json!({"space": "ENG", "title": "Created", "contentFormat": "storage", "content": "<p>body</p>"}),
     )))
@@ -9441,7 +9516,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
     );
     let error =
         ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend))
-            .invoke(page_attachment_add_invocation(&["first", "second"]))
+            .invoke_checked(page_attachment_add_invocation(&["first", "second"]))
             .await
             .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
@@ -9514,7 +9589,7 @@ async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
             ProviderLimits::default(),
             Arc::new(http_confluence_backend_for_server(&server)),
         )
-        .invoke(page_attachment_add_invocation(&["first", "second"]))
+        .invoke_checked(page_attachment_add_invocation(&["first", "second"]))
         .await
         .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
@@ -9626,6 +9701,9 @@ struct DraftThrottleBackend {
     throttle_uploads_after: usize,
     throttle_attachment_reads_after_uploads: usize,
     published_or_discarded: std::sync::atomic::AtomicBool,
+    /// The version of the current page or blog post the draft belongs to;
+    /// `None` reports no current content.
+    current_version: Option<u64>,
 }
 
 impl DraftThrottleBackend {
@@ -9637,6 +9715,7 @@ impl DraftThrottleBackend {
             throttle_uploads_after: usize::MAX,
             throttle_attachment_reads_after_uploads: usize::MAX,
             published_or_discarded: std::sync::atomic::AtomicBool::new(false),
+            current_version: None,
         }
     }
 
@@ -9760,20 +9839,54 @@ impl ConfluenceBackend for DraftThrottleBackend {
 
     async fn page_metadata(
         &self,
-        _page_id: &str,
+        page_id: &str,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.after_finish()?;
-        Err(ConfluenceBackendError::NotFound)
+        match self.current_version {
+            Some(version)
+                if self.content_type == ConfluenceDraftContentType::Page
+                    && page_id == self.id() =>
+            {
+                ok(ConfluencePage {
+                    version,
+                    ..test_current_page(page_id, "Current", "ENG")
+                })
+            }
+            _ => Err(ConfluenceBackendError::NotFound),
+        }
     }
 
     async fn blog_metadata(
         &self,
-        _blog_id: &str,
+        blog_id: &str,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlog>, ConfluenceBackendError> {
         self.after_finish()?;
-        Err(ConfluenceBackendError::NotFound)
+        match self.current_version {
+            Some(version)
+                if self.content_type == ConfluenceDraftContentType::Blog
+                    && blog_id == self.id() =>
+            {
+                ok(ConfluenceBlog {
+                    id: blog_id.to_string(),
+                    title: "Current".to_string(),
+                    space: "ENG".to_string(),
+                    space_id: "98765".to_string(),
+                    space_alias: None,
+                    web_url: None,
+                    space_web_url: None,
+                    status: Some("current".to_string()),
+                    version,
+                    created_at: None,
+                    updated_at: None,
+                    created_by: None,
+                    updated_by: None,
+                    bodies: BTreeMap::new(),
+                })
+            }
+            _ => Err(ConfluenceBackendError::NotFound),
+        }
     }
 
     async fn page(
@@ -10016,7 +10129,7 @@ async fn throttled_draft_attachment_verification_keeps_the_batch_unverified() {
         backend.throttle_attachment_reads_after_uploads = 2;
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_attachment_add_invocation(
+            .invoke_checked(draft_attachment_add_invocation(
                 prefix,
                 id_key,
                 backend.id(),
@@ -10099,7 +10212,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
         backend.throttle_uploads_after = 1;
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_attachment_add_invocation(
+            .invoke_checked(draft_attachment_add_invocation(
                 prefix,
                 id_key,
                 backend.id(),
@@ -10134,7 +10247,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
         backend.throttle_uploads_after = 0;
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_attachment_add_invocation(
+            .invoke_checked(draft_attachment_add_invocation(
                 prefix,
                 id_key,
                 backend.id(),
@@ -10167,7 +10280,7 @@ async fn throttled_reads_after_draft_publish_or_discard_are_unverified() {
         }];
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_invocation(
+            .invoke_checked(draft_invocation(
                 &format!("{prefix}.draft.publish"),
                 json!({id_key: backend.id(), "draftHandle": handle, "bodyFormat": "storage"}),
             ))
@@ -10182,7 +10295,7 @@ async fn throttled_reads_after_draft_publish_or_discard_are_unverified() {
         let (provider, backend, handle) =
             draft_throttle_provider(DraftThrottleBackend::new(content_type));
         let error = provider
-            .invoke(draft_invocation(
+            .invoke_checked(draft_invocation(
                 &format!("{prefix}.draft.discard"),
                 json!({id_key: backend.id(), "draftHandle": handle}),
             ))
@@ -10221,7 +10334,7 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             vec!["ENG".to_string()],
         )]))
         .build();
-    let error = provider.invoke(reply).await.unwrap_err();
+    let error = provider.invoke_checked(reply).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
         "post_create_readback",
@@ -10253,7 +10366,7 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             vec!["ENG".to_string()],
         )]))
         .build();
-    let error = provider.invoke(update).await.unwrap_err();
+    let error = provider.invoke_checked(update).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
         "post_update_readback",

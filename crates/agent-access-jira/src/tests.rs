@@ -53,6 +53,9 @@ mod search_continuation_tests;
 #[path = "issue_view_links_tests.rs"]
 mod issue_view_links_tests;
 
+#[path = "result_schema_tests.rs"]
+mod result_schema_tests;
+
 #[test]
 fn parses_issue_keys_and_rejects_lowercase_or_zero_numbers() {
     assert!(is_issue_key("PROJ-1"));
@@ -1135,7 +1138,7 @@ async fn issue_view_returns_generated_browser_url() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let response = provider
-        .invoke(InvocationBuilder::new("jira", "issue.view")
+        .invoke_checked(InvocationBuilder::new("jira", "issue.view")
             .inputs(json!({
                 "url": "https://example.atlassian.net/jira/software/c/projects/PROJ/issues/PROJ-1"
             }))
@@ -1175,7 +1178,7 @@ async fn issue_view_returns_null_description_when_jira_omits_description() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -1234,7 +1237,7 @@ async fn issue_create_uses_authorized_project_and_returns_readback_issue() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.create")
                 .inputs(json!({
                     "project": "PROJ",
@@ -1318,7 +1321,7 @@ async fn issue_create_fails_closed_when_created_key_leaves_requested_project() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.create")
                 .inputs(json!({
                     "project": "PROJ",
@@ -1368,7 +1371,7 @@ async fn issue_create_malformed_response_emits_side_effect_failure_audit() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.create")
                 .inputs(json!({
                     "project": "PROJ",
@@ -1421,7 +1424,7 @@ async fn issue_create_non_201_success_emits_side_effect_failure_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue"
@@ -1453,7 +1456,7 @@ async fn issue_create_readback_failure_emits_reconciliation_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue",
@@ -1501,7 +1504,7 @@ async fn issue_create_readback_invalid_key_or_project_fails_protocol() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue"
@@ -1537,7 +1540,7 @@ async fn issue_create_readback_mismatch_fails_scope_unresolved() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue"
@@ -1576,7 +1579,7 @@ async fn issue_create_result_size_failure_keeps_side_effect_audit() {
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
 
     let error = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue"
@@ -1612,7 +1615,7 @@ async fn issue_create_rejects_project_scope_mismatch_before_backend() {
     )]))
     .build();
 
-    let error = provider.invoke(invocation).await.unwrap_err();
+    let error = provider.invoke_checked(invocation).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(backend.created_issues.lock().unwrap().is_empty());
@@ -1661,7 +1664,7 @@ async fn issue_create_attribution_is_applied_to_description() {
         ))
         .build();
 
-    let response = provider.invoke(invocation).await.unwrap();
+    let response = provider.invoke_checked(invocation).await.unwrap();
 
     let created = backend.created_issues.lock().unwrap();
     assert_eq!(
@@ -1702,7 +1705,7 @@ async fn issue_create_attribution_target_absent_when_description_omitted() {
     };
 
     let response = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue"
@@ -1747,7 +1750,7 @@ async fn issue_create_enforces_description_body_cap_after_attribution() {
         ))
         .build();
 
-    let error = provider.invoke(invocation).await.unwrap_err();
+    let error = provider.invoke_checked(invocation).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
@@ -1785,7 +1788,7 @@ async fn issue_child_create_attribution_is_applied_to_description() {
         ))
         .build();
 
-    let response = provider.invoke(invocation).await.unwrap();
+    let response = provider.invoke_checked(invocation).await.unwrap();
 
     let created = backend.created_issues.lock().unwrap();
     assert_eq!(
@@ -1815,7 +1818,7 @@ async fn issue_child_create_attribution_target_absent_when_description_omitted()
     };
 
     let response = provider
-        .invoke(issue_child_create_invocation(json!({
+        .invoke_checked(issue_child_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Child issue",
@@ -1864,7 +1867,7 @@ async fn issue_child_create_enforces_description_body_cap_after_attribution() {
         ))
         .build();
 
-    let error = provider.invoke(invocation).await.unwrap_err();
+    let error = provider.invoke_checked(invocation).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
@@ -1949,7 +1952,7 @@ async fn issue_child_create_uses_authorized_parent_and_verifies_readback() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.child.create")
                 .inputs(json!({
                     "project": "PROJ",
@@ -2019,7 +2022,7 @@ async fn issue_child_create_rejects_oversize_returned_description_after_one_muta
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(issue_child_create_invocation(json!({
+        .invoke_checked(issue_child_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Child issue",
@@ -2050,7 +2053,7 @@ async fn issue_child_create_requires_target_and_parent_scope_before_mutation() {
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.child.create")
                 .inputs(json!({
                     "project": "ENG",
@@ -2089,7 +2092,7 @@ async fn issue_child_create_requires_target_project_scope_before_mutation() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.child.create")
                 .inputs(json!({
                     "project": "ENG",
@@ -2161,7 +2164,7 @@ async fn issue_child_create_parent_readback_failure_emits_side_effect_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.child.create")
                 .inputs(json!({
                     "project": "PROJ",
@@ -2222,7 +2225,7 @@ async fn issue_create_rejects_oversize_returned_description_after_one_mutation()
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(issue_create_invocation(json!({
+        .invoke_checked(issue_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Created issue"
@@ -2251,7 +2254,7 @@ async fn issue_child_create_created_project_mismatch_emits_side_effect_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(issue_child_create_invocation(json!({
+        .invoke_checked(issue_child_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Child issue",
@@ -2296,7 +2299,7 @@ async fn issue_child_create_readback_failure_emits_side_effect_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(issue_child_create_invocation(json!({
+        .invoke_checked(issue_child_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Child issue",
@@ -2347,7 +2350,7 @@ async fn issue_child_create_readback_mismatch_fails_scope_unresolved() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(issue_child_create_invocation(json!({
+        .invoke_checked(issue_child_create_invocation(json!({
             "project": "PROJ",
             "issueTypeId": "10001",
             "summary": "Child issue",
@@ -2487,7 +2490,7 @@ async fn issue_view_validates_returned_description_without_write_allowlist() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -2521,7 +2524,7 @@ async fn issue_view_rejects_malformed_or_oversize_returned_description() {
         Arc::new(malformed_backend),
     );
     let malformed_error = malformed_provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -2554,7 +2557,7 @@ async fn issue_view_rejects_malformed_or_oversize_returned_description() {
         Arc::new(oversize_backend),
     );
     let oversize_error = oversize_provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -2601,7 +2604,7 @@ async fn issue_view_confirms_authoritative_project_before_returning_content() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -2736,7 +2739,7 @@ async fn issue_dependency_add_creates_cross_project_outward_link_and_verifies_re
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.dependency.add")
                 .inputs(json!({
                     "blockingIssue": "ENG-1",
@@ -2822,7 +2825,7 @@ async fn issue_dependency_add_requires_both_projects_in_authorized_scope_before_
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.dependency.add")
                 .inputs(json!({
                     "blockingIssue": "ENG-1",
@@ -2914,7 +2917,7 @@ async fn issue_dependency_add_rejects_link_direction_mismatch_before_mutation() 
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.dependency.add")
                 .inputs(json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}))
                 .resources(BTreeMap::from([(
@@ -2958,7 +2961,7 @@ async fn issue_dependency_add_rejects_unavailable_link_type_before_mutation() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.dependency.add")
                 .inputs(json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}))
                 .resources(BTreeMap::from([(
@@ -2999,7 +3002,7 @@ async fn issue_dependency_add_readback_failure_emits_side_effect_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.dependency.add")
                 .inputs(json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}))
                 .resources(BTreeMap::from([(
@@ -3070,7 +3073,7 @@ async fn issue_dependency_add_readback_mismatch_fails_closed() {
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
         let error = provider
-            .invoke(
+            .invoke_checked(
                 InvocationBuilder::new("jira", "issue.dependency.add")
                     .inputs(json!({
                         "blockingIssue": "ENG-1",
@@ -3168,7 +3171,7 @@ async fn issue_parent_set_creates_cross_project_parent_and_verifies_readback() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.parent.set")
                 .inputs(json!({
                     "issue": "ENG-2",
@@ -3249,7 +3252,7 @@ async fn issue_parent_set_requires_both_projects_in_authorized_scope_before_muta
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.parent.set")
                 .inputs(json!({
                     "issue": "ENG-2",
@@ -3342,7 +3345,7 @@ async fn issue_parent_set_readback_failure_emits_side_effect_audit() {
         json!({"issue": "PROJ-1", "parentIssue": "PROJ-2"}),
         vec![],
     );
-    let error = provider.invoke(invocation).await.unwrap_err();
+    let error = provider.invoke_checked(invocation).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(error.upstream_status, Some(204));
@@ -3405,7 +3408,7 @@ async fn issue_parent_set_readback_mismatch_fails_closed() {
             vec![],
         );
 
-        let error = provider.invoke(invocation).await.unwrap_err();
+        let error = provider.invoke_checked(invocation).await.unwrap_err();
 
         assert_eq!(error.reason_code(), expected_reason);
         assert_eq!(
@@ -3446,7 +3449,7 @@ async fn issue_update_uses_current_key_and_redacts_submitted_content_from_audit(
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let response = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({
                 "issue": "OLD-1",
@@ -3519,7 +3522,7 @@ async fn issue_update_notify_users_tristate_and_payload_fields_are_controlled() 
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let omitted = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({"issue": "PROJ-1", "summary": "Summary only"}),
             vec![],
@@ -3530,7 +3533,7 @@ async fn issue_update_notify_users_tristate_and_payload_fields_are_controlled() 
     assert_eq!(omitted.result["changedFields"], json!(["summary"]));
 
     let explicit_true = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({
                 "issue": "PROJ-1",
@@ -3589,7 +3592,7 @@ async fn issue_update_enforces_description_body_cap_after_attribution() {
         ))
         .build();
 
-    let error = provider.invoke(invocation).await.unwrap_err();
+    let error = provider.invoke_checked(invocation).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
@@ -3635,7 +3638,7 @@ async fn issue_update_attribution_is_visible_in_update_readback_and_issue_view()
         ))
         .build();
 
-    let update_response = provider.invoke(update_invocation).await.unwrap();
+    let update_response = provider.invoke_checked(update_invocation).await.unwrap();
 
     assert_eq!(
         update_response.result["issue"]["description"],
@@ -3656,7 +3659,7 @@ async fn issue_update_attribution_is_visible_in_update_readback_and_issue_view()
     assert!(!audit_text.contains("Updated via Agent Access Broker"));
 
     let view_response = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.view",
             json!({"issue": "PROJ-1"}),
             vec![],
@@ -3757,7 +3760,7 @@ async fn issue_update_readback_failures_fail_closed_without_body_leakage() {
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
         let error = provider
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 "issue.update",
                 json!({"issue": "PROJ-1", "summary": "Updated summary"}),
                 vec![],
@@ -3792,7 +3795,7 @@ async fn issue_update_readback_validates_returned_description() {
     );
 
     let malformed_error = malformed_provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({"issue": "PROJ-1", "summary": "Updated summary"}),
             vec![],
@@ -3825,7 +3828,7 @@ async fn issue_update_readback_validates_returned_description() {
         JiraProvider::with_backend(config, ProviderLimits::default(), oversize_backend.clone());
 
     let oversize_error = oversize_provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({"issue": "PROJ-1", "summary": "Updated summary"}),
             vec![],
@@ -3868,7 +3871,7 @@ async fn issue_update_rejects_reconfirmed_issue_outside_authorized_scope_before_
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({"issue": "PROJ-1", "summary": "Updated summary"}),
             vec![],
@@ -3892,7 +3895,7 @@ async fn issue_update_upstream_failure_is_sanitized() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.update",
             json!({"issue": "PROJ-1", "summary": "secret rejected summary"}),
             vec![],
@@ -3927,7 +3930,7 @@ async fn attachment_list_rejects_execution_metadata_for_different_parent() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.list")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -3992,7 +3995,7 @@ async fn attachment_list_rejects_unknown_input_fields() {
     );
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.list")
                 .inputs(json!({"issue": "PROJ-1", "maxResults": 1}))
                 .resources(BTreeMap::from([(
@@ -4044,7 +4047,7 @@ async fn search_caps_pagination_and_rejects_out_of_scope_results() {
         backend.clone(),
     );
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "search")
                 .inputs(json!({
                     "projects": ["PROJ"],
@@ -4339,7 +4342,7 @@ async fn scope_only_jira_search_checks_returned_containment() {
         request = InvocationBuilder::from(request)
             .search(search_preflight(["PROJ"]))
             .build();
-        let result = provider.invoke(request).await;
+        let result = provider.invoke_checked(request).await;
         assert_eq!(result.is_ok(), allowed, "{result:?}");
         if let Err(error) = result {
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -4519,7 +4522,7 @@ async fn all_except_jira_search_constrains_upstream_and_checks_returned_containm
                 SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
             ))
             .build();
-        let result = provider.invoke(request).await;
+        let result = provider.invoke_checked(request).await;
         assert_eq!(result.is_ok(), allowed, "{project}/{key}: {result:?}");
         if let Err(error) = result {
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -4635,10 +4638,13 @@ async fn search_rejection_diagnostics_distinguish_metadata_and_authorization_fai
             .lock()
             .unwrap()
             .replace(page_with_upstream_token("private-request-page-token"));
-        let first = provider.invoke(request(None)).await.unwrap();
+        let first = provider.invoke_checked(request(None)).await.unwrap();
         *backend.search_page.lock().unwrap() = failing_page;
         let sealed = first.result["nextPageToken"].as_str().unwrap().to_string();
-        let error = provider.invoke(request(Some(&sealed))).await.unwrap_err();
+        let error = provider
+            .invoke_checked(request(Some(&sealed)))
+            .await
+            .unwrap_err();
         assert_eq!(
             backend
                 .last_search
@@ -4736,7 +4742,7 @@ async fn successful_search_returns_bounded_sanitized_issue_fields() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let response = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "search")
                 .inputs(json!({
                     "projects": ["PROJ"],
@@ -4807,7 +4813,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "issue.view",
             json!({"issue": "PROJ-1"}),
             vec![],
@@ -4824,7 +4830,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
 
     backend.credential_observations.lock().unwrap().clear();
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "search",
             json!({
                 "projects": ["PROJ"],
@@ -4842,7 +4848,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
 
     backend.credential_observations.lock().unwrap().clear();
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.add",
             json!({
                 "issue": "PROJ-1",
@@ -4864,7 +4870,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
     backend.credential_observations.lock().unwrap().clear();
     let upload = b"upload".to_vec();
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "attachment.add",
             json!({
                 "issue": "PROJ-1",
@@ -4895,7 +4901,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
 
     backend.credential_observations.lock().unwrap().clear();
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "attachment.download",
             json!({"issue": "PROJ-1", "attachmentId": "10055"}),
             vec![],
@@ -4913,7 +4919,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
 
     backend.credential_observations.lock().unwrap().clear();
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "attachment.list",
             json!({"issue": "PROJ-1"}),
             vec![],
@@ -4930,7 +4936,7 @@ async fn per_user_actions_use_selected_execution_credential_after_lookup() {
 
     backend.credential_observations.lock().unwrap().clear();
     provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "verify",
             json!({
                 "issue": "PROJ-1",
@@ -4981,7 +4987,7 @@ async fn comment_list_is_metadata_only_and_view_returns_body() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let list = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.list",
             json!({"issue": "PROJ-1", "maxResults": 5, "orderBy": "-created"}),
             vec![],
@@ -5024,7 +5030,7 @@ async fn comment_list_is_metadata_only_and_view_returns_body() {
 
     backend.credential_observations.lock().unwrap().clear();
     let view = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.view",
             json!({"issue": "PROJ-1", "commentId": "10042"}),
             vec![],
@@ -5062,7 +5068,7 @@ async fn comment_view_rejects_non_adf_upstream_body() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.view",
             json!({"issue": "PROJ-1", "commentId": "10042"}),
             vec![],
@@ -5087,7 +5093,7 @@ async fn comment_view_rejects_oversize_upstream_body_as_sanitized_502() {
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend));
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.view",
             json!({"issue": "PROJ-1", "commentId": "10042"}),
             vec![],
@@ -5122,7 +5128,7 @@ async fn table_comment_body_is_valid_for_view_verify_and_property_membership() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let verify = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "verify",
             json!({"issue": "PROJ-1", "expectCommentId": "10042"}),
             vec![],
@@ -5133,7 +5139,7 @@ async fn table_comment_body_is_valid_for_view_verify_and_property_membership() {
 
     backend.credential_observations.lock().unwrap().clear();
     let property = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.property.get",
             json!({
                 "issue": "PROJ-1",
@@ -5156,7 +5162,7 @@ async fn table_comment_body_is_valid_for_view_verify_and_property_membership() {
 
     backend.credential_observations.lock().unwrap().clear();
     let view = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.view",
             json!({"issue": "PROJ-1", "commentId": "10042"}),
             vec![],
@@ -5207,7 +5213,7 @@ async fn scoped_comment_path_denies_comment_on_different_issue() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let view_error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.view",
             json!({"issue": "PROJ-1", "commentId": "10042"}),
             vec![],
@@ -5225,7 +5231,7 @@ async fn scoped_comment_path_denies_comment_on_different_issue() {
 
     backend.credential_observations.lock().unwrap().clear();
     let property_error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.property.get",
             json!({
                 "issue": "PROJ-1",
@@ -5264,7 +5270,7 @@ async fn comment_reply_denies_parent_on_different_issue() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.reply",
             json!({
                 "issue": "PROJ-1",
@@ -5310,7 +5316,7 @@ async fn comment_reply_rejects_missing_or_mismatched_created_parent() {
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
         let error = provider
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 "comment.reply",
                 json!({
                     "issue": "PROJ-1",
@@ -5352,7 +5358,7 @@ async fn comment_reply_rejects_non_top_level_thread_root() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.reply",
             json!({
                 "issue": "PROJ-1",
@@ -5404,7 +5410,7 @@ async fn comment_reply_denies_thread_root_on_different_issue() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.reply",
             json!({
                 "issue": "PROJ-1",
@@ -5431,7 +5437,7 @@ async fn comment_add_rejects_created_parent() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.add",
             json!({
                 "issue": "PROJ-1",
@@ -5470,7 +5476,7 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         add_backend.clone(),
     );
     let add_error = add_provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.add",
             json!({
                 "issue": "PROJ-1",
@@ -5502,7 +5508,7 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
         reply_backend.clone(),
     );
     let reply_error = reply_provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.reply",
             json!({
                 "issue": "PROJ-1",
@@ -5535,7 +5541,7 @@ async fn comment_mutations_reject_oversize_returned_bodies_after_one_side_effect
     let update_provider =
         JiraProvider::with_backend(config, ProviderLimits::default(), update_backend.clone());
     let update_error = update_provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.update",
             json!({
                 "issue": "PROJ-1",
@@ -5581,7 +5587,7 @@ async fn comment_update_preserves_visibility_and_defaults_notify_false() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let result = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.update",
             json!({
                 "issue": "PROJ-1",
@@ -5639,7 +5645,7 @@ async fn comment_update_preserve_fails_before_put_when_current_comment_unreadabl
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.update",
             json!({
                 "issue": "PROJ-1",
@@ -5672,7 +5678,7 @@ async fn comment_add_visibility_requires_allowlist_and_serializes_group_identifi
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let denied = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.add",
             json!({
                 "issue": "PROJ-1",
@@ -5695,7 +5701,7 @@ async fn comment_add_visibility_requires_allowlist_and_serializes_group_identifi
     }];
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
     let allowed = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.add",
             json!({
                 "issue": "PROJ-1",
@@ -5732,7 +5738,7 @@ async fn comment_add_converts_bold_inline_code_without_conflicting_marks() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let result = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.add",
             json!({
                 "issue": "PROJ-1",
@@ -5793,7 +5799,7 @@ async fn comment_add_applies_configured_attribution_footer() {
         ))
         .build();
 
-    let result = provider.invoke(invocation).await.unwrap();
+    let result = provider.invoke_checked(invocation).await.unwrap();
 
     assert_eq!(
         result.audit.as_ref().unwrap()["attribution"]["applied"],
@@ -5846,7 +5852,7 @@ async fn comment_reply_resolves_child_parent_to_thread_root() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let result = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.reply",
             json!({
                 "issue": "PROJ-1",
@@ -5910,7 +5916,7 @@ async fn comment_property_actions_filter_keys_and_exclude_values_from_audit() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let list = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.property.list",
             json!({"issue": "PROJ-1", "commentId": "10042"}),
             vec![],
@@ -5933,7 +5939,7 @@ async fn comment_property_actions_filter_keys_and_exclude_values_from_audit() {
 
     backend.credential_observations.lock().unwrap().clear();
     let get = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.property.get",
             json!({
                 "issue": "PROJ-1",
@@ -5954,7 +5960,7 @@ async fn comment_property_actions_filter_keys_and_exclude_values_from_audit() {
     );
 
     let set = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.property.set",
             json!({
                 "issue": "PROJ-1",
@@ -6033,7 +6039,7 @@ async fn comment_property_membership_proof_uses_execution_credential() {
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(per_user_invocation(
+        .invoke_checked(per_user_invocation(
             "comment.property.get",
             json!({
                 "issue": "PROJ-1",
@@ -6080,7 +6086,7 @@ async fn response_byte_cap_fails_without_returning_content() {
     let limits = ProviderLimits::default().with_max_upstream_response_bytes(8);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -6106,7 +6112,7 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "comment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6127,7 +6133,7 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
     assert_eq!(error.reason_code(), ReasonCode::BodyMalformed);
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "comment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6155,7 +6161,7 @@ async fn comment_add_rejects_malformed_body_before_upstream() {
     config.content.comment_formats.clear();
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend);
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "comment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6188,7 +6194,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
     let second = b"second upload".to_vec();
     let third = b"third upload".to_vec();
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6274,7 +6280,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
 
     let bad = b"tampered".to_vec();
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6305,7 +6311,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
     assert_eq!(error.reason_code(), ReasonCode::AttachmentIntegrityMismatch);
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": ""}))
                 .resources(BTreeMap::from([(
@@ -6322,7 +6328,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
 
     let duplicate = b"duplicate".to_vec();
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6381,7 +6387,7 @@ async fn attachment_add_checks_integrity_and_reports_partial_without_retry() {
     );
     let bytes = b"first failure".to_vec();
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.add")
                 .inputs(json!({
                     "issue": "PROJ-1",
@@ -6469,7 +6475,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
     // An upload applied before a later one was throttled: repeating the batch
     // after the wait would upload it again, so this is not a rate limit.
     let error = throttled_backend(1)
-        .invoke(attachment_add_invocation(&["first", "second", "third"]))
+        .invoke_checked(attachment_add_invocation(&["first", "second", "third"]))
         .await
         .unwrap_err();
     assert_eq!(error.decision(), crate::Decision::Error);
@@ -6503,7 +6509,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
     // Nothing applied: the throttled first upload stays a rate limit.
 
     let error = throttled_backend(0)
-        .invoke(attachment_add_invocation(&["only"]))
+        .invoke_checked(attachment_add_invocation(&["only"]))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
@@ -6682,7 +6688,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
         ),
     ] {
         let failure = update(Some(error), None)
-            .invoke(update_invocation())
+            .invoke_checked(update_invocation())
             .await
             .unwrap_err();
         assert_eq!(failure.reason_code(), reason);
@@ -6691,7 +6697,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
     // A read-back that times out after the update applied leaves it
     // unverified at the read-back stage, with its own reason.
     let failure = update(None, Some(JiraBackendError::NoResponse { timed_out: true }))
-        .invoke(update_invocation())
+        .invoke_checked(update_invocation())
         .await
         .unwrap_err();
     assert_eq!(failure.reason_code(), ReasonCode::UpstreamTimeout);
@@ -6706,7 +6712,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
     *backend.add_comment_parent_override.lock().unwrap() = Some(Some("10040".to_string()));
     let failure =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 "comment.add",
                 json!({"issue": "PROJ-1", "contentFormat": "adf", "content": adf_text("hello")}),
                 vec![],
@@ -6751,7 +6757,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
         (0, JiraBackendError::HttpStatus(413), None),
     ] {
         let failure = stopped_after(successes, error.clone())
-            .invoke(attachment_add_invocation(&["first", "second"]))
+            .invoke_checked(attachment_add_invocation(&["first", "second"]))
             .await
             .unwrap_err();
         assert_eq!(failure.reason_code(), ReasonCode::UpstreamFailed);
@@ -6760,7 +6766,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
     }
     assert_eq!(
         stopped_after(0, JiraBackendError::NotSent { timed_out: true })
-            .invoke(attachment_add_invocation(&["first", "second"]))
+            .invoke_checked(attachment_add_invocation(&["first", "second"]))
             .await
             .unwrap_err()
             .audit
@@ -6772,7 +6778,7 @@ async fn write_receipts_follow_what_jira_may_have_applied() {
         JiraBackendError::HttpStatus(413),
     ] {
         let failure = stopped_after(1, error)
-            .invoke(attachment_add_invocation(&["first", "second"]))
+            .invoke_checked(attachment_add_invocation(&["first", "second"]))
             .await
             .unwrap_err();
         assert_eq!(failure.reason_code(), ReasonCode::UpstreamFailed);
@@ -6827,7 +6833,7 @@ async fn throttled_readbacks_after_applied_writes_are_unverified_not_rate_limite
     let backend = Arc::new(backend);
     let error =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone())
-            .invoke(issue_create_invocation(json!({
+            .invoke_checked(issue_create_invocation(json!({
                 "project": "PROJ",
                 "issueTypeId": "10001",
                 "summary": "Created issue",
@@ -6874,7 +6880,7 @@ async fn throttled_readbacks_after_applied_writes_are_unverified_not_rate_limite
         let backend = Arc::new(backend);
         let error =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone())
-                .invoke(issue_child_create_invocation(json!({
+                .invoke_checked(issue_child_create_invocation(json!({
                     "project": "PROJ",
                     "issueTypeId": "10001",
                     "summary": "Child issue",
@@ -6907,7 +6913,7 @@ async fn throttled_readbacks_after_applied_writes_are_unverified_not_rate_limite
     let backend = Arc::new(backend);
     let error =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone())
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 "issue.update",
                 json!({"issue": "PROJ-1", "summary": "Renamed"}),
                 vec![],
@@ -6932,7 +6938,7 @@ async fn throttled_readbacks_after_applied_writes_are_unverified_not_rate_limite
     let backend = Arc::new(backend);
     let error =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone())
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 "issue.parent.set",
                 json!({"issue": "PROJ-1", "parentIssue": "PROJ-2"}),
                 vec![],
@@ -6963,7 +6969,7 @@ async fn throttled_readbacks_after_applied_writes_are_unverified_not_rate_limite
     let backend = Arc::new(backend);
     let error =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone())
-            .invoke(per_user_invocation(
+            .invoke_checked(per_user_invocation(
                 "issue.dependency.add",
                 json!({"blockingIssue": "PROJ-1", "blockedIssue": "PROJ-2"}),
                 vec![],
@@ -6991,7 +6997,7 @@ async fn throttled_writes_before_anything_applied_stay_upstream_rate_limited() {
     )));
     let error =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend))
-            .invoke(issue_create_invocation(json!({
+            .invoke_checked(issue_create_invocation(json!({
                 "project": "PROJ",
                 "issueTypeId": "10001",
                 "summary": "Created issue",
@@ -7103,7 +7109,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     config.attachments.download_media_types.allow = vec!["text/plain".to_string()];
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": "99999"}))
                 .resources(BTreeMap::from([(
@@ -7123,7 +7129,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         JiraAttachmentContent::from_bytes("evidence.txt", "application/json", b"hello".to_vec()),
     );
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
                 .resources(BTreeMap::from([(
@@ -7156,7 +7162,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     );
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
                 .resources(BTreeMap::from([(
@@ -7183,7 +7189,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     let limits = ProviderLimits::default().with_max_download_bytes(4);
     let provider = JiraProvider::with_backend(jira_config(), limits, backend);
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
                 .resources(BTreeMap::from([(
@@ -7216,7 +7222,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
         .with_max_download_bytes(128);
     let provider = JiraProvider::with_backend(jira_config(), limits, Arc::new(backend));
     let result = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
                 .resources(BTreeMap::from([(
@@ -7260,7 +7266,7 @@ async fn attachment_download_requires_membership_and_enforces_download_cap() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let result = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "attachment.download")
                 .inputs(json!({"issue": "PROJ-1", "attachmentId": "10055"}))
                 .resources(BTreeMap::from([(
@@ -7294,7 +7300,7 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "verify")
                 .inputs(json!({"issue": "PROJ-1", "expectCommentId": "10042"}))
                 .resources(BTreeMap::from([(
@@ -7327,7 +7333,7 @@ async fn verify_mismatch_returns_allow_decision_with_conflict_reason() {
     let provider =
         JiraProvider::with_backend(jira_config(), ProviderLimits::default(), Arc::new(backend));
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "verify")
                 .inputs(json!({"issue": "PROJ-1", "expectCommentId": "10042"}))
                 .resources(BTreeMap::from([(
@@ -9291,7 +9297,7 @@ async fn issue_create_authorizes_scope_before_converting_content() {
     let provider = JiraProvider::with_backend(config, ProviderLimits::default(), backend.clone());
 
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.create")
                 .inputs(json!({
                     "project": "PROJ",

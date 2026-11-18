@@ -372,7 +372,7 @@ async fn issue_view_with_an_old_locator_returns_the_current_issue_when_new_is_gr
     for locator in old_locators() {
         let (provider, backend) = renamed_provider();
         let result = provider
-            .invoke(invocation("issue.view", locator.clone(), "NEW"))
+            .invoke_checked(invocation("issue.view", locator.clone(), "NEW"))
             .await
             .unwrap_or_else(|error| panic!("{locator}: {error:?}"));
         assert_eq!(result.result["key"], CURRENT_KEY, "{locator}");
@@ -403,7 +403,7 @@ async fn issue_view_with_an_old_locator_is_denied_when_only_the_previous_key_is_
     for locator in old_locators() {
         let (provider, backend) = renamed_provider();
         let error = provider
-            .invoke(invocation("issue.view", locator.clone(), "OLD"))
+            .invoke_checked(invocation("issue.view", locator.clone(), "OLD"))
             .await
             .unwrap_err();
         assert_eq!(
@@ -452,7 +452,7 @@ async fn comment_and_attachment_actions_with_an_old_key_act_on_the_current_key()
     for (action, inputs, operations) in cases {
         let (provider, backend) = renamed_provider();
         let result = provider
-            .invoke(invocation(action, inputs.clone(), "NEW"))
+            .invoke_checked(invocation(action, inputs.clone(), "NEW"))
             .await
             .unwrap_or_else(|error| panic!("{action} {inputs}: {error:?}"));
         // Every keyed call after the lookup names the current issue.
@@ -562,7 +562,7 @@ async fn search_naming_previous_keys_returns_current_issues_inside_the_boundary(
         let (provider, backend) = renamed_provider();
         *backend.search_page.lock().unwrap() = Some(renamed_search_page());
         let result = provider
-            .invoke(search_invocation(inputs.clone(), scope))
+            .invoke_checked(search_invocation(inputs.clone(), scope))
             .await
             .unwrap_or_else(|error| panic!("{inputs}: {error:?}"));
         assert_eq!(result.result["issues"][0]["key"], CURRENT_KEY, "{inputs}");
@@ -604,7 +604,7 @@ async fn search_still_rejects_renamed_projects_outside_the_boundary() {
         let (provider, backend) = renamed_provider();
         *backend.search_page.lock().unwrap() = Some(renamed_search_page());
         let error = provider
-            .invoke(search_invocation(inputs.clone(), scope))
+            .invoke_checked(search_invocation(inputs.clone(), scope))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{inputs}");
@@ -614,7 +614,7 @@ async fn search_still_rejects_renamed_projects_outside_the_boundary() {
     // Explicit projects outside a finite boundary are refused before Jira.
     let (provider, backend) = renamed_provider();
     let error = provider
-        .invoke(search_invocation(
+        .invoke_checked(search_invocation(
             json!({"query": {"type": "jql", "value": "status = Done"}, "projects": ["OLD"]}),
             finite_projects(["NEW"]),
         ))

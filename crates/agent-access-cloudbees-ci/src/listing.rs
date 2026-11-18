@@ -85,6 +85,7 @@ pub(super) fn descriptor(config: &CloudbeesCiListingConfig) -> ActionDescriptor 
     .native_search(NativeSearchEnforcement::ResultFiltered)
     .listing_of(CLOUDBEES_CI_JOB_RESOURCE.id().clone())
     .sensitive_output("/result/items").sensitive_output("/result/nextPageToken")
+    .result_schemas(RESULT_SCHEMAS.action("job.list"))
     .documentation(json!({
         "listing":"Recursively enumerates jobs and containers from a configured controller and optional canonical folder. The starting container is excluded. Permission to list grants no inspection or build access. Only effective authorized items are released; denied parents may be traversed to reach allowed children.",
         "pagination":"Pass nextPageToken as pageToken with unchanged controller, folder and maxResults. more and scan_budget require continuation, even for empty pages, without promising another authorized item. exhausted ends this credential's observed stream, not a snapshot. upstream_window is terminal incomplete coverage.",

@@ -112,7 +112,7 @@ async fn invalid_inputs_and_unauthorized_project_stop_before_http() {
         );
         assert_eq!(
             provider
-                .invoke(invocation(input))
+                .invoke_checked(invocation(input))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -121,7 +121,7 @@ async fn invalid_inputs_and_unauthorized_project_stop_before_http() {
     }
     assert_eq!(
         provider
-            .invoke(invocation(json!({"project":"OTHER"})))
+            .invoke_checked(invocation(json!({"project":"OTHER"})))
             .await
             .unwrap_err()
             .reason_code(),
@@ -149,7 +149,7 @@ async fn identity_is_checked_before_field_discovery_and_no_raw_payload_is_releas
         mount_project(&api, response).await;
         assert!(
             provider
-                .invoke(invocation(json!({"project":"PROJ"})))
+                .invoke_checked(invocation(json!({"project":"PROJ"})))
                 .await
                 .is_err()
         );
@@ -159,7 +159,7 @@ async fn identity_is_checked_before_field_discovery_and_no_raw_payload_is_releas
     mount_project(&api, project()).await;
     mount_fields(&api).await;
     let response = provider
-        .invoke(invocation(json!({"project":"PROJ"})))
+        .invoke_checked(invocation(json!({"project":"PROJ"})))
         .await
         .unwrap();
     assert_eq!(
@@ -192,7 +192,7 @@ async fn identity_only_and_metadata_sections_make_only_needed_requests() {
     let provider = provider(&api, ProviderLimits::default());
     mount_project(&api, project()).await;
     let response = provider
-        .invoke(invocation(json!({"project":"PROJ","include":[]})))
+        .invoke_checked(invocation(json!({"project":"PROJ","include":[]})))
         .await
         .unwrap();
     assert_eq!(response.result.as_object().unwrap().len(), 2);
@@ -209,7 +209,7 @@ async fn identity_only_and_metadata_sections_make_only_needed_requests() {
         .mount(&api)
         .await;
     let response = provider
-        .invoke(invocation(
+        .invoke_checked(invocation(
             json!({"project":"PROJ","include":["versions","components","issueTypes","statuses"]}),
         ))
         .await
@@ -504,7 +504,7 @@ async fn upstream_errors_redirects_and_byte_limits_fail_closed() {
             .mount(&api)
             .await;
         let error = provider
-            .invoke(invocation(json!({"project":"PROJ"})))
+            .invoke_checked(invocation(json!({"project":"PROJ"})))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), reason);
@@ -519,7 +519,7 @@ async fn upstream_errors_redirects_and_byte_limits_fail_closed() {
     );
     assert_eq!(
         limited
-            .invoke(invocation(json!({"project":"PROJ"})))
+            .invoke_checked(invocation(json!({"project":"PROJ"})))
             .await
             .unwrap_err()
             .reason_code(),

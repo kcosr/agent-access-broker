@@ -433,6 +433,11 @@ pub mod test_support {
     }
 }
 
+/// Each action's provider payload schemas: the success value and any
+/// result-bearing provider failure, before presentation and the envelope.
+static RESULT_SCHEMAS: ResultSchemaBundle =
+    ResultSchemaBundle::new(&[include_str!("result-schemas.json")]);
+
 /// Confluence's authoritative service descriptor, derived from its typed
 /// configuration alone.
 pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescriptor {
@@ -453,8 +458,9 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
+                    let schemas = RESULT_SCHEMAS.action(&action.action);
                     documentation::with_guidance(
-                        action.presentation(presentation),
+                        action.presentation(presentation).result_schemas(schemas),
                         &config.tenant_host,
                         &config.attachments.download_media_types,
                     )

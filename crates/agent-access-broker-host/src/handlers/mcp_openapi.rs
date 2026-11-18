@@ -8,6 +8,8 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
     };
     let session = json!({"in":"header","name":"Mcp-Session-Id","required":false,"description":"Required after initialization; identifies routing state, never authentication authority.","schema":{"type":"string"}});
     let version = json!({"in":"header","name":"MCP-Protocol-Version","required":false,"description":"Clients should send the negotiated version after initialization. An omitted header uses the known session profile; a conflicting supplied value is rejected.","schema":{"type":"string","enum":["2025-11-25"]}});
+    // Evaluated on every request, so it is declared on the path item.
+    let output_schemas = json!({"in":"query","name":"outputSchemas","required":false,"description":"MCP output-schema advertisement for this request. on adds each tool's outputSchema and, in action details, mcpTool.outputSchema and resultSchemas; off or omitted omits MCP output-schema metadata. Never stored in the session: send the same value on every request. Only this exact parameter is accepted, at most once; any other query is rejected with 400 before dispatch. It never changes identity, context, grants, credentials, tool names, inputs or results.","schema":{"type":"string","enum":["on","off"],"default":"off"}});
     let error = json!({"type":"object","required":["jsonrpc","error"],"properties":{"jsonrpc":{"const":"2.0"},"id":{"type":["string","integer","null"]},"error":{"type":"object","required":["code","message"],"properties":{"code":{"type":"integer"},"message":{"type":"string"},"data":{}}}}});
     let result = json!({"oneOf":[{"type":"object","required":["jsonrpc","id","result"],"properties":{"jsonrpc":{"const":"2.0"},"id":{"type":["string","integer"]},"result":{}}},error]});
     let mut post = json!({
@@ -18,7 +20,7 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
         "responses":{
             "200":{"description":"JSON-RPC result/error or request-scoped SSE response stream.","headers":{"Mcp-Session-Id":{"schema":{"type":"string"},"description":"Opaque session established by initialization."}},"content":{"application/json":{"schema":result},"text/event-stream":{"schema":{"type":"string"},"description":"Bounded SSE frames carrying JSON-RPC messages; no replay."}}},
             "202":{"description":"Notification accepted; no response body."},
-            "400":{"description":"Malformed protocol request, headers, or unsupported negotiated version."},
+            "400":{"description":"Malformed protocol request, headers or endpoint query, or unsupported negotiated version."},
             "401":{"description":"Missing, malformed, wrong-carrier or invalid principal/caller credential.","headers":{"WWW-Authenticate":{"schema":{"type":"string"}}}},
             "403":{"description":"Origin, token class, execution context, caller capability or trusted human identity denied."},
             "404":{"description":"Unknown, expired, or wrong-owner session, or disabled endpoint."},
@@ -35,7 +37,7 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
     let mut delete = json!({
         "operationId":"mcp.closeSession","description":"Terminate the caller's session. Does not roll back dispatched operations or discard their terminal audit ownership.",
         "parameters":[required_session,version],
-        "responses":{"202":{"description":"Session termination accepted; no response body."},"400":{"description":"Missing or malformed session/protocol headers."},"401":{"description":"Principal authentication or a valid trusted caller and subject assertion required."},"403":{"description":"Origin, token class, execution context, caller capability or trusted human identity denied."},"404":{"description":"Unknown, expired, or wrong-owner session, or disabled endpoint."},"503":{"description":"Required identity state is unavailable."}}
+        "responses":{"202":{"description":"Session termination accepted; no response body."},"400":{"description":"Missing or malformed session/protocol headers or endpoint query."},"401":{"description":"Principal authentication or a valid trusted caller and subject assertion required."},"403":{"description":"Origin, token class, execution context, caller capability or trusted human identity denied."},"404":{"description":"Unknown, expired, or wrong-owner session, or disabled endpoint."},"503":{"description":"Required identity state is unavailable."}}
     });
     let mut get = json!({"operationId":"mcp.noStandaloneStream","description":"Authenticate every request; authenticated GET returns 405 because standalone notification streams are unsupported. Tools do not advertise listChanged; refresh tools/list.","responses":{"405":{"description":"Use POST or DELETE.","headers":{"Allow":{"schema":{"type":"string","const":"POST, DELETE"}}}}}});
     if matches!(auth, RenderAuthMode::Include) {
@@ -55,17 +57,18 @@ pub(super) fn add(document: &mut Value, public_url: &str, auth: RenderAuthMode) 
             operation["x-agent-access-identity-contract"] = json!({
                 "subjectHeader":"X-Agent-Access-User",
                 "subjectSchema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._@+-]+$"},
-                "description":"Repeat identity credentials and assertions on every request. User assertions select username mode before ordinary token authentication. Duplicate subject/credential headers, competing carriers or assertions, all query delimiters, and trailer declarations/frames are rejected. Incidental cookies confer no authority. Dedicated callers use their existing fixed/asserted context contract; fixed/direct callers reject X-Agent-Access-Context. Sessions bind the original live caller, human gate, binding and context; identity transitions require fresh initialization."
+                "description":"Repeat identity credentials and assertions on every request. User assertions select username mode before ordinary token authentication. Duplicate subject/credential headers, competing carriers or assertions, any query other than one outputSchemas selection, and trailer declarations/frames are rejected. Incidental cookies confer no authority. Dedicated callers use their existing fixed/asserted context contract; fixed/direct callers reject X-Agent-Access-Context. Sessions bind the original live caller, human gate, binding and context; identity transitions require fresh initialization."
             });
         }
     }
     let aggregate = json!({
         "servers":[{"url":url.origin().ascii_serialization()}],
         "x-mcp-protocol-version":"2025-11-25",
+        "parameters":[output_schemas],
         "post":post,"delete":delete,"get":get,
     });
     let mut scoped = aggregate.clone();
-    scoped["parameters"] = json!([{"in":"path","name":"service","required":true,"description":"Canonical configured service ID. Only an exact raw path is accepted; no encoded aliases or query strings. The selected service is bound to the session and does not widen authorization.","schema":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,62}$"}}]);
+    scoped["parameters"] = json!([{"in":"path","name":"service","required":true,"description":"Canonical configured service ID. Only an exact raw path is accepted; no encoded aliases. The selected service is bound to the session and does not widen authorization.","schema":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,62}$"}}, output_schemas]);
     scoped["post"]["operationId"] = json!("mcp.service.message");
     scoped["delete"]["operationId"] = json!("mcp.service.closeSession");
     scoped["get"]["operationId"] = json!("mcp.service.noStandaloneStream");
@@ -145,7 +148,22 @@ mod tests {
                     .is_some()
             );
         }
+        let selection = &document["paths"]["/mcp"]["parameters"][0];
+        assert_eq!(selection["in"], "query");
+        assert_eq!(selection["name"], "outputSchemas");
+        assert_eq!(selection["required"], false);
+        assert_eq!(
+            selection["schema"],
+            json!({"type":"string","enum":["on","off"],"default":"off"})
+        );
+        assert!(
+            !document["paths"]["/mcp"]["post"]["x-agent-access-identity-contract"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("all query delimiters")
+        );
         let scoped = &document["paths"]["/mcp/{service}"];
+        assert_eq!(scoped["parameters"][1], *selection);
         assert_eq!(scoped["parameters"][0]["name"], "service");
         assert_eq!(scoped["parameters"][0]["required"], true);
         assert_eq!(

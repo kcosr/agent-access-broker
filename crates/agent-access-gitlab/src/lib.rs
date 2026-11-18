@@ -10,6 +10,7 @@ mod file_reads;
 mod oauth;
 mod present;
 mod provisioning;
+mod result_schemas;
 mod search;
 #[cfg(test)]
 mod tests;
@@ -7311,7 +7312,11 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 .into_iter()
                 .map(|action| {
                     let presentation = present::presentation(&action.action);
-                    documentation::apply(action.presentation(presentation), config)
+                    let schemas = result_schemas::RESULT_SCHEMAS.action(&action.action);
+                    documentation::apply(
+                        action.presentation(presentation).result_schemas(schemas),
+                        config,
+                    )
                 })
                 .collect(),
         )

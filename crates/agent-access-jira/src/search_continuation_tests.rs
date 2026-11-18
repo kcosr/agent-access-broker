@@ -58,7 +58,7 @@ impl Harness {
     }
 
     async fn first_page(&self, request: ProviderInvocation) -> String {
-        let response = self.provider.invoke(request).await.unwrap();
+        let response = self.provider.invoke_checked(request).await.unwrap();
         let token = response.result["nextPageToken"].as_str().unwrap();
         assert_ne!(token, UPSTREAM);
         assert!(!token.contains(UPSTREAM));
@@ -121,7 +121,7 @@ async fn search_continuations_seal_jira_tokens_and_round_trip_normalized_searche
         let searches = harness.upstream_searches();
         let response = harness
             .provider
-            .invoke(search(inputs.clone(), base_scope(), Some(&token)).build())
+            .invoke_checked(search(inputs.clone(), base_scope(), Some(&token)).build())
             .await
             .unwrap_or_else(|error| panic!("{inputs}: {error:?}"));
         assert_eq!(harness.upstream_searches(), searches + 1);
@@ -150,7 +150,7 @@ async fn search_continuations_seal_jira_tokens_and_round_trip_normalized_searche
     });
     let last = harness
         .provider
-        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+        .invoke_checked(search(base_inputs(), base_scope(), Some(&token)).build())
         .await
         .unwrap();
     assert!(last.result["nextPageToken"].is_null());
@@ -203,14 +203,18 @@ async fn search_continuations_reject_changed_searches_callers_and_contexts() {
     ];
     let searches = harness.upstream_searches();
     for request in changed {
-        let error = harness.provider.invoke(request.build()).await.unwrap_err();
+        let error = harness
+            .provider
+            .invoke_checked(request.build())
+            .await
+            .unwrap_err();
         assert_rejected_token(error);
     }
     // Without a cloud ID a bearer token has no route, so its continuation
     // is refused before Jira sees anything.
     let error = harness
         .provider
-        .invoke(
+        .invoke_checked(
             search(base_inputs(), base_scope(), Some(&token))
                 .credential(bearer_credential("per-user-bearer-token"))
                 .build(),
@@ -234,7 +238,7 @@ async fn search_continuations_reject_changed_searches_callers_and_contexts() {
     let searches = harness.upstream_searches();
     let error = harness
         .provider
-        .invoke(
+        .invoke_checked(
             search(
                 json!({"query": {"type": "text", "value": "release notes"}, "projects": ["PROJ"]}),
                 base_scope(),
@@ -278,7 +282,7 @@ async fn search_continuations_bind_the_jira_configuration_and_provider_generatio
         ),
     ] {
         let error = provider
-            .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+            .invoke_checked(search(base_inputs(), base_scope(), Some(&token)).build())
             .await
             .unwrap_err();
         assert_rejected_token(error);
@@ -289,7 +293,7 @@ async fn search_continuations_bind_the_jira_configuration_and_provider_generatio
     let mut comments = jira_config();
     comments.comments.max_results = 10;
     sharing_keys(comments)
-        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+        .invoke_checked(search(base_inputs(), base_scope(), Some(&token)).build())
         .await
         .unwrap();
     assert_eq!(
@@ -312,7 +316,7 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     for scope in [finite(&["PROJ"]), finite(&["PROJ", "OPS_TOOLS", "OTHER"])] {
         let error = harness
             .provider
-            .invoke(search(browse.clone(), scope, Some(&token)).build())
+            .invoke_checked(search(browse.clone(), scope, Some(&token)).build())
             .await
             .unwrap_err();
         assert_scope_changed(error);
@@ -320,7 +324,9 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     assert_eq!(harness.upstream_searches(), searches);
     harness
         .provider
-        .invoke(search(browse.clone(), finite(&["PROJ", "OPS_TOOLS"]), Some(&token)).build())
+        .invoke_checked(
+            search(browse.clone(), finite(&["PROJ", "OPS_TOOLS"]), Some(&token)).build(),
+        )
         .await
         .unwrap();
     let upstream = harness.last_search();
@@ -334,7 +340,7 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     let searches = harness.upstream_searches();
     let error = harness
         .provider
-        .invoke(search(browse.clone(), all_except(&["OPS_TOOLS"]), Some(&token)).build())
+        .invoke_checked(search(browse.clone(), all_except(&["OPS_TOOLS"]), Some(&token)).build())
         .await
         .unwrap_err();
     assert_scope_changed(error);
@@ -351,7 +357,7 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
         .await;
     harness
         .provider
-        .invoke(search(narrowed.clone(), finite(&["PROJ", "OTHER"]), Some(&token)).build())
+        .invoke_checked(search(narrowed.clone(), finite(&["PROJ", "OTHER"]), Some(&token)).build())
         .await
         .unwrap();
     assert_eq!(
@@ -361,7 +367,7 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     let searches = harness.upstream_searches();
     let error = harness
         .provider
-        .invoke(search(narrowed.clone(), finite(&["OTHER"]), Some(&token)).build())
+        .invoke_checked(search(narrowed.clone(), finite(&["OTHER"]), Some(&token)).build())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
@@ -372,7 +378,7 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     *harness.backend.search_page.lock().unwrap() = Some(renamed.clone());
     harness
         .provider
-        .invoke(
+        .invoke_checked(
             search(
                 narrowed.clone(),
                 finite(&["PROJ", "OPS_TOOLS"]),
@@ -388,7 +394,7 @@ async fn search_continuations_apply_grant_changes_on_the_next_page() {
     *harness.backend.search_page.lock().unwrap() = Some(outside);
     let error = harness
         .provider
-        .invoke(search(narrowed, finite(&["PROJ", "OPS_TOOLS"]), Some(&token)).build())
+        .invoke_checked(search(narrowed, finite(&["PROJ", "OPS_TOOLS"]), Some(&token)).build())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -419,7 +425,7 @@ async fn search_page_tokens_follow_the_response_cap_and_are_never_truncated() {
         .await;
     harness
         .provider
-        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+        .invoke_checked(search(base_inputs(), base_scope(), Some(&token)).build())
         .await
         .unwrap();
     assert_eq!(
@@ -442,7 +448,7 @@ async fn search_page_tokens_follow_the_response_cap_and_are_never_truncated() {
         assert_rejected_token(
             harness
                 .provider
-                .invoke(search(base_inputs(), base_scope(), Some(token)).build())
+                .invoke_checked(search(base_inputs(), base_scope(), Some(token)).build())
                 .await
                 .unwrap_err(),
         );
@@ -456,7 +462,7 @@ async fn search_page_tokens_follow_the_response_cap_and_are_never_truncated() {
     *harness.backend.search_page.lock().unwrap() = Some(page_with_upstream_token(&too_long));
     let error = harness
         .provider
-        .invoke(search(base_inputs(), base_scope(), None).build())
+        .invoke_checked(search(base_inputs(), base_scope(), None).build())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -476,7 +482,7 @@ async fn search_page_tokens_follow_the_response_cap_and_are_never_truncated() {
         Some(page_with_upstream_token(&"v".repeat(limit)));
     let error = harness
         .provider
-        .invoke(search(base_inputs(), base_scope(), None).build())
+        .invoke_checked(search(base_inputs(), base_scope(), None).build())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -488,7 +494,7 @@ async fn search_page_tokens_follow_the_response_cap_and_are_never_truncated() {
         .await;
     harness
         .provider
-        .invoke(search(base_inputs(), base_scope(), Some(&token)).build())
+        .invoke_checked(search(base_inputs(), base_scope(), Some(&token)).build())
         .await
         .unwrap();
     assert_eq!(
@@ -539,7 +545,7 @@ async fn http_search_continuations_send_jira_only_its_own_token() {
 
     let first = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
-        provider.invoke(search(inputs.clone(), finite(&["PROJ"]), None).build()),
+        provider.invoke_checked(search(inputs.clone(), finite(&["PROJ"]), None).build()),
     )
     .await
     .unwrap();
@@ -547,7 +553,7 @@ async fn http_search_continuations_send_jira_only_its_own_token() {
     assert_ne!(token, "upstream-cursor-2");
     let second = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
-        provider.invoke(search(inputs, finite(&["PROJ"]), Some(&token)).build()),
+        provider.invoke_checked(search(inputs, finite(&["PROJ"]), Some(&token)).build()),
     )
     .await
     .unwrap();
@@ -598,7 +604,7 @@ async fn the_upstream_response_cap_bounds_jira_tokens_before_sealing() {
     // continuation is sealed, and nothing is truncated.
     let error = agent_access_provider::host::with_correlation_context(
         crate::CorrelationContext::for_tests(),
-        provider.invoke(
+        provider.invoke_checked(
             search(
                 json!({"query": {"type": "jql", "value": QUERY}}),
                 finite(&["PROJ"]),
@@ -633,7 +639,7 @@ async fn resource_exclusion_continuations_bind_filters_context_and_current_autho
             "project != 'ARCHIVE' AND KEY not in ('PRIVATE-1', \"PRIVATE-2\") AND status = Done";
         harness
             .provider
-            .invoke(search(inputs(equivalent), scope.clone(), Some(&token)).build())
+            .invoke_checked(search(inputs(equivalent), scope.clone(), Some(&token)).build())
             .await
             .unwrap();
         assert_eq!(
@@ -649,14 +655,14 @@ async fn resource_exclusion_continuations_bind_filters_context_and_current_autho
         ] {
             let error = harness
                 .provider
-                .invoke(search(inputs(changed), scope.clone(), Some(&token)).build())
+                .invoke_checked(search(inputs(changed), scope.clone(), Some(&token)).build())
                 .await
                 .unwrap_err();
             assert_rejected_token(error);
         }
         let error = harness
             .provider
-            .invoke(
+            .invoke_checked(
                 search(inputs(canonical), scope.clone(), Some(&token))
                     .execution_context("external")
                     .build(),
@@ -669,7 +675,7 @@ async fn resource_exclusion_continuations_bind_filters_context_and_current_autho
         let narrowed = scope.intersection(&finite(&["PROJ"]));
         let error = harness
             .provider
-            .invoke(search(inputs(canonical), narrowed, Some(&token)).build())
+            .invoke_checked(search(inputs(canonical), narrowed, Some(&token)).build())
             .await
             .unwrap_err();
         assert_scope_changed(error);
@@ -684,7 +690,7 @@ async fn resource_exclusion_continuations_bind_filters_context_and_current_autho
         *harness.backend.search_page.lock().unwrap() = Some(moved);
         let result = harness
             .provider
-            .invoke(search(inputs(canonical), scope.clone(), Some(&token)).build())
+            .invoke_checked(search(inputs(canonical), scope.clone(), Some(&token)).build())
             .await;
         if scope.matches("PRIVATE") {
             assert_eq!(result.unwrap().result["issues"][0]["project"], "PRIVATE");
@@ -718,7 +724,9 @@ async fn text_negation_continuations_bind_polarity_operands_and_effective_scope(
                 );
                 harness
                     .provider
-                    .invoke(search(inputs(&equivalent), scope.clone(), Some(&token)).build())
+                    .invoke_checked(
+                        search(inputs(&equivalent), scope.clone(), Some(&token)).build(),
+                    )
                     .await
                     .unwrap();
                 assert_eq!(
@@ -733,7 +741,9 @@ async fn text_negation_continuations_bind_polarity_operands_and_effective_scope(
                 ] {
                     let error = harness
                         .provider
-                        .invoke(search(inputs(&changed), scope.clone(), Some(&token)).build())
+                        .invoke_checked(
+                            search(inputs(&changed), scope.clone(), Some(&token)).build(),
+                        )
                         .await
                         .unwrap_err();
                     assert_rejected_token(error);
@@ -742,7 +752,7 @@ async fn text_negation_continuations_bind_polarity_operands_and_effective_scope(
                 let narrowed = scope.intersection(&finite(&["PROJ"]));
                 let error = harness
                     .provider
-                    .invoke(search(inputs(&query), narrowed, Some(&token)).build())
+                    .invoke_checked(search(inputs(&query), narrowed, Some(&token)).build())
                     .await
                     .unwrap_err();
                 assert_scope_changed(error);
@@ -766,7 +776,7 @@ async fn text_negation_continuation_rechecks_authority_without_invalidating_unch
     // other authority does not invalidate this continuation by itself.
     harness
         .provider
-        .invoke(search(inputs.clone(), finite(&["PROJ"]), Some(&token)).build())
+        .invoke_checked(search(inputs.clone(), finite(&["PROJ"]), Some(&token)).build())
         .await
         .unwrap();
     assert_eq!(
@@ -780,7 +790,7 @@ async fn text_negation_continuation_rechecks_authority_without_invalidating_unch
     *harness.backend.search_page.lock().unwrap() = Some(moved);
     let error = harness
         .provider
-        .invoke(search(inputs, finite(&["PROJ"]), Some(&token)).build())
+        .invoke_checked(search(inputs, finite(&["PROJ"]), Some(&token)).build())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -810,7 +820,7 @@ async fn parent_search_continuations_bind_references_operators_and_lists() {
             .await;
         let response = harness
             .provider
-            .invoke(search(inputs(equivalent), finite(&["PROJ"]), Some(&token)).build())
+            .invoke_checked(search(inputs(equivalent), finite(&["PROJ"]), Some(&token)).build())
             .await
             .unwrap();
         assert_eq!(response.result["issues"][0]["key"], "PROJ-1");
@@ -823,7 +833,7 @@ async fn parent_search_continuations_bind_references_operators_and_lists() {
         assert_rejected_token(
             harness
                 .provider
-                .invoke(search(inputs(changed), finite(&["PROJ"]), Some(&token)).build())
+                .invoke_checked(search(inputs(changed), finite(&["PROJ"]), Some(&token)).build())
                 .await
                 .unwrap_err(),
         );

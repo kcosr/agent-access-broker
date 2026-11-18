@@ -453,6 +453,8 @@ mod tests {
         assert!(descriptor.is_gateway());
         assert!(!descriptor.credentials.verification_supported);
         assert!(descriptor.actions[0].sensitive_output_pointers.is_empty());
+        // Gateway operations are never invoked, so they have no result.
+        assert!(descriptor.actions[0].result_schemas.is_none());
 
         // Ordinary invoke descriptors keep the existing JSON pointer rule.
         let mut ordinary = descriptor;
@@ -579,6 +581,12 @@ mod tests {
         }
         fn scoped_mcp_name(&self, _: &ImportedActionDefinition) -> Result<String, String> {
             Err("gateway actions have no scoped MCP name".into())
+        }
+        fn result_schemas(
+            &self,
+            _: &ImportedActionDefinition,
+        ) -> Result<agent_access_provider::ActionResultSchemas, String> {
+            unreachable!("gateway actions are never asked for result schemas")
         }
         fn build(
             &self,

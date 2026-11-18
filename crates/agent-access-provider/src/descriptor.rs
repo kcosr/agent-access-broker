@@ -8,8 +8,8 @@
 use crate::attribution::AttributionCapability;
 use crate::presentation::ActionPresentation;
 use crate::{
-    ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamAuthority,
-    UpstreamResourceOwnership,
+    ActionCapabilities, ActionResultSchemas, ResourceScopeCapabilities, ServiceCapabilities,
+    UpstreamAuthority, UpstreamResourceOwnership,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,6 +113,9 @@ pub struct ActionDescriptor {
     /// Read-content normalization and whole-result Markdown the action
     /// supports; `None` means JSON results only.
     pub presentation: Option<ActionPresentation>,
+    /// The provider payload schemas the host composes into advertised output
+    /// schemas; `None` publishes none. See [`Self::result_schemas`].
+    pub result_schemas: Option<ActionResultSchemas>,
 }
 
 /// One top-level action input whose supplied value the host copies into the
@@ -364,6 +367,7 @@ impl ActionDescriptor {
             attribution: None,
             requires_stable_signing_key: false,
             presentation: None,
+            result_schemas: None,
         }
     }
 
@@ -514,6 +518,31 @@ impl ActionDescriptor {
 
     pub fn presentation(mut self, presentation: Option<ActionPresentation>) -> Self {
         self.presentation = presentation;
+        self
+    }
+
+    /// Declares the schemas of the action's provider payloads: its success
+    /// `result` and, optionally, its provider errors' `result`. The host
+    /// composes them with the presentation's rendered bodies and Markdown
+    /// export, the shared failure details and the Broker envelope into the
+    /// action's advertised MCP output schema, catalog entry and OpenAPI
+    /// response. [`ServiceDescriptor::validate`] checks them against the
+    /// authoring profile [`ActionResultSchemas`] describes.
+    ///
+    /// ```
+    /// use agent_access_provider::{ActionDescriptor, ActionResultSchemas};
+    /// use serde_json::json;
+    ///
+    /// let action = ActionDescriptor::new("item.view", "View an item", json!({"type": "object"}))
+    ///     .result_schemas(ActionResultSchemas::new(json!({
+    ///         "type": "object",
+    ///         "properties": {"id": {"type": "string"}},
+    ///         "required": ["id"]
+    ///     })));
+    /// assert!(action.result_schemas.is_some());
+    /// ```
+    pub fn result_schemas(mut self, schemas: ActionResultSchemas) -> Self {
+        self.result_schemas = Some(schemas);
         self
     }
 
@@ -894,6 +923,20 @@ impl ServiceDescriptor {
                 errors.push(format!(
                     "{service}.{name} resolves its resource scope by lookup but declares no resource scope"
                 ));
+            }
+            if let Some(schemas) = &action.result_schemas {
+                let owners = action
+                    .presentation
+                    .iter()
+                    .flat_map(|presentation| presentation.embedded_bodies())
+                    .map(crate::presentation::EmbeddedBody::owner_pointer)
+                    .collect::<Vec<_>>();
+                crate::result_schema::validate_action_result_schemas(
+                    &format!("{service}.{name}"),
+                    schemas,
+                    &owners,
+                    &mut errors,
+                );
             }
             if action.presentation.is_some() && matches!(action.io, ActionIo::RawDownload { .. }) {
                 errors.push(format!(
@@ -1582,6 +1625,75 @@ mod tests {
                 ["example.item.view audit input project schema uses a reference"]
             );
         }
+    }
+
+    #[test]
+    fn result_schemas_are_validated_against_the_profile_and_presentation() {
+        use crate::presentation::{
+            ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec,
+            ReadContentFormat, RenderBudget, RenderError, RenderedBody,
+        };
+        struct Codec;
+        impl EmbeddedBodyCodec for Codec {
+            fn render(
+                &self,
+                _owner: &serde_json::Map<String, Value>,
+                _format: ReadContentFormat,
+                _max_body_bytes: u64,
+                _budget: &mut RenderBudget,
+            ) -> Result<Option<RenderedBody>, RenderError> {
+                Ok(None)
+            }
+        }
+        static CODEC: Codec = Codec;
+        static BODIES: [EmbeddedBody; 1] = [EmbeddedBody::new(
+            &[BodyPathSegment::Field("comments"), BodyPathSegment::Each],
+            &CODEC,
+        )];
+        let presented = |schemas| {
+            action("item.view")
+                .presentation(Some(ActionPresentation::new(&BODIES, None)))
+                .result_schemas(schemas)
+        };
+        let comments = json!({"type": "object", "properties": {"comments": {
+            "type": "array", "items": {"type": "object", "properties": {"body": {"type": "string"}}}
+        }}});
+        assert_eq!(
+            errors(vec![presented(ActionResultSchemas::new(comments))]),
+            Vec::<String>::new()
+        );
+        // A presentation and its schema cannot drift: every owner resolves.
+        assert_eq!(
+            errors(vec![presented(ActionResultSchemas::new(
+                json!({"type": "object"})
+            ))]),
+            [
+                "example.item.view success result schema does not resolve rendered body owner /comments/*"
+            ]
+        );
+        // The error schema need not carry the owner.
+        assert_eq!(
+            errors(vec![presented(
+                ActionResultSchemas::new(json!({"type": "object", "properties": {"comments": {
+                    "type": "array", "items": {"type": "object"}
+                }}}))
+                .with_error(json!({"type": "object", "properties": {"code": {"type": "string"}}}))
+            )]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            errors(vec![action("item.list").result_schemas(ActionResultSchemas::new(
+                json!({"type": "object", "properties": {"when": {"type": "string", "format": "date-time"}}})
+            ))]),
+            ["example.item.list success result schema: /properties/when uses keyword format outside the result schema profile"]
+        );
+        // Schemas are optional and never part of capability discovery.
+        let plain = action("item.view");
+        let declared = plain
+            .clone()
+            .result_schemas(ActionResultSchemas::new(json!({"type": "object"})));
+        assert_eq!(plain.capabilities(), declared.capabilities());
+        assert!(errors(vec![plain]).is_empty());
     }
 
     #[test]

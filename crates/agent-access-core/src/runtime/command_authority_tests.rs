@@ -117,6 +117,22 @@ impl ImportedAdapter for PlannedCommand {
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         Ok(action.action.replace('.', "_"))
     }
+    /// The provider's result, and the process fact core adds beside a
+    /// write's receipt; an action marked `"results": "unstated"` has none.
+    fn result_schemas(
+        &self,
+        action: &ImportedActionDefinition,
+    ) -> Result<agent_access_provider::ActionResultSchemas, String> {
+        if action.annotations["command"].get("results") == Some(&json!("unstated")) {
+            return Err("unstated result schemas".into());
+        }
+        Ok(
+            crate::imports::test_result_schemas("dispatched").with_error(json!({
+                "type": "object",
+                "properties": {"operationDispatched": {"type": "boolean"}}
+            })),
+        )
+    }
     fn build(
         &self,
         _: &ImportedServiceDefinition,
@@ -450,6 +466,72 @@ fn imported_listing_metadata_maps_the_accepted_type_id_and_preserves_unscoped_ac
 }
 
 #[test]
+fn imported_descriptors_carry_the_adapter_result_schemas_and_unstated_ones_fail_closed() {
+    let stated = record(&[], actions());
+    let descriptor = imports::descriptor(&stated, &config(), &published_types(&stated));
+    descriptor.validate().unwrap();
+    let expected = PLANNED_COMMAND
+        .result_schemas(&stated.actions[0].definition)
+        .unwrap();
+    assert!(
+        descriptor
+            .actions
+            .iter()
+            .all(|action| action.result_schemas.as_ref() == Some(&expected))
+    );
+
+    // An action whose schemas the adapter cannot state publishes none, and
+    // its import is neither prepared for publication nor built at startup.
+    let mut unstated = record(&[], actions());
+    unstated
+        .actions
+        .push(action("issue.export", json!({"results": "unstated"})));
+    let types = published_types(&unstated);
+    let descriptor = imports::descriptor(&unstated, &config(), &types);
+    assert!(
+        descriptor
+            .action("issue.export")
+            .unwrap()
+            .result_schemas
+            .is_none()
+    );
+    assert!(
+        descriptor
+            .action("issue.view")
+            .unwrap()
+            .result_schemas
+            .is_some()
+    );
+    let mut base = BrokerRuntime::new(config()).unwrap();
+    base.config = Arc::new(import_config());
+    let Some(ManagedStoreError::InputInvalid(message)) =
+        base.prepare_imported_service_change(&unstated, None).err()
+    else {
+        panic!("an import with unstated result schemas must not be prepared");
+    };
+    assert_eq!(message, "unstated result schemas");
+    let config = import_config();
+    for (record, available) in [(stated, true), (unstated, false)] {
+        let catalog = ImportedCatalog {
+            revision: 1,
+            services: vec![record],
+        };
+        let contracts = imports::resolve_credential_contracts(&config, &catalog);
+        let built = imports::build_providers(
+            &config,
+            &catalog,
+            &contracts,
+            &published_types(&catalog.services[0]),
+            None,
+            None,
+            &base.network,
+        )
+        .unwrap();
+        assert_eq!(built.providers.contains_key(SERVICE), available);
+    }
+}
+
+#[test]
 fn imported_descriptors_carry_the_adapter_declared_audit_inputs_and_fail_closed() {
     let declaring = record(
         &[ImportedCredentialMode::Service],
@@ -530,6 +612,12 @@ impl ImportedAdapter for UpstreamImport {
     }
     fn scoped_mcp_name(&self, action: &ImportedActionDefinition) -> Result<String, String> {
         Ok(action.action.replace('.', "_"))
+    }
+    fn result_schemas(
+        &self,
+        _: &ImportedActionDefinition,
+    ) -> Result<agent_access_provider::ActionResultSchemas, String> {
+        Ok(crate::imports::test_result_schemas("upstreamMcp"))
     }
     fn build(
         &self,

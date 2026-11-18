@@ -804,6 +804,39 @@ async fn exercise_import(openapi: bool) {
     let scoped_tools = listed["result"]["tools"].as_array().unwrap();
     assert!(scoped_tools.iter().any(|tool| tool["name"] == raw_read));
     assert!(!scoped_tools.iter().any(|tool| tool["name"] == read_name));
+    // The omitted selection advertises no output schemas; the same session
+    // can request them per request, wrapping the upstream payload.
+    let wrapper = if openapi {
+        "upstreamHttp"
+    } else {
+        "upstreamMcp"
+    };
+    let advertised = client
+        .post(format!("{base}/mcp/imported?outputSchemas=on"))
+        .bearer_auth(&agent)
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &scoped_session)
+        .header("mcp-protocol-version", DOWNSTREAM_MCP)
+        .json(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}))
+        .send()
+        .await
+        .unwrap();
+    let advertised = rpc_response(advertised).await;
+    let advertised = advertised["result"]["tools"].as_array().unwrap();
+    assert_eq!(advertised.len(), scoped_tools.len());
+    for (with, without) in advertised.iter().zip(scoped_tools) {
+        assert!(without.get("outputSchema").is_none(), "{without}");
+        let mut stripped = with.clone();
+        let schema = stripped
+            .as_object_mut()
+            .unwrap()
+            .remove("outputSchema")
+            .unwrap();
+        assert_eq!(&stripped, without);
+        if with["name"] == raw_read {
+            assert!(schema.to_string().contains(wrapper), "{schema}");
+        }
+    }
     let detail = scoped_request(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"actions_describe","arguments":{"service":"imported","action":"item.read"}}}))
         .header("mcp-session-id",&scoped_session).header("mcp-protocol-version",DOWNSTREAM_MCP).send().await.unwrap();
     let detail = rpc_response(detail).await;
@@ -830,6 +863,10 @@ async fn exercise_import(openapi: bool) {
     let listed = scoped.request("tools/list", json!({})).await;
     let tools = listed["result"]["tools"].as_array().unwrap();
     let raw_tool = tools.iter().find(|tool| tool["name"] == raw_read).unwrap();
+    assert!(
+        raw_tool["outputSchema"].to_string().contains(wrapper),
+        "{raw_tool}"
+    );
     assert_eq!(raw_tool["_meta"]["agent-access/action"], "item.read");
     assert_eq!(
         raw_tool["_meta"]["agent-access/sensitive-output-pointers"],
@@ -869,7 +906,42 @@ async fn exercise_import(openapi: bool) {
             PAYLOAD
         );
     }
+    let advertised_read = scoped.request("tools/call",json!({"name":raw_read,"arguments":{"inputs":inputs(json!({"message":"selected read"}))}})).await;
     scoped.finish().await;
+    // Off and the omitted default list the same imported tools without
+    // output schemas, describe without them and return the same payload.
+    for selection in [Some(agent_access_core::mcp::OutputSchemas::Off), None] {
+        let mut plain = McpProcess::start_selecting(&agent_config, Some("imported"), selection);
+        plain.initialize().await;
+        let listed = plain.request("tools/list", json!({})).await;
+        let plain_tools = listed["result"]["tools"].as_array().unwrap();
+        assert_eq!(
+            plain_tools,
+            &tools
+                .iter()
+                .map(|tool| {
+                    let mut tool = tool.clone();
+                    tool.as_object_mut().unwrap().remove("outputSchema");
+                    tool
+                })
+                .collect::<Vec<_>>()
+        );
+        let detail = plain.request("tools/call",json!({"name":"actions_describe","arguments":{"service":"imported","action":"item.read"}})).await;
+        let detail = &detail["result"]["structuredContent"];
+        assert_eq!(detail["mcpTool"]["name"], raw_read);
+        assert!(detail["mcpTool"].get("outputSchema").is_none(), "{detail}");
+        assert!(detail.get("resultSchemas").is_none(), "{detail}");
+        let read = plain.request("tools/call",json!({"name":raw_read,"arguments":{"inputs":inputs(json!({"message":"selected read"}))}})).await;
+        assert_eq!(
+            read["result"]["isError"],
+            advertised_read["result"]["isError"]
+        );
+        assert_eq!(
+            read["result"]["structuredContent"]["result"],
+            advertised_read["result"]["structuredContent"]["result"]
+        );
+        plain.finish().await;
+    }
     if openapi {
         for (configuration, succeeds) in [(&personal_config, true), (&missing_config, false)] {
             let mut personal = McpProcess::start_scoped(configuration, "imported");

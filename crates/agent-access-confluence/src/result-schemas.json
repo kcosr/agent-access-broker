@@ -1,0 +1,1258 @@
+{
+  "definitions": {
+    "author": {
+      "type": ["object", "null"],
+      "properties": {"accountId": {"type": ["string", "null"]}, "displayName": {"type": ["string", "null"]}},
+      "required": ["accountId", "displayName"]
+    },
+    "storageBody": {
+      "type": "object",
+      "properties": {
+        "representation": {"const": "storage"},
+        "value": {"description": "Storage-format XHTML.", "type": "string"}
+      },
+      "required": ["representation", "value"]
+    },
+    "adfBody": {
+      "type": "object",
+      "properties": {
+        "representation": {"const": "atlas_doc_format"},
+        "value": {"description": "ADF document serialized as a JSON string.", "type": "string"}
+      },
+      "required": ["representation", "value"]
+    },
+    "bodyMap": {
+      "description": "Native bodies keyed by representation, per the configured or requested formats; may be empty.",
+      "type": "object",
+      "properties": {
+        "storage": {"$ref": "#/definitions/storageBody"},
+        "atlas_doc_format": {"$ref": "#/definitions/adfBody"}
+      }
+    },
+    "placementVerified": {
+      "type": "object",
+      "properties": {"status": {"const": "matched"}},
+      "required": ["status"]
+    },
+    "check": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["pageVersion", "pageTitle", "blogVersion", "blogTitle", "attachment"]},
+        "version": {"type": "integer"},
+        "id": {"type": "string"},
+        "parentStatus": {"const": "draft"}
+      },
+      "required": ["type"]
+    },
+    "verified": {
+      "type": "object",
+      "properties": {
+        "status": {"const": "matched"},
+        "checked": {"type": "array", "items": {"$ref": "#/definitions/check"}}
+      },
+      "required": ["status", "checked"]
+    },
+    "verificationMismatch": {
+      "type": "object",
+      "properties": {
+        "status": {"const": "mismatch"},
+        "checked": {
+          "description": "Checks that passed before the mismatch.",
+          "type": "array",
+          "items": {"$ref": "#/definitions/check"}
+        },
+        "mismatch": {
+          "type": "object",
+          "properties": {
+            "type": {"enum": ["pageVersion", "pageTitle", "blogVersion", "blogTitle", "attachment"]},
+            "expected": {"type": "integer"},
+            "actual": {"type": "integer"},
+            "id": {"type": "string"}
+          },
+          "required": ["type"]
+        }
+      },
+      "required": ["status", "checked", "mismatch"]
+    },
+    "attachment": {
+      "type": "object",
+      "properties": {
+        "attachmentId": {"type": "string"},
+        "filename": {"type": "string"},
+        "contentType": {"type": "string"},
+        "size": {"type": "integer"}
+      },
+      "required": ["attachmentId", "filename", "contentType", "size"]
+    },
+    "draftAttachment": {
+      "type": "object",
+      "properties": {
+        "attachmentId": {"type": "string"},
+        "filename": {"type": "string"},
+        "contentType": {"type": "string"},
+        "size": {"type": "integer"},
+        "parentStatus": {"const": "draft"}
+      },
+      "required": ["attachmentId", "filename", "contentType", "size", "parentStatus"]
+    },
+    "uploadFailure": {
+      "type": "object",
+      "properties": {
+        "status": {"enum": ["failed", "skipped"]},
+        "attachment": {
+          "type": "object",
+          "properties": {
+            "filename": {"type": "string"},
+            "contentType": {"type": "string"},
+            "size": {"type": "integer"},
+            "sha256": {"type": "string"}
+          },
+          "required": ["filename", "contentType", "size", "sha256"]
+        },
+        "reason": {"type": "string"}
+      },
+      "required": ["status", "attachment", "reason"]
+    },
+    "draftUploadFailure": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "description": "unverified: uploaded, but its read-back was throttled.",
+          "enum": ["failed", "skipped", "unverified"]
+        },
+        "reason": {"type": "string"},
+        "attachmentId": {"type": "string"},
+        "filename": {"type": "string"}
+      },
+      "required": ["status", "reason"]
+    },
+    "pageSummary": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceUrl": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "version": {"type": "integer"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "createdBy": {"$ref": "#/definitions/author"},
+        "updatedBy": {"$ref": "#/definitions/author"}
+      },
+      "required": [
+        "id", "title", "space", "spaceUrl", "webUrl", "version", "createdAt", "updatedAt", "createdBy",
+        "updatedBy"
+      ]
+    },
+    "blogSummary": {
+      "type": "object",
+      "properties": {
+        "blogId": {"type": "string"},
+        "title": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceUrl": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "status": {"const": "current"},
+        "version": {"type": "integer"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "createdBy": {"$ref": "#/definitions/author"},
+        "updatedBy": {"$ref": "#/definitions/author"}
+      },
+      "required": [
+        "blogId", "title", "space", "spaceUrl", "webUrl", "status", "version", "createdAt", "updatedAt",
+        "createdBy", "updatedBy"
+      ]
+    },
+    "pageConflict": {
+      "description": "Result of a version_conflict failure.",
+      "type": "object",
+      "properties": {
+        "pageId": {"type": "string"},
+        "space": {"type": "string"},
+        "expectedBaseVersion": {"type": "integer"},
+        "currentVersion": {
+          "description": "Absent when Confluence itself reported the conflict.",
+          "type": "integer"
+        }
+      },
+      "required": ["pageId", "space", "expectedBaseVersion"]
+    },
+    "blogConflict": {
+      "description": "Result of a version_conflict failure.",
+      "type": "object",
+      "properties": {
+        "blogId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "expectedBaseVersion": {"type": "integer"},
+        "currentVersion": {
+          "description": "Absent when Confluence itself reported the conflict.",
+          "type": "integer"
+        }
+      },
+      "required": ["blogId", "space", "spaceId", "expectedBaseVersion"]
+    },
+    "pageDraft": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "enum": ["page.draft.create", "page.draft.stage", "page.draft.view", "page.draft.update"]
+        },
+        "contentType": {"const": "page"},
+        "pageId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "parentPageId": {"type": ["string", "null"]},
+        "spaceUrl": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "title": {"type": "string"},
+        "version": {"type": "integer"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "createdBy": {"$ref": "#/definitions/author"},
+        "updatedBy": {"$ref": "#/definitions/author"},
+        "lifecycle": {"const": "draft"},
+        "status": {"const": "draft"},
+        "draftHandle": {"description": "Sealed handle that later draft actions require.", "type": "string"},
+        "draftOrigin": {"const": "broker_managed"},
+        "expectedBaseVersion": {
+          "description": "page.draft.stage only: the current version the draft replaces.",
+          "type": "integer"
+        },
+        "body": {
+          "description": "page.draft.view only: the requested native body.",
+          "type": "object",
+          "properties": {"storage": {"$ref": "#/definitions/storageBody"}}
+        }
+      },
+      "required": [
+        "operation", "contentType", "pageId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
+        "draftHandle", "draftOrigin"
+      ]
+    },
+    "pageDraftPublished": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "page.draft.publish"},
+        "contentType": {"const": "page"},
+        "pageId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "parentPageId": {"type": ["string", "null"]},
+        "spaceUrl": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "title": {"type": "string"},
+        "version": {"type": "integer"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "createdBy": {"$ref": "#/definitions/author"},
+        "updatedBy": {"$ref": "#/definitions/author"},
+        "lifecycle": {"const": "current"},
+        "status": {"const": "current"},
+        "draftVersion": {"description": "Version of the draft that was published.", "type": "integer"},
+        "publishedAttachmentIds": {
+          "description": "Draft attachments confirmed on the published content.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "required": [
+        "operation", "contentType", "pageId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
+        "draftVersion", "publishedAttachmentIds"
+      ]
+    },
+    "pageDraftConflict": {
+      "description": "Result of a version_conflict failure: a broker-managed draft already exists.",
+      "type": "object",
+      "properties": {
+        "pageId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "expectedBaseVersion": {"type": "integer"},
+        "draftVersion": {"type": "integer"},
+        "lifecycle": {"const": "draft"}
+      },
+      "required": ["pageId", "space", "spaceId", "expectedBaseVersion", "draftVersion", "lifecycle"]
+    },
+    "blogDraft": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "enum": ["blog.draft.create", "blog.draft.stage", "blog.draft.view", "blog.draft.update"]
+        },
+        "contentType": {"const": "blog"},
+        "blogId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "parentPageId": {"type": ["string", "null"]},
+        "spaceUrl": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "title": {"type": "string"},
+        "version": {"type": "integer"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "createdBy": {"$ref": "#/definitions/author"},
+        "updatedBy": {"$ref": "#/definitions/author"},
+        "lifecycle": {"const": "draft"},
+        "status": {"const": "draft"},
+        "draftHandle": {"description": "Sealed handle that later draft actions require.", "type": "string"},
+        "draftOrigin": {"const": "broker_managed"},
+        "expectedBaseVersion": {
+          "description": "blog.draft.stage only: the current version the draft replaces.",
+          "type": "integer"
+        },
+        "body": {
+          "description": "blog.draft.view only: the requested native body.",
+          "type": "object",
+          "properties": {"storage": {"$ref": "#/definitions/storageBody"}}
+        }
+      },
+      "required": [
+        "operation", "contentType", "blogId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
+        "draftHandle", "draftOrigin"
+      ]
+    },
+    "blogDraftPublished": {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "blog.draft.publish"},
+        "contentType": {"const": "blog"},
+        "blogId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "parentPageId": {"type": ["string", "null"]},
+        "spaceUrl": {"type": "string"},
+        "webUrl": {"type": "string"},
+        "title": {"type": "string"},
+        "version": {"type": "integer"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "createdBy": {"$ref": "#/definitions/author"},
+        "updatedBy": {"$ref": "#/definitions/author"},
+        "lifecycle": {"const": "current"},
+        "status": {"const": "current"},
+        "draftVersion": {"description": "Version of the draft that was published.", "type": "integer"},
+        "publishedAttachmentIds": {
+          "description": "Draft attachments confirmed on the published content.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "required": [
+        "operation", "contentType", "blogId", "space", "spaceId", "parentPageId", "spaceUrl", "webUrl",
+        "title", "version", "createdAt", "updatedAt", "createdBy", "updatedBy", "lifecycle", "status",
+        "draftVersion", "publishedAttachmentIds"
+      ]
+    },
+    "blogDraftConflict": {
+      "description": "Result of a version_conflict failure: a broker-managed draft already exists.",
+      "type": "object",
+      "properties": {
+        "blogId": {"type": "string"},
+        "space": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "expectedBaseVersion": {"type": "integer"},
+        "draftVersion": {"type": "integer"},
+        "lifecycle": {"const": "draft"}
+      },
+      "required": ["blogId", "space", "spaceId", "expectedBaseVersion", "draftVersion", "lifecycle"]
+    },
+    "pageComment": {
+      "type": "object",
+      "properties": {
+        "commentId": {"type": "string"},
+        "kind": {"enum": ["footer", "inline"]},
+        "containerType": {"const": "page"},
+        "space": {"type": "string"},
+        "pageId": {"type": "string"},
+        "status": {"const": "current"},
+        "resolutionStatus": {"type": ["string", "null"]},
+        "version": {"type": ["integer", "null"]},
+        "author": {"$ref": "#/definitions/author"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "parentCommentId": {"description": "null for a top-level comment.", "type": ["string", "null"]},
+        "body": {"$ref": "#/definitions/bodyMap"}
+      },
+      "required": [
+        "commentId", "kind", "containerType", "space", "pageId", "status", "resolutionStatus", "version",
+        "author", "createdAt", "updatedAt", "parentCommentId", "body"
+      ]
+    },
+    "pageCommentList": {
+      "type": "object",
+      "properties": {
+        "comments": {"type": "array", "items": {"$ref": "#/definitions/pageComment"}},
+        "count": {"type": "integer"},
+        "hasMore": {"description": "Whether nextPageToken continues the listing.", "type": "boolean"},
+        "nextPageToken": {
+          "description": "Sealed continuation for the same inputs; null when there are no more results.",
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["comments", "count", "hasMore", "nextPageToken"]
+    },
+    "pageCommentResult": {
+      "type": "object",
+      "properties": {"comment": {"$ref": "#/definitions/pageComment"}},
+      "required": ["comment"]
+    },
+    "pageCommentUpdate": {
+      "type": "object",
+      "properties": {
+        "comment": {"$ref": "#/definitions/pageComment"},
+        "previousVersion": {"type": "integer"},
+        "version": {"type": "integer"}
+      },
+      "required": ["comment", "previousVersion", "version"]
+    },
+    "pageCommentConflict": {
+      "description": "Result of a version_conflict failure.",
+      "type": "object",
+      "properties": {
+        "commentId": {"type": "string"},
+        "kind": {"enum": ["footer", "inline"]},
+        "containerType": {"const": "page"},
+        "space": {"type": "string"},
+        "pageId": {"type": "string"},
+        "expectedBaseVersion": {"type": "integer"},
+        "currentVersion": {
+          "description": "Absent when Confluence itself reported the conflict.",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Present when Confluence itself reported the conflict.",
+          "const": "upstream_conflict"
+        }
+      },
+      "required": ["commentId", "kind", "containerType", "space", "pageId", "expectedBaseVersion"]
+    },
+    "blogComment": {
+      "type": "object",
+      "properties": {
+        "commentId": {"type": "string"},
+        "kind": {"enum": ["footer", "inline"]},
+        "containerType": {"const": "blog"},
+        "space": {"type": "string"},
+        "blogId": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "status": {"const": "current"},
+        "resolutionStatus": {"type": ["string", "null"]},
+        "version": {"type": ["integer", "null"]},
+        "author": {"$ref": "#/definitions/author"},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "parentCommentId": {"description": "null for a top-level comment.", "type": ["string", "null"]},
+        "body": {"$ref": "#/definitions/bodyMap"}
+      },
+      "required": [
+        "commentId", "kind", "containerType", "space", "blogId", "spaceId", "status", "resolutionStatus",
+        "version", "author", "createdAt", "updatedAt", "parentCommentId", "body"
+      ]
+    },
+    "blogCommentList": {
+      "type": "object",
+      "properties": {
+        "comments": {"type": "array", "items": {"$ref": "#/definitions/blogComment"}},
+        "count": {"type": "integer"},
+        "hasMore": {"description": "Whether nextPageToken continues the listing.", "type": "boolean"},
+        "nextPageToken": {
+          "description": "Sealed continuation for the same inputs; null when there are no more results.",
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["comments", "count", "hasMore", "nextPageToken"]
+    },
+    "blogCommentResult": {
+      "type": "object",
+      "properties": {"comment": {"$ref": "#/definitions/blogComment"}},
+      "required": ["comment"]
+    },
+    "blogCommentUpdate": {
+      "type": "object",
+      "properties": {
+        "comment": {"$ref": "#/definitions/blogComment"},
+        "previousVersion": {"type": "integer"},
+        "version": {"type": "integer"}
+      },
+      "required": ["comment", "previousVersion", "version"]
+    },
+    "blogCommentConflict": {
+      "description": "Result of a version_conflict failure.",
+      "type": "object",
+      "properties": {
+        "commentId": {"type": "string"},
+        "kind": {"enum": ["footer", "inline"]},
+        "containerType": {"const": "blog"},
+        "space": {"type": "string"},
+        "blogId": {"type": "string"},
+        "spaceId": {"type": "string"},
+        "expectedBaseVersion": {"type": "integer"},
+        "currentVersion": {
+          "description": "Absent when Confluence itself reported the conflict.",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Present when Confluence itself reported the conflict.",
+          "const": "upstream_conflict"
+        }
+      },
+      "required": ["commentId", "kind", "containerType", "space", "blogId", "spaceId", "expectedBaseVersion"]
+    },
+    "commentDelete": {
+      "type": "object",
+      "properties": {
+        "commentId": {"type": "string"},
+        "status": {"const": "deleted"},
+        "containerType": {"enum": ["page", "blog"]},
+        "kind": {"enum": ["footer", "inline"]},
+        "space": {"type": "string"}
+      },
+      "required": ["commentId", "status", "containerType", "kind", "space"]
+    }
+  },
+  "actions": {
+    "space.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {"type": "string"},
+                "key": {"type": "string"},
+                "name": {"type": "string"},
+                "type": {"type": "string"},
+                "status": {"const": "current"},
+                "webUrl": {"type": "string"},
+                "previewTruncated": {
+                  "description": "Present when name was cut to 4,096 bytes.",
+                  "const": true
+                }
+              },
+              "required": ["id", "key", "name", "type", "status", "webUrl"]
+            }
+          },
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {
+            "description": "more: more spaces may follow; exhausted: none follow; scan_budget: this call's scan budget ended before a matching space (items is empty). Continue more and scan_budget with nextPageToken.",
+            "enum": ["more", "exhausted", "scan_budget"]
+          },
+          "nextPageToken": {
+            "description": "Sealed continuation; absent when the listing is exhausted.",
+            "type": "string"
+          }
+        },
+        "required": ["items", "count", "maxResults", "scanStatus"]
+      }
+    },
+    "page.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceUrl": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "version": {"type": "integer"},
+          "createdAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "createdBy": {"$ref": "#/definitions/author"},
+          "updatedBy": {"$ref": "#/definitions/author"},
+          "body": {"$ref": "#/definitions/bodyMap"}
+        },
+        "required": [
+          "id", "title", "space", "spaceUrl", "webUrl", "version", "createdAt", "updatedAt", "createdBy",
+          "updatedBy", "body"
+        ]
+      }
+    },
+    "search": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "pages": {"type": "array", "items": {"$ref": "#/definitions/pageSummary"}},
+          "maxResults": {"type": "integer"},
+          "nextPageToken": {
+            "description": "Sealed continuation for the same inputs; null when there are no more results.",
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["pages", "maxResults", "nextPageToken"]
+      }
+    },
+    "page.create": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceUrl": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "parentPageId": {"type": "string"},
+          "placement": {"enum": ["requested_parent", "space_homepage"]},
+          "verification": {"$ref": "#/definitions/placementVerified"},
+          "version": {"type": "integer"},
+          "createdAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "createdBy": {"$ref": "#/definitions/author"},
+          "updatedBy": {"$ref": "#/definitions/author"}
+        },
+        "required": [
+          "pageId", "space", "spaceUrl", "webUrl", "parentPageId", "placement", "verification", "version",
+          "createdAt", "updatedAt", "createdBy", "updatedBy"
+        ]
+      }
+    },
+    "page.update": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceUrl": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "previousVersion": {"type": "integer"},
+          "version": {"type": "integer"},
+          "createdAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "createdBy": {"$ref": "#/definitions/author"},
+          "updatedBy": {"$ref": "#/definitions/author"}
+        },
+        "required": [
+          "pageId", "space", "spaceUrl", "webUrl", "previousVersion", "version", "createdAt", "updatedAt",
+          "createdBy", "updatedBy"
+        ]
+      },
+      "error": {"$ref": "#/definitions/pageConflict"}
+    },
+    "page.move": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.move"},
+          "pageId": {"type": "string"},
+          "position": {"enum": ["before", "after", "append"]},
+          "targetPageId": {"type": "string"},
+          "space": {"type": "string"},
+          "parentPageId": {"type": "string"},
+          "previousParentId": {"type": ["string", "null"]},
+          "previousParentType": {"type": ["string", "null"]},
+          "childPosition": {"type": "integer"},
+          "verification": {"$ref": "#/definitions/placementVerified"},
+          "targetChildPosition": {"description": "Present for before and after.", "type": "integer"}
+        },
+        "required": [
+          "operation", "pageId", "position", "targetPageId", "space", "parentPageId", "previousParentId",
+          "previousParentType", "childPosition", "verification"
+        ]
+      }
+    },
+    "attachment.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "status": {"const": "complete"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/attachment"}},
+          "failures": {"type": "array", "maxItems": 0}
+        },
+        "required": ["status", "pageId", "space", "attachments", "failures"]
+      },
+      "error": {
+        "description": "Result of a batch that partly failed.",
+        "type": "object",
+        "properties": {
+          "status": {"const": "partial"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "attachments": {
+            "description": "Uploads that were created.",
+            "type": "array",
+            "items": {"$ref": "#/definitions/attachment"}
+          },
+          "failures": {"type": "array", "items": {"$ref": "#/definitions/uploadFailure"}, "minItems": 1}
+        },
+        "required": ["status", "pageId", "space", "attachments", "failures"]
+      }
+    },
+    "attachment.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "attachmentId": {"type": "string"},
+          "filename": {"type": "string"},
+          "contentType": {"description": "Delivered content type.", "type": "string"},
+          "metadataContentType": {"description": "Content type in the attachment metadata.", "type": "string"},
+          "size": {"type": "integer"},
+          "sha256": {"description": "Present when the digest was known before delivery.", "type": "string"}
+        },
+        "required": [
+          "pageId", "space", "attachmentId", "filename", "contentType", "metadataContentType", "size"
+        ]
+      }
+    },
+    "attachment.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "attachment.list"},
+          "page": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}, "space": {"type": "string"}},
+            "required": ["id", "space"]
+          },
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/attachment"}},
+          "count": {"type": "integer"},
+          "hasMore": {"description": "Whether nextPageToken continues the listing.", "type": "boolean"},
+          "nextPageToken": {
+            "description": "Sealed continuation for the same inputs; null when there are no more results.",
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["operation", "page", "attachments", "count", "hasMore", "nextPageToken"]
+      }
+    },
+    "verify": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "verification": {"$ref": "#/definitions/verified"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"}
+        },
+        "required": ["verification", "pageId", "space"]
+      },
+      "error": {
+        "description": "Result reported with reason verification_mismatch.",
+        "type": "object",
+        "properties": {
+          "verification": {"$ref": "#/definitions/verificationMismatch"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"}
+        },
+        "required": ["verification", "pageId", "space"]
+      }
+    },
+    "blog.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.view"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "spaceUrl": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "title": {"type": "string"},
+          "status": {"const": "current"},
+          "version": {"type": "integer"},
+          "createdAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "createdBy": {"$ref": "#/definitions/author"},
+          "updatedBy": {"$ref": "#/definitions/author"},
+          "body": {
+            "description": "Empty when Confluence returned no storage body.",
+            "type": "object",
+            "properties": {"storage": {"description": "Storage-format XHTML.", "type": "string"}}
+          }
+        },
+        "required": [
+          "operation", "blogId", "space", "spaceId", "spaceUrl", "webUrl", "title", "status", "version",
+          "createdAt", "updatedAt", "createdBy", "updatedBy", "body"
+        ]
+      }
+    },
+    "blog.search": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.search"},
+          "blogs": {"type": "array", "items": {"$ref": "#/definitions/blogSummary"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "nextPageToken": {
+            "description": "Sealed continuation for the same inputs; null when there are no more results.",
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["operation", "blogs", "count", "maxResults", "nextPageToken"]
+      }
+    },
+    "blog.create": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.create"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "spaceUrl": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "title": {"type": "string"},
+          "status": {"const": "current"},
+          "version": {"type": "integer"},
+          "createdAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "createdBy": {"$ref": "#/definitions/author"},
+          "updatedBy": {"$ref": "#/definitions/author"}
+        },
+        "required": [
+          "operation", "blogId", "space", "spaceId", "spaceUrl", "webUrl", "title", "status", "version",
+          "createdAt", "updatedAt", "createdBy", "updatedBy"
+        ]
+      }
+    },
+    "blog.update": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.update"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "spaceUrl": {"type": "string"},
+          "webUrl": {"type": "string"},
+          "title": {"type": "string"},
+          "status": {"const": "current"},
+          "previousVersion": {"type": "integer"},
+          "version": {"type": "integer"},
+          "createdAt": {"type": ["string", "null"]},
+          "updatedAt": {"type": ["string", "null"]},
+          "createdBy": {"$ref": "#/definitions/author"},
+          "updatedBy": {"$ref": "#/definitions/author"}
+        },
+        "required": [
+          "operation", "blogId", "space", "spaceId", "spaceUrl", "webUrl", "title", "status",
+          "previousVersion", "version", "createdAt", "updatedAt", "createdBy", "updatedBy"
+        ]
+      },
+      "error": {"$ref": "#/definitions/blogConflict"}
+    },
+    "blog.attachment.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "status": {"const": "complete"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/attachment"}},
+          "failures": {"type": "array", "maxItems": 0}
+        },
+        "required": ["status", "blogId", "space", "spaceId", "attachments", "failures"]
+      },
+      "error": {
+        "description": "Result of a batch that partly failed.",
+        "type": "object",
+        "properties": {
+          "status": {"const": "partial"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachments": {
+            "description": "Uploads that were created.",
+            "type": "array",
+            "items": {"$ref": "#/definitions/attachment"}
+          },
+          "failures": {"type": "array", "items": {"$ref": "#/definitions/uploadFailure"}, "minItems": 1}
+        },
+        "required": ["status", "blogId", "space", "spaceId", "attachments", "failures"]
+      }
+    },
+    "blog.attachment.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachmentId": {"type": "string"},
+          "filename": {"type": "string"},
+          "contentType": {"description": "Delivered content type.", "type": "string"},
+          "metadataContentType": {"description": "Content type in the attachment metadata.", "type": "string"},
+          "size": {"type": "integer"},
+          "sha256": {"description": "Present when the digest was known before delivery.", "type": "string"}
+        },
+        "required": [
+          "blogId", "space", "spaceId", "attachmentId", "filename", "contentType", "metadataContentType",
+          "size"
+        ]
+      }
+    },
+    "blog.attachment.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.attachment.list"},
+          "blog": {
+            "type": "object",
+            "properties": {
+              "blogId": {"type": "string"},
+              "space": {"type": "string"},
+              "spaceId": {"type": "string"}
+            },
+            "required": ["blogId", "space", "spaceId"]
+          },
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/attachment"}},
+          "count": {"type": "integer"},
+          "hasMore": {"description": "Whether nextPageToken continues the listing.", "type": "boolean"},
+          "nextPageToken": {
+            "description": "Sealed continuation for the same inputs; null when there are no more results.",
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["operation", "blog", "attachments", "count", "hasMore", "nextPageToken"]
+      }
+    },
+    "blog.verify": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "verification": {"$ref": "#/definitions/verified"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"}
+        },
+        "required": ["verification", "blogId", "space", "spaceId"]
+      },
+      "error": {
+        "description": "Result reported with reason verification_mismatch.",
+        "type": "object",
+        "properties": {
+          "verification": {"$ref": "#/definitions/verificationMismatch"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"}
+        },
+        "required": ["verification", "blogId", "space", "spaceId"]
+      }
+    },
+    "page.draft.create": {"success": {"$ref": "#/definitions/pageDraft"}},
+    "page.draft.stage": {
+      "success": {"$ref": "#/definitions/pageDraft"},
+      "error": {
+        "type": "object",
+        "description": "Result of a version_conflict failure.",
+        "anyOf": [{"$ref": "#/definitions/pageConflict"}, {"$ref": "#/definitions/pageDraftConflict"}]
+      }
+    },
+    "page.draft.view": {"success": {"$ref": "#/definitions/pageDraft"}},
+    "page.draft.update": {"success": {"$ref": "#/definitions/pageDraft"}},
+    "page.draft.publish": {"success": {"$ref": "#/definitions/pageDraftPublished"}},
+    "page.draft.discard": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.discard"},
+          "pageId": {"type": "string"},
+          "lifecycle": {"const": "draft"},
+          "status": {"const": "discarded"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "discardedVersion": {"type": "integer"},
+          "discarded": {"const": true}
+        },
+        "required": [
+          "operation", "pageId", "lifecycle", "status", "space", "spaceId", "discardedVersion", "discarded"
+        ]
+      }
+    },
+    "page.draft.verify": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.verify"},
+          "verification": {"$ref": "#/definitions/verified"},
+          "pageId": {"type": "string"},
+          "lifecycle": {"const": "draft"},
+          "status": {"const": "draft"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"}
+        },
+        "required": ["operation", "verification", "pageId", "lifecycle", "status", "space", "spaceId"]
+      },
+      "error": {
+        "description": "Result reported with reason verification_mismatch.",
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.verify"},
+          "verification": {"$ref": "#/definitions/verificationMismatch"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "lifecycle": {"const": "draft"},
+          "pageId": {"type": "string"}
+        },
+        "required": ["operation", "verification", "space", "spaceId", "lifecycle", "pageId"]
+      }
+    },
+    "page.draft.attachment.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.attachment.add"},
+          "status": {"const": "complete"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/draftAttachment"}},
+          "failures": {"type": "array", "maxItems": 0}
+        },
+        "required": ["operation", "status", "pageId", "space", "spaceId", "attachments", "failures"]
+      },
+      "error": {
+        "description": "Result of a batch that partly failed.",
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.attachment.add"},
+          "status": {"const": "partial"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachments": {
+            "description": "Uploads that were created and verified.",
+            "type": "array",
+            "items": {"$ref": "#/definitions/draftAttachment"}
+          },
+          "failures": {"type": "array", "items": {"$ref": "#/definitions/draftUploadFailure"}, "minItems": 1}
+        },
+        "required": ["operation", "status", "pageId", "space", "spaceId", "attachments", "failures"]
+      }
+    },
+    "page.draft.attachment.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.attachment.download"},
+          "pageId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachmentId": {"type": "string"},
+          "filename": {"type": "string"},
+          "contentType": {"description": "Delivered content type.", "type": "string"},
+          "metadataContentType": {"description": "Content type in the attachment metadata.", "type": "string"},
+          "size": {"type": "integer"},
+          "parentStatus": {"const": "draft"}
+        },
+        "required": [
+          "operation", "pageId", "space", "spaceId", "attachmentId", "filename", "contentType",
+          "metadataContentType", "size", "parentStatus"
+        ]
+      }
+    },
+    "page.draft.attachment.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "page.draft.attachment.list"},
+          "page": {
+            "type": "object",
+            "properties": {
+              "id": {"type": "string"},
+              "space": {"type": "string"},
+              "spaceId": {"type": "string"},
+              "status": {"const": "draft"}
+            },
+            "required": ["id", "space", "spaceId", "status"]
+          },
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/draftAttachment"}},
+          "count": {"type": "integer"},
+          "hasMore": {"description": "Whether nextPageToken continues the listing.", "type": "boolean"},
+          "nextPageToken": {
+            "description": "Sealed continuation for the same inputs; null when there are no more results.",
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["operation", "page", "attachments", "count", "hasMore", "nextPageToken"]
+      }
+    },
+    "blog.draft.create": {"success": {"$ref": "#/definitions/blogDraft"}},
+    "blog.draft.stage": {
+      "success": {"$ref": "#/definitions/blogDraft"},
+      "error": {
+        "type": "object",
+        "description": "Result of a version_conflict failure.",
+        "anyOf": [{"$ref": "#/definitions/blogConflict"}, {"$ref": "#/definitions/blogDraftConflict"}]
+      }
+    },
+    "blog.draft.view": {"success": {"$ref": "#/definitions/blogDraft"}},
+    "blog.draft.update": {"success": {"$ref": "#/definitions/blogDraft"}},
+    "blog.draft.publish": {"success": {"$ref": "#/definitions/blogDraftPublished"}},
+    "blog.draft.discard": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.discard"},
+          "blogId": {"type": "string"},
+          "lifecycle": {"const": "draft"},
+          "status": {"const": "discarded"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "discardedVersion": {"type": "integer"},
+          "discarded": {"const": true}
+        },
+        "required": [
+          "operation", "blogId", "lifecycle", "status", "space", "spaceId", "discardedVersion", "discarded"
+        ]
+      }
+    },
+    "blog.draft.verify": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.verify"},
+          "verification": {"$ref": "#/definitions/verified"},
+          "blogId": {"type": "string"},
+          "lifecycle": {"const": "draft"},
+          "status": {"const": "draft"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"}
+        },
+        "required": ["operation", "verification", "blogId", "lifecycle", "status", "space", "spaceId"]
+      },
+      "error": {
+        "description": "Result reported with reason verification_mismatch.",
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.verify"},
+          "verification": {"$ref": "#/definitions/verificationMismatch"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "lifecycle": {"const": "draft"},
+          "blogId": {"type": "string"}
+        },
+        "required": ["operation", "verification", "space", "spaceId", "lifecycle", "blogId"]
+      }
+    },
+    "blog.draft.attachment.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.attachment.add"},
+          "status": {"const": "complete"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/draftAttachment"}},
+          "failures": {"type": "array", "maxItems": 0}
+        },
+        "required": ["operation", "status", "blogId", "space", "spaceId", "attachments", "failures"]
+      },
+      "error": {
+        "description": "Result of a batch that partly failed.",
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.attachment.add"},
+          "status": {"const": "partial"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachments": {
+            "description": "Uploads that were created and verified.",
+            "type": "array",
+            "items": {"$ref": "#/definitions/draftAttachment"}
+          },
+          "failures": {"type": "array", "items": {"$ref": "#/definitions/draftUploadFailure"}, "minItems": 1}
+        },
+        "required": ["operation", "status", "blogId", "space", "spaceId", "attachments", "failures"]
+      }
+    },
+    "blog.draft.attachment.download": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.attachment.download"},
+          "blogId": {"type": "string"},
+          "space": {"type": "string"},
+          "spaceId": {"type": "string"},
+          "attachmentId": {"type": "string"},
+          "filename": {"type": "string"},
+          "contentType": {"description": "Delivered content type.", "type": "string"},
+          "metadataContentType": {"description": "Content type in the attachment metadata.", "type": "string"},
+          "size": {"type": "integer"},
+          "parentStatus": {"const": "draft"}
+        },
+        "required": [
+          "operation", "blogId", "space", "spaceId", "attachmentId", "filename", "contentType",
+          "metadataContentType", "size", "parentStatus"
+        ]
+      }
+    },
+    "blog.draft.attachment.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "blog.draft.attachment.list"},
+          "blog": {
+            "type": "object",
+            "properties": {
+              "blogId": {"type": "string"},
+              "space": {"type": "string"},
+              "spaceId": {"type": "string"},
+              "status": {"const": "draft"}
+            },
+            "required": ["blogId", "space", "spaceId", "status"]
+          },
+          "attachments": {"type": "array", "items": {"$ref": "#/definitions/draftAttachment"}},
+          "count": {"type": "integer"},
+          "hasMore": {"description": "Whether nextPageToken continues the listing.", "type": "boolean"},
+          "nextPageToken": {
+            "description": "Sealed continuation for the same inputs; null when there are no more results.",
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["operation", "blog", "attachments", "count", "hasMore", "nextPageToken"]
+      }
+    },
+    "page.footer_comment.list": {"success": {"$ref": "#/definitions/pageCommentList"}},
+    "page.footer_comment.view": {"success": {"$ref": "#/definitions/pageCommentResult"}},
+    "page.footer_comment.add": {"success": {"$ref": "#/definitions/pageCommentResult"}},
+    "page.footer_comment.update": {
+      "success": {"$ref": "#/definitions/pageCommentUpdate"},
+      "error": {"$ref": "#/definitions/pageCommentConflict"}
+    },
+    "page.footer_comment.delete": {"success": {"$ref": "#/definitions/commentDelete"}},
+    "page.footer_comment.reply.list": {"success": {"$ref": "#/definitions/pageCommentList"}},
+    "page.footer_comment.reply.add": {"success": {"$ref": "#/definitions/pageCommentResult"}},
+    "page.inline_comment.list": {"success": {"$ref": "#/definitions/pageCommentList"}},
+    "page.inline_comment.view": {"success": {"$ref": "#/definitions/pageCommentResult"}},
+    "page.inline_comment.update": {
+      "success": {"$ref": "#/definitions/pageCommentUpdate"},
+      "error": {"$ref": "#/definitions/pageCommentConflict"}
+    },
+    "page.inline_comment.delete": {"success": {"$ref": "#/definitions/commentDelete"}},
+    "page.inline_comment.reply.list": {"success": {"$ref": "#/definitions/pageCommentList"}},
+    "page.inline_comment.reply.add": {"success": {"$ref": "#/definitions/pageCommentResult"}},
+    "blog.footer_comment.list": {"success": {"$ref": "#/definitions/blogCommentList"}},
+    "blog.footer_comment.view": {"success": {"$ref": "#/definitions/blogCommentResult"}},
+    "blog.footer_comment.add": {"success": {"$ref": "#/definitions/blogCommentResult"}},
+    "blog.footer_comment.update": {
+      "success": {"$ref": "#/definitions/blogCommentUpdate"},
+      "error": {"$ref": "#/definitions/blogCommentConflict"}
+    },
+    "blog.footer_comment.delete": {"success": {"$ref": "#/definitions/commentDelete"}},
+    "blog.footer_comment.reply.list": {"success": {"$ref": "#/definitions/blogCommentList"}},
+    "blog.footer_comment.reply.add": {"success": {"$ref": "#/definitions/blogCommentResult"}},
+    "blog.inline_comment.list": {"success": {"$ref": "#/definitions/blogCommentList"}},
+    "blog.inline_comment.view": {"success": {"$ref": "#/definitions/blogCommentResult"}},
+    "blog.inline_comment.update": {
+      "success": {"$ref": "#/definitions/blogCommentUpdate"},
+      "error": {"$ref": "#/definitions/blogCommentConflict"}
+    },
+    "blog.inline_comment.delete": {"success": {"$ref": "#/definitions/commentDelete"}},
+    "blog.inline_comment.reply.list": {"success": {"$ref": "#/definitions/blogCommentList"}},
+    "blog.inline_comment.reply.add": {"success": {"$ref": "#/definitions/blogCommentResult"}}
+  }
+}

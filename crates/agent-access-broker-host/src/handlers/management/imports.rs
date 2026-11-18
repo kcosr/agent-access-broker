@@ -1327,9 +1327,13 @@ fn prepare_update(
                     .map_err(ManagedStoreError::InputInvalid)?;
                 // Adapter source validation is independent of the scoped naming
                 // profile. A valid but out-of-profile name remains acceptable.
+                // An invocation action must also state its result schemas.
                 if adapter.gateway_kind().is_none() {
                     adapter
                         .scoped_mcp_name(&definition)
+                        .map_err(ManagedStoreError::InputInvalid)?;
+                    adapter
+                        .result_schemas(&definition)
                         .map_err(ManagedStoreError::InputInvalid)?;
                 }
                 if let Some(old) = record.actions.iter().find(|a| {

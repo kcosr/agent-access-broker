@@ -90,7 +90,7 @@ async fn local_validation_and_descriptor_need_no_space_or_lookup() {
         json!({"pageToken":""}),
     ] {
         assert_eq!(
-            p.invoke(invocation(input, scope()))
+            p.invoke_checked(invocation(input, scope()))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -153,7 +153,10 @@ async fn mixed_case_space_keys_survive_full_and_small_pages() {
         };
         let mut keys = Vec::new();
         for _ in 0..50 {
-            let result = p.invoke(invocation(input.clone(), scope())).await.unwrap();
+            let result = p
+                .invoke_checked(invocation(input.clone(), scope()))
+                .await
+                .unwrap();
             let items = result.result["items"].as_array().unwrap();
             keys.extend(items.iter().map(|item| item["key"].clone()));
             assert!(items.len() <= size);
@@ -194,7 +197,7 @@ async fn mixed_case_listing_keys_use_exact_inclusions_and_exclusions() {
         ),
     ] {
         let result = p
-            .invoke(invocation(json!({"maxResults":3}), scope))
+            .invoke_checked(invocation(json!({"maxResults":3}), scope))
             .await
             .unwrap();
         assert_eq!(
@@ -262,7 +265,7 @@ async fn rejected_space_fields_have_private_fixed_diagnostics() {
             .mount(&server)
             .await;
         let error = provider(&server, config(&server), ProviderLimits::default())
-            .invoke(invocation(json!({}), scope()))
+            .invoke_checked(invocation(json!({}), scope()))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -291,7 +294,7 @@ async fn canonical_keys_filter_before_metadata_and_aliases_only_control_links() 
     mount(&server,None,3,json!([{"id":"1","key":"DENIED","name":["DENIED_NAME"],"currentActiveAlias":"ENG"},personal,visible]),None).await;
     let p = provider(&server, config(&server), ProviderLimits::default());
     let result = p
-        .invoke(invocation(json!({"maxResults":3}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":3}), scope()))
         .await
         .unwrap();
     assert_eq!(result.result["count"], 2);
@@ -326,7 +329,7 @@ async fn canonical_keys_filter_before_metadata_and_aliases_only_control_links() 
         vec![],
     );
     let denied = p
-        .invoke(invocation(json!({"maxResults":3}), alias))
+        .invoke_checked(invocation(json!({"maxResults":3}), alias))
         .await
         .unwrap();
     assert_eq!(denied.result["count"], 0);
@@ -353,7 +356,7 @@ async fn empty_budget_pages_resume_across_instances_without_skipping_candidates(
         if let Some(token) = token.take() {
             input["pageToken"] = token;
         }
-        let result = p.invoke(invocation(input, scope())).await.unwrap();
+        let result = p.invoke_checked(invocation(input, scope())).await.unwrap();
         assert_eq!(result.result["scanStatus"], status);
         assert_eq!(result.result["count"], count);
         token = result.result.get("nextPageToken").cloned();
@@ -371,7 +374,7 @@ async fn both_pagination_carriers_agree_and_echoes_never_change_requests() {
     mount(&server, Some("A"), 2, json!([space("1", "ENG")]), None).await;
     let p = provider(&server, config(&server), ProviderLimits::default());
     let result = p
-        .invoke(invocation(json!({"maxResults":2}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":2}), scope()))
         .await
         .unwrap();
     assert_eq!(result.result["count"], 1);
@@ -479,12 +482,12 @@ async fn cursor_cycles_fail_within_calls_and_across_resumed_pages() {
         let mut input = json!({"maxResults":1});
         if productive {
             for _ in 0..2 {
-                let result = p.invoke(invocation(input, scope())).await.unwrap();
+                let result = p.invoke_checked(invocation(input, scope())).await.unwrap();
                 input = json!({"maxResults":1,"pageToken":result.result["nextPageToken"]});
             }
         }
         assert_eq!(
-            p.invoke(invocation(input, scope()))
+            p.invoke_checked(invocation(input, scope()))
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -502,7 +505,7 @@ async fn continuation_binds_scope_context_route_method_action_and_page_size_befo
     cfg.cloud_id = Some("11111111-2222-4333-8444-555555555555".into());
     let p = provider(&server, cfg.clone(), ProviderLimits::default());
     let first = p
-        .invoke(invocation(json!({"maxResults":1}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":1}), scope()))
         .await
         .unwrap();
     let token = first.result["nextPageToken"].as_str().unwrap();
@@ -535,7 +538,7 @@ async fn continuation_binds_scope_context_route_method_action_and_page_size_befo
     ];
     for request in requests {
         assert_eq!(
-            p.invoke(request).await.unwrap_err().reason_code(),
+            p.invoke_checked(request).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -548,7 +551,7 @@ async fn continuation_binds_scope_context_route_method_action_and_page_size_befo
         };
         assert_eq!(
             provider(&server, changed, ProviderLimits::default())
-                .invoke(request.clone())
+                .invoke_checked(request.clone())
                 .await
                 .unwrap_err()
                 .reason_code(),
@@ -558,7 +561,7 @@ async fn continuation_binds_scope_context_route_method_action_and_page_size_befo
     let mut tampered = token.as_bytes().to_vec();
     tampered[10] = if tampered[10] == b'A' { b'B' } else { b'A' };
     assert_eq!(
-        p.invoke(invocation(
+        p.invoke_checked(invocation(
             json!({"maxResults":1,"pageToken":String::from_utf8(tampered).unwrap()}),
             scope()
         ))
@@ -607,7 +610,7 @@ async fn continuation_binds_scope_context_route_method_action_and_page_size_befo
             )
             .unwrap();
         assert_eq!(
-            p.invoke(invocation(
+            p.invoke_checked(invocation(
                 json!({"maxResults":1,"pageToken":token}),
                 scope()
             ))
@@ -628,7 +631,7 @@ async fn resumed_provider_token_keeps_its_original_expiry() {
     let p = provider(&server, config(&server), ProviderLimits::default());
     let request = invocation(json!({"maxResults":1}), scope());
     let binding = listing_binding(&p, &request, 1, &scope(), family(&p.limits)).unwrap();
-    let first = p.invoke(request).await.unwrap();
+    let first = p.invoke_checked(request).await.unwrap();
     let opened = p
         .listing_signer
         .open_confidential(&binding, first.result["nextPageToken"].as_str().unwrap())
@@ -644,7 +647,7 @@ async fn resumed_provider_token_keeps_its_original_expiry() {
         .seal_until_at(&binding, opened.payload(), expiry, now)
         .unwrap();
     let resumed = p
-        .invoke(invocation(
+        .invoke_checked(invocation(
             json!({"maxResults":1,"pageToken":aged}),
             scope(),
         ))
@@ -674,7 +677,7 @@ async fn request_response_and_scan_byte_limits_are_explicit_and_no_errors_retry(
     cfg.listing.max_upstream_requests = 1;
     let p = provider(&server, cfg.clone(), ProviderLimits::default());
     let result = p
-        .invoke(invocation(json!({"maxResults":1}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":1}), scope()))
         .await
         .unwrap();
     assert_eq!(result.result["scanStatus"], "scan_budget");
@@ -682,7 +685,7 @@ async fn request_response_and_scan_byte_limits_are_explicit_and_no_errors_retry(
     cfg.listing.max_scan_bytes = 1;
     assert!(
         provider(&server, cfg, ProviderLimits::default())
-            .invoke(invocation(json!({"maxResults":1}), scope()))
+            .invoke_checked(invocation(json!({"maxResults":1}), scope()))
             .await
             .is_err()
     );
@@ -697,7 +700,10 @@ async fn request_response_and_scan_byte_limits_are_explicit_and_no_errors_retry(
             .mount(&server)
             .await;
         let p = provider(&server, config(&server), ProviderLimits::default());
-        let error = p.invoke(invocation(json!({}), scope())).await.unwrap_err();
+        let error = p
+            .invoke_checked(invocation(json!({}), scope()))
+            .await
+            .unwrap_err();
         assert!(!error.message.contains("PRIVATE_ERROR"));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
@@ -712,7 +718,7 @@ async fn request_response_and_scan_byte_limits_are_explicit_and_no_errors_retry(
             config(&server),
             ProviderLimits::default().with_request_timeout_ms(25)
         )
-        .invoke(invocation(json!({}), scope()))
+        .invoke_checked(invocation(json!({}), scope()))
         .await
         .unwrap_err()
         .reason_code(),
@@ -726,7 +732,7 @@ async fn empty_first_page_is_terminal_and_malformed_collections_fail() {
     mount(&server, None, 50, json!([]), None).await;
     let p = provider(&server, config(&server), ProviderLimits::default());
     assert_eq!(
-        p.invoke(invocation(json!({}), scope()))
+        p.invoke_checked(invocation(json!({}), scope()))
             .await
             .unwrap()
             .result,
@@ -746,7 +752,7 @@ async fn empty_first_page_is_terminal_and_malformed_collections_fail() {
             .await;
         assert!(
             provider(&server, config(&server), ProviderLimits::default())
-                .invoke(invocation(json!({"maxResults":1}), scope()))
+                .invoke_checked(invocation(json!({"maxResults":1}), scope()))
                 .await
                 .is_err()
         );
@@ -784,7 +790,7 @@ async fn all_current_space_types_and_independent_allows_keep_clause_exclusions()
     mount(&server, None, 7, json!(values), None).await;
     let p = provider(&server, config(&server), ProviderLimits::default());
     let excluded = p
-        .invoke(invocation(json!({"maxResults":7}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":7}), scope()))
         .await
         .unwrap();
     assert_eq!(excluded.result["count"], 6);
@@ -795,7 +801,7 @@ async fn all_current_space_types_and_independent_allows_keep_clause_exclusions()
         vec![],
     ));
     let allowed = p
-        .invoke(invocation(json!({"maxResults":7}), independent))
+        .invoke_checked(invocation(json!({"maxResults":7}), independent))
         .await
         .unwrap();
     assert_eq!(allowed.result["count"], 7);
@@ -815,7 +821,7 @@ async fn response_and_result_byte_caps_do_not_silently_truncate_pages_or_cursors
     let mut limits = ProviderLimits::default();
     limits.max_upstream_response_bytes = 512;
     let error = provider(&server, config(&server), limits)
-        .invoke(invocation(json!({"maxResults":1}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":1}), scope()))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -828,7 +834,7 @@ async fn response_and_result_byte_caps_do_not_silently_truncate_pages_or_cursors
     limits.max_upstream_response_bytes = 512;
     assert!(
         provider(&server, config(&server), limits)
-            .invoke(invocation(json!({"maxResults":1}), scope()))
+            .invoke_checked(invocation(json!({"maxResults":1}), scope()))
             .await
             .is_err()
     );

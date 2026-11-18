@@ -103,8 +103,12 @@ uploads, downloads and environment/file secret sources.
 
 `/mcp/{service}` selects one canonical service ID and exposes raw provider names.
 All routes share the same endpoint, quotas and admission machinery. Paths must
-use the exact canonical spelling: encoded aliases, query strings, trailing
-slashes and extra segments are rejected without redirects. Unknown, hidden,
+use the exact canonical spelling: encoded aliases, trailing slashes and extra
+segments are rejected without redirects. The only accepted query is one
+`outputSchemas=on` or `outputSchemas=off`, evaluated on every request without
+session state; it selects [MCP output-schema advertisement](mcp.md#output-schemas),
+off when omitted, and never affects identity, context or authorization. Any other
+query is rejected with 400 before dispatch. Unknown, hidden,
 disabled, unready and gateway targets receive the same unavailable diagnostic
 after authentication. Session bindings include the selected view; cross-view
 POST/cancellation/DELETE cannot use or close the original session. Existing
@@ -528,7 +532,9 @@ does not change `renderedBodyOwners`. Present fields, including null values,
 still undergo normal path validation; required descendants and malformed parents
 cannot be skipped. A shared prefix is optional only when every declared owner
 path through it permits absence. The CLI uses this metadata when validating
-embedded formatted responses.
+embedded formatted responses. Catalog actions with declared payload schemas
+also carry `resultSchemas`, from which OpenAPI types their invoke responses; see
+[result schemas and typed responses](#result-schemas-and-typed-responses).
 
 Sensitive input metadata applies to provider actions and management routes:
 
@@ -3213,6 +3219,43 @@ reports the receipt its command gave: `applied_unverified` with the command's
 `applied_unverified` (with `verificationStage`, default `command_response`) on
 failure, and `unknown` when the command gave none or broke the command
 contract; a call whose process never started reports `not_applied`.
+
+### Result schemas and typed responses
+
+Provider actions in `GET /v1/spec/catalog` may include `resultSchemas`, the
+JSON Schemas of the action's `result` payloads:
+
+| Field | Describes |
+| --- | --- |
+| `success` | `result` on success; for a raw download, the metadata envelope's `result` |
+| `error` | Optional: the `result` the action's provider failures carry, before the shared failure fields are added |
+
+They describe the provider payload before presentation: `renderedBody`
+companions and whole-result Markdown are not part of them. A schema covers
+every supported configuration and input of the action, lists as `required` only
+fields that are always present, and leaves objects open, so clients must accept
+fields it does not declare. The field is omitted for actions that declare none;
+every built-in provider action and imported action declares it. The catalog
+version remains
+`agent-access.catalog.v2`, and service capabilities from `/v1/services` and
+service detail do not include it. On an MCP connection that selects output
+schemas, action detail replaces it with the composed
+[`mcpTool.outputSchema`](mcp.md#output-schemas) when the action is a tool on that
+connection; a connection that omits them returns neither.
+
+For an action with result schemas, `GET /v1/spec/openapi.json` types the invoke
+operation's JSON `200` envelope. Its `result` is the union of the success
+payload (with an optional `renderedBody` at each declared body owner), the
+whole-result Markdown `{format, value}` when the action supports it, the
+provider failure payload merged with the shared failure fields, and the shared
+failure fields alone: the [mutation receipt](#mutation-receipts) fields,
+`executionState`, `deadlineKind`, the upstream rate-limit details (`limitScope`,
+`service`, `retryAfterSeconds`, `retryAt`) and `hints.upstreamResourceOwnership`.
+A `default` response describes error envelopes with the same schema. A raw
+download's `X-Agent-Access-Result-Metadata` header schema adds
+`contentEncoding: base64`, `contentMediaType: application/json` and a
+`contentSchema` for the decoded envelope, and its `4XX` error envelope uses the
+same typed schema. Actions without result schemas keep the untyped envelope.
 
 ## Reason-code table
 

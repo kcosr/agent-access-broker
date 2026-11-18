@@ -6,7 +6,7 @@ mod transport;
 
 use std::path::PathBuf;
 
-use agent_access_core::mcp::McpView;
+use agent_access_core::mcp::{McpView, OutputSchemas};
 use anyhow::{Context, Result};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
@@ -28,6 +28,9 @@ struct BrokerMcp {
     cli: crate::Cli,
     config: PathBuf,
     view: McpView,
+    /// Selected at launch and fixed for the process lifetime, including
+    /// across configuration and token rotation.
+    output_schemas: OutputSchemas,
 }
 
 impl BrokerMcp {
@@ -39,6 +42,14 @@ impl BrokerMcp {
         validate_broker_transport(&settings)?;
         Ok(settings)
     }
+}
+
+/// `--output-schemas`: exactly `on` or `off`, with a required value.
+pub(crate) fn output_schemas_parser() -> impl clap::builder::TypedValueParser<Value = OutputSchemas>
+{
+    use clap::builder::TypedValueParser as _;
+    clap::builder::PossibleValuesParser::new(["on", "off"])
+        .map(|value| OutputSchemas::parse(&value).expect("possible value"))
 }
 
 pub(crate) fn parse_service(value: &str) -> Result<String, String> {
@@ -82,7 +93,7 @@ impl ServerHandler for BrokerMcp {
         let tools = tokio::select! {
             biased;
             _ = context.ct.cancelled() => return Err(ErrorData::internal_error("Request cancelled", None)),
-            result = tools::list_tools(&settings, &self.view) => result
+            result = tools::list_tools(&settings, &self.view, self.output_schemas) => result
                 .map_err(|error| ErrorData::internal_error(error.to_string(), None))?,
         };
         paginate(
@@ -106,7 +117,7 @@ impl ServerHandler for BrokerMcp {
             _ = context.ct.cancelled() => tool_error(
                 "Request cancelled. An upstream mutation may already have completed; inspect its state before retrying."
             ),
-            result = tools::call_tool(&settings, &self.view, &request.name, request.arguments.unwrap_or_default()) => {
+            result = tools::call_tool(&settings, &self.view, self.output_schemas, &request.name, request.arguments.unwrap_or_default()) => {
                 match result {
                     Ok(result) => result,
                     Err(error) if error.is::<tools::UnknownToolError>() => {
@@ -170,8 +181,18 @@ fn paginate(
     Ok(result)
 }
 
-pub async fn serve(cli: crate::Cli, config: PathBuf, view: McpView) -> Result<()> {
-    let server = BrokerMcp { cli, config, view };
+pub async fn serve(
+    cli: crate::Cli,
+    config: PathBuf,
+    view: McpView,
+    output_schemas: OutputSchemas,
+) -> Result<()> {
+    let server = BrokerMcp {
+        cli,
+        config,
+        view,
+        output_schemas,
+    };
     server.settings()?;
     // No CLI rendering or stdout logging is allowed here: stdout is exclusively
     // newline-delimited MCP JSON-RPC, including during authentication failures.
@@ -208,6 +229,7 @@ mod tests {
                 view: service.map_or(McpView::Aggregate, |service| {
                     McpView::Service(service.into())
                 }),
+                output_schemas: OutputSchemas::Off,
             };
             let info = server.get_info();
             let instructions = info.instructions.unwrap();
@@ -298,7 +320,7 @@ mod tests {
                 crate::Cli::try_parse_from(["agent-access", "mcp", "serve", "--service", service])
                     .unwrap();
             assert!(
-                matches!(cli.command, crate::Command::Mcp { command: crate::McpCommand::Serve { service: Some(selected) } } if selected == service)
+                matches!(cli.command, crate::Command::Mcp { command: crate::McpCommand::Serve { service: Some(selected), .. } } if selected == service)
             );
         }
         for service in [
@@ -332,18 +354,63 @@ mod tests {
         assert!(matches!(
             cli.command,
             crate::Command::Mcp {
-                command: crate::McpCommand::Serve { service: None }
+                command: crate::McpCommand::Serve { service: None, .. }
             }
         ));
     }
 
     #[test]
+    fn output_schema_selection_is_explicit_off_by_default_and_fixed_in_cli_syntax() {
+        let selected = |arguments: &[&str]| {
+            let mut command = vec!["agent-access", "mcp", "serve"];
+            command.extend_from_slice(arguments);
+            match crate::Cli::try_parse_from(command).map(|cli| cli.command) {
+                Ok(crate::Command::Mcp {
+                    command: crate::McpCommand::Serve { output_schemas, .. },
+                }) => Some(output_schemas),
+                Ok(_) => unreachable!("mcp serve parses as itself"),
+                Err(_) => None,
+            }
+        };
+        assert_eq!(selected(&[]), Some(OutputSchemas::Off));
+        assert_eq!(
+            selected(&["--output-schemas", "on"]),
+            Some(OutputSchemas::On)
+        );
+        assert_eq!(
+            selected(&["--output-schemas=off"]),
+            Some(OutputSchemas::Off)
+        );
+        assert_eq!(
+            selected(&["--service", "fake", "--output-schemas", "on"]),
+            Some(OutputSchemas::On)
+        );
+        for invalid in [
+            &["--output-schemas"][..],
+            &["--output-schemas", ""],
+            &["--output-schemas", "ON"],
+            &["--output-schemas", "true"],
+            &["--output-schemas", "auto"],
+            &["--output-schemas", "on", "--output-schemas", "off"],
+        ] {
+            assert_eq!(selected(invalid), None, "{invalid:?}");
+        }
+        let help = crate::Cli::try_parse_from(["agent-access", "mcp", "serve", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(help.contains("--output-schemas <MODE>"), "{help}");
+        assert!(help.contains("[default: off]"), "{help}");
+        assert!(help.contains("[possible values: on, off]"), "{help}");
+    }
+
+    #[test]
     fn pagination_binds_view_identity_context_and_complete_dispatch_metadata() {
-        let binding = json!({"view":McpView::Service("one".into()),"identity":{"principal":"alice"},"executionContext":"internal"});
+        let binding = json!({"view":McpView::Service("one".into()),"outputSchemas":OutputSchemas::Off,"identity":{"principal":"alice"},"executionContext":"internal"});
         let first = paginate(catalog(101), &binding, None).unwrap();
         for (field, replacement) in [
             ("view", json!(McpView::Aggregate)),
             ("view", json!(McpView::Service("two".into()))),
+            ("outputSchemas", json!(OutputSchemas::On)),
             ("identity", json!({"principal":"bob"})),
             ("executionContext", json!("external")),
         ] {
@@ -380,6 +447,7 @@ mod tests {
             cli,
             config: file.path().to_path_buf(),
             view: McpView::Aggregate,
+            output_schemas: OutputSchemas::Off,
         };
         let error = server.settings().unwrap_err();
         assert_eq!(format!("{error:#}"), CONFIG_ERROR);

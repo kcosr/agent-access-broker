@@ -318,7 +318,7 @@ async fn issue_view_fetches_links_only_with_universal_reach_using_execution_acce
             Arc::new(http_backend(&api, ProviderLimits::default())),
         );
         let result = provider
-            .invoke(view_invocation(universal_reach))
+            .invoke_checked(view_invocation(universal_reach))
             .await
             .unwrap();
         if universal_reach {
@@ -374,7 +374,7 @@ async fn issue_view_records_only_disclosed_counts_and_rejects_null_links() {
             ProviderLimits::default(),
             Arc::new(http_backend(&api, ProviderLimits::default())),
         );
-        let response = provider.invoke(view_invocation(true)).await;
+        let response = provider.invoke_checked(view_invocation(true)).await;
         if expected_status == "error" {
             let error = response.unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -423,7 +423,10 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
             limits.clone(),
             Arc::new(http_backend(&api, limits)),
         );
-        let error = provider.invoke(view_invocation(true)).await.unwrap_err();
+        let error = provider
+            .invoke_checked(view_invocation(true))
+            .await
+            .unwrap_err();
         assert_eq!(error.reason_code(), expected_reason);
         assert!(error.result.is_none());
         assert!(!error.message.contains("Linked title"));
@@ -444,7 +447,7 @@ async fn issue_view_links_keep_source_identity_confirmation_and_byte_bounds() {
         Arc::new(backend),
     );
     let error = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(json!({"issue": "PROJ-1"}))
                 .resources(BTreeMap::from([(
@@ -526,7 +529,7 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_field
         ),
     ] {
         let result = provider
-            .invoke(
+            .invoke_checked(
                 InvocationBuilder::new("jira", action)
                     .inputs(inputs)
                     .resources(BTreeMap::from([(
@@ -549,7 +552,7 @@ async fn mutation_readbacks_and_search_ignore_unsolicited_links_and_custom_field
         assert!(!result.result.to_string().contains("private"));
     }
     let result = provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "search")
                 .inputs(json!({"query":{"type":"jql","value":"project = PROJ"}}))
                 .search(search_preflight(["PROJ"]))
@@ -651,7 +654,7 @@ async fn expanded_issue_view_projects_custom_fields_without_releasing_other_fetc
             Arc::new(http_backend(&api, ProviderLimits::default())),
         );
         let response = provider
-            .invoke(view_invocation(universal_reach))
+            .invoke_checked(view_invocation(universal_reach))
             .await
             .unwrap();
         assert_eq!(
@@ -769,7 +772,10 @@ async fn custom_field_view_limits_fail_the_whole_response_without_partial_values
             limits,
             Arc::new(http_backend(&api, ProviderLimits::default())),
         );
-        let error = provider.invoke(view_invocation(false)).await.unwrap_err();
+        let error = provider
+            .invoke_checked(view_invocation(false))
+            .await
+            .unwrap_err();
         assert_eq!(
             error.reason_code(),
             ReasonCode::UpstreamProtocolFailed,
@@ -807,7 +813,10 @@ async fn malformed_custom_adf_is_withheld_after_fetch_while_valid_custom_fields_
         ProviderLimits::default(),
         Arc::new(http_backend(&api, ProviderLimits::default())),
     );
-    let result = provider.invoke(view_invocation(false)).await.unwrap();
+    let result = provider
+        .invoke_checked(view_invocation(false))
+        .await
+        .unwrap();
     assert_eq!(
         result.result["customFields"][0],
         json!({
@@ -905,7 +914,7 @@ async fn context_is_view_only_and_hierarchy_uses_the_same_fetch_and_gate_as_link
             Arc::new(http_backend(&api, ProviderLimits::default())),
         );
         let response = provider
-            .invoke(view_invocation(universal_reach))
+            .invoke_checked(view_invocation(universal_reach))
             .await
             .unwrap();
         assert_standard_context(&response.result);
@@ -986,7 +995,10 @@ async fn eligible_parent_and_subtask_absence_have_explicit_output_and_audit_sema
             ProviderLimits::default(),
             Arc::new(http_backend(&api, ProviderLimits::default())),
         );
-        let response = provider.invoke(view_invocation(true)).await.unwrap();
+        let response = provider
+            .invoke_checked(view_invocation(true))
+            .await
+            .unwrap();
         assert_eq!(response.result.get("parent"), Some(&Value::Null));
         assert_eq!(response.result.get("subtasks"), expected_subtasks.as_ref());
         assert_eq!(
@@ -1033,7 +1045,10 @@ async fn provider_suppresses_hierarchy_from_a_backend_that_ignores_the_disclosur
         let backend = Arc::new(backend);
         let provider =
             JiraProvider::with_backend(jira_config(), ProviderLimits::default(), backend.clone());
-        let response = provider.invoke(view_invocation(universal)).await.unwrap();
+        let response = provider
+            .invoke_checked(view_invocation(universal))
+            .await
+            .unwrap();
         assert_eq!(
             *backend.issue_view_link_requests.lock().unwrap(),
             vec![universal]
@@ -1063,4 +1078,149 @@ async fn provider_suppresses_hierarchy_from_a_backend_that_ignores_the_disclosur
             );
         }
     }
+}
+
+/// Every supported custom-field type, each empty sentinel and status, and
+/// the nullable issue summaries of an eligible view match the published
+/// result schema (`invoke_checked` validates the outcome strictly).
+#[tokio::test]
+async fn every_custom_field_type_and_nullable_summary_conforms_to_the_view_schema() {
+    let api = MockServer::start().await;
+    let mut source = source_issue(Some(json!([])));
+    let option = json!({"id": "12", "value": "High"});
+    let user = json!({"accountId": "account-a", "displayName": null});
+    let fields = [
+        ("textfield", "string", None, json!("plain"), "supported"),
+        (
+            "url",
+            "string",
+            None,
+            json!("https://example.invalid/"),
+            "supported",
+        ),
+        ("float", "number", None, json!(3.25), "supported"),
+        ("datepicker", "date", None, json!("2026-10-23"), "supported"),
+        (
+            "datetime",
+            "datetime",
+            None,
+            json!("2026-10-23T12:00:00.000+0000"),
+            "supported",
+        ),
+        (
+            "textarea",
+            "string",
+            None,
+            adf_text("Rich content"),
+            "supported",
+        ),
+        ("select", "option", None, option.clone(), "supported"),
+        (
+            "multiselect",
+            "array",
+            Some("option"),
+            json!([option.clone()]),
+            "supported",
+        ),
+        (
+            "cascadingselect",
+            "option-with-child",
+            None,
+            json!({"id": "1", "value": "Parent", "child": option.clone()}),
+            "supported",
+        ),
+        (
+            "cascadingselect",
+            "option-with-child",
+            None,
+            json!({"id": "1", "value": "Parent"}),
+            "supported",
+        ),
+        ("userpicker", "user", None, user.clone(), "supported"),
+        (
+            "multiuserpicker",
+            "array",
+            Some("user"),
+            json!([user]),
+            "supported",
+        ),
+        (
+            "labels",
+            "array",
+            Some("string"),
+            json!(["triaged", "triaged"]),
+            "supported",
+        ),
+        (
+            "multicheckboxes",
+            "array",
+            Some("option"),
+            json!([]),
+            "supported",
+        ),
+        (
+            "radiobuttons",
+            "option",
+            None,
+            json!({"id": "12"}),
+            "withheld",
+        ),
+    ];
+    let mut schemas = serde_json::Map::new();
+    let mut expected_statuses = Vec::new();
+    for (index, (implementation, kind, items, value, status)) in fields.into_iter().enumerate() {
+        let id = format!("customfield_{}", index + 1);
+        source["fields"][&id] = value;
+        let mut schema = json!({
+            "type": kind,
+            "custom": format!("com.atlassian.jira.plugin.system.customfieldtypes:{implementation}"),
+        });
+        if let Some(items) = items {
+            schema["items"] = json!(items);
+        }
+        schemas.insert(id, schema);
+        expected_statuses.push(status);
+    }
+    // Fields without a reviewed schema are unsupported, keeping only an empty sentinel.
+    source["fields"]["customfield_90"] = json!({"private-app-object": "private-value"});
+    source["fields"]["customfield_91"] = json!(null);
+    expected_statuses.extend(["unsupported", "unsupported"]);
+    source["schema"] = Value::Object(schemas);
+    source["names"] = json!({"customfield_1": "Text"});
+    source["fields"]["creator"] = json!({"displayName": "Display only"});
+    source["fields"]["priority"] = json!({"id": 3});
+    source["fields"]["labels"] = json!(["label-a"]);
+    source["fields"]["parent"] = json!(null);
+    source["fields"]["subtasks"] = json!([]);
+    mount_source_reads(&api, source, true).await;
+    let provider = JiraProvider::with_backend(
+        jira_config(),
+        ProviderLimits::default(),
+        Arc::new(http_backend(&api, ProviderLimits::default())),
+    );
+    let response = provider
+        .invoke_checked(view_invocation(true))
+        .await
+        .unwrap();
+    let result = &response.result;
+    let custom_fields = result["customFields"].as_array().unwrap();
+    assert_eq!(
+        custom_fields
+            .iter()
+            .map(|field| field["status"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected_statuses
+    );
+    assert_eq!(custom_fields[9]["value"]["child"], Value::Null);
+    assert!(custom_fields[14].get("value").is_none());
+    assert!(custom_fields[15].get("value").is_none());
+    assert_eq!(custom_fields[16]["value"], Value::Null);
+    assert_eq!(
+        result["creator"],
+        json!({"accountId": null, "displayName": "Display only"})
+    );
+    assert_eq!(result["priority"], json!({"id": "3", "name": null}));
+    assert_eq!(result["parent"], Value::Null);
+    assert_eq!(result["subtasks"], json!([]));
+    assert_eq!(result["issueLinks"], json!([]));
 }

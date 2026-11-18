@@ -1,4 +1,7 @@
 //! Guarded stdio MCP client for native collection acceptance tests.
+#[path = "mcp_output.rs"]
+mod mcp_output;
+
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, Write},
@@ -9,6 +12,7 @@ pub struct StdioMcp {
     stdin: Option<ChildStdin>,
     responses: tokio::sync::mpsc::UnboundedReceiver<String>,
     next_id: u64,
+    tools: mcp_output::AdvertisedTools,
 }
 
 impl StdioMcp {
@@ -18,8 +22,9 @@ impl StdioMcp {
                 command.env_remove(key);
             }
         }
+        // Explicitly advertise output schemas so every result is checked.
         let mut child = command
-            .args(["mcp", "serve"])
+            .args(["mcp", "serve", "--output-schemas", "on"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -41,6 +46,10 @@ impl StdioMcp {
             stdin,
             responses,
             next_id: 1,
+            tools: mcp_output::AdvertisedTools::new(
+                Some(agent_access_core::mcp::OutputSchemas::On),
+                None,
+            ),
         }
     }
 
@@ -55,7 +64,39 @@ impl StdioMcp {
         self.send(json!({"jsonrpc":"2.0","method":method,"params":params}));
     }
 
+    /// Sends one request. A `tools/call` result's structured content is
+    /// checked against the tool's advertised output schema, listing the
+    /// tools first, as a client would, when the tool was not listed yet.
     pub async fn request(&mut self, method: &str, params: Value) -> Value {
+        let call = (method == "tools/call")
+            .then(|| params["name"].as_str().unwrap_or_default().to_owned());
+        if let Some(name) = &call
+            && !self.tools.knows(name)
+        {
+            self.list_advertised_tools().await;
+        }
+        let response = self.send_request(method, params).await;
+        match &call {
+            Some(name) => self.tools.check_call(name, &response),
+            None if method == "tools/list" => self.tools.record_listing(&response),
+            None => {}
+        }
+        response
+    }
+
+    async fn list_advertised_tools(&mut self) {
+        let mut params = json!({});
+        loop {
+            let page = self.send_request("tools/list", params).await;
+            self.tools.record_listing(&page);
+            match page["result"]["nextCursor"].as_str() {
+                Some(cursor) => params = json!({"cursor": cursor}),
+                None => break,
+            }
+        }
+    }
+
+    async fn send_request(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}));

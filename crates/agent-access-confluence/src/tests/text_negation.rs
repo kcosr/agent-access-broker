@@ -238,7 +238,7 @@ async fn text_negation_preserves_whole_response_containment_and_hashed_diagnosti
                 let inputs = json!({"query": {"type": "cql", "value": filter}});
                 assert!(provider.local_scopes(action, &inputs).unwrap()["space"].is_empty());
                 let result = provider
-                    .invoke(
+                    .invoke_checked(
                         InvocationBuilder::new("confluence", action)
                             .inputs(inputs)
                             .credential(credential())

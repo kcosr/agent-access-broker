@@ -789,7 +789,7 @@ async fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{invocation, provider};
+    use crate::tests::{CheckedInvoke, invocation, provider};
     use agent_access_provider::CredentialMode;
     use agent_access_provider::test_support::InvocationBuilder;
     use wiremock::matchers::{method, path};
@@ -839,7 +839,10 @@ mod tests {
             .await;
     }
     async fn read(ci: &CloudbeesCiProvider, input: Value) -> Result<Value, ProviderError> {
-        Ok(ci.invoke(invocation("build.log.read", input)).await?.result)
+        Ok(ci
+            .checked_invoke(invocation("build.log.read", input))
+            .await?
+            .result)
     }
 
     #[tokio::test]
@@ -1253,7 +1256,7 @@ mod tests {
         let mut wrong = invocation("build.log.read", input.clone());
         wrong = InvocationBuilder::from(wrong).principal("other").build();
         assert_eq!(
-            ci.invoke(wrong).await.unwrap_err().reason_code(),
+            ci.checked_invoke(wrong).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         let mut wrong = invocation("build.log.read", input.clone());
@@ -1261,7 +1264,7 @@ mod tests {
             .execution_context("external")
             .build();
         assert_eq!(
-            ci.invoke(wrong).await.unwrap_err().reason_code(),
+            ci.checked_invoke(wrong).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         let mut wrong = input.clone();
@@ -1300,7 +1303,7 @@ mod tests {
             .credential_mode(CredentialMode::PerUser)
             .build();
         assert_eq!(
-            ci.invoke(wrong).await.unwrap_err().reason_code(),
+            ci.checked_invoke(wrong).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
         ci.log_fingerprint = hash(&"different provider configuration");

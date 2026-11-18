@@ -42,6 +42,7 @@ can inspect authorized access to an already known gateway service ID.
 
 Action detail and the caller-filtered `agent-access.catalog.v2` catalog contain
 the inner `inputSchema`, extended `documentation`, I/O and response capabilities.
+Catalog `resultSchemas` describe the response's `result` on success and failure.
 Read documentation for query syntax, field relationships, content formats,
 continuation, companion permissions and write outcomes. `mcpTool` describes a
 different transport; missing MCP naming does not prevent canonical invocation.

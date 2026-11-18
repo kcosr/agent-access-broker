@@ -96,7 +96,7 @@ async fn metadata_view_uses_execution_head_without_content_limits_or_get() {
     .await;
 
     let result = provider
-        .invoke(file_invocation("file.view", file_inputs("README.md")))
+        .invoke_strict(file_invocation("file.view", file_inputs("README.md")))
         .await
         .unwrap();
     let file = &result.result["file"];
@@ -135,7 +135,7 @@ async fn metadata_view_preserves_unicode_repository_paths() {
     )
     .await;
     let result = provider
-        .invoke(file_invocation("file.view", file_inputs("docs/café.md")))
+        .invoke_strict(file_invocation("file.view", file_inputs("docs/café.md")))
         .await
         .unwrap();
     assert_eq!(result.result["file"]["filePath"], "docs/café.md");
@@ -173,7 +173,7 @@ async fn text_view_preserves_complete_utf8_and_explicitly_omits_unsupported_byte
         let mut inputs = file_inputs(file_path);
         inputs["includeContent"] = json!(true);
         let result = provider
-            .invoke(file_invocation("file.view", inputs))
+            .invoke_strict(file_invocation("file.view", inputs))
             .await
             .unwrap();
         let file = &result.result["file"];
@@ -237,7 +237,7 @@ async fn explicit_whole_file_budget_reads_more_than_the_default_without_a_prefix
     let mut inputs = file_inputs("large.txt");
     inputs["includeContent"] = json!(true);
     let omitted = provider
-        .invoke(file_invocation("file.view", inputs.clone()))
+        .invoke_strict(file_invocation("file.view", inputs.clone()))
         .await
         .unwrap();
     assert_eq!(omitted.result["file"]["contentStatus"], "too_large");
@@ -247,7 +247,7 @@ async fn explicit_whole_file_budget_reads_more_than_the_default_without_a_prefix
 
     inputs["maxContentBytes"] = json!(bytes.len());
     let included = provider
-        .invoke(file_invocation("file.view", inputs))
+        .invoke_strict(file_invocation("file.view", inputs))
         .await
         .unwrap();
     assert_eq!(included.result["file"]["contentStatus"], "included");
@@ -274,7 +274,7 @@ async fn configured_ceiling_reduces_the_default_budget_and_is_published_in_schem
     let mut inputs = file_inputs("five.txt");
     inputs["includeContent"] = json!(true);
     let result = provider
-        .invoke(file_invocation("file.view", inputs))
+        .invoke_strict(file_invocation("file.view", inputs))
         .await
         .unwrap();
     assert_eq!(result.result["file"]["contentStatus"], "too_large");
@@ -350,7 +350,7 @@ async fn invalid_view_budgets_and_download_view_options_fail_before_upstream() {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         let error = provider
-            .invoke(file_invocation("file.view", inputs))
+            .invoke_strict(file_invocation("file.view", inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{extra}");
@@ -365,7 +365,7 @@ async fn invalid_view_budgets_and_download_view_options_fail_before_upstream() {
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
         let error = provider
-            .invoke(file_invocation("file.raw.download", inputs))
+            .invoke_strict(file_invocation("file.raw.download", inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{extra}");
@@ -382,7 +382,7 @@ async fn file_reads_refuse_project_scope_changes_before_file_lookup() {
         InvocationBuilder::from(file_invocation("file.view", file_inputs("README.md")))
             .resources(repository_scopes_from_path("other/repository"))
             .build();
-    let error = provider.invoke(invocation).await.unwrap_err();
+    let error = provider.invoke_strict(invocation).await.unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         received_requests(&server).await,
@@ -404,7 +404,7 @@ async fn file_metadata_path_mismatch_is_an_error_not_an_omission() {
     )
     .await;
     let error = provider
-        .invoke(file_invocation("file.view", file_inputs("README.md")))
+        .invoke_strict(file_invocation("file.view", file_inputs("README.md")))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -425,7 +425,7 @@ async fn file_authorization_failures_remain_failures_in_both_view_modes() {
         let mut inputs = file_inputs("README.md");
         inputs["includeContent"] = json!(include);
         let error = provider
-            .invoke(file_invocation("file.view", inputs))
+            .invoke_strict(file_invocation("file.view", inputs))
             .await
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamForbidden);
@@ -513,7 +513,7 @@ async fn assert_inline_stream_failure(
     inputs["includeContent"] = json!(true);
     let result = tokio::time::timeout(
         Duration::from_secs(3),
-        provider.invoke(file_invocation("file.view", inputs)),
+        provider.invoke_strict(file_invocation("file.view", inputs)),
     )
     .await;
     let _ = finish.send(());
@@ -591,7 +591,7 @@ async fn raw_download_uses_one_execution_get_and_never_advertises_converted_cont
     )
     .await;
     let result = provider
-        .invoke(file_invocation(
+        .invoke_strict(file_invocation(
             "file.raw.download",
             file_inputs("source.txt"),
         ))

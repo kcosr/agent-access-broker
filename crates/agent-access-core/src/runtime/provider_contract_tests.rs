@@ -50,7 +50,7 @@ struct OutcomeProvider(Outcomes);
 
 impl agent_access_provider::test_support::DescribedProvider for OutcomeProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        super::tests::untyped_fake_descriptor()
     }
 }
 

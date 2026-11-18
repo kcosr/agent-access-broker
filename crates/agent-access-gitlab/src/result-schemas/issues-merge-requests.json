@@ -1,0 +1,859 @@
+{
+  "definitions": {
+    "user": {
+      "type": "object",
+      "properties": {
+        "id": {"type": ["integer", "null"]},
+        "username": {"type": ["string", "null"]},
+        "name": {"type": ["string", "null"]},
+        "webUrl": {"type": ["string", "null"]}
+      },
+      "required": ["id", "username", "name", "webUrl"]
+    },
+    "nullableUser": {"anyOf": [{"$ref": "#/definitions/user"}, {"type": "null"}]},
+    "users": {"type": "array", "items": {"$ref": "#/definitions/user"}},
+    "nullableUsers": {"type": ["array", "null"], "items": {"$ref": "#/definitions/user"}},
+    "labels": {"type": ["array", "null"], "items": {"type": "string"}},
+    "milestone": {
+      "type": ["object", "null"],
+      "properties": {
+        "id": {"type": ["integer", "null"]},
+        "iid": {"type": ["integer", "null"]},
+        "title": {"type": ["string", "null"]},
+        "state": {"type": ["string", "null"]},
+        "dueDate": {"type": ["string", "null"]}
+      },
+      "required": ["id", "iid", "title", "state", "dueDate"]
+    },
+    "project": {"type": "string", "description": "Project path with namespace."},
+    "nextPageToken": {"type": ["string", "null"], "description": "Pass as pageToken to read the next page; null on the last page."},
+    "projection": {"enum": ["full", "summary"]},
+    "issue": {
+      "type": "object",
+      "properties": {
+        "id": {"type": ["integer", "null"]},
+        "iid": {"type": "integer"},
+        "projectId": {"type": "integer"},
+        "project": {"$ref": "#/definitions/project"},
+        "title": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "state": {"type": ["string", "null"]},
+        "webUrl": {"type": ["string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "author": {"$ref": "#/definitions/nullableUser"},
+        "assignees": {"$ref": "#/definitions/nullableUsers"},
+        "labels": {"$ref": "#/definitions/labels"},
+        "milestone": {"$ref": "#/definitions/milestone"}
+      },
+      "required": ["id", "iid", "projectId", "project", "title", "description", "state", "webUrl", "createdAt", "updatedAt", "author", "assignees", "labels", "milestone"]
+    },
+    "mergeRequest": {
+      "type": "object",
+      "properties": {
+        "id": {"type": ["integer", "null"]},
+        "iid": {"type": "integer"},
+        "projectId": {"type": "integer"},
+        "project": {"$ref": "#/definitions/project"},
+        "title": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "state": {"type": ["string", "null"]},
+        "draft": {"type": ["boolean", "null"]},
+        "sourceBranch": {"type": ["string", "null"]},
+        "targetBranch": {"type": ["string", "null"]},
+        "sourceProjectId": {"type": ["integer", "null"]},
+        "targetProjectId": {"type": ["integer", "null"]},
+        "sha": {"type": ["string", "null"]},
+        "diffRefs": {
+          "type": ["object", "null"],
+          "properties": {
+            "baseSha": {"type": ["string", "null"]},
+            "startSha": {"type": "string"},
+            "headSha": {"type": "string"}
+          },
+          "required": ["baseSha", "startSha", "headSha"]
+        },
+        "mergeStatus": {"type": ["string", "null"]},
+        "detailedMergeStatus": {"type": ["string", "null"]},
+        "mergeCommitSha": {"type": ["string", "null"]},
+        "squashCommitSha": {"type": ["string", "null"]},
+        "hasConflicts": {"type": ["boolean", "null"]},
+        "blockingDiscussionsResolved": {"type": ["boolean", "null"]},
+        "discussionLocked": {"type": ["boolean", "null"]},
+        "changesCount": {"type": ["string", "null"]},
+        "userNotesCount": {"type": ["integer", "null"]},
+        "preparedAt": {"type": ["string", "null"]},
+        "headPipeline": {
+          "type": ["object", "null"],
+          "properties": {
+            "id": {"type": "integer"},
+            "sha": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]},
+            "status": {"type": ["string", "null"]},
+            "webUrl": {"type": ["string", "null"]}
+          },
+          "required": ["id", "sha", "ref", "status", "webUrl"]
+        },
+        "webUrl": {"type": ["string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "author": {"$ref": "#/definitions/nullableUser"},
+        "assignees": {"$ref": "#/definitions/nullableUsers"},
+        "reviewers": {"$ref": "#/definitions/nullableUsers"},
+        "labels": {"$ref": "#/definitions/labels"},
+        "milestone": {"$ref": "#/definitions/milestone"}
+      },
+      "required": ["id", "iid", "projectId", "project", "title", "description", "state", "draft", "sourceBranch", "targetBranch", "sourceProjectId", "targetProjectId", "sha", "diffRefs", "mergeStatus", "detailedMergeStatus", "mergeCommitSha", "squashCommitSha", "hasConflicts", "blockingDiscussionsResolved", "discussionLocked", "changesCount", "userNotesCount", "preparedAt", "headPipeline", "webUrl", "createdAt", "updatedAt", "author", "assignees", "reviewers", "labels", "milestone"]
+    },
+    "linePoint": {
+      "type": "object",
+      "properties": {
+        "lineCode": {"type": "string"},
+        "type": {"type": ["string", "null"]},
+        "oldLine": {"type": "integer"},
+        "newLine": {"type": "integer"}
+      },
+      "required": ["lineCode", "type"]
+    },
+    "position": {
+      "type": "object",
+      "properties": {
+        "positionType": {"type": "string"},
+        "baseSha": {"type": ["string", "null"]},
+        "startSha": {"type": "string"},
+        "headSha": {"type": "string"},
+        "oldPath": {"type": "string"},
+        "newPath": {"type": "string"},
+        "oldLine": {"type": "integer"},
+        "newLine": {"type": "integer"},
+        "lineRange": {
+          "type": "object",
+          "properties": {
+            "start": {"$ref": "#/definitions/linePoint"},
+            "end": {"$ref": "#/definitions/linePoint"}
+          },
+          "required": ["start", "end"]
+        },
+        "width": {"type": "integer"},
+        "height": {"type": "integer"},
+        "x": {"type": "integer"},
+        "y": {"type": "integer"}
+      },
+      "required": ["positionType", "baseSha", "startSha", "headSha", "oldPath", "newPath"]
+    },
+    "suggestion": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "fromLine": {"type": "integer"},
+        "toLine": {"type": "integer"},
+        "applicable": {"type": "boolean"},
+        "applied": {"type": "boolean"},
+        "fromContent": {"type": "string"},
+        "toContent": {"type": "string"}
+      },
+      "required": ["id", "fromLine", "toLine", "applicable", "applied", "fromContent", "toContent"]
+    },
+    "note": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "body": {"type": ["string", "null"]},
+        "type": {"type": "string"},
+        "system": {"type": ["boolean", "null"]},
+        "confidential": {"type": ["boolean", "null"]},
+        "authorUserId": {"type": ["integer", "null"]},
+        "authorUsername": {"type": ["string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "noteableType": {"type": "string"},
+        "noteableIid": {"type": "integer"},
+        "noteableId": {"type": "integer"},
+        "projectId": {"type": "integer"},
+        "resolvable": {"type": "boolean"},
+        "resolved": {"type": "boolean"},
+        "resolvedBy": {"$ref": "#/definitions/user"},
+        "resolvedAt": {"type": "string"},
+        "commitId": {"type": "string"},
+        "position": {"$ref": "#/definitions/position"},
+        "suggestions": {"type": "array", "items": {"$ref": "#/definitions/suggestion"}}
+      },
+      "required": ["id", "body", "system", "confidential", "authorUserId", "authorUsername", "createdAt", "updatedAt"]
+    },
+    "noteItem": {
+      "type": "object",
+      "description": "Full note; with projection summary, no body, suggestions, resolvedBy, noteable or project IDs, and null fields are omitted.",
+      "properties": {
+        "id": {"type": "integer"},
+        "body": {"type": ["string", "null"]},
+        "type": {"type": "string"},
+        "system": {"type": ["boolean", "null"]},
+        "confidential": {"type": ["boolean", "null"]},
+        "authorUserId": {"type": ["integer", "null"]},
+        "authorUsername": {"type": ["string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]},
+        "noteableType": {"type": "string"},
+        "noteableIid": {"type": "integer"},
+        "noteableId": {"type": "integer"},
+        "projectId": {"type": "integer"},
+        "resolvable": {"type": "boolean"},
+        "resolved": {"type": "boolean"},
+        "resolvedBy": {"$ref": "#/definitions/user"},
+        "resolvedAt": {"type": "string"},
+        "commitId": {"type": "string"},
+        "position": {"$ref": "#/definitions/position"},
+        "suggestions": {"type": "array", "items": {"$ref": "#/definitions/suggestion"}}
+      },
+      "required": ["id"]
+    },
+    "discussion": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "individualNote": {"type": ["boolean", "null"]},
+        "notes": {"type": "array", "items": {"$ref": "#/definitions/note"}}
+      },
+      "required": ["id", "individualNote", "notes"]
+    },
+    "discussionItem": {
+      "type": "object",
+      "description": "Full discussion; projection summary adds noteCount and summary notes.",
+      "properties": {
+        "id": {"type": "string"},
+        "individualNote": {"type": ["boolean", "null"]},
+        "noteCount": {"type": "integer"},
+        "notes": {"type": "array", "items": {"$ref": "#/definitions/noteItem"}}
+      },
+      "required": ["id", "notes"]
+    },
+    "draftNote": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "body": {"type": ["string", "null"]},
+        "authorUserId": {"type": ["integer", "null"]},
+        "mergeRequestId": {"type": ["integer", "null"]},
+        "discussionId": {"type": ["string", "null"], "description": "Discussion this draft replies to."},
+        "resolveDiscussion": {"type": ["boolean", "null"]},
+        "commitId": {"type": ["string", "null"]},
+        "position": {"anyOf": [{"$ref": "#/definitions/position"}, {"type": "null"}]}
+      },
+      "required": ["id", "body", "authorUserId", "mergeRequestId", "discussionId", "resolveDiscussion", "commitId", "position"]
+    },
+    "draftNoteItem": {
+      "type": "object",
+      "description": "Full draft note; with projection summary, no body and null fields are omitted.",
+      "properties": {
+        "id": {"type": "integer"},
+        "body": {"type": ["string", "null"]},
+        "authorUserId": {"type": ["integer", "null"]},
+        "mergeRequestId": {"type": ["integer", "null"]},
+        "discussionId": {"type": ["string", "null"], "description": "Discussion this draft replies to."},
+        "resolveDiscussion": {"type": ["boolean", "null"]},
+        "commitId": {"type": ["string", "null"]},
+        "position": {"anyOf": [{"$ref": "#/definitions/position"}, {"type": "null"}]}
+      },
+      "required": ["id"]
+    },
+    "reviewContext": {
+      "type": "object",
+      "description": "Credential and GitLab identity the review action acted as.",
+      "properties": {
+        "credentialMode": {"enum": ["service", "per_user"]},
+        "credentialBinding": {"enum": ["shared", "principal"]},
+        "upstreamActor": {
+          "type": "object",
+          "properties": {
+            "id": {"type": "integer"},
+            "username": {"type": "string"}
+          },
+          "required": ["id", "username"]
+        }
+      },
+      "required": ["credentialMode", "credentialBinding", "upstreamActor"]
+    },
+    "group": {
+      "type": "object",
+      "properties": {
+        "id": {"type": ["integer", "null"]},
+        "name": {"type": ["string", "null"]},
+        "path": {"type": ["string", "null"]},
+        "fullPath": {"type": ["string", "null"]}
+      },
+      "required": ["id", "name", "path", "fullPath"]
+    },
+    "approvalRule": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "ruleType": {"type": ["string", "null"]},
+        "approvalsRequired": {"type": "integer"},
+        "approved": {"type": ["boolean", "null"]},
+        "eligibleApprovers": {"$ref": "#/definitions/users"},
+        "approvedBy": {"$ref": "#/definitions/users"},
+        "users": {"$ref": "#/definitions/users"},
+        "groups": {"type": "array", "items": {"$ref": "#/definitions/group"}},
+        "overridden": {"type": ["boolean", "null"]},
+        "containsHiddenGroups": {"type": ["boolean", "null"]},
+        "codeOwner": {"type": ["boolean", "null"]},
+        "section": {"type": ["string", "null"]},
+        "sourceRule": {
+          "type": ["object", "null"],
+          "properties": {"approvalsRequired": {"type": "integer"}},
+          "required": ["approvalsRequired"]
+        }
+      },
+      "required": ["id", "name", "ruleType", "approvalsRequired", "approved", "eligibleApprovers", "approvedBy", "users", "groups", "overridden", "containsHiddenGroups", "codeOwner", "section", "sourceRule"]
+    },
+    "reviewer": {
+      "type": "object",
+      "properties": {
+        "user": {"$ref": "#/definitions/user"},
+        "state": {"type": "string"},
+        "createdAt": {"type": ["string", "null"]}
+      },
+      "required": ["user", "state", "createdAt"]
+    },
+    "commit": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "shortId": {"type": ["string", "null"]},
+        "title": {"type": ["string", "null"]},
+        "message": {"type": ["string", "null"]},
+        "authorName": {"type": ["string", "null"]},
+        "authoredDate": {"type": ["string", "null"]},
+        "committedDate": {"type": ["string", "null"]},
+        "webUrl": {"type": ["string", "null"]}
+      },
+      "required": ["id", "shortId", "title", "message", "authorName", "authoredDate", "committedDate", "webUrl"]
+    },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "iid": {"type": ["integer", "null"]},
+        "projectId": {"type": "integer"},
+        "ref": {"type": ["string", "null"]},
+        "sha": {"type": ["string", "null"]},
+        "status": {"type": ["string", "null"]},
+        "source": {"type": ["string", "null"]},
+        "webUrl": {"type": ["string", "null"]},
+        "createdAt": {"type": ["string", "null"]},
+        "updatedAt": {"type": ["string", "null"]}
+      },
+      "required": ["id", "iid", "projectId", "ref", "sha", "status", "source", "webUrl", "createdAt", "updatedAt"]
+    },
+    "diffFile": {
+      "type": "object",
+      "properties": {
+        "oldPath": {"type": "string"},
+        "newPath": {"type": "string"},
+        "oldMode": {"type": ["string", "null"]},
+        "newMode": {"type": ["string", "null"]},
+        "diff": {"type": ["string", "null"]},
+        "newFile": {"type": ["boolean", "null"]},
+        "renamedFile": {"type": ["boolean", "null"]},
+        "deletedFile": {"type": ["boolean", "null"]},
+        "generatedFile": {"type": ["boolean", "null"]},
+        "collapsed": {"type": ["boolean", "null"]},
+        "tooLarge": {"type": ["boolean", "null"]}
+      },
+      "required": ["oldPath", "newPath", "oldMode", "newMode", "diff", "newFile", "renamedFile", "deletedFile", "generatedFile", "collapsed", "tooLarge"]
+    },
+    "diffVersionSummary": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "mergeRequestId": {"type": "integer"},
+        "headCommitSha": {"type": "string"},
+        "baseCommitSha": {"type": "string"},
+        "startCommitSha": {"type": "string"},
+        "createdAt": {"type": ["string", "null"]},
+        "state": {"type": ["string", "null"]},
+        "realSize": {"type": ["string", "null"]},
+        "patchIdSha": {"type": ["string", "null"]}
+      },
+      "required": ["id", "mergeRequestId", "headCommitSha", "baseCommitSha", "startCommitSha", "createdAt", "state", "realSize", "patchIdSha"]
+    },
+    "diffVersion": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "mergeRequestId": {"type": "integer"},
+        "headCommitSha": {"type": "string"},
+        "baseCommitSha": {"type": "string"},
+        "startCommitSha": {"type": "string"},
+        "createdAt": {"type": ["string", "null"]},
+        "state": {"type": ["string", "null"]},
+        "realSize": {"type": ["string", "null"]},
+        "patchIdSha": {"type": ["string", "null"]},
+        "commits": {"type": "array", "items": {"$ref": "#/definitions/commit"}},
+        "diffs": {"type": "array", "items": {"$ref": "#/definitions/diffFile"}}
+      },
+      "required": ["id", "mergeRequestId", "headCommitSha", "baseCommitSha", "startCommitSha", "createdAt", "state", "realSize", "patchIdSha", "commits", "diffs"]
+    },
+    "issueResult": {
+      "type": "object",
+      "properties": {"issue": {"$ref": "#/definitions/issue"}},
+      "required": ["issue"]
+    },
+    "mergeRequestResult": {
+      "type": "object",
+      "properties": {"mergeRequest": {"$ref": "#/definitions/mergeRequest"}},
+      "required": ["mergeRequest"]
+    },
+    "noteResult": {
+      "type": "object",
+      "properties": {"note": {"$ref": "#/definitions/note"}},
+      "required": ["note"]
+    },
+    "noteList": {
+      "type": "object",
+      "properties": {
+        "notes": {"type": "array", "items": {"$ref": "#/definitions/noteItem"}},
+        "count": {"type": "integer"},
+        "maxResults": {"type": "integer"},
+        "isLast": {"type": "boolean"},
+        "nextPageToken": {"$ref": "#/definitions/nextPageToken"},
+        "projection": {"$ref": "#/definitions/projection"}
+      },
+      "required": ["notes", "count", "maxResults", "isLast", "nextPageToken", "projection"]
+    },
+    "noteDeleted": {
+      "type": "object",
+      "properties": {
+        "deleted": {"const": true},
+        "project": {"$ref": "#/definitions/project"},
+        "iid": {"type": "integer"},
+        "noteId": {"type": "integer"}
+      },
+      "required": ["deleted", "project", "iid", "noteId"]
+    },
+    "discussionResult": {
+      "type": "object",
+      "properties": {"discussion": {"$ref": "#/definitions/discussion"}},
+      "required": ["discussion"]
+    },
+    "draftNoteWritten": {
+      "type": "object",
+      "properties": {
+        "mutationStatus": {"const": "applied"},
+        "retrySafe": {"const": false},
+        "draftNoteId": {"type": "integer"},
+        "draftNote": {"$ref": "#/definitions/draftNote"},
+        "reviewContext": {"$ref": "#/definitions/reviewContext"}
+      },
+      "required": ["mutationStatus", "retrySafe", "draftNoteId", "draftNote", "reviewContext"]
+    },
+    "positionInputInvalid": {
+      "type": "object",
+      "description": "input_invalid detail when the diff position cannot be placed on the current patch.",
+      "properties": {"inputCategory": {"enum": ["coordinates_unresolved", "patch_unavailable"]}},
+      "required": ["inputCategory"]
+    },
+    "suggestionApplied": {
+      "type": "object",
+      "properties": {
+        "mutationStatus": {"const": "applied"},
+        "retrySafe": {"const": false},
+        "suggestionIds": {"type": "array", "items": {"type": "integer"}}
+      },
+      "required": ["mutationStatus", "retrySafe", "suggestionIds"]
+    },
+    "suggestionOutdated": {
+      "type": "object",
+      "description": "input_invalid detail when a suggestion is stale for expectedHeadSha, already applied or not applicable.",
+      "properties": {"inputCategory": {"const": "suggestion_outdated"}},
+      "required": ["inputCategory"]
+    }
+  },
+  "actions": {
+    "issue.view": {"success": {"$ref": "#/definitions/issueResult"}},
+    "issue.search": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "issues": {"type": "array", "items": {"$ref": "#/definitions/issue"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["issues", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "issue.create": {"success": {"$ref": "#/definitions/issueResult"}},
+    "issue.update": {"success": {"$ref": "#/definitions/issueResult"}},
+    "issue.note.list": {"success": {"$ref": "#/definitions/noteList"}},
+    "issue.note.view": {"success": {"$ref": "#/definitions/noteResult"}},
+    "issue.note.add": {"success": {"$ref": "#/definitions/noteResult"}},
+    "issue.note.update": {"success": {"$ref": "#/definitions/noteResult"}},
+    "issue.note.delete": {"success": {"$ref": "#/definitions/noteDeleted"}},
+    "merge_request.view": {"success": {"$ref": "#/definitions/mergeRequestResult"}},
+    "merge_request.search": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mergeRequests": {"type": "array", "items": {"$ref": "#/definitions/mergeRequest"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["mergeRequests", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.create": {"success": {"$ref": "#/definitions/mergeRequestResult"}},
+    "merge_request.update": {"success": {"$ref": "#/definitions/mergeRequestResult"}},
+    "merge_request.merge": {
+      "success": {
+        "type": "object",
+        "description": "The merged merge request; its description is always null.",
+        "properties": {"mergeRequest": {"$ref": "#/definitions/mergeRequest"}},
+        "required": ["mergeRequest"]
+      }
+    },
+    "merge_request.note.list": {"success": {"$ref": "#/definitions/noteList"}},
+    "merge_request.note.view": {"success": {"$ref": "#/definitions/noteResult"}},
+    "merge_request.note.add": {"success": {"$ref": "#/definitions/noteResult"}},
+    "merge_request.note.update": {"success": {"$ref": "#/definitions/noteResult"}},
+    "merge_request.note.delete": {"success": {"$ref": "#/definitions/noteDeleted"}},
+    "merge_request.discussion.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "discussions": {"type": "array", "items": {"$ref": "#/definitions/discussionItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"},
+          "projection": {"$ref": "#/definitions/projection"}
+        },
+        "required": ["discussions", "count", "maxResults", "isLast", "nextPageToken", "projection"]
+      }
+    },
+    "merge_request.discussion.view": {"success": {"$ref": "#/definitions/discussionResult"}},
+    "merge_request.discussion.add": {"success": {"$ref": "#/definitions/discussionResult"}},
+    "merge_request.discussion.resolve": {"success": {"$ref": "#/definitions/discussionResult"}},
+    "merge_request.discussion.reopen": {"success": {"$ref": "#/definitions/discussionResult"}},
+    "merge_request.discussion.inline.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "discussionId": {"type": "string"},
+          "noteId": {"type": "integer"},
+          "discussion": {"$ref": "#/definitions/discussion"}
+        },
+        "required": ["mutationStatus", "retrySafe", "discussionId", "noteId", "discussion"]
+      },
+      "error": {"$ref": "#/definitions/positionInputInvalid"}
+    },
+    "merge_request.discussion.note.add": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "discussionId": {"type": "string"},
+          "noteId": {"type": "integer"},
+          "note": {"$ref": "#/definitions/note"}
+        },
+        "required": ["mutationStatus", "retrySafe", "discussionId", "noteId", "note"]
+      }
+    },
+    "merge_request.discussion.note.update": {"success": {"$ref": "#/definitions/noteResult"}},
+    "merge_request.discussion.note.delete": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "deleted": {"const": true},
+          "project": {"$ref": "#/definitions/project"},
+          "iid": {"type": "integer"},
+          "discussionId": {"type": "string"},
+          "noteId": {"type": "integer"}
+        },
+        "required": ["deleted", "project", "iid", "discussionId", "noteId"]
+      }
+    },
+    "merge_request.draft_note.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "draftNotes": {"type": "array", "items": {"$ref": "#/definitions/draftNoteItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"},
+          "projection": {"$ref": "#/definitions/projection"},
+          "reviewContext": {"$ref": "#/definitions/reviewContext"}
+        },
+        "required": ["draftNotes", "count", "maxResults", "isLast", "nextPageToken", "projection", "reviewContext"]
+      }
+    },
+    "merge_request.draft_note.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "draftNote": {"$ref": "#/definitions/draftNote"},
+          "reviewContext": {"$ref": "#/definitions/reviewContext"}
+        },
+        "required": ["draftNote", "reviewContext"]
+      }
+    },
+    "merge_request.draft_note.add": {
+      "success": {"$ref": "#/definitions/draftNoteWritten"},
+      "error": {"$ref": "#/definitions/positionInputInvalid"}
+    },
+    "merge_request.draft_note.update": {
+      "success": {"$ref": "#/definitions/draftNoteWritten"},
+      "error": {"$ref": "#/definitions/positionInputInvalid"}
+    },
+    "merge_request.draft_note.delete": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "draftNoteId": {"type": "integer"},
+          "deleted": {"const": true},
+          "reviewContext": {"$ref": "#/definitions/reviewContext"}
+        },
+        "required": ["mutationStatus", "retrySafe", "draftNoteId", "deleted", "reviewContext"]
+      }
+    },
+    "merge_request.draft_note.publish": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "draftNoteId": {"type": "integer"},
+          "published": {"const": true},
+          "discussionId": {"type": "string", "description": "Discussion holding the published note."},
+          "noteId": {"type": "integer", "description": "The published note."},
+          "reviewContext": {"$ref": "#/definitions/reviewContext"}
+        },
+        "required": ["mutationStatus", "retrySafe", "draftNoteId", "published", "discussionId", "noteId", "reviewContext"]
+      }
+    },
+    "merge_request.draft_note.publish_all": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "publishedDraftNoteIds": {"type": "array", "items": {"type": "integer"}},
+          "summaryNoteId": {"type": "integer", "description": "Present when a summary note was posted."},
+          "reviewContext": {"$ref": "#/definitions/reviewContext"}
+        },
+        "required": ["mutationStatus", "retrySafe", "publishedDraftNoteIds", "reviewContext"]
+      }
+    },
+    "merge_request.review.submit": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "publishedDraftNoteIds": {"type": "array", "items": {"type": "integer"}},
+          "summaryNoteId": {"type": "integer", "description": "Present when a summary note was posted."},
+          "reviewerState": {"enum": ["reviewed", "requestedChanges"]},
+          "reviewContext": {"$ref": "#/definitions/reviewContext"}
+        },
+        "required": ["mutationStatus", "retrySafe", "publishedDraftNoteIds", "reviewerState", "reviewContext"]
+      }
+    },
+    "merge_request.reviewer.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "reviewers": {"type": "array", "items": {"$ref": "#/definitions/reviewer"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["reviewers", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.approval.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "approval": {
+            "type": "object",
+            "properties": {
+              "approvalsRequired": {"type": ["integer", "null"]},
+              "approvalsLeft": {"type": ["integer", "null"]},
+              "approved": {"type": ["boolean", "null"]},
+              "approvedBy": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "user": {"$ref": "#/definitions/user"},
+                    "approvedAt": {"type": ["string", "null"]}
+                  },
+                  "required": ["user", "approvedAt"]
+                }
+              },
+              "userHasApproved": {"type": "boolean", "description": "Whether the acting user approved; present when GitLab reports it."},
+              "userCanApprove": {"type": "boolean", "description": "Present when GitLab reports it."}
+            },
+            "required": ["approvalsRequired", "approvalsLeft", "approved", "approvedBy"]
+          }
+        },
+        "required": ["approval"]
+      }
+    },
+    "merge_request.approval_state.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "approvalState": {
+            "type": "object",
+            "properties": {
+              "approvalRulesOverwritten": {"type": "boolean"},
+              "rules": {"type": "array", "items": {"$ref": "#/definitions/approvalRule"}}
+            },
+            "required": ["rules"]
+          }
+        },
+        "required": ["approvalState"]
+      }
+    },
+    "merge_request.approval_rule.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "approvalRules": {"type": "array", "items": {"$ref": "#/definitions/approvalRule"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["approvalRules", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.approval_rule.view": {
+      "success": {
+        "type": "object",
+        "properties": {"approvalRule": {"$ref": "#/definitions/approvalRule"}},
+        "required": ["approvalRule"]
+      }
+    },
+    "merge_request.approve": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "userId": {"type": "integer", "description": "Acting GitLab user."},
+          "headSha": {"type": "string"},
+          "approved": {"const": true}
+        },
+        "required": ["mutationStatus", "retrySafe", "userId", "headSha", "approved"]
+      }
+    },
+    "merge_request.unapprove": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"const": "applied"},
+          "retrySafe": {"const": false},
+          "userId": {"type": "integer", "description": "Acting GitLab user."},
+          "headSha": {"type": "null"},
+          "approved": {"const": false}
+        },
+        "required": ["mutationStatus", "retrySafe", "userId", "headSha", "approved"]
+      }
+    },
+    "merge_request.suggestion.apply": {
+      "success": {"$ref": "#/definitions/suggestionApplied"},
+      "error": {"$ref": "#/definitions/suggestionOutdated"}
+    },
+    "merge_request.suggestion.batch_apply": {
+      "success": {"$ref": "#/definitions/suggestionApplied"},
+      "error": {"$ref": "#/definitions/suggestionOutdated"}
+    },
+    "merge_request.commit.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "commits": {"type": "array", "items": {"$ref": "#/definitions/commit"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["commits", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.pipeline.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "pipelines": {"type": "array", "items": {"$ref": "#/definitions/pipeline"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["pipelines", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.diff.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "diffs": {"type": "array", "items": {"$ref": "#/definitions/diffFile"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["diffs", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.diff.raw.download": {
+      "success": {
+        "type": "object",
+        "description": "Download metadata; the raw unified diff is the file content.",
+        "properties": {
+          "project": {"$ref": "#/definitions/project"},
+          "projectId": {"type": "integer"},
+          "iid": {"type": "integer"},
+          "headShaAtPreflight": {"type": ["string", "null"], "description": "Merge request head SHA read before the download; null when GitLab reported none."},
+          "contentType": {"type": "string"},
+          "size": {"type": ["integer", "null"], "description": "Bytes from Content-Length; null when GitLab sent none."}
+        },
+        "required": ["project", "projectId", "iid", "headShaAtPreflight", "contentType", "size"]
+      }
+    },
+    "merge_request.diff_version.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "diffVersions": {"type": "array", "items": {"$ref": "#/definitions/diffVersionSummary"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/nextPageToken"}
+        },
+        "required": ["diffVersions", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "merge_request.diff_version.view": {
+      "success": {
+        "type": "object",
+        "properties": {"diffVersion": {"$ref": "#/definitions/diffVersion"}},
+        "required": ["diffVersion"]
+      }
+    }
+  }
+}

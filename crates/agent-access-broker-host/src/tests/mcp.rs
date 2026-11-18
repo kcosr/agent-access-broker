@@ -1,9 +1,12 @@
 //! Real router + SDK wire tests. No external services or caller configuration.
 use super::*;
+use agent_access_core::mcp::OutputSchemas;
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
+pub(super) mod advertisement;
 pub(super) mod names;
+pub(super) mod output_schemas;
 mod rate_wait;
 mod trusted_user;
 
@@ -12,12 +15,34 @@ pub(super) const TOKEN_A: &str = "mcp-test-token-alpha";
 const TOKEN_B: &str = "mcp-test-token-bravo";
 const VERSION: &str = "2025-11-25";
 
+/// The `outputSchemas` query a test's MCP request carries; `None` omits it.
+pub(super) type Selection = Option<OutputSchemas>;
+
+/// `path` with the `outputSchemas` query of `selection`.
+pub(super) fn endpoint(path: &str, selection: Selection) -> String {
+    match selection {
+        Some(mode) => format!("{path}?outputSchemas={}", mode.as_str()),
+        None => path.to_owned(),
+    }
+}
+
+fn effective(selection: Selection) -> OutputSchemas {
+    selection.unwrap_or(OutputSchemas::CONNECTION_DEFAULT)
+}
+
 pub(super) struct Fixture {
     broker: TestBroker,
     pub(super) app: Router,
     token_path: PathBuf,
     state: Arc<ReloadableState>,
     pub(super) audit_path: PathBuf,
+    /// The selection of this fixture's own `initialize`, `rpc` and `call`
+    /// requests: explicitly `on`, so their delivery checks validate every
+    /// result, unless a test chooses another.
+    selection: Selection,
+    /// Tool definitions from this fixture's `tools/list` responses, by
+    /// endpoint path, effective selection and name.
+    listed_tools: std::sync::Mutex<BTreeMap<(String, OutputSchemas, String), Value>>,
     _directory: tempfile::TempDir,
 }
 
@@ -97,6 +122,8 @@ impl Fixture {
             state,
             token_path,
             audit_path,
+            selection: Some(OutputSchemas::On),
+            listed_tools: Default::default(),
             _directory: directory,
         }
     }
@@ -109,14 +136,29 @@ impl Fixture {
     }
 
     async fn initialize_version(&self, token: &str, version: &str) -> String {
+        self.initialize_at("/mcp", self.selection, token, version)
+            .await
+    }
+
+    pub(super) async fn initialize_at(
+        &self,
+        path: &str,
+        selection: Selection,
+        token: &str,
+        version: &str,
+    ) -> String {
+        let uri = endpoint(path, selection);
         let response = self
-            .send(request(
-                Method::POST,
-                Some(token),
-                None,
-                Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-                    "protocolVersion":version,"capabilities":{},"clientInfo":{"name":"broker-wire-tests","version":"1"}
-                }})),
+            .send(at_uri(
+                &uri,
+                request(
+                    Method::POST,
+                    Some(token),
+                    None,
+                    Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                        "protocolVersion":version,"capabilities":{},"clientInfo":{"name":"broker-wire-tests","version":"1"}
+                    }})),
+                ),
             ))
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -134,11 +176,14 @@ impl Fixture {
             assert!(body["result"]["capabilities"].get(capability).is_none());
         }
         let notification = self
-            .send(request(
-                Method::POST,
-                Some(token),
-                Some(&session),
-                Some(json!({"jsonrpc":"2.0","method":"notifications/initialized"})),
+            .send(at_uri(
+                &uri,
+                request(
+                    Method::POST,
+                    Some(token),
+                    Some(&session),
+                    Some(json!({"jsonrpc":"2.0","method":"notifications/initialized"})),
+                ),
             ))
             .await;
         assert_eq!(notification.status(), StatusCode::ACCEPTED);
@@ -156,18 +201,96 @@ impl Fixture {
     }
 
     pub(super) async fn rpc(&self, session: &str, id: u64, method: &str, params: Value) -> Value {
+        self.rpc_at("/mcp", self.selection, session, id, method, params)
+            .await
+    }
+
+    /// One request on `path` with `selection`, checked against what that
+    /// connection advertised in that mode.
+    pub(super) async fn rpc_at(
+        &self,
+        path: &str,
+        selection: Selection,
+        session: &str,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> Value {
         let response = self
-            .send(request(
-                Method::POST,
-                Some(TOKEN_A),
-                Some(session),
-                Some(json!({"jsonrpc":"2.0","id":id,"method":method,"params":params})),
+            .send(at_uri(
+                &endpoint(path, selection),
+                request(
+                    Method::POST,
+                    Some(TOKEN_A),
+                    Some(session),
+                    Some(json!({"jsonrpc":"2.0","id":id,"method":method,"params":&params})),
+                ),
             ))
             .await;
         assert_eq!(response.status(), StatusCode::OK, "method {method}");
         let body = rpc_body(response).await;
         assert_eq!(body["id"], id);
+        let connection = output_schemas::Connection {
+            id: session,
+            path,
+            output_schemas: effective(selection),
+        };
+        match method {
+            "tools/list" => {
+                let tools = body["result"]["tools"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                output_schemas::capture_tools(&connection, &tools);
+                let mut listed = self.listed_tools.lock().unwrap();
+                for tool in tools {
+                    if let Some(name) = tool["name"].as_str() {
+                        listed.insert(
+                            (path.to_owned(), connection.output_schemas, name.to_owned()),
+                            tool,
+                        );
+                    }
+                }
+            }
+            "tools/call" => {
+                let name = params["name"].as_str().unwrap_or_default();
+                let tool = self.advertised_tool(path, connection.output_schemas, name);
+                output_schemas::check_call(&connection, name, tool.as_ref(), &body);
+            }
+            _ => {}
+        }
         body
+    }
+
+    /// The definition this fixture's caller was last listed for `name` on
+    /// `path` in `mode`, or, before any such listing, the one the current
+    /// runtime's registry for that view and mode advertises.
+    fn advertised_tool(&self, path: &str, mode: OutputSchemas, name: &str) -> Option<Value> {
+        if let Some(tool) =
+            self.listed_tools
+                .lock()
+                .unwrap()
+                .get(&(path.to_owned(), mode, name.to_owned()))
+        {
+            return Some(tool.clone());
+        }
+        let view = match path.strip_prefix("/mcp/") {
+            Some(service) => agent_access_core::mcp::McpView::Service(service.to_owned()),
+            None => agent_access_core::mcp::McpView::Aggregate,
+        };
+        let mut catalog = agent_access_core::empty_catalog(json!({}));
+        catalog.services = self.state.current().runtime.api_services_all();
+        agent_access_core::mcp::ToolRegistry::build(
+            &catalog,
+            &view,
+            agent_access_core::mcp::ProjectionMode::Http,
+            mode,
+            agent_access_core::mcp::STDIO_MAX_CATALOG_BYTES,
+        )
+        .ok()?
+        .definitions()
+        .into_iter()
+        .find(|tool| tool["name"] == name)
     }
 
     pub(super) async fn call(&self, session: &str, id: u64, name: &str, arguments: Value) -> Value {
@@ -179,6 +302,32 @@ impl Fixture {
         )
         .await
     }
+
+    pub(super) async fn call_at(
+        &self,
+        path: &str,
+        selection: Selection,
+        session: &str,
+        id: u64,
+        name: &str,
+        arguments: Value,
+    ) -> Value {
+        self.rpc_at(
+            path,
+            selection,
+            session,
+            id,
+            "tools/call",
+            json!({"name":name,"arguments":arguments}),
+        )
+        .await
+    }
+}
+
+/// `request` addressed to `uri`, a path with an optional query.
+pub(super) fn at_uri(uri: &str, mut request: Request<Body>) -> Request<Body> {
+    *request.uri_mut() = uri.parse().unwrap();
+    request
 }
 
 pub(super) fn assert_http_instructions(value: &Value) {
@@ -1171,7 +1320,8 @@ async fn mcp_cancellation_before_dispatch_skips_provider_and_finalizes_audit() {
 struct CatalogProvider;
 impl agent_access_provider::test_support::DescribedProvider for CatalogProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        let mut descriptor = agent_access_fake::fake_descriptor();
+        // Calibrated to the page budget without an output schema.
+        let mut descriptor = super::untyped_fake_descriptor();
         // A valid action whose large description forces response-byte pagination
         // without inventing actions outside the Broker's canonical catalog.
         descriptor.actions[0].description = "x".repeat(55_600);

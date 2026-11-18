@@ -1,0 +1,941 @@
+{
+  "definitions": {
+    "nullableString": {"type": ["string", "null"]},
+    "nullableInteger": {"type": ["integer", "null"]},
+    "nullableBoolean": {"type": ["boolean", "null"]},
+    "applied": {"type": "string", "const": "applied"},
+    "notRetrySafe": {"type": "boolean", "const": false},
+    "pageToken": {"type": ["string", "null"], "description": "Pass as pageToken for the next page; null when isLast."},
+    "searchPageToken": {"type": "string", "description": "Present only when scanStatus is more or scan_budget; pass as pageToken with all other inputs unchanged."},
+    "scanStatus": {
+      "type": "string",
+      "enum": ["more", "scan_budget", "exhausted", "upstream_window"],
+      "description": "more/scan_budget: upstream work remains, not proof of another match; exhausted: observed stream ended; upstream_window: upstream retrieval window reached, coverage incomplete."
+    },
+    "previewTruncated": {"type": "boolean", "description": "Present with a preview or snippet; true when it was cut at 4096 UTF-8 bytes."},
+    "webUrl": {"type": "string", "description": "Omitted when no consistent locator is available."},
+    "project": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "pathWithNamespace": {"type": "string"},
+        "name": {"$ref": "#/definitions/nullableString"},
+        "description": {"$ref": "#/definitions/nullableString"},
+        "webUrl": {"$ref": "#/definitions/nullableString"},
+        "defaultBranch": {"$ref": "#/definitions/nullableString"},
+        "visibility": {"$ref": "#/definitions/nullableString"},
+        "archived": {"$ref": "#/definitions/nullableBoolean"},
+        "lastActivityAt": {"$ref": "#/definitions/nullableString"},
+        "starCount": {"$ref": "#/definitions/nullableInteger"}
+      },
+      "required": ["id", "pathWithNamespace", "name", "description", "webUrl", "defaultBranch", "visibility", "archived", "lastActivityAt", "starCount"]
+    },
+    "upload": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer", "description": "Present when GitLab returned an upload ID."},
+        "alt": {"type": "string"},
+        "url": {"type": "string"},
+        "fullPath": {"type": "string"},
+        "markdown": {"type": "string"}
+      },
+      "required": ["alt", "url", "fullPath", "markdown"]
+    },
+    "branch": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "merged": {"$ref": "#/definitions/nullableBoolean"},
+        "protected": {"$ref": "#/definitions/nullableBoolean"},
+        "default": {"$ref": "#/definitions/nullableBoolean"},
+        "webUrl": {"$ref": "#/definitions/nullableString"},
+        "commit": {
+          "type": ["object", "null"],
+          "properties": {
+            "id": {"type": "string"},
+            "shortId": {"$ref": "#/definitions/nullableString"},
+            "title": {"$ref": "#/definitions/nullableString"}
+          },
+          "required": ["id", "shortId", "title"]
+        }
+      },
+      "required": ["name", "merged", "protected", "default", "webUrl", "commit"]
+    },
+    "accessLevel": {
+      "type": "object",
+      "properties": {
+        "accessLevel": {"$ref": "#/definitions/nullableInteger"},
+        "accessLevelDescription": {"$ref": "#/definitions/nullableString"},
+        "userId": {"$ref": "#/definitions/nullableInteger"},
+        "groupId": {"$ref": "#/definitions/nullableInteger"},
+        "deployKeyId": {"$ref": "#/definitions/nullableInteger"}
+      },
+      "required": ["accessLevel", "accessLevelDescription", "userId", "groupId", "deployKeyId"]
+    },
+    "accessLevels": {"type": "array", "items": {"$ref": "#/definitions/accessLevel"}},
+    "protectedBranch": {
+      "type": "object",
+      "properties": {
+        "id": {"$ref": "#/definitions/nullableInteger"},
+        "name": {"type": "string", "description": "Branch name or wildcard pattern."},
+        "allowForcePush": {"$ref": "#/definitions/nullableBoolean"},
+        "codeOwnerApprovalRequired": {"$ref": "#/definitions/nullableBoolean"},
+        "inherited": {"$ref": "#/definitions/nullableBoolean"},
+        "pushAccessLevels": {"$ref": "#/definitions/accessLevels"},
+        "mergeAccessLevels": {"$ref": "#/definitions/accessLevels"},
+        "unprotectAccessLevels": {"$ref": "#/definitions/accessLevels"}
+      },
+      "required": ["id", "name", "allowForcePush", "codeOwnerApprovalRequired", "inherited", "pushAccessLevels", "mergeAccessLevels", "unprotectAccessLevels"]
+    },
+    "fileMutation": {
+      "type": "object",
+      "properties": {
+        "filePath": {"type": "string"},
+        "branch": {"type": "string"}
+      },
+      "required": ["filePath", "branch"]
+    },
+    "commit": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "shortId": {"$ref": "#/definitions/nullableString"},
+        "title": {"$ref": "#/definitions/nullableString"},
+        "message": {"$ref": "#/definitions/nullableString"},
+        "authorName": {"$ref": "#/definitions/nullableString"},
+        "authoredDate": {"$ref": "#/definitions/nullableString"},
+        "committedDate": {"$ref": "#/definitions/nullableString"},
+        "webUrl": {"$ref": "#/definitions/nullableString"}
+      },
+      "required": ["id", "shortId", "title", "message", "authorName", "authoredDate", "committedDate", "webUrl"]
+    },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "iid": {"$ref": "#/definitions/nullableInteger"},
+        "projectId": {"type": "integer"},
+        "ref": {"$ref": "#/definitions/nullableString"},
+        "sha": {"$ref": "#/definitions/nullableString"},
+        "status": {"$ref": "#/definitions/nullableString"},
+        "source": {"$ref": "#/definitions/nullableString"},
+        "webUrl": {"$ref": "#/definitions/nullableString"},
+        "createdAt": {"$ref": "#/definitions/nullableString"},
+        "updatedAt": {"$ref": "#/definitions/nullableString"}
+      },
+      "required": ["id", "iid", "projectId", "ref", "sha", "status", "source", "webUrl", "createdAt", "updatedAt"]
+    },
+    "job": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"$ref": "#/definitions/nullableString"},
+        "status": {"$ref": "#/definitions/nullableString"},
+        "stage": {"$ref": "#/definitions/nullableString"},
+        "ref": {"$ref": "#/definitions/nullableString"},
+        "pipelineId": {"$ref": "#/definitions/nullableInteger"},
+        "projectId": {"$ref": "#/definitions/nullableInteger"},
+        "traceSize": {"type": ["integer", "null"], "description": "Trace size in bytes; null when GitLab did not report it."},
+        "webUrl": {"$ref": "#/definitions/nullableString"},
+        "createdAt": {"$ref": "#/definitions/nullableString"},
+        "startedAt": {"$ref": "#/definitions/nullableString"},
+        "finishedAt": {"$ref": "#/definitions/nullableString"}
+      },
+      "required": ["id", "name", "status", "stage", "ref", "pipelineId", "projectId", "traceSize", "webUrl", "createdAt", "startedAt", "finishedAt"]
+    },
+    "secretNames": {
+      "type": "array",
+      "items": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]},
+      "description": "Names only, never values; absent when GitLab did not report them."
+    },
+    "webhook": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "projectId": {"$ref": "#/definitions/nullableInteger"},
+        "url": {"type": "string"},
+        "name": {"$ref": "#/definitions/nullableString"},
+        "description": {"$ref": "#/definitions/nullableString"},
+        "createdAt": {"$ref": "#/definitions/nullableString"},
+        "enableSslVerification": {"$ref": "#/definitions/nullableBoolean"},
+        "alertStatus": {"$ref": "#/definitions/nullableString"},
+        "disabledUntil": {"$ref": "#/definitions/nullableString"},
+        "events": {
+          "type": "array",
+          "items": {"type": "string", "enum": ["push", "tag_push", "issues", "confidential_issues", "merge_requests", "notes", "confidential_notes", "jobs", "pipelines", "wiki_pages", "deployments", "releases", "milestones", "feature_flags", "emoji", "resource_access_tokens", "resource_deploy_tokens", "vulnerabilities"]}
+        },
+        "branchFilterStrategy": {"$ref": "#/definitions/nullableString"},
+        "pushEventsBranchFilter": {"$ref": "#/definitions/nullableString"},
+        "customWebhookTemplate": {"$ref": "#/definitions/nullableString"},
+        "customHeaders": {"$ref": "#/definitions/secretNames"},
+        "urlVariables": {"$ref": "#/definitions/secretNames"},
+        "tokenPresent": {"$ref": "#/definitions/nullableBoolean"},
+        "signingTokenPresent": {"$ref": "#/definitions/nullableBoolean"}
+      },
+      "required": ["id", "projectId", "url", "name", "description", "createdAt", "enableSslVerification", "alertStatus", "disabledUntil", "events", "branchFilterStrategy", "pushEventsBranchFilter", "customWebhookTemplate", "tokenPresent", "signingTokenPresent"]
+    },
+    "deliveryAttempt": {
+      "type": "object",
+      "properties": {
+        "message": {"$ref": "#/definitions/nullableString"},
+        "responseStatus": {"type": ["integer", "null"], "description": "Receiver HTTP status when GitLab reported one."}
+      },
+      "required": ["message", "responseStatus"]
+    },
+    "headerMap": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": "Header name to value; sensitive and custom header values are [REDACTED]."
+    },
+    "deliveryEvent": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "trigger": {"$ref": "#/definitions/nullableString"},
+        "createdAt": {"$ref": "#/definitions/nullableString"},
+        "executionDuration": {"type": ["number", "null"]},
+        "responseStatus": {"$ref": "#/definitions/nullableString"},
+        "requestHeaders": {"$ref": "#/definitions/headerMap"},
+        "requestData": {"description": "Opaque upstream request payload; null when absent or when requestDataTruncated is true."},
+        "requestDataTruncated": {"type": "boolean", "description": "True when the payload exceeded the field byte cap and was omitted."},
+        "responseHeaders": {"$ref": "#/definitions/headerMap"},
+        "responseBody": {"$ref": "#/definitions/nullableString"},
+        "responseBodyTruncated": {"type": "boolean"}
+      },
+      "required": ["id", "trigger", "createdAt", "executionDuration", "responseStatus", "requestHeaders", "requestData", "requestDataTruncated", "responseHeaders", "responseBody", "responseBodyTruncated"]
+    },
+    "searchProjectItem": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string"},
+        "projectId": {"type": "integer"},
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "defaultBranch": {"type": "string"},
+        "visibility": {"type": "string"},
+        "archived": {"type": "boolean"},
+        "description": {"type": "string", "description": "Preview of the project description."},
+        "previewTruncated": {"$ref": "#/definitions/previewTruncated"},
+        "webUrl": {"$ref": "#/definitions/webUrl"}
+      },
+      "required": ["project", "projectId", "id"]
+    },
+    "searchIssuableItem": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string"},
+        "projectId": {"type": "integer"},
+        "id": {"type": "integer"},
+        "iid": {"type": "integer"},
+        "title": {"type": "string"},
+        "state": {"type": "string"},
+        "descriptionPreview": {"type": "string"},
+        "previewTruncated": {"$ref": "#/definitions/previewTruncated"},
+        "webUrl": {"$ref": "#/definitions/webUrl"}
+      },
+      "required": ["project", "projectId", "id", "iid", "title", "state"]
+    },
+    "searchCodeItem": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string"},
+        "projectId": {"type": "integer"},
+        "path": {"type": "string"},
+        "ref": {"type": "string"},
+        "startLine": {"type": "integer"},
+        "snippet": {"type": "string", "description": "Upstream excerpt; may not contain the exact match."},
+        "previewTruncated": {"$ref": "#/definitions/previewTruncated"},
+        "snippetSource": {"type": "string", "const": "upstream"},
+        "webUrl": {"$ref": "#/definitions/webUrl"}
+      },
+      "required": ["project", "projectId", "path", "snippetSource"]
+    },
+    "searchCommitItem": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string"},
+        "projectId": {"type": "integer"},
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "messagePreview": {"type": "string"},
+        "previewTruncated": {"$ref": "#/definitions/previewTruncated"},
+        "webUrl": {"$ref": "#/definitions/webUrl"}
+      },
+      "required": ["project", "projectId", "id", "title"]
+    },
+    "searchWikiItem": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string"},
+        "projectId": {"type": "integer"},
+        "path": {"type": "string"},
+        "title": {"type": "string"},
+        "snippet": {"type": "string", "description": "Upstream excerpt, not the full page; may omit the matching passage."},
+        "previewTruncated": {"$ref": "#/definitions/previewTruncated"},
+        "snippetSource": {"type": "string", "const": "upstream"},
+        "webUrl": {"$ref": "#/definitions/webUrl"}
+      },
+      "required": ["project", "projectId", "snippetSource"]
+    },
+    "searchCommentItem": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string"},
+        "projectId": {"type": "integer"},
+        "id": {"type": "integer"},
+        "parentKind": {"type": "string", "enum": ["Issue", "MergeRequest", "Commit", "Snippet"]},
+        "bodyPreview": {"type": "string"},
+        "previewTruncated": {"$ref": "#/definitions/previewTruncated"},
+        "webUrl": {"$ref": "#/definitions/webUrl"}
+      },
+      "required": ["project", "projectId", "id", "parentKind"]
+    },
+    "searchEngine": {"type": "string", "enum": ["basic", "advanced"], "description": "Effective search engine."},
+    "codeSearchEngine": {"type": "string", "enum": ["basic", "advanced", "zoekt"], "description": "Effective search engine."},
+    "accessToken": {
+      "type": "object",
+      "description": "Token metadata, never the secret. Optional keys appear only when GitLab returned them.",
+      "properties": {
+        "id": {"type": "integer"},
+        "userId": {"type": "integer"},
+        "name": {"type": "string"},
+        "scopes": {"type": "array", "items": {"type": "string"}},
+        "expiresAt": {"$ref": "#/definitions/nullableString"},
+        "createdAt": {"$ref": "#/definitions/nullableString"},
+        "lastUsedAt": {"$ref": "#/definitions/nullableString"},
+        "active": {"type": "boolean"},
+        "revoked": {"type": "boolean"},
+        "accessLevel": {"type": "integer"}
+      },
+      "required": ["id", "userId", "name", "scopes"]
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "username": {"type": "string"}
+      },
+      "required": ["id", "name", "username"]
+    },
+    "issuedToken": {"type": "string", "description": "Newly issued token secret, returned only in this response; store it securely now."},
+    "issuedTokenResult": {
+      "type": "object",
+      "properties": {
+        "accessToken": {"$ref": "#/definitions/accessToken"},
+        "issuedToken": {"$ref": "#/definitions/issuedToken"},
+        "mutationStatus": {"$ref": "#/definitions/applied"},
+        "retrySafe": {"$ref": "#/definitions/notRetrySafe"}
+      },
+      "required": ["accessToken", "issuedToken", "mutationStatus", "retrySafe"]
+    },
+    "webhookWriteResult": {
+      "type": "object",
+      "properties": {
+        "mutationStatus": {"$ref": "#/definitions/applied"},
+        "retrySafe": {"$ref": "#/definitions/notRetrySafe"},
+        "webhookId": {"type": "integer"},
+        "webhook": {"$ref": "#/definitions/webhook"}
+      },
+      "required": ["mutationStatus", "retrySafe", "webhookId", "webhook"]
+    },
+    "webhookHeaderResult": {
+      "type": "object",
+      "properties": {
+        "mutationStatus": {"$ref": "#/definitions/applied"},
+        "retrySafe": {"$ref": "#/definitions/notRetrySafe"},
+        "webhookId": {"type": "integer"},
+        "key": {"type": "string", "description": "Custom header name."}
+      },
+      "required": ["mutationStatus", "retrySafe", "webhookId", "key"]
+    }
+  },
+  "actions": {
+    "project.view": {
+      "success": {
+        "type": "object",
+        "properties": {"project": {"$ref": "#/definitions/project"}},
+        "required": ["project"]
+      }
+    },
+    "project.upload": {
+      "success": {
+        "type": "object",
+        "properties": {"upload": {"$ref": "#/definitions/upload"}},
+        "required": ["upload"]
+      }
+    },
+    "project.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchProjectItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus"]
+      }
+    },
+    "project.search": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchProjectItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus"]
+      }
+    },
+    "search.issues": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchIssuableItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "engine": {"$ref": "#/definitions/searchEngine"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus", "engine"]
+      }
+    },
+    "search.merge_requests": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchIssuableItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "engine": {"$ref": "#/definitions/searchEngine"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus", "engine"]
+      }
+    },
+    "search.code": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchCodeItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "engine": {"$ref": "#/definitions/codeSearchEngine"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus", "engine"]
+      }
+    },
+    "search.commits": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchCommitItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "engine": {"$ref": "#/definitions/searchEngine"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus", "engine"]
+      }
+    },
+    "search.wiki": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchWikiItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "engine": {"$ref": "#/definitions/searchEngine"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus", "engine"]
+      }
+    },
+    "search.comments": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/searchCommentItem"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "scanStatus": {"$ref": "#/definitions/scanStatus"},
+          "engine": {"$ref": "#/definitions/searchEngine"},
+          "nextPageToken": {"$ref": "#/definitions/searchPageToken"}
+        },
+        "required": ["items", "count", "maxResults", "scanStatus", "engine"]
+      }
+    },
+    "branch.list": {
+      "success": {
+        "type": "object",
+        "properties": {"branches": {"type": "array", "items": {"$ref": "#/definitions/branch"}}},
+        "required": ["branches"]
+      }
+    },
+    "branch.view": {
+      "success": {
+        "type": "object",
+        "properties": {"branch": {"$ref": "#/definitions/branch"}},
+        "required": ["branch"]
+      }
+    },
+    "branch.create": {
+      "success": {
+        "type": "object",
+        "properties": {"branch": {"$ref": "#/definitions/branch"}},
+        "required": ["branch"]
+      }
+    },
+    "protected_branch.list": {
+      "success": {
+        "type": "object",
+        "properties": {"protectedBranches": {"type": "array", "items": {"$ref": "#/definitions/protectedBranch"}}},
+        "required": ["protectedBranches"]
+      }
+    },
+    "protected_branch.view": {
+      "success": {
+        "type": "object",
+        "properties": {"protectedBranch": {"$ref": "#/definitions/protectedBranch"}},
+        "required": ["protectedBranch"]
+      }
+    },
+    "protected_branch.verify": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "protectedBranchVerification": {
+            "type": "object",
+            "properties": {
+              "project": {"type": "string"},
+              "projectId": {"type": "integer"},
+              "defaultBranch": {"$ref": "#/definitions/nullableString"},
+              "checks": {
+                "type": "array",
+                "description": "One check per required pattern: the default branch, standard default-branch names and requested patterns.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "pattern": {"type": "string"},
+                    "covered": {"type": "boolean"},
+                    "matchedRule": {"type": ["string", "null"], "description": "Name of the first matching protection rule; null when not covered."},
+                    "pushAccessLevels": {"$ref": "#/definitions/accessLevels"},
+                    "mergeAccessLevels": {"$ref": "#/definitions/accessLevels"}
+                  },
+                  "required": ["pattern", "covered", "matchedRule", "pushAccessLevels", "mergeAccessLevels"]
+                }
+              }
+            },
+            "required": ["project", "projectId", "defaultBranch", "checks"]
+          }
+        },
+        "required": ["protectedBranchVerification"]
+      }
+    },
+    "file.view": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "object",
+            "properties": {
+              "fileName": {"type": "string"},
+              "filePath": {"type": "string"},
+              "size": {"type": "integer", "description": "Raw file size in bytes."},
+              "contentSha256": {"type": ["string", "null"], "description": "GitLab's content hash; may describe converted text, not the raw bytes."},
+              "ref": {"type": "string", "description": "Requested ref."},
+              "blobId": {"$ref": "#/definitions/nullableString"},
+              "commitId": {"type": "string", "description": "Resolved commit."},
+              "lastCommitId": {"$ref": "#/definitions/nullableString"},
+              "executeFilemode": {"$ref": "#/definitions/nullableBoolean"},
+              "contentStatus": {"type": "string", "enum": ["not_requested", "included", "too_large", "unsupported_text"]},
+              "content": {"type": "string", "description": "Complete UTF-8 file text; present only when contentStatus is included."},
+              "contentBudgetBytes": {"type": "integer", "description": "Applied whole-file budget; present only when contentStatus is too_large."}
+            },
+            "required": ["fileName", "filePath", "size", "contentSha256", "ref", "blobId", "commitId", "lastCommitId", "executeFilemode", "contentStatus"]
+          }
+        },
+        "required": ["file"]
+      }
+    },
+    "file.raw.download": {
+      "success": {
+        "type": "object",
+        "description": "Download metadata; the file bytes are delivered separately.",
+        "properties": {
+          "project": {"type": "string"},
+          "projectId": {"type": "integer"},
+          "path": {"type": "string"},
+          "ref": {"type": "string", "description": "Requested ref."},
+          "resolvedRef": {"type": "string", "description": "Resolved commit SHA."},
+          "contentType": {"type": "string"},
+          "size": {"type": "integer"}
+        },
+        "required": ["project", "projectId", "path", "ref", "resolvedRef", "contentType", "size"]
+      }
+    },
+    "file.create": {
+      "success": {
+        "type": "object",
+        "properties": {"file": {"$ref": "#/definitions/fileMutation"}},
+        "required": ["file"]
+      }
+    },
+    "file.update": {
+      "success": {
+        "type": "object",
+        "properties": {"file": {"$ref": "#/definitions/fileMutation"}},
+        "required": ["file"]
+      }
+    },
+    "file.delete": {
+      "success": {
+        "type": "object",
+        "properties": {"file": {"$ref": "#/definitions/fileMutation"}},
+        "required": ["file"]
+      }
+    },
+    "commit.list": {
+      "success": {
+        "type": "object",
+        "properties": {"commits": {"type": "array", "items": {"$ref": "#/definitions/commit"}}},
+        "required": ["commits"]
+      }
+    },
+    "commit.view": {
+      "success": {
+        "type": "object",
+        "properties": {"commit": {"$ref": "#/definitions/commit"}},
+        "required": ["commit"]
+      }
+    },
+    "commit.create": {
+      "success": {
+        "type": "object",
+        "properties": {"commit": {"$ref": "#/definitions/commit"}},
+        "required": ["commit"]
+      }
+    },
+    "pipeline.list": {
+      "success": {
+        "type": "object",
+        "properties": {"pipelines": {"type": "array", "items": {"$ref": "#/definitions/pipeline"}}},
+        "required": ["pipelines"]
+      }
+    },
+    "pipeline.view": {
+      "success": {
+        "type": "object",
+        "properties": {"pipeline": {"$ref": "#/definitions/pipeline"}},
+        "required": ["pipeline"]
+      }
+    },
+    "pipeline.run": {
+      "success": {
+        "type": "object",
+        "properties": {"pipeline": {"$ref": "#/definitions/pipeline"}},
+        "required": ["pipeline"]
+      }
+    },
+    "pipeline.retry": {
+      "success": {
+        "type": "object",
+        "properties": {"pipeline": {"$ref": "#/definitions/pipeline"}},
+        "required": ["pipeline"]
+      }
+    },
+    "pipeline.cancel": {
+      "success": {
+        "type": "object",
+        "properties": {"pipeline": {"$ref": "#/definitions/pipeline"}},
+        "required": ["pipeline"]
+      }
+    },
+    "job.list": {
+      "success": {
+        "type": "object",
+        "properties": {"jobs": {"type": "array", "items": {"$ref": "#/definitions/job"}}},
+        "required": ["jobs"]
+      }
+    },
+    "job.view": {
+      "success": {
+        "type": "object",
+        "properties": {"job": {"$ref": "#/definitions/job"}},
+        "required": ["job"]
+      }
+    },
+    "job.trace.download": {
+      "success": {
+        "type": "object",
+        "description": "Download metadata; the trace bytes are delivered separately.",
+        "properties": {
+          "project": {"type": "string"},
+          "projectId": {"type": "integer"},
+          "jobId": {"type": "integer"},
+          "pipelineId": {"$ref": "#/definitions/nullableInteger"},
+          "ref": {"$ref": "#/definitions/nullableString"},
+          "contentType": {"type": "string"},
+          "size": {"type": "integer"}
+        },
+        "required": ["project", "projectId", "jobId", "pipelineId", "ref", "contentType", "size"]
+      }
+    },
+    "job.retry": {
+      "success": {
+        "type": "object",
+        "properties": {"job": {"$ref": "#/definitions/job"}},
+        "required": ["job"]
+      }
+    },
+    "job.cancel": {
+      "success": {
+        "type": "object",
+        "properties": {"job": {"$ref": "#/definitions/job"}},
+        "required": ["job"]
+      }
+    },
+    "job.play": {
+      "success": {
+        "type": "object",
+        "properties": {"job": {"$ref": "#/definitions/job"}},
+        "required": ["job"]
+      }
+    },
+    "webhook.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "webhooks": {"type": "array", "items": {"$ref": "#/definitions/webhook"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/pageToken"}
+        },
+        "required": ["webhooks", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "webhook.view": {
+      "success": {
+        "type": "object",
+        "properties": {"webhook": {"$ref": "#/definitions/webhook"}},
+        "required": ["webhook"]
+      }
+    },
+    "webhook.create": {
+      "success": {"$ref": "#/definitions/webhookWriteResult"}
+    },
+    "webhook.update": {
+      "success": {"$ref": "#/definitions/webhookWriteResult"},
+      "error": {
+        "type": "object",
+        "properties": {
+          "resetConfiguration": {
+            "type": "object",
+            "description": "Secret names a URL change would reset; repeat with confirmDestinationReset=true to proceed.",
+            "properties": {
+              "customHeaders": {"type": "array", "items": {"type": "string"}},
+              "urlVariables": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["customHeaders", "urlVariables"]
+          }
+        },
+        "required": ["resetConfiguration"]
+      }
+    },
+    "webhook.delete": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"},
+          "webhookId": {"type": "integer"}
+        },
+        "required": ["mutationStatus", "retrySafe", "webhookId"]
+      }
+    },
+    "webhook.test": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"},
+          "webhookId": {"type": "integer"},
+          "attempt": {"$ref": "#/definitions/deliveryAttempt"}
+        },
+        "required": ["mutationStatus", "retrySafe", "webhookId", "attempt"]
+      }
+    },
+    "webhook.event.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "events": {"type": "array", "items": {"$ref": "#/definitions/deliveryEvent"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/pageToken"}
+        },
+        "required": ["events", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "webhook.event.resend": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"},
+          "webhookId": {"type": "integer"},
+          "webhookEventId": {"type": "integer"},
+          "attempt": {"$ref": "#/definitions/deliveryAttempt"}
+        },
+        "required": ["mutationStatus", "retrySafe", "webhookId", "webhookEventId", "attempt"]
+      }
+    },
+    "webhook.custom_header.set": {
+      "success": {"$ref": "#/definitions/webhookHeaderResult"}
+    },
+    "webhook.custom_header.delete": {
+      "success": {"$ref": "#/definitions/webhookHeaderResult"}
+    },
+    "project.access_token.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/accessToken"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/pageToken"}
+        },
+        "required": ["items", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "project.access_token.view": {
+      "success": {
+        "type": "object",
+        "properties": {"accessToken": {"$ref": "#/definitions/accessToken"}},
+        "required": ["accessToken"]
+      }
+    },
+    "project.access_token.create": {
+      "success": {"$ref": "#/definitions/issuedTokenResult"}
+    },
+    "project.access_token.rotate": {
+      "success": {"$ref": "#/definitions/issuedTokenResult"}
+    },
+    "project.access_token.revoke": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "userId": {"type": "integer", "description": "Token's bot user; present when GitLab reported it."},
+          "tokenId": {"type": "integer"},
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"}
+        },
+        "required": ["tokenId", "mutationStatus", "retrySafe"]
+      }
+    },
+    "service_account.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/serviceAccount"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/pageToken"}
+        },
+        "required": ["items", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "service_account.view": {
+      "success": {
+        "type": "object",
+        "properties": {"serviceAccount": {"$ref": "#/definitions/serviceAccount"}},
+        "required": ["serviceAccount"]
+      }
+    },
+    "service_account.create": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "serviceAccount": {"$ref": "#/definitions/serviceAccount"},
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"}
+        },
+        "required": ["serviceAccount", "mutationStatus", "retrySafe"]
+      }
+    },
+    "service_account.delete": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "userId": {"type": "integer"},
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"}
+        },
+        "required": ["userId", "mutationStatus", "retrySafe"]
+      }
+    },
+    "service_account.member.set": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "member": {
+            "type": "object",
+            "properties": {
+              "userId": {"type": "integer"},
+              "accessLevel": {"type": "integer"}
+            },
+            "required": ["userId", "accessLevel"]
+          },
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"}
+        },
+        "required": ["member", "mutationStatus", "retrySafe"]
+      }
+    },
+    "service_account.token.list": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "items": {"type": "array", "items": {"$ref": "#/definitions/accessToken"}},
+          "count": {"type": "integer"},
+          "maxResults": {"type": "integer"},
+          "isLast": {"type": "boolean"},
+          "nextPageToken": {"$ref": "#/definitions/pageToken"}
+        },
+        "required": ["items", "count", "maxResults", "isLast", "nextPageToken"]
+      }
+    },
+    "service_account.token.create": {
+      "success": {"$ref": "#/definitions/issuedTokenResult"}
+    },
+    "service_account.token.rotate": {
+      "success": {"$ref": "#/definitions/issuedTokenResult"}
+    },
+    "service_account.token.revoke": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "userId": {"type": "integer"},
+          "tokenId": {"type": "integer"},
+          "mutationStatus": {"$ref": "#/definitions/applied"},
+          "retrySafe": {"$ref": "#/definitions/notRetrySafe"}
+        },
+        "required": ["userId", "tokenId", "mutationStatus", "retrySafe"]
+      }
+    }
+  }
+}

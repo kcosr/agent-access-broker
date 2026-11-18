@@ -414,6 +414,115 @@ pub struct RenderContext {
     pub budget: PresentationBudget,
 }
 
+/// A rendered-body owner path did not resolve in a result schema. A unit
+/// error by design: the caller names the action and path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("rendered body owner does not resolve in the result schema")]
+pub struct UnresolvedBodyOwner;
+
+/// The schema of the `renderedBody` companion a non-native
+/// `readContentFormat` adds to each body owner.
+fn rendered_body_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "Present only when readContentFormat is markdown or text.",
+        "properties": {
+            "format": {"type": "string", "enum": ["markdown", "text"]},
+            "value": {"type": "string"}
+        },
+        "required": ["format", "value"]
+    })
+}
+
+/// The schema of the whole result when `responseFormat` is `markdown`.
+pub fn markdown_result_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "The whole result as Markdown, when responseFormat is markdown.",
+        "properties": {
+            "format": {"type": "string", "const": "markdown"},
+            "value": {"type": "string"}
+        },
+        "required": ["format", "value"]
+    })
+}
+
+/// Adds the optional `renderedBody` property to every object schema that
+/// `owner_pointer` reaches in the result schema `schema`.
+///
+/// The pointer is relative to the result, as
+/// [`EmbeddedBody::owner_pointer`] returns it: each segment names an object
+/// property, `*` the items of an array, and the empty pointer the result
+/// itself. Each step follows every `anyOf` branch, so the property lands in
+/// each object branch it reaches. The path must reach at least one object
+/// schema.
+pub fn inject_rendered_body_schema(
+    schema: &mut Value,
+    owner_pointer: &str,
+) -> Result<(), UnresolvedBodyOwner> {
+    let segments = if owner_pointer.is_empty() {
+        Vec::new()
+    } else {
+        owner_pointer
+            .strip_prefix('/')
+            .ok_or(UnresolvedBodyOwner)?
+            .split('/')
+            .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+            .collect()
+    };
+    if inject_rendered_body_at(schema, &segments, &rendered_body_schema()) {
+        Ok(())
+    } else {
+        Err(UnresolvedBodyOwner)
+    }
+}
+
+fn inject_rendered_body_at(schema: &mut Value, segments: &[String], rendered: &Value) -> bool {
+    let Some(object) = schema.as_object_mut() else {
+        return false;
+    };
+    let mut resolved = false;
+    if let Some(Value::Array(branches)) = object.get_mut("anyOf") {
+        for branch in branches {
+            resolved |= inject_rendered_body_at(branch, segments, rendered);
+        }
+    }
+    match segments.split_first() {
+        None => {
+            let typed_object = match object.get("type") {
+                Some(Value::String(name)) => name == "object",
+                Some(Value::Array(names)) => names.iter().any(|name| name == "object"),
+                _ => false,
+            };
+            let owner = object.contains_key("properties")
+                || (typed_object && !object.contains_key("anyOf"));
+            if owner
+                && let Some(properties) = object
+                    .entry("properties")
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+            {
+                properties.insert("renderedBody".into(), rendered.clone());
+                resolved = true;
+            }
+        }
+        Some((segment, rest)) if segment == "*" => {
+            if let Some(items) = object.get_mut("items") {
+                resolved |= inject_rendered_body_at(items, rest, rendered);
+            }
+        }
+        Some((segment, rest)) => {
+            if let Some(child) = object
+                .get_mut("properties")
+                .and_then(|properties| properties.get_mut(segment.as_str()))
+            {
+                resolved |= inject_rendered_body_at(child, rest, rendered);
+            }
+        }
+    }
+    resolved
+}
+
 /// Capabilities an action advertises: none without a presentation.
 pub fn response_capabilities(presentation: Option<&ActionPresentation>) -> ResponseCapabilities {
     presentation
@@ -961,6 +1070,68 @@ pub fn enforce_serialized_bound(value: &Value, max_bytes: u64) -> Result<(), Ren
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_body_schemas_reach_every_object_branch_of_the_owner_path() {
+        let mut schema = json!({"type": "object", "properties": {
+            "body": {"type": "string"},
+            "parent": {"type": ["object", "null"], "properties": {"body": {}}},
+            "comments": {"type": "array", "items": {"anyOf": [
+                {"type": "object", "properties": {"body": {}}},
+                {"type": "object", "properties": {"deleted": {"const": true}}},
+                {"type": "null"}
+            ]}},
+            "a/b": {"type": "object"}
+        }});
+        for pointer in ["", "/parent", "/comments/*", "/a~1b"] {
+            inject_rendered_body_schema(&mut schema, pointer).unwrap();
+        }
+        let rendered = rendered_body_schema();
+        assert_eq!(schema["properties"]["renderedBody"], rendered);
+        assert_eq!(
+            schema["properties"]["parent"]["properties"]["renderedBody"],
+            rendered
+        );
+        let branches = &schema["properties"]["comments"]["items"]["anyOf"];
+        assert_eq!(branches[0]["properties"]["renderedBody"], rendered);
+        assert_eq!(branches[1]["properties"]["renderedBody"], rendered);
+        assert!(branches[2].get("properties").is_none());
+        assert_eq!(
+            schema["properties"]["a/b"]["properties"]["renderedBody"],
+            rendered
+        );
+        assert!(rendered.get("required").is_some());
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("renderedBody")))
+        );
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&json!({"renderedBody": {"format": "text", "value": "x"}})));
+        assert!(!validator.is_valid(&json!({"renderedBody": {"format": "native", "value": "x"}})));
+        for unresolved in [
+            "/missing",
+            "/body/*",
+            "/comments",
+            "/comments/*/body/*",
+            "body",
+        ] {
+            let mut copy = schema.clone();
+            assert_eq!(
+                inject_rendered_body_schema(&mut copy, unresolved),
+                Err(UnresolvedBodyOwner),
+                "{unresolved}"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_results_are_a_complete_object_branch() {
+        let validator = jsonschema::validator_for(&markdown_result_schema()).unwrap();
+        assert!(validator.is_valid(&json!({"format": "markdown", "value": "# Title\n"})));
+        assert!(!validator.is_valid(&json!({"format": "markdown"})));
+        assert!(!validator.is_valid(&json!({"format": "text", "value": ""})));
+    }
 
     /// Upper-cases the owner's `text` field.
     struct ShoutCodec;

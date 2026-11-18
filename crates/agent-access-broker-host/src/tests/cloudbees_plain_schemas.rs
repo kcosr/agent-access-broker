@@ -2,7 +2,7 @@
 use super::mcp::{Fixture, TOKEN_A, structured};
 use super::*;
 use agent_access_core::ApiCatalog;
-use agent_access_core::mcp::{ProjectionMode, project_catalog, tool_name};
+use agent_access_core::mcp::{OutputSchemas, ProjectionMode, project_catalog, tool_name};
 use agent_access_provider::ActionIo;
 
 const JOB: &str = "payments/build-api";
@@ -78,7 +78,7 @@ async fn cloudbees_plain_inputs_project_through_stdio_http_send_and_openapi() {
     let catalog: ApiCatalog = serde_json::from_value(spec(&fixture, "catalog").await).unwrap();
     let openapi = spec(&fixture, "openapi.json").await;
     let send = spec(&fixture, "send-schema.json").await;
-    let stdio = project_catalog(&catalog, ProjectionMode::Stdio).unwrap();
+    let stdio = project_catalog(&catalog, ProjectionMode::Stdio, OutputSchemas::On).unwrap();
     let session = fixture.initialize().await;
     let listing = fixture.rpc(&session, 2, "tools/list", json!({})).await;
     assert!(listing["result"].get("nextCursor").is_none());

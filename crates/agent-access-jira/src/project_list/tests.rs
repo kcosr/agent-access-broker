@@ -123,7 +123,7 @@ async fn current_keys_are_filtered_before_metadata_and_empty_pages_resume() {
     .await;
     mount(&server, 3, 2, true, json!([project("20", "OPS")])).await;
     let first = p
-        .invoke(invocation(json!({"maxResults":2}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":2}), scope()))
         .await
         .unwrap();
     assert_eq!(first.result["items"], json!([]));
@@ -133,7 +133,7 @@ async fn current_keys_are_filtered_before_metadata_and_empty_pages_resume() {
     // A rebuild with the same stable key keeps the token usable.
     let p = provider(&server, cfg, ProviderLimits::default());
     let second = p
-        .invoke(invocation(
+        .invoke_checked(invocation(
             json!({"maxResults":2,"pageToken":token}),
             scope(),
         ))
@@ -146,7 +146,7 @@ async fn current_keys_are_filtered_before_metadata_and_empty_pages_resume() {
         json!({"id":"10","key":"ENG","name":"ENG project","projectTypeKey":"software","webUrl":"https://example.atlassian.net/browse/ENG"})
     );
     let third = p
-        .invoke(invocation(
+        .invoke_checked(invocation(
             json!({"maxResults":2,"pageToken":second.result["nextPageToken"]}),
             scope(),
         ))
@@ -190,7 +190,10 @@ async fn independent_allow_preserves_an_excluded_project_and_previews_are_bounde
         }],
         vec![],
     ));
-    let result = p.invoke(invocation(json!({}), authority)).await.unwrap();
+    let result = p
+        .invoke_checked(invocation(json!({}), authority))
+        .await
+        .unwrap();
     assert_eq!(result.result["count"], 1);
     assert!(result.result["items"][0]["name"].as_str().unwrap().len() <= 4096);
     assert_eq!(result.result["items"][0]["previewTruncated"], true);
@@ -202,7 +205,7 @@ async fn continuations_reject_changed_authority_inputs_config_and_identity_befor
     mount(&server, 0, 2, false, json!([project("1", "ENG")])).await;
     let p = provider(&server, config(&server), ProviderLimits::default());
     let first = p
-        .invoke(invocation(json!({"maxResults":2}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":2}), scope()))
         .await
         .unwrap();
     let token = first.result["nextPageToken"].as_str().unwrap();
@@ -228,7 +231,7 @@ async fn continuations_reject_changed_authority_inputs_config_and_identity_befor
     ];
     for request in variants {
         assert_eq!(
-            p.invoke(request).await.unwrap_err().reason_code(),
+            p.invoke_checked(request).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -236,7 +239,7 @@ async fn continuations_reject_changed_authority_inputs_config_and_identity_befor
     cfg.listing.max_scan_bytes += 1;
     assert_eq!(
         provider(&server, cfg, ProviderLimits::default())
-            .invoke(base.clone())
+            .invoke_checked(base.clone())
             .await
             .unwrap_err()
             .reason_code(),
@@ -245,7 +248,11 @@ async fn continuations_reject_changed_authority_inputs_config_and_identity_befor
     let mut restarted = provider(&server, config(&server), ProviderLimits::default());
     restarted.listing_signer = ContinuationSigner::new(None);
     assert_eq!(
-        restarted.invoke(base).await.unwrap_err().reason_code(),
+        restarted
+            .invoke_checked(base)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::InputInvalid
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
@@ -264,7 +271,10 @@ async fn failure_statuses_and_byte_limits_never_become_exhaustion_or_hidden_retr
             .mount(&server)
             .await;
         let p = provider(&server, config(&server), ProviderLimits::default());
-        let error = p.invoke(invocation(json!({}), scope())).await.unwrap_err();
+        let error = p
+            .invoke_checked(invocation(json!({}), scope()))
+            .await
+            .unwrap_err();
         assert!(!error.message.contains("DENIED_ERROR_DETAIL"));
         assert_eq!(
             server.received_requests().await.unwrap().len(),
@@ -284,7 +294,7 @@ async fn failure_statuses_and_byte_limits_never_become_exhaustion_or_hidden_retr
         }
         assert!(
             provider(&server, cfg, limits)
-                .invoke(invocation(json!({}), scope()))
+                .invoke_checked(invocation(json!({}), scope()))
                 .await
                 .is_err()
         );
@@ -304,7 +314,7 @@ async fn http_attempt_and_cumulative_body_budgets_bound_denied_scanning() {
             cfg.listing.max_upstream_requests = 1;
         }
         let result = provider(&server, cfg, ProviderLimits::default())
-            .invoke(invocation(json!({"maxResults":1}), scope()))
+            .invoke_checked(invocation(json!({"maxResults":1}), scope()))
             .await;
         if byte_budget {
             assert!(result.is_err());
@@ -361,7 +371,7 @@ async fn offset_pages_tolerate_repeated_denied_candidates_after_concurrent_chang
     )
     .await;
     let result = provider(&server, config(&server), ProviderLimits::default())
-        .invoke(invocation(json!({"maxResults":2}), scope()))
+        .invoke_checked(invocation(json!({"maxResults":2}), scope()))
         .await
         .unwrap();
     assert_eq!(result.result["count"], 1);
@@ -374,7 +384,10 @@ async fn first_page_exhaustion_timeout_and_result_byte_overflow_are_distinct() {
     let server = MockServer::start().await;
     mount(&server, 0, 50, true, json!([])).await;
     let p = provider(&server, config(&server), ProviderLimits::default());
-    let result = p.invoke(invocation(json!({}), scope())).await.unwrap();
+    let result = p
+        .invoke_checked(invocation(json!({}), scope()))
+        .await
+        .unwrap();
     assert_eq!(
         result.result,
         json!({"items":[],"count":0,"maxResults":50,"scanStatus":"exhausted"})
@@ -391,7 +404,7 @@ async fn first_page_exhaustion_timeout_and_result_byte_overflow_are_distinct() {
         ProviderLimits::default().with_request_timeout_ms(25),
     );
     assert_eq!(
-        p.invoke(invocation(json!({}), scope()))
+        p.invoke_checked(invocation(json!({}), scope()))
             .await
             .unwrap_err()
             .reason_code(),
@@ -410,7 +423,7 @@ async fn first_page_exhaustion_timeout_and_result_byte_overflow_are_distinct() {
     let mut limits = ProviderLimits::default();
     limits.max_upstream_response_bytes = 150;
     let error = provider(&server, config(&server), limits)
-        .invoke(invocation(json!({}), scope()))
+        .invoke_checked(invocation(json!({}), scope()))
         .await
         .unwrap_err();
     assert_eq!(
@@ -427,7 +440,7 @@ async fn provider_resume_preserves_an_aged_tokens_original_expiry() {
     let p = provider(&server, config(&server), ProviderLimits::default());
     let request = invocation(json!({"maxResults":1}), scope());
     let binding = listing_binding(&p, &request, 1, &scope(), TOKENS).unwrap();
-    let first = p.invoke(request).await.unwrap();
+    let first = p.invoke_checked(request).await.unwrap();
     let opened = p
         .listing_signer
         .open_confidential(&binding, first.result["nextPageToken"].as_str().unwrap())
@@ -444,7 +457,7 @@ async fn provider_resume_preserves_an_aged_tokens_original_expiry() {
         .seal_until_at(&binding, opened.payload(), expiry, now)
         .unwrap();
     let resumed = p
-        .invoke(invocation(
+        .invoke_checked(invocation(
             json!({"maxResults":1,"pageToken":aged}),
             scope(),
         ))
@@ -475,7 +488,7 @@ async fn credential_route_changes_and_foreign_actions_or_families_reject_before_
     cfg.cloud_id = Some("11111111-2222-4333-8444-555555555555".into());
     let p = provider(&server, cfg, ProviderLimits::default());
     let request = invocation(json!({"maxResults":1}), scope());
-    let first = p.invoke(request.clone()).await.unwrap();
+    let first = p.invoke_checked(request.clone()).await.unwrap();
     let base = invocation(
         json!({"maxResults":1,"pageToken":first.result["nextPageToken"]}),
         scope(),
@@ -491,7 +504,7 @@ async fn credential_route_changes_and_foreign_actions_or_families_reject_before_
             .credential(credential)
             .build();
         assert_eq!(
-            p.invoke(request).await.unwrap_err().reason_code(),
+            p.invoke_checked(request).await.unwrap_err().reason_code(),
             ReasonCode::InputInvalid
         );
     }
@@ -525,7 +538,7 @@ async fn credential_route_changes_and_foreign_actions_or_families_reject_before_
             )
             .unwrap();
         assert_eq!(
-            p.invoke(invocation(
+            p.invoke_checked(invocation(
                 json!({"maxResults":1,"pageToken":token}),
                 scope()
             ))
@@ -549,7 +562,7 @@ async fn credential_route_changes_and_foreign_actions_or_families_reject_before_
         )
         .unwrap();
     assert_eq!(
-        p.invoke(invocation(
+        p.invoke_checked(invocation(
             json!({"maxResults":1,"pageToken":token}),
             scope()
         ))

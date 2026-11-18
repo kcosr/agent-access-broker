@@ -136,7 +136,7 @@ async fn uploaded_bytes_share_url_plans_and_execute_offline_without_document_htt
                 &host.context(),
             )
             .unwrap()
-            .provider()
+            .checked()
             .unwrap();
         assert_eq!(fixture.call_count(), 1);
         provider

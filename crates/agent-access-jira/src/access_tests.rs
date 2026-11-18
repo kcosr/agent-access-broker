@@ -310,7 +310,7 @@ async fn oauth_reads_go_through_the_gateway_pinned_to_the_site() {
         .unwrap();
     assert_eq!(resolution.scopes(), &eng_scopes());
     let result = provider
-        .invoke(delegated_invocation(
+        .invoke_checked(delegated_invocation(
             "issue.view",
             inputs.clone(),
             &credential,
@@ -330,7 +330,7 @@ async fn oauth_reads_go_through_the_gateway_pinned_to_the_site() {
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
     let error = provider
-        .invoke(delegated_invocation("issue.view", inputs, &elsewhere))
+        .invoke_checked(delegated_invocation("issue.view", inputs, &elsewhere))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
@@ -367,7 +367,7 @@ async fn static_tokens_keep_routing_by_kind() {
         bearer_credential("service-token"),
     ] {
         provider
-            .invoke(
+            .invoke_checked(
                 InvocationBuilder::new("jira", "issue.view")
                     .inputs(json!({ "issue": "ENG-1" }))
                     .resources(eng_scopes())
@@ -435,7 +435,7 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
     let resolution = provider.resolve_scopes(fixture.request()).await.unwrap();
     assert_eq!(resolution.scopes(), &eng_scopes());
     provider
-        .invoke(
+        .invoke_checked(
             InvocationBuilder::new("jira", "issue.view")
                 .inputs(inputs.clone())
                 .resources(eng_scopes())
@@ -537,7 +537,7 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
             denial
         );
         let error = provider
-            .invoke(
+            .invoke_checked(
                 InvocationBuilder::new("jira", "issue.view")
                     .inputs(inputs.clone())
                     .resources(eng_scopes())
@@ -604,7 +604,7 @@ async fn one_recovery_spans_the_lookups_and_execution() {
         .await
         .unwrap();
     provider
-        .invoke(delegated_invocation(
+        .invoke_checked(delegated_invocation(
             "issue.view",
             inputs.clone(),
             &credential,
@@ -641,7 +641,7 @@ async fn one_recovery_spans_the_lookups_and_execution() {
     let credential = delegated_credential(lease.clone());
     let provider = self::provider(&server);
     let error = provider
-        .invoke(delegated_invocation("comment.list", inputs, &credential))
+        .invoke_checked(delegated_invocation("comment.list", inputs, &credential))
         .await
         .unwrap_err();
     assert_eq!(error, already_recovered());
@@ -712,7 +712,7 @@ async fn delegated_failures_at_a_read_back_report_the_write_applied_unverified()
             .await;
         let credential = delegated_credential(lease.clone());
         let error = provider(&server)
-            .invoke(delegated_invocation(
+            .invoke_checked(delegated_invocation(
                 "issue.create",
                 create_inputs(),
                 &credential,
@@ -751,7 +751,7 @@ async fn delegated_failures_at_a_read_back_report_the_write_applied_unverified()
     answer(&server, "GET", &readback, "Bearer oauth-2", 401, json!({})).await;
     let credential = delegated_credential(Lease::new(CLOUD_ID));
     let error = provider(&server)
-        .invoke(delegated_invocation(
+        .invoke_checked(delegated_invocation(
             "issue.create",
             create_inputs(),
             &credential,
@@ -773,7 +773,7 @@ async fn delegated_failures_before_the_write_pass_through_unchanged() {
         lease.fail_revalidation(failure.clone());
         let credential = delegated_credential(lease);
         let error = provider(&server)
-            .invoke(delegated_invocation(
+            .invoke_checked(delegated_invocation(
                 "issue.create",
                 create_inputs(),
                 &credential,
@@ -799,7 +799,7 @@ async fn delegated_failures_before_the_write_pass_through_unchanged() {
     lease.recovered.store(true, Ordering::SeqCst);
     let credential = delegated_credential(lease.clone());
     let error = provider(&server)
-        .invoke(delegated_invocation(
+        .invoke_checked(delegated_invocation(
             "issue.create",
             create_inputs(),
             &credential,
@@ -1210,7 +1210,7 @@ async fn oauth_resolves_a_renamed_project_key_through_the_gateway() {
             .unwrap();
         assert_eq!(resolution.scopes(), &project_scopes("NEW"), "{locator}");
         let result = provider
-            .invoke(
+            .invoke_checked(
                 delegated_invocation_builder("NEW", "issue.view", locator.clone(), &credential)
                     .build(),
             )
@@ -1241,7 +1241,7 @@ async fn oauth_resolves_a_renamed_project_key_through_the_gateway() {
         );
 
         let error = provider
-            .invoke(
+            .invoke_checked(
                 delegated_invocation_builder("OLD", "issue.view", locator.clone(), &credential)
                     .build(),
             )
@@ -1303,7 +1303,7 @@ async fn oauth_rechecks_a_moved_issue_through_the_gateway_before_acting() {
             .unwrap();
         assert_eq!(resolution.scopes(), &eng_scopes(), "{action}");
         let error = provider
-            .invoke(delegated_invocation(action, inputs, &credential))
+            .invoke_checked(delegated_invocation(action, inputs, &credential))
             .await
             .unwrap_err();
         assert_eq!(
@@ -1369,7 +1369,7 @@ async fn oauth_issue_view_discloses_embedded_links_through_the_gateway() {
     let provider = provider(&server);
 
     let result = provider
-        .invoke(
+        .invoke_checked(
             delegated_invocation_builder(
                 "ENG",
                 "issue.view",
@@ -1472,7 +1472,7 @@ async fn project_listing_counts_oauth_replay_and_shares_one_recovery_across_page
                 ),
             ))
             .build();
-        let result = provider.invoke(request).await;
+        let result = provider.invoke_checked(request).await;
         if attempts == 2 {
             let result = result.unwrap();
             assert_eq!(result.result["scanStatus"], "scan_budget");
@@ -1557,7 +1557,7 @@ async fn project_listing_reserves_replay_before_the_last_budgeted_page() {
         .mount(&server)
         .await;
     let result = p
-        .invoke(listing_request(&credential, json!({"maxResults":1})))
+        .invoke_checked(listing_request(&credential, json!({"maxResults":1})))
         .await
         .unwrap();
     assert_eq!(result.result["scanStatus"], "scan_budget");
@@ -1579,7 +1579,7 @@ async fn project_listing_fences_a_rejected_version_even_when_its_body_exceeds_bu
         .mount(&server)
         .await;
     assert!(
-        p.invoke(listing_request(&credential, json!({})))
+        p.invoke_checked(listing_request(&credential, json!({})))
             .await
             .is_err()
     );
@@ -1600,7 +1600,7 @@ async fn project_listing_continuations_survive_access_refresh_but_not_a_credenti
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"startAt":offset,"maxResults":1,"isLast":false,"values":[{"id":format!("{}",offset+10),"key":key,"name":key}]}))).mount(&server).await;
     }
     let first = p
-        .invoke(listing_request(&credential, json!({"maxResults":1})))
+        .invoke_checked(listing_request(&credential, json!({"maxResults":1})))
         .await
         .unwrap();
     let resumed = listing_request(
@@ -1611,13 +1611,16 @@ async fn project_listing_continuations_survive_access_refresh_but_not_a_credenti
         .credential(bearer_credential("static-token"))
         .build();
     assert_eq!(
-        p.invoke(static_request).await.unwrap_err().reason_code(),
+        p.invoke_checked(static_request)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::InputInvalid
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     // A different operation refreshed this same connection; the binding is unchanged.
     lease.current.store(2, Ordering::SeqCst);
-    let second = p.invoke(resumed).await.unwrap();
+    let second = p.invoke_checked(resumed).await.unwrap();
     assert_eq!(second.result["items"][0]["key"], "OPS");
     assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }

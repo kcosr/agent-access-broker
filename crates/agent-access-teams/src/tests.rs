@@ -1,5 +1,5 @@
 use super::*;
-use agent_access_provider::test_support::InvocationBuilder;
+use agent_access_provider::test_support::{InvocationBuilder, assert_result_conforms};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{method, path},
@@ -48,6 +48,29 @@ impl NotificationTransport for ThrottledTransport {
     }
 }
 
+/// Invokes a provider and checks the outcome strictly against the action's
+/// result schemas. Unit tests use it instead of `Provider::invoke`.
+trait CheckedInvoke {
+    async fn checked_invoke(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError>;
+}
+impl CheckedInvoke for TeamsProvider {
+    async fn checked_invoke(
+        &self,
+        request: ProviderInvocation,
+    ) -> Result<ProviderResult, ProviderError> {
+        let action = descriptor().action(request.action()).cloned();
+        let outcome = Provider::invoke(self, request).await;
+        match &action {
+            Some(action) => assert_result_conforms(action, &outcome),
+            None => assert!(outcome.is_err(), "an undeclared action must fail"),
+        }
+        outcome
+    }
+}
+
 fn admitted_invocation() -> ProviderInvocation {
     InvocationBuilder::new("teams", ACTION)
         .inputs(simple())
@@ -85,7 +108,10 @@ async fn workflow_throttling_is_an_upstream_rate_limit_without_retry_claims() {
             allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
             max_bytes: MAX_BODY_BYTES,
         };
-        let error = provider.invoke(admitted_invocation()).await.unwrap_err();
+        let error = provider
+            .checked_invoke(admitted_invocation())
+            .await
+            .unwrap_err();
         assert_eq!(error.decision(), Decision::Error);
         assert_eq!(error.reason_code(), ReasonCode::UpstreamRateLimited);
         assert_eq!(error.upstream_status, Some(429));
@@ -140,7 +166,10 @@ async fn redirects_and_server_errors_leave_an_unknown_notification_outcome() {
             allowed_upstream_hosts: vec![format!("{ORIGIN}/**")],
             max_bytes: MAX_BODY_BYTES,
         };
-        let error = provider.invoke(admitted_invocation()).await.unwrap_err();
+        let error = provider
+            .checked_invoke(admitted_invocation())
+            .await
+            .unwrap_err();
         assert_eq!(error.reason_code(), reason, "{status}");
         assert_eq!(
             error.message,
@@ -168,14 +197,14 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
             vec!["release-alerts".into()],
         )]))
         .build();
-    assert!(provider.invoke(invocation.clone()).await.is_err());
+    assert!(provider.checked_invoke(invocation.clone()).await.is_err());
     invocation = InvocationBuilder::from(invocation)
         .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
             "webhookUrl".into(),
             ENDPOINT.into(),
         )])))
         .build();
-    let receipt = provider.invoke(invocation.clone()).await.unwrap();
+    let receipt = provider.checked_invoke(invocation.clone()).await.unwrap();
     assert_eq!(
         receipt.result,
         json!({"destination":"release-alerts","accepted":true})
@@ -188,7 +217,7 @@ async fn invocation_requires_private_admitted_endpoint_and_returns_only_receipt_
     invocation = InvocationBuilder::from(invocation)
         .credential_mode(CredentialMode::PerUser)
         .build();
-    assert!(provider.invoke(invocation).await.is_err());
+    assert!(provider.checked_invoke(invocation).await.is_err());
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
@@ -222,7 +251,7 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
             .resources(destinations(&["other-alerts", "release-alerts"]))
             .build(),
     ] {
-        let error = provider.invoke(invocation).await.unwrap_err();
+        let error = provider.checked_invoke(invocation).await.unwrap_err();
         assert_eq!(error.decision(), Decision::Deny);
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
         assert_eq!(error.message, "invalid Teams invocation authority");
@@ -245,7 +274,7 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
         ),
     ] {
         let error = provider
-            .invoke(
+            .checked_invoke(
                 variant()
                     .resource_attributes(ResourceAttributes::from(BTreeMap::from([(
                         "webhookUrl".into(),
@@ -261,7 +290,10 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
     }
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 0);
     // Audit and object IDs name the alias and the endpoint's origin only.
-    let receipt = provider.invoke(admitted_invocation()).await.unwrap();
+    let receipt = provider
+        .checked_invoke(admitted_invocation())
+        .await
+        .unwrap();
     assert_eq!(
         receipt.audit,
         Some(json!({"destination":"release-alerts","upstreamOrigin":ORIGIN}))
@@ -271,6 +303,20 @@ async fn invocation_needs_service_mode_no_execution_material_and_the_exact_admit
         Some(json!({"destination":"release-alerts"}))
     );
     assert_eq!(transport.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn every_action_declares_bundled_result_schemas() {
+    let descriptor = descriptor();
+    assert_eq!(descriptor.validate(), Ok(()));
+    let mut names = descriptor
+        .actions
+        .iter()
+        .inspect(|action| assert!(action.result_schemas.is_some(), "{}", action.action))
+        .map(|action| action.action.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(RESULT_SCHEMAS.actions(), names);
 }
 
 #[test]
@@ -580,6 +626,7 @@ async fn proven_unsent_requests_are_reported_apart_from_unknown_outcomes() {
         Some(&json!({"mutationStatus": "not_applied", "retrySafe": true}))
     );
     assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+    assert_result_conforms(&descriptor().actions[0], &Err(error));
 }
 
 #[tokio::test]
@@ -623,6 +670,7 @@ async fn upstream_traces_and_failures_carry_only_the_endpoint_origin() {
                 assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
                 assert!(!format!("{error:?}").contains("private-path"));
                 assert!(!format!("{error:?}").contains("SYNTHETIC_SECRET"));
+                assert_result_conforms(&descriptor().actions[0], &Err(error));
             }
         }
     }

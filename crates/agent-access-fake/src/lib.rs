@@ -16,11 +16,11 @@ pub use oauth_records::{OAUTH_COLLECTION_RESOURCE, OAUTH_STUB_BACKEND, OAuthStub
 pub use oauth_stub::STUB_OAUTH_DIALECT;
 
 use agent_access_provider::{
-    ActionDescriptor, BackendConfig, BackendRegistration, BuildContext, CredentialDescriptor,
-    EgressProxyConfig, Provider, ProviderBuildError, ProviderError, ProviderInvocation,
-    ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes, ResourceType,
-    ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor, ServiceProvider,
-    ValidationContext, parse_backend_config,
+    ActionDescriptor, ActionResultSchemas, BackendConfig, BackendRegistration, BuildContext,
+    CredentialDescriptor, EgressProxyConfig, Provider, ProviderBuildError, ProviderError,
+    ProviderInvocation, ProviderResult, ReasonCode, ResourceScopeCapabilities, ResourceScopes,
+    ResourceType, ResourceTypeDescriptor, ScopeRequest, ScopeResolution, ServiceDescriptor,
+    ServiceProvider, ValidationContext, parse_backend_config,
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -162,9 +162,27 @@ pub fn fake_descriptor() -> ServiceDescriptor {
             .scope("project")
             .credential_modes(["service", "per_user"])
             // The echoed message is content, which audit never records.
-            .audit_input("project", "Project"),
+            .audit_input("project", "Project")
+            .result_schemas(echo_result_schemas()),
         ])
         .with_credentials(CredentialDescriptor::without_execution_credential())
+}
+
+/// The `echo` result: the admitted request echoed back.
+fn echo_result_schemas() -> ActionResultSchemas {
+    let string = || json!({"type": "string"});
+    ActionResultSchemas::new(json!({
+        "type": "object",
+        "properties": {
+            "provider": {"type": "string", "const": "fake"},
+            "action": string(),
+            "project": string(),
+            "message": string(),
+            "credentialMode": {"type": "string", "enum": ["service", "per_user"]},
+            "principal": string()
+        },
+        "required": ["provider", "action", "project", "message", "credentialMode", "principal"]
+    }))
 }
 
 /// The fake provider paired with its descriptor, for runtimes built without
@@ -215,4 +233,50 @@ fn is_fake_project_key(value: &str) -> bool {
     let mut chars = value.chars();
     matches!(chars.next(), Some(first) if first.is_ascii_uppercase())
         && chars.all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_access_provider::CredentialMode;
+    use agent_access_provider::test_support::{InvocationBuilder, assert_result_conforms};
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    /// The echo awaits nothing, so one poll completes it.
+    fn invoke(request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        let invocation = FakeProvider.invoke(request);
+        let mut invocation = std::pin::pin!(invocation);
+        match invocation
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(outcome) => outcome,
+            Poll::Pending => panic!("the fake echo completes without waiting"),
+        }
+    }
+
+    #[test]
+    fn echo_results_match_their_declared_schemas() {
+        let descriptor = fake_descriptor();
+        descriptor.validate().unwrap();
+        let echo = descriptor.action("echo").unwrap();
+        for mode in [CredentialMode::Service, CredentialMode::PerUser] {
+            let outcome = invoke(
+                InvocationBuilder::new("fake", "echo")
+                    .inputs(json!({"project": "TEST", "message": "hello"}))
+                    .resources(ResourceScopes::from([(
+                        "project".to_string(),
+                        vec!["TEST".to_string()],
+                    )]))
+                    .credential_mode(mode)
+                    .build(),
+            );
+            assert_result_conforms(echo, &outcome);
+            assert_eq!(outcome.unwrap().result["project"], "TEST");
+        }
+        let denied = invoke(InvocationBuilder::new("fake", "echo").build());
+        assert_result_conforms(echo, &denied);
+        assert!(denied.is_err());
+    }
 }

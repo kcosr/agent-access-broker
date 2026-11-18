@@ -68,7 +68,7 @@ fn describe(state: Option<&ProviderState>) -> String {
 
 impl agent_access_provider::test_support::DescribedProvider for StateProvider {
     fn descriptor(&self) -> ServiceDescriptor {
-        agent_access_fake::fake_descriptor()
+        super::tests::untyped_fake_descriptor()
     }
 }
 
