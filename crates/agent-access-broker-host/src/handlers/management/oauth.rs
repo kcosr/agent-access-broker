@@ -1,13 +1,14 @@
 //! Human-owned delegated service connections. Broker invocation tokens cannot consent.
 use super::common::{
     ManagementAccess, ManagementContext, management_context, management_context_error_response,
-    management_success_response, management_write_audit_preflight,
+    management_pre_audited_success_response, management_store_call,
+    management_store_error_response, management_success_response, management_write_audit_preflight,
 };
 use super::connections;
 use crate::state::AppState;
 use agent_access_core::{
-    OAuthBinding, OAuthConnectIntent, OAuthConnection, OAuthConnectionStatus, OAuthError,
-    OAuthManagementAdmission, OAuthReturnPath, RemoteRevocation,
+    BrokerRuntime, IdentityContext, OAuthBinding, OAuthConnectIntent, OAuthConnection,
+    OAuthConnectionStatus, OAuthError, OAuthManagementAdmission, OAuthReturnPath, RemoteRevocation,
 };
 use agent_access_provider::{CorrelationContext, ReasonCode, host::with_correlation_context};
 use axum::Json;
@@ -15,7 +16,7 @@ use axum::extract::{ConnectInfo, Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -33,14 +34,30 @@ fn private_response(mut response: Response) -> Response {
 }
 
 async fn error(context: &ManagementContext, operation: &str, failure: OAuthError) -> Response {
+    targeted_error(context, operation, failure, None).await
+}
+
+async fn targeted_error(
+    context: &ManagementContext,
+    operation: &str,
+    failure: OAuthError,
+    target: Option<Value>,
+) -> Response {
     let (status, reason) = match failure {
         OAuthError::SelfServiceDisabled => (StatusCode::FORBIDDEN, ReasonCode::SelfServiceDisabled),
         OAuthError::SetupDenied => (StatusCode::FORBIDDEN, ReasonCode::ServiceActionDenied),
         _ => (StatusCode::BAD_REQUEST, ReasonCode::CredentialInvalid),
     };
     private_response(
-        management_context_error_response(context, status, operation, reason, failure.code(), None)
-            .await,
+        management_context_error_response(
+            context,
+            status,
+            operation,
+            reason,
+            failure.code(),
+            target,
+        )
+        .await,
     )
 }
 
@@ -84,13 +101,15 @@ struct RegistrationConsumers {
     consumers: Vec<String>,
 }
 
-fn selected_registrations(context: &ManagementContext) -> BTreeMap<String, RegistrationConsumers> {
-    let runtime = &context.snapshot.runtime;
+fn selected_registrations(
+    runtime: &BrokerRuntime,
+    identity: &IdentityContext,
+) -> BTreeMap<String, RegistrationConsumers> {
     let mut registrations = BTreeMap::<String, RegistrationConsumers>::new();
     for connection in connections::connection_ids(runtime) {
         // The signed-in principal's kind selects the connection's method.
         let Some(agent_access_core::Selection::OAuth(oauth)) =
-            connections::selection(runtime, &connection, context.identity.principal_kind)
+            connections::selection(runtime, &connection, identity.principal_kind)
         else {
             continue;
         };
@@ -110,10 +129,10 @@ fn selected_registrations(context: &ManagementContext) -> BTreeMap<String, Regis
 }
 
 fn setup_unavailable_reason(
-    context: &ManagementContext,
+    runtime: &BrokerRuntime,
+    identity: &IdentityContext,
     service: &str,
 ) -> Result<Option<&'static str>, OAuthError> {
-    let runtime = &context.snapshot.runtime;
     if let Some(record) = runtime.imported_catalog().service(service)
         && (record.status == agent_access_core::ImportedServiceStatus::Retired
             || runtime
@@ -124,23 +143,25 @@ fn setup_unavailable_reason(
     }
     let store = runtime.managed_store().ok_or(OAuthError::Storage)?;
     let admin_discovery = store
-        .can_manage_imported_oauth(&context.identity.principal, service)
+        .can_manage_imported_oauth(&identity.principal, service)
         .map_err(|_| OAuthError::Storage)?;
-    Ok((!admin_discovery
-        && !runtime.has_any_per_user_policy_for_service(&context.identity, service))
-    .then_some("no_personal_access"))
+    Ok(
+        (!admin_discovery && !runtime.has_any_per_user_policy_for_service(identity, service))
+            .then_some("no_personal_access"),
+    )
 }
 
 /// The consumers of a registration the user may set up through, and why
 /// the others are unavailable.
 fn entitlement(
-    context: &ManagementContext,
+    runtime: &BrokerRuntime,
+    identity: &IdentityContext,
     consumers: &[String],
 ) -> Result<(Vec<String>, Vec<&'static str>), OAuthError> {
     let mut entitled = Vec::new();
     let mut reasons = Vec::new();
     for service in consumers {
-        match setup_unavailable_reason(context, service)? {
+        match setup_unavailable_reason(runtime, identity, service)? {
             None => entitled.push(service.clone()),
             Some(reason) => reasons.push(reason),
         }
@@ -158,20 +179,41 @@ pub(crate) async fn list(
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let runtime = &context.snapshot.runtime;
+    match connection_rows(&context.snapshot.runtime, &context.identity, false, true) {
+        Ok(rows) => private_response(
+            management_success_response(&context, operation, None, json!(rows)).await,
+        ),
+        Err(failure) => error(&context, operation, failure).await,
+    }
+}
+
+/// Shared metadata projection. Administrative reads describe the target's
+/// connections without checking owner-only consent prerequisites. A disabled
+/// or non-human target has no live connection but can retain remote cleanup.
+fn connection_rows(
+    runtime: &BrokerRuntime,
+    identity: &IdentityContext,
+    administrative: bool,
+    active_human: bool,
+) -> Result<Vec<Value>, OAuthError> {
     let Some(manager) = runtime.oauth_manager() else {
-        return private_response(
-            management_success_response(&context, operation, None, json!([])).await,
-        );
+        return if administrative && !runtime.config().oauth.registrations.is_empty() {
+            Err(OAuthError::Configuration)
+        } else {
+            Ok(Vec::new())
+        };
     };
-    let owned_connections = match manager.list(&context.identity.principal) {
-        Ok(c) => c,
-        Err(e) => return error(&context, operation, e).await,
+    let (owned_connections, live_owner) = if active_human {
+        match manager.list(&identity.principal) {
+            Ok(connections) => (connections, true),
+            // The target may have been disabled since resolving its identity.
+            Err(OAuthError::Principal) if administrative => (Vec::new(), false),
+            Err(failure) => return Err(failure),
+        }
+    } else {
+        (Vec::new(), false)
     };
-    let revocations = match manager.remote_revocations(&context.identity.principal) {
-        Ok(revocations) => revocations,
-        Err(e) => return error(&context, operation, e).await,
-    };
+    let revocations = manager.remote_revocations(&identity.principal)?;
     let remote_revocation = |registration: &str| {
         revocations
             .get(registration)
@@ -179,13 +221,14 @@ pub(crate) async fn list(
             .unwrap_or(RemoteRevocation::NotRequested)
     };
     let mut rows = Vec::new();
-    let selected_registrations = selected_registrations(&context);
+    let selected_registrations = if live_owner {
+        selected_registrations(runtime, identity)
+    } else {
+        BTreeMap::new()
+    };
     for (registration_id, selected) in &selected_registrations {
         let registration_id = registration_id.clone();
-        let (entitled, reasons) = match entitlement(&context, &selected.consumers) {
-            Ok(entitlement) => entitlement,
-            Err(failure) => return error(&context, operation, failure).await,
-        };
+        let (entitled, reasons) = entitlement(runtime, identity, &selected.consumers)?;
         let connection = owned_connections
             .iter()
             .find(|c| c.registration == registration_id);
@@ -204,14 +247,16 @@ pub(crate) async fn list(
             } else {
                 "no_personal_access"
             })
+        } else if administrative {
+            None
         } else {
             // A registration bound to a Broker sign-in the user has not
             // linked cannot connect; consent start and installation check
             // it again.
-            match manager.check_login_binding(&context.identity.principal, &registration_id) {
+            match manager.check_login_binding(&identity.principal, &registration_id) {
                 Ok(()) => None,
                 Err(OAuthError::LoginBindingRequired) => Some("login_binding_required"),
-                Err(failure) => return error(&context, operation, failure).await,
+                Err(failure) => return Err(failure),
             }
         };
         let Some(registration) = manager.config().registrations.get(&registration_id) else {
@@ -288,7 +333,14 @@ pub(crate) async fn list(
             "canDisconnect":owned,"remoteRevocation":remote_revocation,
             "connection":connection}));
     }
-    private_response(management_success_response(&context, operation, None, json!(rows)).await)
+    if administrative {
+        for row in &mut rows {
+            let object = row.as_object_mut().expect("OAuth connection row");
+            object.remove("canConnect");
+            object.remove("connectUnavailableReason");
+        }
+    }
+    Ok(rows)
 }
 
 /// The entitled consumers across a registration's connections and the
@@ -311,6 +363,124 @@ fn registration_consumer_view(
     }
     let other = selected.consumers.len().saturating_sub(views.len());
     (views, other)
+}
+
+/// Resolves the target without replacing the administrator's actor context.
+async fn administered_identity(
+    context: &ManagementContext,
+    operation: &str,
+    principal: &str,
+    target: Option<Value>,
+) -> Result<(IdentityContext, bool), Box<Response>> {
+    let principal = principal.to_string();
+    let (record, groups) = match management_store_call(context, move |store| {
+        Ok((
+            store.principal(&principal)?,
+            store.policy_groups(&principal)?,
+        ))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(failure) => {
+            return Err(Box::new(private_response(
+                management_store_error_response(context, operation, target, failure).await,
+            )));
+        }
+    };
+    let active_human = record.status == "active" && record.kind == "user";
+    Ok((
+        super::admin::managed_principal_identity(&context.snapshot.runtime, record, groups),
+        active_human,
+    ))
+}
+
+pub(crate) async fn admin_list(
+    State(state): State<AppState>,
+    Path(principal): Path<String>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let operation = "admin.principals.oauth_connections.list";
+    let context = match management_context(
+        &state,
+        remote,
+        &headers,
+        operation,
+        ManagementAccess::AdminRead,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return private_response(*response),
+    };
+    let target = Some(json!({"principal": principal}));
+    let (identity, active_human) =
+        match administered_identity(&context, operation, &principal, target.clone()).await {
+            Ok(identity) => identity,
+            Err(response) => return *response,
+        };
+    match connection_rows(&context.snapshot.runtime, &identity, true, active_human) {
+        Ok(rows) => private_response(
+            management_success_response(&context, operation, target, json!(rows)).await,
+        ),
+        Err(failure) => targeted_error(&context, operation, failure, target).await,
+    }
+}
+
+pub(crate) async fn admin_disconnect(
+    State(state): State<AppState>,
+    Path((principal, registration)): Path<(String, String)>,
+    ConnectInfo(remote): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    let operation = "admin.principals.oauth_connections.disconnect";
+    let context = match management_context(
+        &state,
+        remote,
+        &headers,
+        operation,
+        ManagementAccess::AdminWrite,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return private_response(*response),
+    };
+    let target = Some(json!({"principal": principal, "registration": registration}));
+    if let Err(response) =
+        administered_identity(&context, operation, &principal, target.clone()).await
+    {
+        return *response;
+    }
+    let Some(manager) = context.snapshot.runtime.oauth_manager() else {
+        return targeted_error(&context, operation, OAuthError::Configuration, target).await;
+    };
+    if !manager.config().registrations.contains_key(&registration) {
+        return targeted_error(&context, operation, OAuthError::Configuration, target).await;
+    }
+    if let Err(response) =
+        management_write_audit_preflight(&context, operation, target.clone()).await
+    {
+        return private_response(*response);
+    }
+    // The core transaction leaves a pending initial consent unchanged when no
+    // connection exists. A concurrent disable has already ended local access.
+    // Use the owner's state inside the disconnect transaction: an earlier
+    // disabled-state snapshot must not skip a connection made after re-enable.
+    let result = match manager.disconnect(&principal, &registration).await {
+        Err(OAuthError::Principal) => manager.remote_revocation(&principal, &registration),
+        result => result,
+    };
+    match result {
+        Ok(remote_revocation) => private_response(management_pre_audited_success_response(
+            &context,
+            operation,
+            target,
+            json!({"disconnected":true,"remoteRevocation":remote_revocation}),
+        )),
+        Err(failure) => targeted_error(&context, operation, failure, target).await,
+    }
 }
 
 #[derive(Deserialize)]
@@ -337,11 +507,15 @@ pub(crate) async fn connect(
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let mut registrations = selected_registrations(&context);
+    let mut registrations = selected_registrations(&context.snapshot.runtime, &context.identity);
     let Some(selected) = registrations.remove(&body.registration) else {
         return error(&context, operation, OAuthError::Configuration).await;
     };
-    let (entitled, _) = match entitlement(&context, &selected.consumers) {
+    let (entitled, _) = match entitlement(
+        &context.snapshot.runtime,
+        &context.identity,
+        &selected.consumers,
+    ) {
         Ok(entitlement) => entitlement,
         Err(failure) => return error(&context, operation, failure).await,
     };

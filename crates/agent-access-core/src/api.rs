@@ -686,7 +686,7 @@ pub fn openapi_from_catalog(
                 }
             }
             if route.access == RouteAccess::BrowserManagement {
-                operation.insert("description".into(), json!("Requires a signed-in browser session; writes require the configured CSRF header. Broker API tokens cannot manage OAuth connections."));
+                operation.insert("description".into(), json!("Requires a signed-in browser session; writes require the configured CSRF header. Broker API tokens cannot use this personal OAuth route."));
                 if matches!(auth, RenderAuthMode::Include) {
                     operation.insert("security".into(), json!([{"browserSession": []}]));
                 }
@@ -952,6 +952,7 @@ pub fn http_route_specs(
     routes.extend(spec_route_specs());
     routes.extend(user_management_route_specs());
     routes.extend(oauth_route_specs());
+    routes.extend(admin_oauth_route_specs());
     routes.extend(application_access_route_specs());
     routes.extend(admin_management_route_specs());
     routes.extend(resource_policy_route_specs(resource_types));
@@ -1602,7 +1603,55 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
             }
         }),
     );
-    let connection_schema = json!({
+    let mut row_schema = oauth_connection_row_schema();
+    row_schema["required"]
+        .as_array_mut()
+        .expect("OAuth row required fields")
+        .extend([json!("canConnect"), json!("connectUnavailableReason")]);
+    row_schema["properties"]["canConnect"] = json!({"type":"boolean"});
+    row_schema["properties"]["connectUnavailableReason"] = json!({
+        "enum":[null,"no_personal_access","service_unavailable","login_binding_required"],
+        "description":"login_binding_required: the registration binds connections to a Broker sign-in the caller has not linked."
+    });
+    routes[0].result_schema = Some(json!({
+        "type":"array",
+        "description":"One row per OAuth registration the caller's credential connections select: registrations available for setup, plus existing owned connections available for local disconnect, plus cleanup-only rows for registrations whose remoteRevocation is pending, failed or unconfirmed, whatever the caller's entitlement or ownership. Setup requires self-service and a matching per-user grant on a consuming service or the administrator import-discovery exception; it does not authorize invocation.",
+        "items":row_schema
+    }));
+    routes[1].sensitive_response_pointers = vec!["/result/authorizationUrl".into()];
+    routes[2].result_schema = Some(oauth_disconnect_result_schema());
+    // The redirect callback is a browser protocol endpoint, like /v1/auth/*,
+    // rather than an envelope-based JSON send route. See docs/oauth.md.
+    routes
+}
+
+fn admin_oauth_route_specs() -> Vec<HttpRouteSpec> {
+    let mut routes = vec![
+        get_management_route(
+            "/v1/admin/principals/{principal}/oauth/connections",
+            "admin.principals.oauth_connections.list",
+            RouteAccess::AdminRead,
+        ),
+        no_body_route(
+            "DELETE",
+            "/v1/admin/principals/{principal}/oauth/connections/{registration}",
+            "admin.principals.oauth_connections.disconnect",
+            RouteAccess::AdminWrite,
+            ResponseKind::ManagementEnvelope,
+            ExitPolicy::ManagementOk,
+        ),
+    ];
+    routes[0].result_schema = Some(json!({
+        "type":"array",
+        "description":"The target principal's OAuth registrations and nonsecret connected-account metadata, including owned connections after grant loss or removal of their last consumer and pending, failed or unconfirmed remote-revocation cleanup rows. Administrative inspection and disconnect do not require the target's self-service to be enabled. Connection status is local metadata, not an upstream verification; unavailable state fails the request instead of reporting disconnected. Connect and reconnect remain owner-only.",
+        "items":oauth_connection_row_schema()
+    }));
+    routes[1].result_schema = Some(oauth_disconnect_result_schema());
+    routes
+}
+
+fn oauth_connection_schema() -> Value {
+    json!({
         "type":["object","null"],"additionalProperties":false,
         "required":["registration","connectionId","subjectId","displayName","status","reason","targets"],
         "properties":{
@@ -1622,43 +1671,41 @@ fn oauth_route_specs() -> Vec<HttpRouteSpec> {
                 }
             }}
         }
-    });
-    routes[0].result_schema = Some(json!({
-        "type":"array",
-        "description":"One row per OAuth registration the caller's credential connections select: registrations available for setup, plus existing owned connections available for local disconnect, plus cleanup-only rows for registrations whose remoteRevocation is pending, failed or unconfirmed, whatever the caller's entitlement or ownership. Setup requires self-service and a matching per-user grant on a consuming service or the administrator import-discovery exception; it does not authorize invocation.",
-        "items":{
-            "type":"object","additionalProperties":false,
-            "required":["registration","displayName","connectionDescription","consumers","otherConsumers","permissionProfile","scopeMode","requestedScopes","target","canConnect","canDisconnect","connectUnavailableReason","remoteRevocation","connection"],
-            "properties":{
-                "registration":{"type":"string"},
-                "displayName":{"type":"string"},
-                "connectionDescription":{"type":["string","null"]},
-                "consumers":connection_consumers_schema(),
-                "otherConsumers":{"type":"integer","minimum":0,"description":"Consuming services the caller is not entitled to; the connection serves them too."},
-                "permissionProfile":{"type":["string","null"],"description":"Null, like scopeMode and target, on a cleanup-only row for a registration no credential connection selects any more: its consented profile is unknown."},
-                "scopeMode":{"enum":[null,"explicit","server_default"]},
-                "requestedScopes":{"type":"array","items":{"type":"string"}},
-                "target":{"type":["string","null"]},
-                "canConnect":{"type":"boolean"},
-                "canDisconnect":{"type":"boolean","description":"An owned connection exists. Local disconnect remains available after setup entitlement is removed."},
-                "connectUnavailableReason":{"enum":[null,"no_personal_access","service_unavailable","login_binding_required"],"description":"login_binding_required: the registration binds connections to a Broker sign-in the caller has not linked."},
-                "remoteRevocation":remote_revocation_schema(),
-                "connection":connection_schema
-            }
+    })
+}
+
+/// Shared nonsecret owner and administrator metadata. Owner setup capabilities
+/// are added only by the browser-management list.
+fn oauth_connection_row_schema() -> Value {
+    json!({
+        "type":"object","additionalProperties":false,
+        "required":["registration","displayName","connectionDescription","consumers","otherConsumers","permissionProfile","scopeMode","requestedScopes","target","canDisconnect","remoteRevocation","connection"],
+        "properties":{
+            "registration":{"type":"string"},
+            "displayName":{"type":"string"},
+            "connectionDescription":{"type":["string","null"]},
+            "consumers":connection_consumers_schema(),
+            "otherConsumers":{"type":"integer","minimum":0,"description":"Consuming services the connection's owner is not entitled to; the connection serves them too."},
+            "permissionProfile":{"type":["string","null"],"description":"Null, like scopeMode and target, on a cleanup-only row for a registration no credential connection selects any more: its consented profile is unknown."},
+            "scopeMode":{"enum":[null,"explicit","server_default"]},
+            "requestedScopes":{"type":"array","items":{"type":"string"}},
+            "target":{"type":["string","null"]},
+            "canDisconnect":{"type":"boolean","description":"An owned connection exists. Local disconnect remains available after setup entitlement is removed; the caller must separately have authority to disconnect."},
+            "remoteRevocation":remote_revocation_schema(),
+            "connection":oauth_connection_schema()
         }
-    }));
-    routes[1].sensitive_response_pointers = vec!["/result/authorizationUrl".into()];
-    routes[2].result_schema = Some(json!({
+    })
+}
+
+fn oauth_disconnect_result_schema() -> Value {
+    json!({
         "type":"object","additionalProperties":false,
         "required":["disconnected","remoteRevocation"],
         "properties":{
             "disconnected":{"const":true},
             "remoteRevocation":remote_revocation_schema()
         }
-    }));
-    // The redirect callback is a browser protocol endpoint, like /v1/auth/*,
-    // rather than an envelope-based JSON send route. See docs/oauth.md.
-    routes
+    })
 }
 
 fn user_management_route_specs() -> Vec<HttpRouteSpec> {

@@ -2776,6 +2776,152 @@ fn oauth_management_specs_require_browser_auth_and_mark_authorization_url_sensit
 }
 
 #[test]
+fn admin_oauth_routes_project_role_access_paths_and_bodyless_send_requests() {
+    let routes = http_route_specs(&crate::tests::test_resource_types());
+    let expected = [
+        (
+            "GET",
+            "/v1/admin/principals/{principal}/oauth/connections",
+            "admin.principals.oauth_connections.list",
+            RouteAccess::AdminRead,
+            json!({"principal":"alice"}),
+        ),
+        (
+            "DELETE",
+            "/v1/admin/principals/{principal}/oauth/connections/{registration}",
+            "admin.principals.oauth_connections.disconnect",
+            RouteAccess::AdminWrite,
+            json!({"principal":"alice","registration":"gitlab"}),
+        ),
+    ];
+    let mut catalog = empty_catalog(json!({}));
+    for (method, path, operation, access, _) in &expected {
+        let route = routes
+            .iter()
+            .find(|route| route.method == *method && route.route == *path)
+            .unwrap();
+        assert_eq!(route.operation, *operation);
+        assert_eq!(route.access, *access);
+        assert_eq!(route.response_kind, ResponseKind::ManagementEnvelope);
+        assert_eq!(route.exit_policy, ExitPolicy::ManagementOk);
+        assert!(!route.body_allowed);
+        assert!(!route.body_required);
+        assert!(route.request_body_schema.is_none());
+        catalog.routes.push(route.clone());
+    }
+    let openapi = openapi_from_catalog(
+        &catalog,
+        RenderAuthMode::Include,
+        &["Authorization".into()],
+        "aab_session",
+    );
+    let send = send_schema_from_catalog(&catalog);
+    let validator = jsonschema::validator_for(&send).unwrap();
+    for (method, path, operation, _, path_params) in expected {
+        let projected = &openapi["paths"][path][method.to_ascii_lowercase()];
+        assert_eq!(projected["operationId"], operation);
+        assert!(projected.get("requestBody").is_none());
+        // Admin management tokens may use these routes; they do not inherit
+        // the browser-only consent routes' security requirement.
+        assert!(projected.get("security").is_none());
+        let parameters = projected["parameters"].as_array().unwrap();
+        for name in path_params.as_object().unwrap().keys() {
+            assert!(parameters.iter().any(|parameter| {
+                parameter["name"] == *name
+                    && parameter["in"] == "path"
+                    && parameter["required"] == true
+            }));
+        }
+        let request = json!({
+            "version":SEND_SCHEMA_VERSION,"kind":"http","method":method,
+            "route":path,"pathParams":path_params
+        });
+        assert!(validator.is_valid(&request), "{request}");
+        let mut invalid = request.clone();
+        invalid["body"] = json!({});
+        assert!(!validator.is_valid(&invalid));
+        for name in request["pathParams"].as_object().unwrap().keys() {
+            let mut invalid = request.clone();
+            invalid["pathParams"].as_object_mut().unwrap().remove(name);
+            assert!(!validator.is_valid(&invalid), "{invalid}");
+        }
+        let route = catalog
+            .routes
+            .iter()
+            .find(|route| route.operation == operation)
+            .unwrap();
+        assert_eq!(
+            &projected["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["result"],
+            route.result_schema.as_ref().unwrap()
+        );
+    }
+}
+
+#[test]
+fn admin_oauth_metadata_omits_owner_setup_capabilities_and_reuses_disconnect_outcomes() {
+    let owner_routes = oauth_route_specs();
+    let admin_routes = admin_oauth_route_specs();
+    let owner_schema = owner_routes[0].result_schema.as_ref().unwrap();
+    let admin_schema = admin_routes[0].result_schema.as_ref().unwrap();
+    let owner_validator = jsonschema::validator_for(owner_schema).unwrap();
+    let admin_validator = jsonschema::validator_for(admin_schema).unwrap();
+    let mut row = json!({
+        "registration":"gitlab","displayName":"GitLab","connectionDescription":null,
+        "consumers":[],"otherConsumers":2,"permissionProfile":"default",
+        "scopeMode":"explicit","requestedScopes":["api"],"target":"https://gitlab.example",
+        "canDisconnect":true,"remoteRevocation":"pending",
+        "connection":{
+            "registration":"gitlab","connectionId":"owned-connection",
+            "subjectId":"42","displayName":"Alice","status":"ready","reason":null,
+            "targets":[{"id":"https://gitlab.example","name":"GitLab",
+                "audience":"gitlab","scopes":["api"]}]
+        }
+    });
+    for status in [
+        "ready",
+        "reconnect_required",
+        "operator_action_required",
+        "disconnected",
+    ] {
+        row["connection"]["status"] = json!(status);
+        assert!(admin_validator.is_valid(&json!([row.clone()])));
+    }
+    row["connection"]["accessToken"] = json!("not-administrative-metadata");
+    assert!(!admin_validator.is_valid(&json!([row.clone()])));
+    row["connection"]
+        .as_object_mut()
+        .unwrap()
+        .remove("accessToken");
+    row["connection"] = Value::Null;
+    row["permissionProfile"] = Value::Null;
+    row["scopeMode"] = Value::Null;
+    row["target"] = Value::Null;
+    row["canDisconnect"] = json!(false);
+    assert!(admin_validator.is_valid(&json!([row.clone()])));
+    assert!(!owner_validator.is_valid(&json!([row.clone()])));
+    row["canConnect"] = json!(false);
+    row["connectUnavailableReason"] = json!("no_personal_access");
+    assert!(owner_validator.is_valid(&json!([row.clone()])));
+    assert!(!admin_validator.is_valid(&json!([row])));
+
+    let owner_disconnect = owner_routes[2].result_schema.as_ref().unwrap();
+    let admin_disconnect = admin_routes[1].result_schema.as_ref().unwrap();
+    assert_eq!(admin_disconnect, owner_disconnect);
+    let validator = jsonschema::validator_for(admin_disconnect).unwrap();
+    for state in [
+        "not_requested",
+        "pending",
+        "revoked",
+        "failed",
+        "unconfirmed",
+    ] {
+        assert!(validator.is_valid(&json!({"disconnected":true,"remoteRevocation":state})));
+    }
+    assert!(!validator.is_valid(&json!({"disconnected":true})));
+    assert!(!validator.is_valid(&json!({"disconnected":false,"remoteRevocation":"revoked"})));
+}
+
+#[test]
 fn file_output_is_independent_of_read_only_and_includes_upload_responses() {
     let base = agent_access_provider::ActionDescriptor::new(
         "item.view",

@@ -1,248 +1,181 @@
-// An administered principal's Credentials tab: its OAuth registrations come
-// from the administrator credential list, read-only, with their remote
-// revocation and no connect or disconnect for administrators or auditors.
+// Administrative OAuth uses its own endpoint and the same status, details and
+// confirmation as personal credentials; auditors never get mutation controls.
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
-import type { ConnectionConsumer, CredentialList, OAuthConnectionTarget, RemoteRevocation } from "../src/types";
+import type { AdminOAuthConnectionTarget, CredentialList, OAuthConnectionTarget, RemoteRevocation } from "../src/types";
+import type { ConfirmOptions } from "../src/app/modal";
 
 const mocks = vi.hoisted(() => ({
-  session: { authenticated: true, principal: "admin", role: "admin" as string, selfServiceEnabled: true },
+  session: { authenticated: true, principal: "admin", role: "admin" as string, selfServiceEnabled: false },
   credentials: { connections: [], retained: [] } as CredentialList,
-  oauthEnabled: [] as boolean[]
+  oauth: [] as AdminOAuthConnectionTarget[],
+  oauthError: false,
+  ownQuery: vi.fn(), adminQuery: vi.fn(), confirm: vi.fn(), disconnect: vi.fn(), ownDisconnect: vi.fn(), portal: vi.fn(), toast: vi.fn()
 }));
-vi.mock("../src/app/session", () => ({ useSession: () => ({ session: mocks.session, reportError: vi.fn(), attempt: vi.fn() }) }));
-vi.mock("../src/app/modal", () => ({ useModal: () => ({ setModal: vi.fn(), confirm: vi.fn() }) }));
-vi.mock("../src/data/invalidation", () => ({ usePortalInvalidation: () => ({ oauthConnections: vi.fn(), portal: vi.fn() }) }));
+vi.mock("../src/app/session", () => ({ useSession: () => ({ session: mocks.session, reportError: vi.fn(), attempt: (operation: (session: object) => unknown) => operation(mocks.session) }) }));
+vi.mock("../src/app/modal", () => ({ useModal: () => ({ confirm: mocks.confirm }) }));
+vi.mock("../src/api", () => ({ brokerApi: { adminPrincipalOAuthDisconnect: mocks.disconnect, oauthDisconnect: mocks.ownDisconnect } }));
+vi.mock("../src/workbench", async (original) => ({ ...await original<typeof import("../src/workbench")>(), useToast: () => mocks.toast }));
+vi.mock("../src/data/invalidation", () => ({ usePortalInvalidation: () => ({ oauthConnections: vi.fn(), portal: mocks.portal }) }));
 vi.mock("../src/mutations/credentials", () => ({ useCredentialActions: () => ({ save: vi.fn(), remove: vi.fn(), removeRetained: vi.fn(), verify: vi.fn() }) }));
 vi.mock("../src/data/queries", () => ({
-  useConsoleData: () => ({
-    query: { isError: false, isFetching: false, error: null, refetch: vi.fn() },
-    targets: [],
-    credentials: mocks.credentials,
-    tokens: [],
-    loading: false
-  }),
+  useConsoleData: () => ({ query: { isError: false, isFetching: false, error: null, refetch: vi.fn() }, targets: [], credentials: mocks.credentials, tokens: [], loading: false }),
   useOAuthConnections: (enabled: boolean) => {
-    mocks.oauthEnabled.push(enabled);
-    return { data: undefined, isError: false, error: null, refetch: vi.fn() };
+    mocks.ownQuery(enabled);
+    // A previously cached personal result must not leak into the administered view.
+    return { data: [{ ...registration("own", "ready"), canConnect: true, connectUnavailableReason: null }], isError: false, refetch: vi.fn() };
+  },
+  useAdminOAuthConnections: (principal: string, enabled: boolean) => {
+    mocks.adminQuery(principal, enabled);
+    return { data: mocks.oauth, isError: mocks.oauthError, error: mocks.oauthError ? new Error("OAuth store unavailable") : null, isFetching: false, refetch: vi.fn() };
   }
 }));
-import { administeredOAuthRegistrations } from "../src/lib/credentials";
-import { CredentialDrawer, CredentialRows, CredentialToolbar, credentialCounts, credentialRows, needsAttention, useCredentialList } from "../src/features/credentials/credential-list";
+import { CredentialDrawer, CredentialRows, CredentialToolbar, credentialCounts, credentialRows, needsAttention, useCredentialList, type CredentialListModel } from "../src/features/credentials/credential-list";
+import { oauthDisconnectNotice } from "../src/components/oauth-connections";
 import { adminSubject } from "../src/app/active-route";
+import { portalQueryKeys } from "../src/lib/portal-queries";
 
-const stamp = { createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", createdBy: "admin", updatedBy: "admin" };
 const rest = { service: "gitlab", displayName: "GitLab REST", credentialVerificationSupported: true, credentialVerificationInputs: [] };
 const git = { service: "gitlab_git", displayName: "GitLab Git", credentialVerificationSupported: true, credentialVerificationInputs: ["repository"] };
-const mail = { service: "gmail", displayName: "Gmail", credentialVerificationSupported: true, credentialVerificationInputs: [] };
-const jira = { service: "jira", displayName: "Jira", credentialVerificationSupported: true, credentialVerificationInputs: [] };
-const confluence = { service: "confluence", displayName: "Confluence", credentialVerificationSupported: true, credentialVerificationInputs: [] };
-const oauthConnection = (connection: string, displayName: string, registration: string, consumers: ConnectionConsumer[], otherConsumers: number, remoteRevocation: RemoteRevocation | null) => ({
-  connection, displayName, method: "oauth" as const, consumers, otherConsumers, tokenProfiles: [], registration, remoteRevocation, credential: null
-});
-const token = { credentialId: "credential-ci", ownerPrincipal: "morgan", ownerKind: "user", connection: "ci", profile: "ci-token", label: null, credentialKind: "bearer_token", metadata: {}, status: "active", verificationStatus: "upstream_verified", lastVerifiedAt: stamp.updatedAt, ...stamp };
-/** Morgan's administrator credential list, with GitLab's remote revocation in `state`. */
-function morgan(state: RemoteRevocation | null): CredentialList {
+function registration(id: string, status: NonNullable<OAuthConnectionTarget["connection"]>["status"], remoteRevocation: RemoteRevocation = "not_requested"): AdminOAuthConnectionTarget {
   return {
-    connections: [
-      { connection: "ci", displayName: "CI", method: "token", consumers: [], otherConsumers: 0, tokenProfiles: [{ profile: "ci-token", label: null, credentialKind: "bearer_token", inputSchema: { connection: "ci", profile: "ci-token", credentialKind: "bearer_token", fields: [] } }], registration: null, remoteRevocation: null, credential: token },
-      oauthConnection("gitlab", "GitLab", "gitlab", [rest, git], 0, state),
-      oauthConnection("gmail", "Gmail", "google", [mail], 0, "not_requested"),
-      // Jira and Confluence share one Atlassian registration through two connections.
-      oauthConnection("jira", "Atlassian", "atlassian", [jira], 0, null),
-      oauthConnection("confluence", "Confluence", "atlassian", [confluence], 1, "not_requested"),
-      // Cleanup-only: Morgan lost every grant on it, and its revocation failed.
-      oauthConnection("gitlab_ops", "GitLab Ops", "gitlab-ops", [], 2, "failed")
-    ],
-    retained: [{ credentialId: "credential-old", ownerPrincipal: "morgan", ownerKind: "user", service: "ci", name: "legacy", profile: "ci-token", label: null, credentialKind: "bearer_token", metadata: {}, status: "active", ...stamp }]
+    registration: id, displayName: id === "gitlab" ? "GitLab" : id, connectionDescription: "GitLab access", consumers: [rest, git], otherConsumers: 1,
+    permissionProfile: "default", scopeMode: "explicit", requestedScopes: ["api"], target: "https://gitlab.example.test", canDisconnect: status !== "disconnected", remoteRevocation,
+    connection: { connectionId: status === "disconnected" ? null : `connection-${id}`, subjectId: "morgan-upstream", displayName: status === "disconnected" ? null : "Morgan upstream", status, reason: status === "reconnect_required" ? "oauth_refresh_uncertain" : null, targets: [] }
   };
 }
-
+let model: CredentialListModel;
 function Harness() {
-  const model = useCredentialList(adminSubject("morgan"));
+  model = useCredentialList(adminSubject("morgan"));
   return createElement("div", null, createElement(CredentialToolbar, { model }), createElement(CredentialRows, { model }), createElement(CredentialDrawer, { model }));
 }
-/** The administered Credentials tab of Morgan, with `open` as the drawer's row key. */
-function render(role: "admin" | "auditor", credentials: CredentialList, open?: string) {
+function render(role: "admin" | "auditor" = "admin", open?: string) {
   mocks.session.role = role;
-  mocks.credentials = credentials;
   const search = open ? `?credential=${encodeURIComponent(open)}` : "";
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [`/ui/admin/principals/morgan/credentials${search}`] }, createElement(Harness)));
 }
-/** One table row's markup, by its row key. */
 function tableRow(html: string, key: string) {
   return (html.match(/<tr\b[\s\S]*?<\/tr>/g) ?? []).find((row) => row.includes(`data-wb-row="${key}"`)) ?? "";
 }
-/** A row's first cell, the Status column. */
-function statusCell(row: string) {
-  return /<t[dh]\b[\s\S]*?<\/t[dh]>/.exec(row)?.[0] ?? "";
-}
-function escapeRegExp(text: string) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-/** The table's column header texts. */
-function columnHeaders(html: string) {
-  const head = /<thead>([\s\S]*?)<\/thead>/.exec(html)?.[1] ?? "";
-  return (head.match(/<th\b[\s\S]*?<\/th>/g) ?? []).map((cell) => cell.replace(/<[^>]*>/g, "").trim());
-}
-/** The drawer's markup. */
-function drawer(html: string) {
-  return html.slice(html.indexOf("<aside"));
-}
-/** The drawer's header actions. */
-function drawerActions(html: string) {
-  return /<div class="wb-drawer-actions">([\s\S]*?)<\/div>/.exec(drawer(html))?.[1];
-}
-const OWNER_ACTIONS = [">Connect account<", ">Reconnect<", ">Disconnect<", "Return to authorization tab"];
+function drawer(html: string) { return html.slice(html.indexOf("<aside")); }
 
 beforeEach(() => {
-  mocks.oauthEnabled.length = 0;
+  vi.clearAllMocks();
+  mocks.oauthError = false;
+  mocks.credentials = { connections: [{ connection: "obsolete", displayName: "Old projection", method: "oauth", consumers: [], otherConsumers: 0, tokenProfiles: [], registration: "obsolete", remoteRevocation: "failed", credential: null }], retained: [] };
+  mocks.oauth = [registration("gitlab", "ready")];
+  mocks.disconnect.mockResolvedValue({ disconnected: true, remoteRevocation: "revoked" });
 });
 
-describe("an administered principal's OAuth registrations", () => {
-  test("are one row per registration with the registration's connections and consumers together", () => {
-    const registrations = administeredOAuthRegistrations(morgan("revoked"));
-    expect(registrations.map((registration) => registration.registration)).toEqual(["gitlab", "google", "atlassian", "gitlab-ops"]);
-    expect(registrations[2]).toEqual({
-      registration: "atlassian",
-      displayName: "Atlassian",
-      connections: ["jira", "confluence"],
-      consumers: [jira, confluence],
-      otherConsumers: 1,
-      // The first connection's state was unavailable; another reported it.
-      remoteRevocation: "not_requested"
-    });
-    expect(registrations[3]).toMatchObject({ connections: ["gitlab_ops"], consumers: [], otherConsumers: 2, remoteRevocation: "failed" });
+describe("administrative OAuth connections", () => {
+  test("uses the selected principal's independent list and never merges the token list or viewer's cached OAuth", () => {
+    const html = render();
+    expect(mocks.ownQuery).toHaveBeenCalledWith(false);
+    expect(mocks.adminQuery).toHaveBeenCalledWith("morgan", true);
+    expect(tableRow(html, "oauth:gitlab")).toContain("Connected");
+    expect(html).not.toContain("Old projection");
+    expect(html).not.toContain('data-wb-row="oauth:own"');
+    expect(credentialRows([], mocks.credentials, undefined)).toEqual([]);
+    expect(portalQueryKeys.adminOAuthConnections("admin", "morgan")).not.toEqual(portalQueryKeys.adminOAuthConnections("admin", "avery"));
+    expect(portalQueryKeys.adminOAuthConnections("admin", "morgan")).not.toEqual(portalQueryKeys.adminOAuthConnections("auditor", "morgan"));
+    expect(portalQueryKeys.adminOAuthConnections("admin", "morgan")).not.toEqual(portalQueryKeys.oauthConnections("admin"));
   });
 
-  test("come from the administrator list, never from the signed-in user's own OAuth connections", () => {
-    const own: OAuthConnectionTarget = {
-      registration: "own", displayName: "Own", connectionDescription: null, consumers: [], otherConsumers: 0, permissionProfile: null, scopeMode: null, requestedScopes: [], target: null,
-      canConnect: true, connectUnavailableReason: null, canDisconnect: true, remoteRevocation: "failed", connection: null
-    };
-    const administered = credentialRows(true, [], morgan("pending"), [own]);
-    expect(administered.map((row) => `${row.kind}:${row.key}`)).toEqual([
-      "token:ci",
-      "administered-oauth:oauth:gitlab",
-      "administered-oauth:oauth:google",
-      "administered-oauth:oauth:atlassian",
-      "administered-oauth:oauth:gitlab-ops",
-      "retained:retained:credential-old"
-    ]);
-    // The personal list keeps its own registrations and ignores the connections' OAuth rows.
-    expect(credentialRows(false, [], morgan("pending"), [own]).filter((row) => row.kind.endsWith("oauth")).map((row) => `${row.kind}:${row.key}`)).toEqual(["oauth:oauth:own"]);
-    render("admin", morgan("pending"));
-    expect(mocks.oauthEnabled).toEqual([false]);
-  });
-
-  test.each([
-    ["pending", "Revocation pending", "still revoking the tokens of an ended connection"],
-    ["revoked", "Revoked at provider", "revoked the tokens of the connections the broker ended"],
-    ["failed", "Revocation failed", "did not revoke every token of an ended connection"],
-    ["unconfirmed", "Revocation unconfirmed", "token renewal&#x27;s outcome was lost for an ended connection"]
-  ] as const)("show a %s remote revocation as concerning ended connections in the drawer, and in the row's status only when it needs cleanup", (state, label, explanation) => {
-    const html = render("admin", morgan(state), "oauth:gitlab");
-    const row = tableRow(html, "oauth:gitlab");
-    const cleanup = state === "failed" || state === "unconfirmed";
-    expect(drawer(html)).toContain(label);
-    expect(drawer(html)).toContain(explanation);
-    // The row's status keeps who manages the account and adds a revocation
-    // that needs cleanup as a danger badge, explained by its tooltip; a
-    // pending or successful revocation shows only in the drawer.
-    const status = statusCell(row);
-    expect(status).toContain("Managed by user");
-    expect(status).toContain('title="Only the user can connect, reconnect or disconnect this account, from their own Credentials page."');
-    expect(status.includes('<span class="wb-badge wb-tone-danger" title="')).toBe(cleanup);
-    expect(row.includes(label)).toBe(cleanup);
-    expect(row.includes(explanation)).toBe(cleanup);
-    if (cleanup) expect(status).toMatch(new RegExp(`<span class="wb-badge wb-tone-danger" title="[^"]*${escapeRegExp(explanation)}[^"]*">${label}</span>`));
-    for (const surface of [row, drawer(html)]) {
-      // No current connection is known, so none is described.
-      expect(surface).not.toContain("current connection is not affected");
-      expect(surface).not.toContain("Not connected");
-      expect(surface).not.toContain("Connected");
-    }
-    for (const surface of [row, drawer(html)]) {
-      // The administrator cannot act on the account; the user, or a provider administrator, revokes.
-      expect(surface.includes("The user must revoke the broker application&#x27;s access at the provider")).toBe(cleanup);
-      expect(surface.includes("Preferences › Applications › Authorized applications")).toBe(cleanup);
-      expect(surface).not.toContain("Revoke the broker application&#x27;s access");
-    }
-    expect(drawer(html)).toContain("OAuth registration");
-    expect(drawer(html)).toContain(">gitlab</span>");
-    expect(drawer(html)).toContain("Managed by user");
-  });
-
-  test("show no revocation when none was requested, and an unknown state as unknown", () => {
-    const html = render("admin", morgan(null), "oauth:gitlab");
-    expect(tableRow(html, "oauth:google")).not.toContain("Revocation");
-    expect(tableRow(html, "oauth:google")).not.toContain("Revoked at provider");
-    expect(tableRow(html, "oauth:gitlab")).not.toContain("Revocation");
-    expect(drawer(html)).toContain("Unknown: OAuth is inactive or its state is unavailable.");
-    expect(drawer(render("admin", morgan(null), "oauth:google"))).toContain("Not requested: the broker kept nothing to revoke at the provider.");
-    // Both connections of the shared registration are named.
-    expect(drawer(render("admin", morgan(null), "oauth:atlassian"))).toContain(">jira, confluence</span>");
-  });
-
-  test("list no Permissions column; the remote revocation's explanation is in the drawer and the status tooltip", () => {
-    const html = render("auditor", morgan("failed"));
-    // An auditor has no row actions, not even for the retained row.
-    expect(columnHeaders(html)).toEqual(["Status", "Connection", "Used by", "Method", "Verified"]);
-    // Only the badge's label is cell text.
-    const text = tableRow(html, "oauth:gitlab").replace(/<[^>]*>/g, " ");
-    expect(text).toContain("Revocation failed");
-    expect(text).not.toContain("did not revoke every token");
-  });
-
-  test("list a cleanup-only registration with no current grants", () => {
-    const html = render("admin", morgan("revoked"), "oauth:gitlab-ops");
-    const row = tableRow(html, "oauth:gitlab-ops");
-    expect(row).toContain("No current grants");
-    expect(statusCell(row)).toContain("Managed by user");
-    expect(statusCell(row)).toContain(">Revocation failed</span>");
-    expect(drawer(html)).toContain("No service this account is granted uses this connection now.");
-    expect(drawer(html)).toContain("Also used by 2 other services this account is not granted.");
-  });
-
-  test.each(["admin", "auditor"] as const)("offer an %s no connect, reconnect or disconnect, and explain why", (role) => {
-    for (const state of ["pending", "revoked", "failed", "unconfirmed"] as const) {
-      for (const open of ["oauth:gitlab", "oauth:gitlab-ops"]) {
-        const html = render(role, morgan(state), open);
-        const rows = ["oauth:gitlab", "oauth:gitlab-ops", "oauth:google", "oauth:atlassian"].map((key) => tableRow(html, key));
-        for (const surface of [...rows, drawer(html)]) {
-          expect(surface).not.toBe("");
-          for (const action of OWNER_ACTIONS) expect(surface).not.toContain(action);
-        }
-        for (const row of rows) expect(row).not.toContain("<button");
-        expect(drawerActions(html)).toBe("");
-        expect(html).toContain("OAuth connections are read-only here: only the user can connect, reconnect or disconnect them, from their own Credentials page.");
-        expect(drawer(html)).toContain("Only the user can connect, reconnect or disconnect this account, from their own Credentials page.");
-        expect(drawer(html)).toContain("This view does not show its connection status or connected account.");
-      }
-    }
-    // An administrator may still delete a retained stored row; an auditor may not.
-    const retained = tableRow(render(role, morgan("failed")), "retained:credential-old");
-    expect(retained.includes(">Delete<")).toBe(role === "admin");
-  });
-
-  test("need attention when their revocation failed or is unconfirmed, and are not counted as set up", () => {
-    for (const [state, attention] of [["not_requested", 1], ["pending", 1], ["revoked", 1], ["failed", 2], ["unconfirmed", 2], [null, 1]] as const) {
-      const rows = credentialRows(true, [], morgan(state), undefined);
-      const gitlab = rows.find((row) => row.key === "oauth:gitlab")!;
-      expect(needsAttention(gitlab)).toBe(state === "failed" || state === "unconfirmed");
-      // The cleanup-only registration's failed revocation always counts.
-      expect(rows.filter(needsAttention).map((row) => row.key)).toEqual(attention === 2 ? ["oauth:gitlab", "oauth:gitlab-ops"] : ["oauth:gitlab-ops"]);
-      // Only the token connection can be set up from here; OAuth status is the owner's.
-      expect(credentialCounts(rows)).toEqual({ all: 6, settable: 1, attention, missing: 0, unused: 1 });
-    }
-    const html = render("auditor", morgan("unconfirmed"));
-    expect(html).toMatch(/Needs attention[\s\S]*?>2</);
+  test.each(["admin", "auditor"] as const)("shows %s the current account, status and permissions with owner-only consent actions absent", (role) => {
+    const html = render(role, "oauth:gitlab");
+    expect(tableRow(html, "oauth:gitlab")).toContain("Morgan upstream");
+    expect(drawer(html)).toContain("Connected");
+    expect(drawer(html)).toContain("GitLab access");
+    expect(html).not.toContain("Managed by user");
+    for (const action of [">Connect account<", ">Reconnect<", "Return to authorization tab"]) expect(html).not.toContain(action);
+    expect(tableRow(html, "oauth:gitlab").includes(">Disconnect</button>")).toBe(role === "admin");
+    expect(drawer(html).includes(">Disconnect</button>")).toBe(role === "admin");
     expect(html).toContain("<b>1</b> of 1 set up");
-    // With OAuth rows alone there is nothing to set up from here.
-    const oauthOnly = morgan("failed");
-    oauthOnly.connections = oauthOnly.connections.filter((connection) => connection.method === "oauth");
-    expect(render("admin", oauthOnly)).not.toContain("of 0 set up");
+    if (role === "auditor") expect(html).not.toContain("Row actions");
+  });
+
+  test("retains cleanup-only rows and applies the same missing/attention filters", () => {
+    mocks.oauth = [registration("gitlab", "reconnect_required"), { ...registration("retired", "disconnected", "failed"), connection: null, consumers: [], otherConsumers: 0, permissionProfile: null, scopeMode: null, target: null }];
+    const html = render("admin", "oauth:retired");
+    expect(tableRow(html, "oauth:gitlab")).toContain("Reconnect required");
+    expect(tableRow(html, "oauth:retired")).toContain("Not connected");
+    expect(tableRow(html, "oauth:retired")).toContain("Revocation failed");
+    expect(tableRow(html, "oauth:retired")).not.toContain("<button");
+    expect(drawer(html)).toContain("No service this account is granted uses this connection now.");
+    expect(credentialCounts(model.rows)).toEqual({ all: 2, settable: 2, attention: 2, missing: 1, unused: 0 });
+    expect(model.rows.every(needsAttention)).toBe(true);
+  });
+
+  test("keeps grant-loss and unselected owned connections disconnectable", () => {
+    mocks.oauth = [{ ...registration("unselected", "ready"), consumers: [], permissionProfile: null, scopeMode: null, target: null }];
+    const html = render("admin", "oauth:unselected");
+    expect(tableRow(html, "oauth:unselected")).toContain("No current grants");
+    expect(drawer(html)).toContain(">Disconnect</button>");
+  });
+
+  test.each(["failed", "unconfirmed"] as const)("words %s provider cleanup for the target user, without suggesting the admin's own account", (state) => {
+    mocks.oauth = [registration("gitlab", "ready", state)];
+    const html = render("admin", "oauth:gitlab");
+    expect(drawer(html)).toContain("The user morgan must revoke");
+    expect(drawer(html)).toContain("the user must reconnect afterwards");
+    expect(html).not.toContain("in your account settings");
+    const notice = oauthDisconnectNotice(state, "morgan");
+    expect(notice.message).toContain("Account disconnected for morgan.");
+    expect(notice.message).toContain("The user morgan must revoke");
+    expect(notice.tone).toBe("error");
+  });
+
+  test("does not suggest an administrator can reconnect an unidentified account", () => {
+    mocks.oauth[0].connection!.subjectId = null;
+    const html = render("admin", "oauth:gitlab");
+    expect(drawer(html)).toContain("Upstream account identity unavailable.");
+    expect(drawer(html)).not.toContain("reconnecting asks to confirm");
+  });
+
+  test("shows explicit unavailability and withholds cached statuses and actions when the query fails", () => {
+    mocks.oauthError = true;
+    const html = render("admin", "oauth:gitlab");
+    expect(html).toContain("OAuth connection status unavailable");
+    expect(html).toContain("OAuth store unavailable");
+    expect(html).not.toContain("Not connected");
+    expect(html).not.toContain("No credential connections");
+    expect(html).not.toContain("Morgan upstream");
+    expect(html).not.toContain(">Disconnect</button>");
+  });
+
+  test("uses one confirmation naming the target and services before calling the administrative DELETE", async () => {
+    render();
+    model.connections.disconnect(mocks.oauth[0]);
+    expect(mocks.confirm).toHaveBeenCalledOnce();
+    expect(mocks.disconnect).not.toHaveBeenCalled();
+    const confirmation: ConfirmOptions = mocks.confirm.mock.calls[0][0];
+    expect(confirmation.title).toBe("Disconnect account?");
+    expect(confirmation.confirmLabel).toBe("Disconnect");
+    expect(confirmation.body).toContain("morgan's GitLab connection");
+    expect(confirmation.body).toContain("GitLab REST, GitLab Git and 1 other service stop using this account.");
+    expect(confirmation.body).toContain("The user can connect again while permitted");
+    await confirmation.onConfirm();
+    expect(mocks.disconnect).toHaveBeenCalledWith(mocks.session, "morgan", "gitlab");
+    expect(mocks.ownDisconnect).not.toHaveBeenCalled();
+    expect(mocks.portal).toHaveBeenCalledOnce();
+    expect(mocks.toast.mock.calls[0][0]).toContain("Account disconnected for morgan.");
+  });
+
+  test("leaves a failed mutation to the shared confirmation error state without claiming success", async () => {
+    mocks.disconnect.mockRejectedValue(new Error("disconnect refused"));
+    render();
+    model.connections.disconnect(mocks.oauth[0]);
+    await expect((mocks.confirm.mock.calls[0][0] as ConfirmOptions).onConfirm()).rejects.toThrow("disconnect refused");
+    expect(mocks.portal).not.toHaveBeenCalled();
+    expect(mocks.toast).not.toHaveBeenCalled();
+  });
+
+  test("an auditor cannot start a disconnect even through the action hook", () => {
+    render("auditor");
+    model.connections.disconnect(mocks.oauth[0]);
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.disconnect).not.toHaveBeenCalled();
   });
 });

@@ -282,9 +282,12 @@ responses: one row per credential connection naming its entitled services and
 counting the others, verification through a Git gateway service with a
 repository, one row per OAuth registration whose disconnect confirmation names
 the affected services and whose status shows a failed or unconfirmed remote
-revocation beside the connection status, an administered user's OAuth
-registrations shown read-only to administrators and auditors with their remote
-revocation, and deletion of a retained stored credential by ID. It also covers
+revocation beside the connection status, an administered user's OAuth status
+and connected account with administrator disconnect and auditor read-only
+access, unavailable OAuth state, and deletion of a retained stored credential
+by ID. The host's OAuth administration tests cover role and CSRF admission,
+target isolation, disabled self-service, retained connection cleanup and
+administrator/target audit attribution. It also covers
 token types: a connection accepting one type keeps its plain form; one accepting
 several asks for a **Token type** with none preselected, marks the select invalid
 when left empty, shows the chosen type's fields, and sends the chosen `profile`;

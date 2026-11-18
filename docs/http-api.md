@@ -1208,6 +1208,8 @@ Admin management (also on the public listener):
 | `PUT` `DELETE` | `/v1/admin/principals/{principal}/service-limits/{service}` |
 | `GET` | `/v1/admin/principals/{principal}/credentials` |
 | `GET` | `/v1/admin/principals/{principal}/credentials/targets` |
+| `GET` | `/v1/admin/principals/{principal}/oauth/connections` |
+| `DELETE` | `/v1/admin/principals/{principal}/oauth/connections/{registration}` |
 | `GET` | `/v1/admin/principals/{principal}/agent-token-options` |
 | `GET` `POST` | `/v1/admin/principals/{principal}/agent-tokens` |
 | `GET` `DELETE` | `/v1/admin/principals/{principal}/agent-tokens/{token_id}` |
@@ -3044,7 +3046,7 @@ These operations are not audited when they succeed:
 | Area | Operations |
 | --- | --- |
 | Self-service | `auth.session` (with a valid session or no session cookie), `tokens.list`, `tokens.inspect`, `tokens.options`, `tokens.effective_access`, `applications.authorizations.inspect`, `applications.access.list`, `credentials.list`, `credentials.inspect`, `credentials.targets`, `credentials.input_schema`, `oauth.connections.list`, `audit.options`, `audit.events.list`, `audit.requests.inspect` |
-| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.principals.application_access.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
+| Administration and status | `config.status`, `admin.store.status`, `admin.principals.list`, `admin.principals.inspect`, `admin.principals.services`, `admin.principals.login_methods.list`, `admin.principals.service_limits.list`, `admin.principals.identity_token.inspect` (metadata only), `admin.principals.identity_access.inspect`, `admin.principals.identity_bindings.list`, `admin.principals.application_access.list`, `admin.principals.oauth_connections.list`, `admin.groups.list`, `admin.groups.inspect`, `admin.groups.members.list`, `admin.groups.external_group_bindings.list`, `admin.rights.list`, `admin.tokens.list`, `admin.tokens.inspect`, `admin.tokens.list_principal_agent`, `admin.tokens.inspect_principal_agent`, `admin.tokens.options_principal_agent`, `admin.tokens.effective_access_principal_agent`, `admin.credentials.list`, `admin.credentials.list_principal`, `admin.credentials.inspect`, `admin.credentials.targets`, `admin.credentials.input_schema` |
 | Imports | `admin.imports.list`, `admin.imports.inspect`, `admin.imports.preview` (saved previews only; discovery remains a write operation) |
 | Policy | `admin.policy.status`, `admin.policy.catalog`, `admin.policy.grants.list`, `admin.policy.grants.inspect`, `admin.policy.service_managers.list`, `admin.policy.resources.list`, `admin.policy.resources.get`, `admin.policy.resources.used_by`, `admin.policy.resource_groups.list`, `admin.policy.resource_groups.get`, `admin.policy.resource_groups.used_by`, `admin.audit.options`, `admin.audit.events.list`, `admin.audit.requests.inspect`, and the POST dry runs `admin.policy.effective_access` and `admin.policy.grants.validate` (a `valid: false` result is a successful response) |
 
@@ -4149,6 +4151,35 @@ identity-access gate and username bindings.
 The runtime catalog and send schema mark import `/body/token` as sensitive and
 reveal `/result/token` as sensitive output. See [managed identity](managed-identity.md)
 for trust, provisioning and rotation.
+
+## Administrator upstream OAuth connections
+
+`GET /v1/admin/principals/{principal}/oauth/connections` uses `admin_read`;
+`DELETE /v1/admin/principals/{principal}/oauth/connections/{registration}` uses
+`admin_write`. Their operation IDs are
+`admin.principals.oauth_connections.list` and
+`admin.principals.oauth_connections.disconnect`. Administrators and auditors can
+read connection status and nonsecret upstream account metadata; only
+administrators can disconnect. These routes accept the normal administrative
+credentials and browser CSRF controls independently of the target's self-service
+setting. Unknown principals return 404.
+
+The list returns the same row shape as the personal OAuth list below, omitting
+`canConnect` and `connectUnavailableReason`. Consumers are evaluated for the
+target principal. `connection` includes its status, reason, upstream identity
+and scope metadata, never tokens; `canDisconnect` means an owned connection
+exists, with write authorization checked separately. Existing connections stay
+visible after grant loss or removal of their last selecting consumer. Disabled
+principals retain pending/failed/unconfirmed revocation cleanup rows. If OAuth
+state is unavailable, the request fails instead of describing it as disconnected.
+
+DELETE uses the same disconnect behavior and `{disconnected, remoteRevocation}`
+result as personal disconnect. It requires a configured registration, preserves
+initial pending consent when no current connection exists, and does not change
+grants or prohibit reconnecting. Its audit actor is the administrator and target
+is `{principal, registration}`; upstream account names and tokens are not audit
+fields. Both routes use `no-store` and `no-referrer` response headers. See
+[administrative OAuth management](oauth.md#administrator-management-api).
 
 ## Upstream OAuth browser connections
 
