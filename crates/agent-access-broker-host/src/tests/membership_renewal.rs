@@ -2477,7 +2477,8 @@ async fn renewal_waits_hold_per_principal_capacity() {
             .body(Body::from(
                 // Concurrent requests in this session need distinct JSON-RPC
                 // IDs so the SDK can route and close each response stream.
-                json!({"jsonrpc":"2.0","id":request_id,"method":"tools/list","params":{}}).to_string(),
+                json!({"jsonrpc":"2.0","id":request_id,"method":"tools/list","params":{}})
+                    .to_string(),
             ))
             .unwrap();
         async move { app.oneshot(request).await.unwrap() }
