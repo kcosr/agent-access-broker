@@ -187,6 +187,13 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Jira custom fields can be set or cleared with arbitrary JSON through
+  `issue.custom_field.set` and the typed CLI, with an optional immutable issue-ID
+  guard. Administrators allowlist writable field IDs; Jira validates their values
+  and editability. Successful writes return a value-free acknowledgement. See
+  [custom-field updates](docs/providers-jira.md#issuecustom_fieldset).
+  ([#118](https://github.com/kcosr/agent-access-broker/pull/118))
+
 - **OpenAPI Actions/tools imports support anonymous upstream access.** Choose
   Anonymous upstream in the portal or supply an empty `executionBindings` array
   without a security scheme. Broker authentication, grants and audit still apply;

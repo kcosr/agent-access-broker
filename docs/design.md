@@ -792,8 +792,8 @@ metadata. When a concealed `scope_unresolved` result repeats that value under
 fixed independently of the requested locator and must never encode resource
 existence, ownership of a particular object, or an authorization outcome.
 
-- **Jira** (`jira`) — twenty-four actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
-  `issue.child.create`, `issue.update`, `issue.parent.set`,
+- **Jira** (`jira`) — twenty-five actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
+  `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`,
   `issue.dependency.add`, `search`,
   `comment.list`, `comment.view`, `comment.add`, `comment.reply`, `comment.update`,
   `comment.delete`, `comment.property.list`, `comment.property.get`,
@@ -818,6 +818,12 @@ existence, ownership of a particular object, or an authorization outcome.
   Format, a `{ "type": "doc", "version": 1, "content": [...] }` JSON
   document). Comment property actions require an issue locator and are limited
   to broker-owned key prefixes.
+  `issue.custom_field.set` writes or clears one operator-allowlisted custom
+  field on the confirmed immutable issue ID. It accepts a present JSON value
+  within the content-body limit and returns an acknowledgement without readback.
+  Jira validates the field's type, context and editability. The provider-global
+  allowlist defaults to empty and is checked after authorization; field values
+  are neither returned nor audited.
   `issue.view` can include one chronological page of full comment bodies through
   `includeComments`; `comment.list` returns metadata by default and full bodies
   only with `includeBodies`. Both use the dedicated collection endpoint and

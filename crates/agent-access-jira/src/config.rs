@@ -21,6 +21,16 @@ pub struct JiraProviderConfig {
     pub comments: JiraCommentsConfig,
     #[serde(default)]
     pub issue_links: JiraIssueLinksConfig,
+    #[serde(default)]
+    pub custom_fields: JiraCustomFieldsConfig,
+}
+
+/// Custom fields this provider may write or clear. Ordinary project/action grants
+/// still authorize each request; an empty allowlist disables all field writes.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JiraCustomFieldsConfig {
+    pub allowed_field_ids: Vec<String>,
 }
 
 /// Work limits for live project enumeration.
@@ -303,7 +313,8 @@ pub static JIRA_BACKEND: BackendRegistration = BackendRegistration::new(
     "jira",
     parse_backend_config::<JiraProviderConfig>,
 )
-.with_resource_types(&[&JIRA_PROJECT_RESOURCE]);
+.with_resource_types(&[&JIRA_PROJECT_RESOURCE])
+.with_domain_reasons(&[&custom_field::NOT_ALLOWED, &custom_field::REJECTED]);
 
 impl BackendConfig for JiraProviderConfig {
     fn kind(&self) -> &'static str {
@@ -361,6 +372,15 @@ impl BackendConfig for JiraProviderConfig {
             );
         }
         validate_jira_issue_links_config("providers.jira.issue_links", &self.issue_links, errors);
+        let mut field_ids = BTreeSet::new();
+        if self
+            .custom_fields
+            .allowed_field_ids
+            .iter()
+            .any(|id| !custom_fields::is_custom_field_id(id) || !field_ids.insert(id))
+        {
+            errors.push("providers.jira.custom_fields.allowed_field_ids must contain unique canonical custom-field IDs".to_string());
+        }
         validate_provider_limit_relation("jira", &self.attachments, context.limits, errors);
     }
 

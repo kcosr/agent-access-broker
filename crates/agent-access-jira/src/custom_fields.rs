@@ -196,7 +196,7 @@ fn metadata_map<'a>(
     }
 }
 
-fn is_custom_field_id(id: &str) -> bool {
+pub(super) fn is_custom_field_id(id: &str) -> bool {
     let Some(suffix) = id.strip_prefix(FIELD_PREFIX) else {
         return false;
     };

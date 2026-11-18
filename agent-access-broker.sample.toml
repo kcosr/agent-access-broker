@@ -823,6 +823,12 @@ dependency_link_type = "Blocks"
 dependency_outward = "blocks"
 dependency_inward = "is blocked by"
 
+[providers.jira.custom_fields]
+# Only these custom fields may be set or cleared through issue.custom_field.set.
+# Empty by default; ordinary project/action grants remain required.
+# Each listed field permits any JSON value/clear Jira accepts and its field-specific effects.
+allowed_field_ids = [] # for example ["customfield_12345"]
+
 # Visibility restrictions are denied unless explicitly allowlisted.
 # [[providers.jira.comments.allowed_visibility]]
 # type = "role"

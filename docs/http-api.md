@@ -3355,8 +3355,12 @@ whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 | --- | --- | --- | --- |
 | `cloudbees_ci_log_chunk_exceeded` | CloudBees CI | deny | 413 |
 | `cloudbees_ci_log_scan_exceeded` | CloudBees CI | deny | 413 |
+| `jira_custom_field_not_allowed` | Jira | deny | 403 |
+| `jira_custom_field_rejected` | Jira | deny | 400 |
 
-See [CloudBees CI errors](providers-cloudbees-ci.md#errors) for when they occur.
+See [CloudBees CI errors](providers-cloudbees-ci.md#errors) and
+[Jira custom-field updates](providers-jira.md#issuecustom_fieldset) for when
+they occur.
 
 `upstream_rate_limited` means the upstream service throttled the request; the
 Broker's own limits use `rate_limited`. Jira, Confluence, GitLab REST, CloudBees

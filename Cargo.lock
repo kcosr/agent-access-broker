@@ -416,6 +416,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "futures-util",
+ "jsonschema",
  "percent-encoding",
  "regex",
  "reqwest",

@@ -114,6 +114,19 @@ pub trait JiraBackend: Send + Sync {
         ))
     }
 
+    /// Set only the selected custom field on the confirmed immutable issue ID.
+    async fn set_issue_custom_field(
+        &self,
+        _issue_id: &str,
+        _field_id: &str,
+        _value: &Value,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        Err(JiraBackendError::Protocol(
+            "Jira custom-field writes are not supported by this backend".to_string(),
+        ))
+    }
+
     async fn set_issue_parent(
         &self,
         _issue_key: &str,
@@ -1344,6 +1357,41 @@ impl JiraBackend for HttpJiraBackend {
         })
     }
 
+    async fn set_issue_custom_field(
+        &self,
+        issue_id: &str,
+        field_id: &str,
+        value: &Value,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        let url = self
+            .api_base(credential)?
+            .join(&format!("issue/{issue_id}"))
+            .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
+        let body = json!({"fields": {field_id: value}});
+        let started = Instant::now();
+        let client = self.request_client(credential)?;
+        let response = send_jira_request(
+            client,
+            credential,
+            client
+                .request(Method::PUT, url)
+                .header("Accept", "application/json")
+                .json(&body),
+            UpstreamCall::new("issue.custom_field.set"),
+        )
+        .await?;
+        let status = response.status().as_u16();
+        custom_field_response_unit(response, self.limits.max_upstream_response_bytes)
+            .await
+            .map_err(accepted_if_success(status))?;
+        Ok(JiraBackendResponse {
+            value: (),
+            status,
+            duration_ms: elapsed_ms(started),
+        })
+    }
+
     async fn set_issue_parent(
         &self,
         issue_key: &str,
@@ -2256,6 +2304,23 @@ pub(crate) async fn jira_response_unit(
     jira_response_bytes_for_body(response, byte_cap)
         .await
         .map(|_| ())
+}
+
+// Custom-field validation errors deliberately discard Jira's body. Classify
+// their upstream trace with the same value-free domain reason as invocation.
+async fn custom_field_response_unit(
+    mut response: reqwest::Response,
+    byte_cap: u64,
+) -> Result<(), JiraBackendError> {
+    let trace = take_upstream_trace(&mut response);
+    let result = jira_response_unit(response, byte_cap).await;
+    if let Some(trace) = trace {
+        trace.complete(result.as_ref().err().map(|error| match error {
+            JiraBackendError::HttpStatus(400 | 422) => (&custom_field::REJECTED).into(),
+            error => jira_backend_reason_code(error).into(),
+        }));
+    }
+    result
 }
 
 #[cfg(test)]

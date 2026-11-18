@@ -2116,6 +2116,10 @@ enum JiraIssueCommand {
         #[command(subcommand)]
         command: JiraIssueParentCommand,
     },
+    CustomField {
+        #[command(subcommand)]
+        command: JiraIssueCustomFieldCommand,
+    },
     Dependency {
         #[command(subcommand)]
         command: JiraIssueDependencyCommand,
@@ -2199,6 +2203,26 @@ enum JiraIssueParentCommand {
         parent: Option<String>,
         #[arg(long)]
         parent_url: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum JiraIssueCustomFieldCommand {
+    /// Set one operator-allowed custom field to an explicit JSON value.
+    Set {
+        issue: Option<String>,
+        #[arg(long)]
+        issue_url: Option<String>,
+        #[arg(long, help = "Require this immutable Jira issue ID before writing")]
+        expected_issue_id: Option<String>,
+        #[arg(long, help = "Canonical custom-field ID, such as customfield_12345")]
+        field_id: String,
+        #[arg(
+            long,
+            allow_hyphen_values = true,
+            help = "JSON value accepted by Jira for this field; null requests clearing"
+        )]
+        value_json: String,
     },
 }
 
@@ -15298,6 +15322,39 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     run_invoke_value(
                         ctx,
                         "jira.issue.parent.set",
+                        serde_json::Value::Object(inputs),
+                    )
+                    .await
+                }
+            },
+            JiraIssueCommand::CustomField { command } => match command {
+                JiraIssueCustomFieldCommand::Set {
+                    issue,
+                    issue_url,
+                    expected_issue_id,
+                    field_id,
+                    value_json,
+                } => {
+                    let mut inputs = jira_issue_argument_locator_inputs(
+                        issue.as_deref(),
+                        issue_url.as_deref(),
+                        "jira issue custom-field set",
+                    );
+                    inputs.insert("fieldId".to_string(), serde_json::json!(field_id));
+                    let value = require_cli_input(
+                        serde_json::from_str::<serde_json::Value>(value_json)
+                            .map_err(|_| anyhow::anyhow!("--value-json must be a JSON value")),
+                    );
+                    inputs.insert("value".to_string(), value);
+                    if let Some(expected_issue_id) = expected_issue_id {
+                        inputs.insert(
+                            "expectedIssueId".to_string(),
+                            serde_json::json!(expected_issue_id),
+                        );
+                    }
+                    run_invoke_value(
+                        ctx,
+                        "jira.issue.custom_field.set",
                         serde_json::Value::Object(inputs),
                     )
                     .await

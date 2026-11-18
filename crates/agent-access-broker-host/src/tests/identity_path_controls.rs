@@ -232,6 +232,7 @@ async fn fixture() -> Fixture {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+            custom_fields: Default::default(),
         });
     config.credentials.service.insert(
         "jira".into(),

@@ -47,6 +47,15 @@ the read smoke and the mutating write/download/verify smoke in that binary.
 
 ## Local Deterministic Suite
 
+Jira custom-field tests use a local HTTP fixture for the production provider
+to check the operator allowlist, JSON value preservation and clearing, required
+value and content limits, immutable-issue guards, a single-field PUT, credential
+selection, and write-uncertainty receipts. The `jira_smoke::custom_field` tests
+drive an isolated Broker with the real CLI to check the dedicated action grant,
+catalog/OpenAPI/send projections, typed and generic invocations, HTTP and stdio
+MCP, omission and size denial, and audit omission of field values. These tests
+do not contact Jira.
+
 OpenAPI anonymous-import tests exercise both Swagger and OpenAPI through real
 Broker/CLI, HTTP MCP and stdio MCP fixtures: credential-free setup, grant denials,
 service-only execution, source-security quarantine and offline restart. Adapter
@@ -135,7 +144,7 @@ they do not establish live provider access or runtime credential availability.
 The CLI's `published_typed_commands_match_clap_paths_and_usage` test resolves
 every native and OAuth fixture action's documented help path through the actual
 Clap command tree and compares its published Usage template with Clap's output.
-Optional action families are enabled, covering all 230 typed wrappers.
+Optional action families are enabled, covering all 231 typed wrappers.
 Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message
 without being validated. Command-authority tests check that imported and

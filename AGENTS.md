@@ -553,7 +553,9 @@ The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
 backend as a provider fixture and drives typed `agent-access jira issue
 view/search`, live project listing, project details and searchable-field discovery,
 project issue-type discovery and its create workflow, and issue
-comment commands.
+comment commands. Its custom-field module also checks the dedicated action
+grant, typed/generic writes and clears, omission and size denial on transport
+surfaces, projections, and audit omission of custom-field values.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
 
@@ -681,11 +683,19 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
   `project_view.rs` authorized project details and searchable-field discovery,
   `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
+  `custom_field.rs` acknowledgement-only writes to one operator-allowlisted custom field,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
-  embedded hierarchy and custom fields belong only to `JiraIssueView`; search
+  embedded hierarchy and general custom-field projection belong only to `JiraIssueView`; search
   and mutation readbacks keep their own shapes. Hierarchy shares the existing
   universal same-mode issue-link gate and never triggers target fetches.
+  Custom-field writes require an allowlist that defaults to empty; enforce it
+  after policy so the denial survives lookup concealment. Keep the serialized
+  value size check in invocation for a visible body_size_denied reason. Require
+  present JSON values including null, preserve the confirmed immutable issue ID,
+  and send exactly one fields entry. Jira owns type/context/editability rules.
+  Return a value-free acknowledgement without reading the field. Preserve write
+  uncertainty receipts; never audit field values or raw Jira validation errors.
   Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
   or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   project discovery uses the selected execution credential after authorization,

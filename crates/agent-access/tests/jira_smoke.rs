@@ -1,5 +1,7 @@
 #[path = "jira_smoke/comment_bodies.rs"]
 mod comment_bodies;
+#[path = "jira_smoke/custom_field.rs"]
+mod custom_field;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "jira_smoke/project_list.rs"]
@@ -3492,6 +3494,7 @@ struct StubJiraBackend {
     created_issue: Mutex<Option<JiraCreatedIssue>>,
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
+    custom_field_updates: Mutex<Vec<(String, String, serde_json::Value)>>,
     parent_updates: Mutex<Vec<(String, JiraIssueParentSetRequest)>>,
     issue_parent_readbacks: Mutex<BTreeMap<String, JiraIssueParentReadback>>,
     issue_link_types: Mutex<Vec<JiraIssueLinkType>>,
@@ -3698,6 +3701,26 @@ impl JiraBackend for StubJiraBackend {
             .lock()
             .unwrap()
             .push((issue_key.to_string(), request));
+        Ok(JiraBackendResponse {
+            value: (),
+            status: 204,
+            duration_ms: 4,
+        })
+    }
+
+    async fn set_issue_custom_field(
+        &self,
+        issue_id: &str,
+        field_id: &str,
+        value: &serde_json::Value,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        self.record_credential("set_issue_custom_field", credential);
+        self.custom_field_updates.lock().unwrap().push((
+            issue_id.to_string(),
+            field_id.to_string(),
+            value.clone(),
+        ));
         Ok(JiraBackendResponse {
             value: (),
             status: 204,
@@ -4411,6 +4434,7 @@ fn jira_provider_config(max_results: u32) -> JiraProviderConfig {
         listing: Default::default(),
         comments: agent_access_jira::JiraCommentsConfig::default(),
         issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+        custom_fields: Default::default(),
     }
 }
 
