@@ -1394,17 +1394,13 @@ async fn output_schema_selection_applies_alike_under_username_and_fingerprint_ad
             assert_eq!(response.headers()["cache-control"], "no-store");
             assert!(response.headers().get("mcp-session-id").is_none());
             let body = rpc_body(response).await;
-            if admission < 2 {
-                // Username mode keeps its reserved admission envelope.
-                assert_eq!(body["service"], "broker", "{body}");
-                assert_eq!(body["action"], "identity.authenticate");
-                assert_eq!(body["reasonCode"], "identity_assertion_invalid");
-            } else {
-                assert_eq!(
-                    body,
-                    json!({"error":"Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"})
-                );
-            }
+            // A malformed query is a request-shape error, not an identity
+            // failure, so username mode gets the same plain rejection.
+            assert_eq!(
+                body,
+                json!({"error":"Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"}),
+                "{admission} {query}"
+            );
         }
     }
 }

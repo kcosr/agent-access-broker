@@ -516,7 +516,10 @@ pub(crate) async fn handle(
     let (view, output_schemas) = match request_view(&request) {
         Ok(selection) => selection,
         Err(rejection) => {
-            if ingress.is_username() {
+            // A malformed endpoint query is a request-shape error, never an
+            // identity failure: every admission mode, username included, gets
+            // the same plain 400 before any identity work.
+            if ingress.is_username() && matches!(rejection, EndpointRejection::Path) {
                 return crate::router::admission_failure_response(
                     &state,
                     snapshot,

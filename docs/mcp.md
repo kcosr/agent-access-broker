@@ -393,11 +393,11 @@ a fingerprint alongside a username, and alternate principal credential carriers
 are rejected. A wrong caller, wrong transport, missing capability or unknown/paused
 human never falls back to an ordinary token, cookie or fingerprint. The only
 accepted query is one [`outputSchemas`](#output-schemas) selection; every other
-query, including a bare `?` delimiter, is rejected before dispatch. For
-ordinary-token/fingerprint requests that is HTTP 400 JSON
-`{"error":"Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"}`;
-username mode returns the reserved `identity_assertion_invalid` admission
-envelope. The selection never identifies anyone. Ordinary token precedence over
+query, including a bare `?` delimiter, is rejected before dispatch with HTTP
+400 JSON
+`{"error":"Invalid MCP endpoint query; only outputSchemas=on or outputSchemas=off is accepted"}`
+in every admission mode, including username mode: a malformed query is not an
+identity failure. The selection never identifies anyone. Ordinary token precedence over
 fingerprint identity applies only without the user header.
 
 Protected `Connection` nominations are rejected. Every MCP `Trailer` declaration
