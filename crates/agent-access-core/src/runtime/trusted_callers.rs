@@ -181,6 +181,22 @@ pub(super) fn load_trusted_callers(
     Ok(Arc::new(callers))
 }
 
+/// Loads `[applications]`, whose client secrets stay distinct from every
+/// trusted caller credential.
+pub(super) fn load_applications(
+    config: &BrokerConfig,
+    callers: &[ResolvedTrustedCaller],
+) -> Result<Arc<crate::RegisteredApplications>, RuntimeError> {
+    let credentials = callers
+        .iter()
+        .map(|caller| caller.credential.as_ref())
+        .collect::<Vec<_>>();
+    Ok(Arc::new(crate::RegisteredApplications::load(
+        config,
+        &credentials,
+    )?))
+}
+
 pub(super) fn validate_caller_principal_credentials(
     callers: &[ResolvedTrustedCaller],
     sources: &[IdentitySourceResolver],

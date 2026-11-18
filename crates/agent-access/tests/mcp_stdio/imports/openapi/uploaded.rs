@@ -540,3 +540,6 @@ async fn exercise_uploaded_document(swagger: bool) {
     stdio.finish().await;
     stop(broker).await;
 }
+
+#[path = "anonymous.rs"]
+mod anonymous;

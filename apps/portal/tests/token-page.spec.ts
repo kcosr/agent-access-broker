@@ -93,6 +93,7 @@ async function fixture(page: Page, role: PrincipalRole = "user", selfServiceEnab
     else if (pathname.endsWith("/identity-token")) result = { principalId: "viewer", configured: false, enabled: true, readOnly: false, revision: 1, updatedAt: stamp.createdAt };
     else if (pathname.endsWith("/identity-access")) result = { principalId: "viewer", incarnation: "fixture", paused: false, version: 1, ...stamp };
     else if (pathname.endsWith("/identity-bindings")) result = { bindings: [], configuredNamespaces: [] };
+    else if (pathname.endsWith("/application-access")) result = { access: [] };
     else if (pathname === "/v1/admin/policy/catalog") result = { services: [], subjects: { users: [], groups: [], anonymous: false }, resources: [], resourceGroups: [], executionContexts: { allowedValues: ["internal", "external"], defaultContext: "internal" } };
     else if (pathname === "/v1/admin/policy/status") result = { policyGeneration: 1, writable: true, authority: "managed", counts: { active: 0, disabled: 0, deleted: 0 }, managementScope: { kind: "global" } };
     else if (pathname === "/v1/me") result = { serviceLimits: [] };

@@ -15,6 +15,32 @@ Two distinct config files exist:
 They are unrelated structs. The broker config has no listen-address or
 `[service]` block; the CLI config's `[service].url` is purely a client setting.
 
+## Listener transport
+
+Listener addresses and inbound TLS are `agent-access-broker serve` options,
+not TOML fields. The main listener always binds `--listen` (default
+`127.0.0.1:8787`); the gateway listener binds only with `--gateway-listen`.
+Each independently serves HTTP when its TLS pair is absent or HTTPS when both
+paths are present:
+
+| Listener | PEM certificate chain | PEM private key |
+| --- | --- | --- |
+| Main | `--tls-cert-chain <path>` | `--tls-private-key <path>` |
+| Gateway | `--gateway-tls-cert-chain <path>` | `--gateway-tls-private-key <path>` |
+
+An incomplete pair is invalid; gateway TLS also requires `--gateway-listen`.
+HTTPS replaces HTTP on the selected address. The listener does not accept both
+protocols on one port or fall back to HTTP. TLS settings do not create another
+listener or change its routes. The two listeners may share certificate/key
+files or use separate identities.
+
+Changing addresses, TLS mode, or file paths requires restart. Every configuration
+reload reads replacement material at the configured paths, even with unchanged
+TOML. Validation or admission failure before publication retains the previous
+runtime and both TLS identities. `config validate` checks the TOML document;
+`serve` checks the TLS files before serving. See [listener TLS](operator-guide.md#listener-tls)
+for file requirements, client trust, and rotation.
+
 ## Canonical broker config shape
 
 `BrokerConfig` and every nested struct use `#[serde(deny_unknown_fields)]`, so
@@ -29,7 +55,7 @@ Sections fall into three categories:
 | --- | --- | --- |
 | Mandatory | `identity`, `policy`, `limits` | parse error; an omitted `[limits]` is reported as its missing `upload_spool_dir` |
 | Optional | `execution_context`, `managed_store`, `credential_encryption`, `broker_tokens`, `audit` | feature-specific behavior described below; audit is disabled without `[audit]` |
-| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
+| Defaulted | `deployment`, `network`, `credentials`, `imports`, `command_imports`, `oauth`, `applications`, `management`, `browser_auth`, `portal`, `mcp`, `providers`, `gateways`, `attribution` | filled with built-in defaults |
 
 ### Conditional requirements
 
@@ -55,6 +81,10 @@ These cross-section rules are enforced by validation (not by the parser):
   [`[browser_auth]`](#browser_auth).
 - `portal.enabled = true` requires `browser_auth.enabled = true` and an
   absolute `portal.static_dir`.
+- Any `[applications.<id>]` entry requires managed identity authority,
+  `[managed_store]`, `[broker_tokens]` with a `broker_tokens` identity source,
+  `browser_auth.enabled = true` with `browser_auth.public_origin`, and
+  `management.enabled = true`. See [Applications](#applications).
 
 Validation runs `deployment`, `identity`, `execution_context`, `network`, managed sections,
 `credentials`, `providers`, `gateways`, `policy`,
@@ -218,8 +248,8 @@ including the staged `default` transition when introducing an explicit registry.
 ## `[mcp]`
 
 Optional downstream Streamable HTTP MCP uses `/mcp` and `/mcp/{service}` on the public listener.
-Terminate TLS at trusted ingress and preserve its public Host. The broker does
-not create a second listener. This setting controls downstream client connections;
+Use native HTTPS or terminate TLS at trusted ingress that preserves the public
+Host. Enabling MCP does not create another listener. This setting controls downstream client connections;
 upstream imports are configured separately. Keep `public_url` at `/mcp`; a
 service-specific connection appends its canonical service ID. No per-service
 listener, URL record or enable flag is needed. Proxy rules must permit both path
@@ -876,6 +906,10 @@ membership_renewal = false               # default
 - `public_origin`, when set, must be an `http` or `https` origin with no path,
   query, or fragment. Non-local `http` origins are rejected. Production
   deployments with `browser_auth.enabled = true` must set `public_origin`.
+  Set the canonical browser HTTPS origin, including any non-default port, for
+  native HTTPS too: it controls origin checks and `Secure` cookies independently
+  of listener TLS. When a reverse proxy serves that origin, changing its Broker
+  upstream to HTTPS does not change `public_origin`.
 - `session_cookie_name` must be a valid cookie name and may not use the
   `__Host-` or `__Secure-` prefixes, matched case-insensitively, because the
   browser session cookie is scoped to `Path=/v1` and loopback development may
@@ -1391,6 +1425,9 @@ allowed_property_key_prefixes = ["agent-access."]
 dependency_link_type = "Blocks"
 dependency_outward = "blocks"
 dependency_inward = "is blocked by"
+
+[providers.jira.custom_fields]
+allowed_field_ids = [] # default: no writable custom fields
 ```
 
 - `tenant_host` is required and must be a lowercase, normalized bare host name
@@ -1520,6 +1557,16 @@ dependency_inward = "is blocked by"
   values must be non-empty and contain no control characters. At runtime the
   broker fetches Jira issue link types and validates the configured type and
   direction names before creating `issue.dependency.add` links.
+- `[providers.jira.custom_fields].allowed_field_ids` limits `issue.custom_field.set`
+  to explicit canonical IDs such as `customfield_12345`. The default empty
+  list disables writes; duplicate or malformed IDs are rejected. Ordinary
+  action/project grants and Jira permissions are required separately. Every
+  grantee of this action can set or clear every listed field using any JSON Jira
+  accepts. Verify the field's supported edit behavior and effects before listing
+  it; Jira or apps may attach workflow, hierarchy, notification or other effects.
+  The Broker adds no comment/description attribution to custom ADF values.
+  Serialized values must fit `content.max_body_bytes`. See
+  [custom-field updates](providers-jira.md#issuecustom_fieldset).
 
 ### `[providers.confluence]`
 
@@ -2760,6 +2807,49 @@ until its database write finishes even if the HTTP caller disconnects. OIDC JIT
 performs this generation check after the external exchange. Initial-administrator
 bootstrap into an empty store is startup-only; a reload that would bootstrap a
 new administrator is rejected without provisioning one.
+
+## Applications
+
+`[applications.<id>]` registers a client application that obtains short-lived
+agent tokens for a person who approved it in the portal. The contract, flow
+and administration are in [applications.md](applications.md). The table name
+is the OAuth client ID: at most 64 safe identifier characters, without `:`.
+
+```toml
+[applications.example-runner]
+display_name = "Example Runner"
+client_secret_ref = "file:/run/secrets/example-runner-client-secret"
+redirect_uris = ["https://runner.example.test/auth/broker/callback"]
+connect = "read_write"
+allowed_execution_contexts = ["internal"]
+allowed_services = ["jira"]
+access_token_ttl = "8h"
+refresh_idle_ttl = "90d"
+```
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `display_name` | yes | The name people see on the approval page: 1 to 128 bytes, no control characters or surrounding whitespace. |
+| `client_secret_ref` | yes | An `env:` or `file:` reference to the client secret. |
+| `redirect_uris` | yes | 1 to 16 distinct absolute `https` URIs of at most 2,048 bytes, without fragment or credentials. Plain `http` is accepted only for a loopback host. A request's `redirect_uri` must equal one exactly. |
+| `connect` | yes | `none`, `read_only` or `read_write`: what everyone who connects receives. |
+| `allowed_execution_contexts` | yes | The context caveat of every minted token: one or more distinct values from the configured [execution contexts](#execution_context). It must contain every context in which the application or its agents present a token. |
+| `allowed_services` | no | When set, the service caveat of every minted token: one or more distinct service names. A name no service has grants nothing. |
+| `access_token_ttl` | no | Lifetime of each minted token; default `8h`, at most `broker_tokens.max_self_issued_agent_invoke_ttl`. |
+| `refresh_idle_ttl` | no | How long a refresh token may go unused before it stops working; default `90d`, at most `3650d`. |
+
+Applications require managed identity authority, `[managed_store]`,
+`[broker_tokens]` with a `broker_tokens` identity source,
+`browser_auth.enabled = true` with `browser_auth.public_origin` (the issuer of
+the authorization server), and `management.enabled = true`.
+
+A client secret holds 16 to 1,024 visible ASCII bytes, cannot start with
+`aab_`, and must differ from every other application's secret and from every
+trusted caller credential. The secret file holds only the raw secret; the
+application sends it with HTTP Basic authentication. Secrets and registrations
+are loaded at startup and reload. A reload that changes or removes a
+registration applies to the next request; see
+[what a change affects](applications.md#registering-an-application).
 
 ## Delegated upstream OAuth
 

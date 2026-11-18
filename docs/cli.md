@@ -789,6 +789,22 @@ auditors; reveal and changes require the administrator role. See
 [managed identity](managed-identity.md) for lifecycle and
 [access path controls](managed-identity.md#access-path-controls).
 
+A person's access for [registered applications](applications.md) has one
+command group:
+
+| Command | Arguments |
+| --- | --- |
+| `admin principals application-access list` | `PRINCIPAL` |
+| `admin principals application-access update` | `PRINCIPAL ACCESS_ID [--enabled BOOL] [--read-only BOOL] --expected-version N` |
+| `admin principals application-access delete` | `PRINCIPAL ACCESS_ID --expected-version N` |
+
+`update` requires at least one of `--enabled` and `--read-only`, each taking
+`true` or `false`. Every actual change, and `delete`, ends the tokens the
+application holds for that person. Read the current version from `list` before
+a mutation; a stale one is refused with `version_conflict`. `list` permits
+auditors; changes require the administrator role. There is no command to
+connect an application: a person approves it in their own browser session.
+
 
 Administrative management of principals, rights, tokens, credentials, and
 policy, plus audit queries. Metadata reads also permit auditors; changes require global admin authority;
@@ -1046,7 +1062,7 @@ Each typed Jira command lowers to a generic `invoke` of the corresponding
 routes; typed commands only build the invoke input for you.
 
 The typed Jira family covers project listing and field discovery, issue view/create/update/search, parented child
-creation, parent assignment, dependency links, issue comments and comment
+creation, parent assignment, custom-field writes, dependency links, issue comments and comment
 properties, issue attachments, and verification helpers. Issue locators accept
 issue keys and, where documented, tenant browser URLs. Provider-specific
 actions, required inputs, typed examples, generic `invoke` payloads, JSON
@@ -1609,6 +1625,7 @@ agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://exa
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout'
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout' --content-file description.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --summary 'Clarify startup failure handling'
+agent-access --url http://127.0.0.1:8787 jira issue custom-field set PROJ-123 --field-id customfield_12345 --value-json '"https://reports.example.com/issues/PROJ-123"'
 agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100 --content 'Follow the deployment checklist.' --content-format plain_text
 agent-access --url http://127.0.0.1:8787 jira issue parent set PROJ-124 --parent PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue dependency add --blocking PROJ-123 --blocked PROJ-124
@@ -1636,6 +1653,15 @@ works only when the Epic and child issue types accept the narrow create fields;
 issue types requiring additional custom fields are unsupported by these create
 commands. Raw field passthrough is not available. To attach an existing issue to the
 Epic instead of creating a new child, use `jira issue parent set <issue> --parent <epic>`.
+
+Use `jira issue custom-field set` for one operator-allowlisted custom field.
+`--value-json` is required and accepts any JSON value, including `null` to
+request clearing. Quote JSON strings explicitly, for example
+`--value-json '"Report ready"'`; strings are not parsed again. Jira determines
+which values and clears the field accepts. `--expected-issue-id` guards the immutable Jira
+issue ID, and `--issue-url` can replace the positional issue key.
+See [Custom-field writes](providers-jira.md#issuecustom_fieldset) for authority,
+limits, and acknowledgement semantics.
 
 See [providers-jira.md](providers-jira.md) for provider examples, canonical
 `jira.<action>` invoke inputs, JSON `send` payloads, and lookup-backed

@@ -23,6 +23,9 @@ mod documentation_tests;
 #[path = "issue_type_tests.rs"]
 mod issue_type_tests;
 
+#[path = "custom_field_tests.rs"]
+mod custom_field_tests;
+
 #[path = "jql_custom_field_tests.rs"]
 mod jql_custom_field_tests;
 
@@ -433,6 +436,8 @@ struct StubJiraBackend {
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
     issue_update_error: Mutex<Option<JiraBackendError>>,
+    custom_field_error: Mutex<Option<JiraBackendError>>,
+    custom_field_updates: Mutex<Vec<(String, String, Value)>>,
     parent_updates: Mutex<Vec<(String, JiraIssueParentSetRequest)>>,
     issue_parent_update_error: Mutex<Option<JiraBackendError>>,
     issue_parent_readbacks: Mutex<BTreeMap<String, JiraIssueParentReadback>>,
@@ -635,6 +640,29 @@ impl JiraBackend for StubJiraBackend {
                 }),
             status: 201,
             duration_ms: 11,
+        })
+    }
+
+    async fn set_issue_custom_field(
+        &self,
+        issue_id: &str,
+        field_id: &str,
+        value: &Value,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        self.record_credential("set_issue_custom_field", credential);
+        self.custom_field_updates.lock().unwrap().push((
+            issue_id.to_owned(),
+            field_id.to_owned(),
+            value.clone(),
+        ));
+        if let Some(error) = self.custom_field_error.lock().unwrap().clone() {
+            return Err(error);
+        }
+        Ok(JiraBackendResponse {
+            value: (),
+            status: 204,
+            duration_ms: 1,
         })
     }
 
@@ -9539,6 +9567,7 @@ fn jira_config_with_search_cap(max_results: u32) -> JiraProviderConfig {
         listing: Default::default(),
         comments: crate::JiraCommentsConfig::default(),
         issue_links: crate::JiraIssueLinksConfig::default(),
+        custom_fields: Default::default(),
     }
 }
 

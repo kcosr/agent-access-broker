@@ -48,6 +48,7 @@ async function fixture(page: Page, role: PrincipalRole = "admin", authority = "m
     else if (path.endsWith("/identity-token")) result = { principalId: principal.principalId, configured: false, enabled: true, readOnly: false, revision: 1, updatedAt: stamp.createdAt };
     else if (path.endsWith("/identity-access")) result = { principalId: principal.principalId, incarnation: "fixture", paused: false, version: 1, ...stamp };
     else if (path.endsWith("/identity-bindings")) result = { bindings: [], configuredNamespaces: [] };
+    else if (path.endsWith("/application-access")) result = { access: [] };
     else if (path === "/v1/resource-types") { await route.fulfill({ json: { resourceTypes: [] } }); return; }
     await route.fulfill({ json: { ok: true, result } });
   });

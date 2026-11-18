@@ -426,6 +426,7 @@ fn runtime_with_replaced_config(runtime: &BrokerRuntime, config: BrokerConfig) -
         managed_store: runtime.managed_store.clone(),
         credential_key_ring: runtime.credential_key_ring.clone(),
         trusted_callers: runtime.trusted_callers.clone(),
+        applications: runtime.applications.clone(),
         broker_token_hasher: runtime.broker_token_hasher.clone(),
         local_password_hasher: runtime.local_password_hasher.clone(),
         browser_csrf_key: runtime.browser_csrf_key.clone(),
@@ -7790,6 +7791,7 @@ async fn attribution_validation_failure_during_reload_preserves_active_runtime()
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+            custom_fields: Default::default(),
         });
     candidate
         .attribution
@@ -8261,6 +8263,7 @@ async fn per_user_credential_mode_is_selected_and_unconfigured_mode_fails_closed
         managed_store: None,
         credential_key_ring: None,
         trusted_callers: Arc::new(Vec::new()),
+        applications: runtime.applications.clone(),
         broker_token_hasher: None,
         local_password_hasher: None,
         browser_csrf_key: None,
@@ -8808,6 +8811,7 @@ pub(super) fn base_fake_config() -> BrokerConfig {
         imports: Default::default(),
         command_imports: Default::default(),
         oauth: Default::default(),
+        applications: Default::default(),
         deployment,
         network: crate::NetworkConfig::default(),
         identity: IdentityConfig {
@@ -9202,6 +9206,7 @@ fn configure_lookup_trace_jira(config: &mut BrokerConfig) {
             listing: Default::default(),
             comments: agent_access_jira::JiraCommentsConfig::default(),
             issue_links: agent_access_jira::JiraIssueLinksConfig::default(),
+            custom_fields: Default::default(),
         });
     config.credentials.service.clear();
     config.credentials.lookup.clear();

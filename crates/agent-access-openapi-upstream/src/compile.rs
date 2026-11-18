@@ -27,39 +27,19 @@ pub(crate) fn operation(
             "operation destinations do not include the independently approved API base URL".into(),
         );
     }
-    let scheme = settings
-        .scheme
-        .ok_or("select an execution security scheme, save the draft, and refresh discovery")?;
-    let security = operation
-        .security_schemes
-        .iter()
-        .find(|candidate| candidate.scheme == scheme)
-        .cloned()
-        .ok_or("selected security scheme is missing or unsupported")?;
+    let security = crate::security::select(operation, &settings)?;
     let delivery = security.delivery()?;
     if definition
         .execution_bindings
         .iter()
-        .any(|binding| binding.delivery != delivery)
+        .any(|binding| Some(&binding.delivery) != delivery.as_ref())
     {
         return Err(
             "selected security scheme does not match the configured credential delivery".into(),
         );
     }
-    let requirements = operation
-        .security_requirements
-        .as_array()
-        .ok_or("operation has no supported authenticated security requirement")?;
-    if !requirements.iter().any(|requirement| {
-        requirement.as_object().is_some_and(|map| {
-            map.len() == 1
-                && map
-                    .get(&scheme)
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty)
-        })
-    }) {
-        return Err("operation security requires unsupported or combined credentials; a single selected Basic/bearer/header-key alternative is required".into());
+    if settings.anonymous {
+        crate::security::reject_credential_parameters(document, dialect, &operation.parameters)?;
     }
     if operation.parameters.len() > 128 {
         return Err("operation exceeds 128 parameters".into());
@@ -125,8 +105,7 @@ pub(crate) fn operation(
         if location == "header" {
             crate::config::parameter_header(name)?;
             if security
-                .header
-                .as_ref()
+                .header()
                 .is_some_and(|header| header.eq_ignore_ascii_case(name))
             {
                 return Err("parameter collides with the execution credential header".into());

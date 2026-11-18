@@ -2,11 +2,12 @@
 // last attempt failed: an expired session, or a Microsoft sign-in error that
 // the broker reports with `/ui/login?error=<reason>&requestId=<id>`.
 import { useState } from "react";
-import { useSearchParams } from "react-router";
+import { useMatch, useSearchParams } from "react-router";
 import { errorMessage } from "../lib/helpers";
 import { Banner, Brand, Button, Field, Input, Spacer, ThemeMenu, TopBar } from "../workbench";
 import { FormError } from "../components/form";
 import { useAuthActions } from "../mutations/auth";
+import { ROUTE } from "./paths";
 import { useSession } from "./session";
 import { usePortalTheme } from "./theme";
 
@@ -42,6 +43,7 @@ export function SignInPage() {
   const { login, startMicrosoftLogin } = useAuthActions();
   const { mode, setMode } = usePortalTheme();
   const [params] = useSearchParams();
+  const approving = useMatch(ROUTE.authorize) !== null;
   const oidcError = oidcErrorMessage(params);
   const [principalId, setPrincipalId] = useState("");
   const [password, setPassword] = useState("");
@@ -75,7 +77,7 @@ export function SignInPage() {
           <h1 className="pt-auth-title" id="sign-in-title">
             Sign in
           </h1>
-          <p className="pt-auth-lede">Scoped, audited access for your agents.</p>
+          <p className="pt-auth-lede">{approving ? "Sign in to review an application’s request to act as you." : "Scoped, audited access for your agents."}</p>
           {signInNotice ? (
             <Banner tone={signInNotice.tone} live>
               {signInNotice.text}

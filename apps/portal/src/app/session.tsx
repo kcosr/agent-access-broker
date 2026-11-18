@@ -109,7 +109,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!(error instanceof ApiError)) return false;
       if (sessionExpired(error)) {
         setPendingReturnTo(window.location.pathname);
-        setSession(SIGNED_OUT);
+        // Keep the sign-in choices on screen, so the person can sign in again where they are.
+        setSession((current) => ({ ...SIGNED_OUT, loginOptions: current.loginOptions }));
         clearPortalData();
         setModal(null);
         setSignInNotice({ tone: "danger", text: errorMessage(error) });

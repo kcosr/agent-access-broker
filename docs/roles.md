@@ -34,6 +34,17 @@ other accounts, or an administrator's own account, remain governed by the role.
 Existing invocation tokens, stored credentials, and OAuth refresh continue to
 work for authorized invocation. Disabling self-service does not revoke them.
 
+## Connecting applications
+
+Approving a [registered application](applications.md) is its own permission.
+Any enabled human account can approve one whose level is not `none`, with
+self-service on or off and whatever its agent-token issuance policy: the
+application, not the person, receives the tokens. The person's own list of
+connected applications and its removal are likewise not gated by self-service.
+Administrators set an access's Enabled and Read-only settings and remove it;
+auditors read it; service policy managers have no access to it. An
+application's tokens act only within the person's invocation grants.
+
 ## Agent token issuance
 
 `agentTokenIssuance` is an administrator-owned object for new personal

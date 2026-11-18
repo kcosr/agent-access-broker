@@ -10,7 +10,7 @@ Provider invocations use an `inputs` envelope; runtime specs define the contract
 
 ## Connection and identity
 
-Use configured authentication and TLS trust through the intended trusted-ingress
+Use configured authentication and TLS trust through the administrator-provided
 base URL for both discovery and execution. Send a unique
 `X-Agent-Access-Request-Id` on authenticated routes. Keep credentials out of
 logs, argv and tracked files. This skill does not authorize configuration,

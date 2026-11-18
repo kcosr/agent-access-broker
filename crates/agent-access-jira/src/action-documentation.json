@@ -271,6 +271,43 @@
     ],
     "typedCommand": "Typed CLI wrapper: agent-access jira issue update [OPTIONS] [ISSUE]; run agent-access jira issue update --help for flags and input alternatives."
   },
+  "issue.custom_field.set": {
+    "scope": "Authorization is by Jira project; a grant for issue.update alone does not grant this action. The operator must allow fieldId in providers.jira.custom_fields.allowed_field_ids; the default empty list permits no custom-field writes. The provider-wide allowlist applies to every caller with matching action and project authority, allowing each caller to write every listed field. Use the issue key or accepted browser URL, not a policy resource ID.",
+    "workflow": "Set one operator-allowed custom field. Supply exactly one issue or url locator, a canonical customfield_<positive decimal ID> fieldId, and a present value of any JSON type, including null to request clearing. JSON strings are passed unchanged, never parsed again. Null issue/url locators are treated as omitted; exactly one non-null locator is required. Optional expectedIssueId is a positive decimal string that must match the resolved immutable issue ID before writing. Jira decides the field type, context, editability and requiredness; it may reject a value or null.",
+    "authority": "Allowlisting a field delegates any value or clear that Jira accepts for that field, together with its field-specific effects. Operators must verify those effects before listing it. Configured comment/description attribution does not add attribution to custom ADF fields. The action exposes no transition, notification or override controls and preserves Jira notification defaults.",
+    "result": "Returns operation=issue.custom_field.set, the confirmed issue identity, fieldId and status=set after one PUT containing only the selected field and addressed by the confirmed immutable issue ID. This acknowledges Jira acceptance; it does not read back or return the field value, field name or raw custom data. No current-value check or duplicate-write suppression is performed. Field values and names are omitted from audit. Accepted writes whose result cannot be completed retain the standard applied_unverified receipt, and uncertain requests are not safe to replay blindly.",
+    "errors": "jira_custom_field_not_allowed means the operator has not allowed this field ID. jira_custom_field_rejected means Jira refused the edit with HTTP 400 or 422; no raw Jira error content is returned. These are nonretryable configuration or value errors. The serialized JSON value is bounded by content.max_body_bytes; an excess returns body_size_denied. Ordinary transport and request-body limits also apply. An expectedIssueId mismatch or an issue that has left the admitted projects returns scope_unresolved before any write and carries no mutation receipt.",
+    "inputExamples": [
+      {
+        "label": "Set a string value",
+        "inputs": {
+          "issue": "PROJ-123",
+          "expectedIssueId": "10001",
+          "fieldId": "customfield_12345",
+          "value": "https://reports.example.com/issues/PROJ-123"
+        }
+      },
+      {
+        "label": "Clear an allowed field when Jira permits null",
+        "inputs": {
+          "issue": "PROJ-123",
+          "fieldId": "customfield_12345",
+          "value": null
+        }
+      },
+      {
+        "label": "Set an object value accepted by the selected field",
+        "inputs": {
+          "issue": "PROJ-123",
+          "fieldId": "customfield_12345",
+          "value": {
+            "id": "10002"
+          }
+        }
+      }
+    ],
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue custom-field set [OPTIONS] --field-id <FIELD_ID> --value-json <VALUE_JSON> [ISSUE]; run agent-access jira issue custom-field set --help for flags and input alternatives."
+  },
   "issue.view": {
     "scope": "Authorization is by Jira project. Use the issue key or accepted browser URL, not a policy resource ID; an issue locator does not introduce a separate issue grant.",
     "presentation": "Whole-result Markdown omits null standard context and shows None. for empty collections. Named values keep their IDs even when names are unavailable. Custom fields use readable names and IDs with explicit unsupported/withheld markers; custom-field nulls and empty arrays display as not set. An empty customFields array means no custom fields were returned, not that the project defines none. A returned null parent displays No parent returned. Embedded formatting retains native ADF and adds renderedBody beside the owning issue, comment or supported ADF custom-field value.",

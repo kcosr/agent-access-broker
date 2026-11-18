@@ -41,7 +41,12 @@ actions and exposes typed wrappers for supported services.
   and profile spellings, and persisted import JSON are durable data contracts.
   Core golden tests freeze rows written by an earlier release; never regenerate
   them to make a refactor pass.
-- Update `README.md` for user-facing behavior, config, or workflow changes.
+- Keep `README.md` focused on project purpose, supported integrations, the access
+  model, getting started, and documentation navigation. Update it when those
+  entry points change. Put detailed behavior, configuration contracts, limits,
+  edge cases, and operational procedures in the relevant `docs/` guide or action
+  documentation; do not append feature-by-feature implementation notes to the
+  README. Link to the detailed source instead of duplicating it.
 - Service policy grants use the canonical plural `subjects` field everywhere;
   do not reintroduce singular grant `subject` config, API, CLI JSON, or store
   shapes unless an approved interface change explicitly changes the contract.
@@ -335,6 +340,98 @@ Token commit and completion audit belong to the cancellation-resistant mutation
 owner. A failed completion returns the existing audit-unavailable error without
 the secret while retaining the committed row; never retry issuance automatically.
 
+## Application access
+
+`docs/applications.md` is the contract for registered applications
+(`[applications.<id>]`, `applications_config.rs`,
+`managed_store/application_access.rs`, migration `037`, host
+`handlers/applications.rs` and `handlers/management/application_access.rs`).
+The wire contract is fixed for clients: metadata, authorization code with PKCE
+S256, `client_secret_basic`, non-rotating refresh tokens, revocation, and RFC
+6749 JSON errors on the token and revocation endpoints for every refusal,
+including those made before their handlers. In this repository "connection"
+means an outbound provider account; the inbound objects are an application and
+a person's application access.
+
+An application's token is an ordinary `agent_invoke` `broker_tokens` row, so
+every admission path works unchanged; never add an identity path or special
+admission for it. Its caveats are fixed at mint: the application's contexts
+and services, and `readOnly` when the level is `read_only` or the access is
+read-only. Per-person settings only narrow. Connecting is independent of
+self-service and of the agent-token issuance policy: the personal routes use
+`ManagementAccess::Account`, and consent requires a browser session with CSRF,
+never a bearer token.
+
+Approval, mint and refresh re-check inside their transaction that the
+application is registered and not `none`, the access is enabled, the person is
+an enabled human and the refresh token is not idle. An approval only issues a
+code (with a not-yet-connected placeholder row for a first approval); the code
+exchange installs the new refresh token and, in the same transaction, ends the
+previous refresh token, its tokens and the access's other codes, so an
+unredeemed approval never ends a working consent. The decision (approve and
+cancel alike) and the code exchange also require the stored redirect URI to be
+registered still; never return a browser or a code to an address the fenced
+registration no longer lists. Mint and revocation run in owners that keep the
+request's admission permit through store completion and audit; mint also
+holds the token-issuance reload fence. A failed mint audit keeps the committed
+row, withholds the secret and is never retried. Audit every refusal after
+client authentication, and failed client authentication itself, with a fixed
+reason and no supplied value.
+
+A settings change, administrator removal, redeemed re-approval, disconnect or
+principal disable ends the access's live tokens in the same transaction; every
+actual settings change advances `version` once and a no-op writes nothing.
+Startup and every reload end the live tokens the current registration would no
+longer mint (removed, `none`, `read_only` against a write-capable token, or
+different contexts or services) and audit one record per application; refresh
+tokens stay. A reload reconciles only after its generation is published, in an
+owner that keeps the mutation fence and admission permit through the store
+work and audit, with no await between publication and that owner: a rejected
+or abandoned candidate never revokes, and every committed reconciliation is
+audited. A failure there is reported, logged and audited, never a rejected
+reload, and retried by the next reload or startup; startup itself must not
+serve when its reconciliation fails. The mint, revocation and reconciliation
+owners take an `OwnerDrain` lease before they can outlive their caller, and
+shutdown drains those leases before the audit writers close. The consent
+decision carries the required `principalId` the page displayed and is refused
+with `version_conflict` under another account's session. Portal documents are
+served with `Referrer-Policy: no-referrer`; the portal's writes must keep
+sending `Origin`, which the sign-in routes check. Token and revocation
+requests are authentication-budget requests at pre-body admission whatever
+other Broker credential they carry. A disconnect by the person or by the
+application's refresh-token revocation never lifts an administrator's
+restriction: it deletes only an enabled, not read-only row and otherwise keeps
+the row, disconnected, for the next approval to reuse. Only an administrator's
+delete removes a restricted row, the person's own list shows connected rows
+only, and connecting or disconnecting never moves `version`.
+Keep application-minted tokens out of the individual token lists (the access
+reports a live count), bounded per access and deleted 7 days after they end.
+`broker_tokens.application_access_id` is deliberately not a foreign key.
+
+Codes, refresh tokens and client secrets stay outside the `aab_` namespace and
+are never accepted as caller credentials. Store only keyed hashes of codes and
+refresh tokens and the hash of a request ID; keep them, verifiers, `state` and
+client secrets out of logs, audit, errors and `Debug`. Redirect URIs match
+exactly, and an unknown client or redirect URI gets an error page, never a
+redirect. Audit approval, denial, every mint, refusal, revocation and
+administrator change with the application ID. Never name a specific client
+product in code, tests or docs.
+
+The portal's approval page (`/ui/authorize/<request>`) stays a focused page in
+the sign-in frame, without portal navigation or the command palette, and
+works without self-service. It shows the account the request was read for
+(the `principal` of the read's envelope) and sends that account as the
+decision's `principalId`, once per explicit click and only while the
+browser's session is still that account. It never replays a decision after a
+`version_conflict`, CSRF or session failure: it shows the account that is
+signed in now and asks again. It opens the decision's `redirectTo` only as
+a top-level navigation, and keeps the request ID and that address out of
+rendered text, logs and error messages. A person's list lives on **Account**,
+which accounts without self-service can reach, and is shown from the runtime
+catalog's `account_management` routes, never by probing; an administrator's
+rows are in the principal's **Access paths**. `docs/testing.md` lists the
+portal's unit, real-Broker and mocked coverage.
+
 ## Microsoft membership renewal
 
 `membership_renewal` keeps one encrypted Microsoft refresh-token record per
@@ -479,7 +576,9 @@ The Jira read smoke is also included in `cargo test`; it serves a stubbed Jira
 backend as a provider fixture and drives typed `agent-access jira issue
 view/search`, live project listing, project details and searchable-field discovery,
 project issue-type discovery and its create workflow, and issue
-comment commands.
+comment commands. Its custom-field module also checks the dedicated action
+grant, typed/generic writes and clears, omission and size denial on transport
+surfaces, projections, and audit omission of custom-field values.
 The ignored `real_jira_smoke` test is only for a live broker that has already
 been configured with real Jira credentials.
 
@@ -610,11 +709,19 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
   `project_view.rs` authorized project details and searchable-field discovery,
   `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
+  `custom_field.rs` acknowledgement-only writes to one operator-allowlisted custom field,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
-  embedded hierarchy and custom fields belong only to `JiraIssueView`; search
+  embedded hierarchy and general custom-field projection belong only to `JiraIssueView`; search
   and mutation readbacks keep their own shapes. Hierarchy shares the existing
   universal same-mode issue-link gate and never triggers target fetches.
+  Custom-field writes require an allowlist that defaults to empty; enforce it
+  after policy so the denial survives lookup concealment. Keep the serialized
+  value size check in invocation for a visible body_size_denied reason. Require
+  present JSON values including null, preserve the confirmed immutable issue ID,
+  and send exactly one fields entry. Jira owns type/context/editability rules.
+  Return a value-free acknowledgement without reading the field. Preserve write
+  uncertainty receipts; never audit field values or raw Jira validation errors.
   Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
   or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   project discovery uses the selected execution credential after authorization,
@@ -714,7 +821,8 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   command parsing, `config validate`, `audit verify`, exit statuses) and its
   `serve` lifecycle (`src/lifecycle.rs`: logging, listeners, signals, reload, and
   bounded shutdown; `src/http_server.rs` serves each listener's connections and
-  owns their tasks; `src/oauth_revocations.rs` the OAuth revocation worker the
+  owns their tasks; `src/listener_tls.rs` loads bounded operator-provided TLS
+  identities; `src/oauth_revocations.rs` the OAuth revocation worker the
   lifecycle starts and drains; `src/membership_renewal.rs` the Microsoft
   membership renewal admission, flights and drain, sharing ID-token validation
   with sign-in through `src/oidc_id_token.rs`), HTTP routers and handlers,
@@ -846,6 +954,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `docs/configuration.md`: canonical broker and CLI config schema, including
   identity, policy, credentials, managed store, broker tokens, encryption,
   management, audit, services, and providers.
+- `docs/applications.md`: registered client applications: registration and
+  levels, the OAuth authorization-server wire contract, consent routes,
+  personal and administrative management, limits, retention, audit and
+  security notes.
 - `docs/oauth.md`: delegated OAuth, production Google, GitLab and Atlassian
   dialects (including their administrator setup and scopes, and Atlassian's
   connection table, per-product registrations, quota and lifecycle), separate
@@ -925,6 +1037,21 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `skills/agent-access-mcp/SKILL.md`: discovery and invocation through existing
   MCP connections, including argument shapes, pagination, and error handling.
 
+## Listener TLS
+
+Keep TLS optional and independent on the existing public and gateway listeners;
+transport selection never changes their routes or authentication. Prepare all
+configured identities before startup or reload publication, and publish them
+with the host runtime snapshot after all pre-publication checks. Both reload
+entry points reread unchanged file paths, even when configuration text is
+unchanged. Other snapshot publications preserve the identities. A TLS
+connection captures only its identity, not a retired runtime or state-lock set.
+Keep handshake capacity separate from established connections and acquire it
+before spawning work. Use the existing tracked Hyper executor, request-lifetime
+and shutdown handling, including pending handshake cancellation. Keep private
+key bytes out of diagnostics. Require the production-executable TLS smoke:
+test dependencies must not supply HTTP/2 support that a normal build lacks.
+
 ## Changelog
 
 Location: `CHANGELOG.md` (root)
@@ -1001,15 +1128,16 @@ node scripts/verify-release.mjs --output-dir /absolute/external/path
 
 The driver runs the required standalone Rust, crate-boundary, public API,
 downstream consumer, portal, script, documentation, changelog, sample-config,
-Unix signal, native release-provenance, and notice checks. It
+Unix signal, native release-provenance, listener TLS, and notice checks. It
 writes `qualification.json`, per-gate logs, and generated Rust notices. Missing
 required prerequisites or failed gates prevent passing qualification; optional
 OAuth/live-provider exclusions and platform applicability are recorded. Preflight
 requires Python 3.11+ and its SQLite 3.43+ library with working FTS5
 `contentless_delete`, the `nightly-2026-07-13` toolchain and `cargo-public-api`
 0.52.0 for the public API gate, cargo-nextest 0.9.150 or newer for the Rust
-test gate, and rejects Cargo target runners, including
-through configuration includes. The public API gate checks the candidate
+test gate, and `openssl` on `PATH` for Unix listener TLS. It records the
+`openssl version` result before any gate starts and rejects Cargo target runners,
+including through configuration includes. The public API gate checks the candidate
 against its own `api/` inventory; for a release on an existing compatible line,
 also review `git diff <previous-release-tag> -- api/`, where a patch release
 may not remove or change any line. See the
@@ -1288,8 +1416,13 @@ them atomically when an empty draft switches away from upload. Portal creation
 and upload are separate mutations: preserve the created draft after upload failure.
 Empty drafts may choose settings before accepting actions; accepted connection
 settings and delivery cannot change underneath existing action identities.
-Both source readers use the common compiler and executor. Preserve existing
-JSON plan bytes; strictly validate the optional form plan and reject duplicate
+OpenAPI actions with an explicitly empty `executionBindings` array use anonymous
+upstream access and service-mode grants; no selected scheme, execution credential
+or personal credential is allowed. Preserve caller authentication and policy.
+Validate effective source security, distinguishing absence from malformed null,
+and reserve source-declared credential parameters. Missing static credentials
+never select anonymous execution. Both source readers use the common compiler
+and executor. Preserve existing JSON plan bytes; strictly validate the optional form plan and reject duplicate
 JSON members during discovery. Resolve imported credential kinds and input rules
 through the adapter's offline credential contract, never by guessing token
 material or parsing protocol settings in core. Imported Basic validation belongs

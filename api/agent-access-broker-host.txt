@@ -260,6 +260,7 @@ impl core::marker::UnsafeUnpin for agent_access_core::api::ResponseKind
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_core::api::ResponseKind
 impl core::panic::unwind_safe::UnwindSafe for agent_access_core::api::ResponseKind
 pub enum agent_access_core::api::RouteAccess
+pub agent_access_core::api::RouteAccess::AccountManagement
 pub agent_access_core::api::RouteAccess::AdminRead
 pub agent_access_core::api::RouteAccess::AdminWrite
 pub agent_access_core::api::RouteAccess::AgentInvoke

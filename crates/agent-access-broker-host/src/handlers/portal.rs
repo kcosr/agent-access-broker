@@ -93,6 +93,14 @@ fn insert_portal_security_headers(response: &mut Response) {
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("DENY"),
     );
+    // A portal address can carry a value that is not for other requests'
+    // logs, such as the request ID of `/ui/authorize/<id>`. No request a
+    // portal document makes sends its address. The portal's own writes still
+    // carry `Origin`, which the sign-in routes check.
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
     headers.insert(
         HeaderName::from_static("content-security-policy"),
         HeaderValue::from_static(
@@ -139,6 +147,11 @@ mod tests {
             (None, "portal index", "no-store"),
             (Some("principals/alice"), "portal index", "no-store"),
             (
+                Some("authorize/3q2-7wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+                "portal index",
+                "no-store",
+            ),
+            (
                 Some("assets/app.js"),
                 "portal script",
                 "public, max-age=31536000, immutable",
@@ -149,6 +162,7 @@ mod tests {
             assert_eq!(response.headers()[CACHE_CONTROL], cache);
             assert_eq!(response.headers()["x-content-type-options"], "nosniff");
             assert_eq!(response.headers()["x-frame-options"], "DENY");
+            assert_eq!(response.headers()["referrer-policy"], "no-referrer");
             assert!(response.headers().contains_key("content-security-policy"));
             let body = axum::body::to_bytes(response.into_body(), 1024)
                 .await

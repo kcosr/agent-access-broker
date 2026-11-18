@@ -815,6 +815,7 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
          preserved_tables.map(|table| issuance_table_columns(&conn, table)))
     };
     let tokens_before = issuance_table_rows(&old.connection.lock().unwrap(), "broker_tokens");
+    let token_columns = issuance_table_columns(&old.connection.lock().unwrap(), "broker_tokens");
     let ledger_before = migration_rows(&path);
     drop(old);
     assert!(matches!(
@@ -863,7 +864,8 @@ fn agent_token_issuance_migration_preserves_tokens_and_credentials_and_rewrites_
             let after = issuance_projected_rows(&conn, table, &prior_columns[index]);
             assert_eq!(after, before[index], "{table}");
         }
-        let tokens_after = issuance_table_rows(&conn, "broker_tokens");
+        // Later migrations only add token columns; compare the earlier ones.
+        let tokens_after = issuance_projected_rows(&conn, "broker_tokens", &token_columns);
         assert_eq!(tokens_before.len(), tokens_after.len());
         for (before, after) in tokens_before.iter().zip(&tokens_after) {
             let mut expected = before.clone();
@@ -1011,6 +1013,8 @@ fn agent_token_issuance_migration_collision_rolls_back_and_supports_revoke_then_
         original.revoke_broker_token(id, "admin").unwrap();
     }
     let revoked_rows = issuance_table_rows(&original.connection.lock().unwrap(), "broker_tokens");
+    let token_columns =
+        issuance_table_columns(&original.connection.lock().unwrap(), "broker_tokens");
     drop(original);
     let upgraded = ManagedStore::open(
         &store_config(&path),
@@ -1018,7 +1022,12 @@ fn agent_token_issuance_migration_collision_rolls_back_and_supports_revoke_then_
         ManagedStoreOpenMode::Startup,
     )
     .unwrap();
-    let after = issuance_table_rows(&upgraded.connection.lock().unwrap(), "broker_tokens");
+    // Later migrations only add token columns; compare the earlier ones.
+    let after = issuance_projected_rows(
+        &upgraded.connection.lock().unwrap(),
+        "broker_tokens",
+        &token_columns,
+    );
     for (id, raw) in collisions.into_iter().chain([revoked]) {
         let id_value = rusqlite::types::Value::Text(id);
         assert_eq!(

@@ -365,13 +365,14 @@ surface is both easier for agents to use correctly and smaller to reason about.
 
 The supported production deployment uses a single broker process owning one managed
 store, audit store (a SQLite audit database or JSONL files), and upload-spool
-state set, serving one public HTTP listener
-behind the deployment's TLS and trusted-context-ingress boundary. That listener carries the agent invoke API,
+state set, serving one public listener with native HTTPS or behind controlled
+TLS ingress. TLS protects the transport; named trusted callers independently
+authenticate permitted identity and execution-context assertions. That listener carries the agent invoke API,
 discovery, browser authentication, the same-origin portal, self-service
 credential/token management, audit queries, DB-backed admin management, and
 config reload/status operations. Deployments that enable protocol gateways, such as Git
 smart HTTP, bind a separate gateway listener for host-matched protocol traffic;
-that listener does not mount `/v1` or `/ui` and authenticates with
+that listener independently selects HTTP or HTTPS, does not mount `/v1` or `/ui`, and authenticates with
 `agent_invoke` broker tokens carried by the protocol client or explicitly enabled
 managed identity through a named trusted caller. Unix deployments
 can also trigger config reload through `SIGUSR2` for service-manager hooks
@@ -608,6 +609,17 @@ security-relevant properties are:
   stored credentials and `agent_invoke` tokens without ever seeing stored
   upstream secret material and without changing the audit actor away from the
   admin.
+
+- **Connected applications hold only short-lived agent tokens.** An
+  operator-registered [application](applications.md) receives tokens for a
+  person only after that person approves it in their own browser session, with
+  CSRF protection; a bearer token cannot consent and an administrator cannot
+  approve for someone. The tokens are ordinary `agent_invoke` tokens within the
+  person's grants, with the application's context and service caveats and an
+  operator or administrator read-only ceiling. The application authenticates
+  with a client secret under the trusted-caller credential rules, redirect
+  URIs match exactly, PKCE is required, codes are one use, and codes, refresh
+  tokens and client secrets are never accepted as caller credentials.
 
 Parameter values (Argon2 cost, cookie attributes, CSRF key handling), the full
 administrator action list, and the managed-user workflow are documented in
@@ -1055,6 +1067,8 @@ so configured identity headers remain with the original Broker endpoint.
 | Broker implementation defect allows an overbroad operation. | Use reviewed code, deterministic tests, config validation, staged rollout, and release gates. |
 | A linked provider, OAuth companion, or import adapter misuses the process's authority. | Link only modules you have reviewed and qualified; SDK contracts are not a sandbox. Run mutually untrusted modules in separate deployments. See [linked module trust](#linked-module-trust). |
 | An approved import command leaks the credentials or attributes it receives, ignores the grants of a command-enforced action, or is replaced by a different binary. | Approve only reviewed commands, protect their paths like the Broker executable, run discovery again after every upgrade, and prefer Broker-enforced resource inputs. Commands have the Broker's authority and no sandbox. See [command imports](#command-imports). |
+| A registered application or its client secret and stored refresh tokens are compromised. | The attacker can mint agent tokens for every person who connected that application, within each person's grants, the application's context and service caveats and its read-only level. Register only applications you operate or trust, keep `allowed_execution_contexts` and `allowed_services` narrow, prefer `read_only` where it suffices, and keep client secrets out of workloads. To contain it, set the application's `connect = "none"` or remove it and reload, then remove or disable people's access to end the tokens already minted; rotate the secret before registering it again. Audit records every mint with the application ID. |
+| A person approves an application they did not intend to. | The approval page names the application and its level, and the request can only return to that application's registered redirect URI. The person removes their own access at any time, and administrators can disable or remove it; both end its tokens at once. |
 | Users bypass the broker by giving direct upstream tokens to agents. | Establish policy and network controls so approved agent access to protected services uses brokered access unless an exception is approved. |
 
 ## Outbound server authentication
@@ -1080,6 +1094,7 @@ generation and refreshed by validated config reload.
 - Operational deployment guide: [operator-guide.md](operator-guide.md)
 - Managed user onboarding: [end-user-guide.md](end-user-guide.md)
 - Trusted ingress contract: [trusted-callers.md](trusted-callers.md)
+- Registered applications: [applications.md](applications.md)
 
 ## Deliberate downstream credential issuance
 
@@ -1115,7 +1130,8 @@ route protocol state and confer no authority. Each request reauthenticates, and
 sessions bind to an exact credential, execution context, and endpoint/security
 configuration. Policy reloads preserve sessions while rechecking authority on
 each request.
-Public Host and explicit Origin validation complement trusted TLS ingress.
+Public Host and explicit Origin validation complement native HTTPS or trusted
+TLS ingress.
 
 HTTP exposes JSON actions and passes inline inputs through the canonical action
 schema, including sensitive fields. Such inputs and deliberately issued output

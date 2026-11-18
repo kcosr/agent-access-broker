@@ -356,6 +356,10 @@ pub(super) fn validate_structure(conn: &Connection) -> Result<(), ManagedStoreEr
     imported_store::validate_structure_through(conn, MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION)?;
     agent_token_issuance::validate_context_rows(conn)?;
     imported_gateway_routes::check_rows(conn)?;
+    check_rows(conn)
+}
+
+pub(super) fn check_rows(conn: &Connection) -> Result<(), ManagedStoreError> {
     let invalid =
         || ManagedStoreError::SchemaInvalid("pending Microsoft enrollment is invalid".into());
     let mut statement = conn

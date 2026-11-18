@@ -35,6 +35,9 @@ use url::form_urlencoded;
 pub(crate) enum ManagementAccess {
     User,
     UserManageToken,
+    /// The signed-in person's own account routes that self-service does not
+    /// gate: a browser session or `user_manage` token.
+    Account,
     PolicyRead,
     PolicyWrite,
     AdminRead,
@@ -860,7 +863,7 @@ pub(crate) async fn management_context(
             matches!(token_class, Some(BrokerTokenClass::UserManage))
                 || (token_class.is_none() && config.management.allow_classless_user_management)
         }
-        ManagementAccess::UserManageToken => {
+        ManagementAccess::UserManageToken | ManagementAccess::Account => {
             matches!(token_class, Some(BrokerTokenClass::UserManage))
         }
         ManagementAccess::AdminRead | ManagementAccess::AdminWrite => {
@@ -878,7 +881,7 @@ pub(crate) async fn management_context(
     };
     let personal = matches!(
         access,
-        ManagementAccess::User | ManagementAccess::UserManageToken
+        ManagementAccess::User | ManagementAccess::UserManageToken | ManagementAccess::Account
     );
     let admission = if !class_allowed {
         Err((
@@ -926,6 +929,7 @@ pub(crate) async fn management_context(
                     ManagementAccess::User | ManagementAccess::UserManageToken => {
                         authority.principal.self_service_enabled
                     }
+                    ManagementAccess::Account => true,
                     ManagementAccess::AdminRead => global_read,
                     ManagementAccess::AdminWrite => global_write,
                     ManagementAccess::PolicyRead => {
@@ -1062,6 +1066,9 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "tokens.list"
             | "tokens.inspect"
             | "tokens.options"
+            | "applications.authorizations.inspect"
+            | "applications.access.list"
+            | "admin.principals.application_access.list"
             | "admin.store.status"
             | "config.status"
             | "admin.policy.status"
@@ -1256,6 +1263,8 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "tokens.inspect",
     "tokens.options",
     "tokens.effective_access",
+    "applications.authorizations.inspect",
+    "applications.access.list",
     "credentials.list",
     "credentials.inspect",
     "credentials.targets",
@@ -1279,6 +1288,7 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "admin.principals.identity_token.inspect",
     "admin.principals.identity_access.inspect",
     "admin.principals.identity_bindings.list",
+    "admin.principals.application_access.list",
     "admin.groups.list",
     "admin.groups.inspect",
     "admin.groups.members.list",
@@ -2125,6 +2135,9 @@ pub(super) async fn management_store_error_response(
     let category = match error {
         agent_access_core::ManagedStoreError::TokenIssuanceDenied { category } => {
             Some(json!({"category": category}))
+        }
+        agent_access_core::ManagedStoreError::ApplicationAccessDenied(denial) => {
+            Some(json!({"denialReason": denial}))
         }
         _ => None,
     };

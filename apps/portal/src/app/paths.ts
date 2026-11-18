@@ -12,6 +12,8 @@ export const ROUTE = {
   credentials: "/ui/credentials",
   activity: "/ui/activity",
   account: "/ui/account",
+  /** An application's pending request for the signed-in person's approval. */
+  authorize: "/ui/authorize/:requestId",
   policies: "/ui/admin/policies",
   grantNew: "/ui/admin/policies/new",
   grantEdit: "/ui/admin/policies/:grantRef/edit",

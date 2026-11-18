@@ -7,6 +7,7 @@ pub(crate) struct Settings {
     /// Uploads use the approved API endpoint, never a local filename or URL.
     pub document_base: Url,
     pub scheme: Option<String>,
+    pub anonymous: bool,
     pub document_delivery: Option<ImportedCredentialDelivery>,
 }
 pub(crate) enum DefinitionSource {
@@ -16,10 +17,7 @@ pub(crate) enum DefinitionSource {
 impl Settings {
     pub fn parse(definition: &ImportedServiceDefinition) -> Result<Self, String> {
         definition.validate()?;
-        if definition.adapter_kind != "openapi_http"
-            || definition.transport_auth
-            || definition.execution_bindings.is_empty()
-        {
+        if definition.adapter_kind != "openapi_http" || definition.transport_auth {
             return Err(
                 "OpenAPI imports require openapi_http without transport authentication".into(),
             );
@@ -41,6 +39,12 @@ impl Settings {
             }
         }
         let settings = &definition.connection_settings;
+        // executionBindings is required on the wire. An explicitly empty list
+        // is the common import contract for credential-free service execution.
+        let anonymous = definition.execution_bindings.is_empty();
+        if anonymous && settings.contains_key("securityScheme") {
+            return Err("anonymous OpenAPI execution must not select a security scheme".into());
+        }
         if settings.keys().any(|key| {
             !matches!(
                 key.as_str(),
@@ -109,6 +113,7 @@ impl Settings {
             source,
             document_base,
             scheme,
+            anonymous,
             document_delivery,
         })
     }

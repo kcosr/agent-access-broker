@@ -322,6 +322,33 @@ that admitted them. Changing what is linked requires a new build and a restart.
 [Shutdown](#process-shutdown) drains listeners, closes HTTP MCP sessions, then
 drains operations, command-import processes and audit within a bounded budget.
 
+### Listener transport
+
+The host owns one public listener and an optional gateway listener. Each uses
+HTTP by default or HTTPS when its `serve` certificate-chain and private-key
+options are set. Transport selection preserves the listener's existing router,
+state, middleware and MCP endpoint ownership; the gateway never acquires public
+routes. Addresses, transport mode and file paths are process settings, while
+replacement file contents participate in ordinary configuration reload.
+
+The host loads bounded PEM files and prepares Rustls server configurations with
+the explicit ring crypto provider, TLS 1.2/1.3, no client-certificate
+authentication and ALPN for HTTP/2 and HTTP/1.1. A handshake captures only its
+selected immutable TLS identity from the active runtime snapshot; it does not
+hold an old runtime or state locks for the connection's lifetime. Neither
+certificate loading nor key parsing occurs on the request path. Clients own
+issuer trust, hostname and validity-period verification.
+
+Each listener owns its handshakes, connection tasks and Hyper child tasks. A
+five-second timeout and 64-handshake capacity bound pending TLS work; excess
+accepted sockets close without spawning waiting tasks. The handshake permit is
+released before established HTTP service begins. ALPN selects the HTTP protocol,
+and a TLS connection without ALPN uses HTTP/1.1. The existing tracked connection
+server preserves request-lifetime and HTTP/2 stream cancellation, streaming,
+upgrades and the original TCP peer address. Graceful shutdown cancels incomplete
+handshakes, drains established work and joins tasks on forced cancellation.
+See [listener TLS](operator-guide.md#listener-tls) for the operator contract.
+
 ### Core vs provider responsibilities
 
 The core runtime owns identity admission, the lookup-before-policy gate, scope
@@ -792,8 +819,8 @@ metadata. When a concealed `scope_unresolved` result repeats that value under
 fixed independently of the requested locator and must never encode resource
 existence, ownership of a particular object, or an authorization outcome.
 
-- **Jira** (`jira`) — twenty-four actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
-  `issue.child.create`, `issue.update`, `issue.parent.set`,
+- **Jira** (`jira`) — twenty-five actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
+  `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`,
   `issue.dependency.add`, `search`,
   `comment.list`, `comment.view`, `comment.add`, `comment.reply`, `comment.update`,
   `comment.delete`, `comment.property.list`, `comment.property.get`,
@@ -818,6 +845,12 @@ existence, ownership of a particular object, or an authorization outcome.
   Format, a `{ "type": "doc", "version": 1, "content": [...] }` JSON
   document). Comment property actions require an issue locator and are limited
   to broker-owned key prefixes.
+  `issue.custom_field.set` writes or clears one operator-allowlisted custom
+  field on the confirmed immutable issue ID. It accepts a present JSON value
+  within the content-body limit and returns an acknowledgement without readback.
+  Jira validates the field's type, context and editability. The provider-global
+  allowlist defaults to empty and is checked after authorization; field values
+  are neither returned nor audited.
   `issue.view` can include one chronological page of full comment bodies through
   `includeComments`; `comment.list` returns metadata by default and full bodies
   only with `includeBodies`. Both use the dedicated collection endpoint and
@@ -1562,6 +1595,81 @@ supply a service scope. Completion failure retains the committed row
 and returns the existing audit-unavailable error without the secret; issuance
 is never retried automatically. See [storage and recovery](database.md#agent-token-issuance-storage-and-upgrade)
 and [account settings](roles.md#agent-token-issuance).
+
+## Application access
+
+A [registered application](applications.md) obtains agent tokens for a person
+who approved it. The Broker is its OAuth 2.0 authorization server
+(authorization code with PKCE, confidential preregistered clients, refresh
+tokens that do not rotate, RFC 8414 metadata and RFC 7009 revocation). The
+feature adds no identity path: an application's token is an ordinary
+`agent_invoke` row in `broker_tokens`, admitted, limited and audited exactly
+like an issued agent token.
+
+Registrations are TOML (`[applications.<id>]`), loaded with their client
+secrets into each runtime generation beside the trusted callers
+(`applications_config.rs`). The managed store owns everything else
+(`managed_store/application_access.rs`, migration `037_application_access`):
+
+- **Pending requests.** The authorization endpoint validates the client and its
+  exact redirect URI, stores the request for 10 minutes and redirects the
+  browser to the literal portal path `/ui/authorize/<id>`, which the existing
+  sign-in return rule carries through local or Microsoft sign-in. The store
+  keeps the ID's hash and encrypts the request under a key derived from the
+  raw ID, as `oidc_authorization_flows` does with its payload.
+- **The decision.** Two management routes serve the portal page with the
+  person's browser session; bearer tokens cannot consent. Approval runs in one
+  transaction: it consumes the request, checks again that the application's
+  level is not `none`, that the person is an enabled human and that an
+  administrator has not disabled their access, and issues a one-use code bound
+  to the client, redirect URI and PKCE challenge, for the existing access or a
+  not-yet-connected placeholder. It changes nothing else: a working consent
+  stays as it is until the code is redeemed. A refused approval rolls back,
+  leaving the request for the return to the application.
+- **Minting.** Code exchange and refresh share one transaction that consumes
+  the code or finds the refresh-token hash and re-checks the application, the
+  access, the person, refresh idleness and the live-token bound before
+  inserting the token. A redeemed code is the new grant: the same transaction
+  installs its refresh token and ends the previous one, the tokens minted
+  through it and the access's other pending codes. Its caveats are the application's contexts and services
+  and `readOnly` when the application's level is `read_only` or the access is
+  read-only. The host runs it through the reload fence used for token issuance
+  (`token_store_call_from_snapshot`), so the registration it was admitted with
+  is the current one, in an owner task that also writes the completion audit
+  and keeps the request's admission permit until it has finished, whether or
+  not the response waiter is still there. A failed audit withholds the
+  committed token and is never retried.
+- **Ending tokens.** A settings change, removal, redeemed re-approval or
+  refresh-token revocation revokes the access's live tokens in its transaction; a database
+  trigger does the same when the person's status becomes `disabled`. Startup,
+  and each reload once its generation is published and can no longer be
+  rejected, revoke the live tokens the generation's registrations would no
+  longer mint, so an operator's narrowing never waits for token expiry. The
+  reload hands its mutation fence and admission permit to an owner task for
+  this step, so it completes with its audit when the reload's waiter is
+  cancelled and no mint or reload interleaves; mint re-checks the published
+  registration, so nothing is minted under the old one meanwhile. A failure
+  is reported in the reload result, logged and audited, and retried by the
+  next reload or startup. Startup has published nothing, so it stops instead
+  of serving when the step fails.
+- **Restrictions outlive consent.** A disconnect by the person or the
+  application clears the refresh token but keeps a disabled or read-only row
+  for the next approval to reuse; only an administrator deletes it. The
+  settings version does not move for connecting or disconnecting.
+- **Current registration.** The decision and the code exchange check the
+  stored redirect URI against the fenced generation's registration, so nothing
+  is returned to an address removed at reload. Tokens
+  carry `application_access_id`, which hides them from the individual token
+  lists and selects them for deletion 7 days after they end.
+
+The token and revocation endpoints answer RFC 6749 JSON. A response layer
+outside transport admission rewrites any other refusal on those two paths, so
+rate limits and body limits keep the same contract. Transport admission
+classes both paths as authentication requests unconditionally, so an unrelated
+Broker token or session never exempts them from the source budget. Connecting is independent
+of self-service and of the agent-token issuance policy; the personal routes use
+a management access that requires only a browser session or `user_manage`
+token.
 
 ## Execution-context boundary
 
@@ -2969,6 +3077,14 @@ identities can use config reload/status without a managed store only when that
 bootstrap/recovery mode is explicitly enabled. The reload/status request and
 response shapes are in [docs/http-api.md](http-api.md).
 
+Both triggers reread every configured listener certificate/key pair, including
+when the configuration hash is unchanged. The prepared TLS identities live in
+the candidate host snapshot and publish at the same commit point as the runtime,
+after required pre-publication admission, audit and reconciliation. A rejected
+candidate leaves both active identities unchanged. Other snapshot publications
+preserve the current TLS identities. Post-publication housekeeping keeps its
+existing failure semantics and does not roll back a published identity.
+
 Reload is atomic and execution-context admission is generation-coherent with
 the candidate runtime snapshot. Removing a value still referenced by an active
 TOML or managed grant rejects the candidate. Disabled or deleted managed grants
@@ -2991,7 +3107,8 @@ Audit queries use the reader pool of the generation that admitted the request.
 ## Process shutdown
 
 On `SIGTERM` or `SIGINT`, the broker enters a single graceful shutdown path. The
-public listener stops accepting new connections, in-flight HTTP work drains
+public and gateway listeners stop accepting new connections and cancel pending
+TLS handshakes; in-flight HTTP work drains
 within `--shutdown-timeout-ms`, and `SIGUSR2` reload handling exits. Pending rate
 admission closes at drain start: no further rate grants occur, queued tickets
 are removed without dispatch, and tracked admission owners finalize before the
@@ -3021,7 +3138,11 @@ permit, reporting those that have not. Microsoft
 [membership renewals](#microsoft-membership-renewal) stop starting when drain
 begins; shutdown then waits within the remaining budget (at least 100 ms) for
 submitted renewal writes and their audit records, logging each one that does
-not finish. The audit writer shuts
+not finish. The application token mint and revocation owners and a reload's
+token reconciliation owner have no preflight record, so each holds a lease in
+a drain from before it can outlive its caller; shutdown waits for those leases
+within the remaining budget (at least 100 ms) and reports the owners still
+running. The audit writer shuts
 down after that. Unfinished finalization is reported explicitly;
 process kill, host loss, or unavailable audit storage cannot be made durable by
 an in-memory supervisor.

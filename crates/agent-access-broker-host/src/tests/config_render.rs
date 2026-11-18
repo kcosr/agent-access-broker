@@ -7,17 +7,18 @@ use agent_access_cloudbees_ci::{CloudbeesCiControllerConfig, CloudbeesCiProvider
 use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig};
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
-    AggregateInvocationLimitConfig, AttributionConfig, AuditConfig, AuditDurability, BrokerConfig,
-    BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig, CommandImportConfig,
-    ConnectionConfig, ConnectionOAuthConfig, CredentialConfig, CredentialEncryptionConfig,
-    CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig, ExecutionContextConfig,
-    GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig, IdentityGroupConfig,
-    IdentitySourceConfig, ImportsConfig, InitialAdminConfig, InvocationLimitConfig,
-    InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig, ManagedStoreConfig,
-    ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig, OAuthConfig, OidcConfig,
-    OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig, PolicyGrantConfig, PortalConfig,
-    PrincipalInvocationLimitConfig, ProvidersConfig, ResourceDefinition, ResourceGroupDefinition,
-    ResourceSelection, StaticPrincipalConfig, TrustedCallerConfig, TrustedCallerContextMode,
+    AggregateInvocationLimitConfig, ApplicationConfig, AttributionConfig, AuditConfig,
+    AuditDurability, BrokerConfig, BrokerTokenTtlOption, BrokerTokensConfig, BrowserAuthConfig,
+    CommandImportConfig, ConnectionConfig, ConnectionOAuthConfig, CredentialConfig,
+    CredentialEncryptionConfig, CredentialEncryptionKeyConfig, CredentialsConfig, DeploymentConfig,
+    ExecutionContextConfig, GatewayConfig, GatewayUpstreamTokenAuth, IdentityConfig,
+    IdentityGroupConfig, IdentitySourceConfig, ImportsConfig, InitialAdminConfig,
+    InvocationLimitConfig, InvocationLimitsConfig, LimitsConfig, LocalPasswordConfig,
+    ManagedStoreConfig, ManagementConfig, McpConfig, MicrosoftOidcConfig, NetworkConfig,
+    OAuthConfig, OidcConfig, OutboundTlsConfig, OutboundTlsTrustMode, PolicyConfig,
+    PolicyGrantConfig, PortalConfig, PrincipalInvocationLimitConfig, ProvidersConfig,
+    ResourceDefinition, ResourceGroupDefinition, ResourceSelection, StaticPrincipalConfig,
+    TrustedCallerConfig, TrustedCallerContextMode,
 };
 use agent_access_fake::{FakeProviderConfig, OAuthStubProviderConfig};
 use agent_access_gitlab::{
@@ -27,8 +28,8 @@ use agent_access_gitlab::{
 };
 use agent_access_gmail::GmailConfig;
 use agent_access_jira::{
-    JiraCommentVisibilityConfig, JiraCommentsConfig, JiraContentConfig, JiraIssueLinksConfig,
-    JiraProviderConfig,
+    JiraCommentVisibilityConfig, JiraCommentsConfig, JiraContentConfig, JiraCustomFieldsConfig,
+    JiraIssueLinksConfig, JiraProviderConfig,
 };
 use agent_access_provider::{
     AttachmentLimitsConfig, EgressProxyConfig, MediaTypePolicyConfig, SearchLimitsConfig,
@@ -105,6 +106,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
         imports,
         command_imports,
         oauth,
+        applications,
         managed_store,
         credential_encryption,
         management,
@@ -134,6 +136,7 @@ pub(super) fn render_config(config: &BrokerConfig) -> Table {
             keyed(command_imports, command_import_value),
         )
         .put("oauth", oauth_value(oauth))
+        .put("applications", keyed(applications, application_value))
         .opt(
             "managed_store",
             managed_store.as_ref().map(managed_store_value),
@@ -281,6 +284,32 @@ fn trusted_caller_value(caller: &TrustedCallerConfig) -> Value {
             allowed_execution_contexts.as_deref().map(strings),
         )
         .put("allow_forwarded_identity", *allow_forwarded_identity)
+        .value()
+}
+
+fn application_value(application: &ApplicationConfig) -> Value {
+    let ApplicationConfig {
+        display_name,
+        client_secret_ref,
+        redirect_uris,
+        connect,
+        allowed_execution_contexts,
+        allowed_services,
+        access_token_ttl,
+        refresh_idle_ttl,
+    } = application;
+    Fields::default()
+        .put("display_name", display_name.as_str())
+        .put("client_secret_ref", client_secret_ref.as_str())
+        .put("redirect_uris", strings(redirect_uris))
+        .put("connect", connect.as_str())
+        .put(
+            "allowed_execution_contexts",
+            strings(allowed_execution_contexts),
+        )
+        .opt("allowed_services", allowed_services.as_deref().map(strings))
+        .put("access_token_ttl", access_token_ttl.as_str())
+        .put("refresh_idle_ttl", refresh_idle_ttl.as_str())
         .value()
 }
 
@@ -1112,6 +1141,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         listing,
         comments,
         issue_links,
+        custom_fields,
     } = jira;
     let JiraContentConfig {
         comment_formats,
@@ -1130,6 +1160,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         dependency_outward,
         dependency_inward,
     } = issue_links;
+    let JiraCustomFieldsConfig { allowed_field_ids } = custom_fields;
     Fields::default()
         .put("tenant_host", tenant_host.as_str())
         .opt("cloud_id", cloud_id.clone())
@@ -1190,6 +1221,12 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
                 .put("dependency_link_type", dependency_link_type.as_str())
                 .put("dependency_outward", dependency_outward.as_str())
                 .put("dependency_inward", dependency_inward.as_str())
+                .value(),
+        )
+        .put(
+            "custom_fields",
+            Fields::default()
+                .put("allowed_field_ids", strings(allowed_field_ids))
                 .value(),
         )
         .value()

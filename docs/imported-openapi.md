@@ -74,13 +74,15 @@ In **Admin > Catalog > Import service**, a base administrator:
    for or drops a Swagger 2.0 or OpenAPI 3.1 JSON file. A private URL can use a
    separate Basic, Bearer or named API-key discovery credential. It is independent
    of the credential used for API calls. File uploads need no discovery credential.
-3. Creates the draft, discovers the document and selects a supported security scheme from the discovered
-   names. The broker maps HTTP Basic, HTTP Bearer or a header API key into the execution
-   credential's delivery settings. Operations remain unavailable until a scheme
-   is selected and discovery is refreshed.
+3. Chooses **Anonymous upstream** for an API that needs no upstream credential,
+   or **Static credential**. In static mode, creates the draft, discovers the
+   document and selects a supported security scheme from the discovered names.
+   The broker maps HTTP Basic, HTTP Bearer or a header API key into the execution
+   credential's delivery settings. Static operations remain unavailable until a
+   scheme is selected and discovery is refreshed.
 4. Reviews operations and explicitly assigns read-only or write-capable status,
-   accepts the selection, provisions the execution credential and enables the
-   service. Existing action/context grants control access. Operations stay
+   accepts the selection, provisions the execution credential in static mode and
+   enables the service. Existing action/context grants control access. Operations stay
    write-capable until reviewed as read-only, including POST search operations,
    and the classification also limits
    [read-only identity paths](imported-services.md#classification-and-read-only-identity-access).
@@ -96,9 +98,33 @@ contain a colon, and neither field can contain control characters. Both must be
 nonempty; usernames are limited to 256 UTF-8 bytes, with a 32 KiB combined
 serialized-secret limit. There is no credential normalization or challenge retry.
 
-Actions/tools definitions require one or two execution credential bindings,
-selecting service credentials, personal credentials, or both. Anonymous document
-discovery does not enable anonymous API execution.
+Actions/tools definitions explicitly declare upstream authentication through the
+required `executionBindings` array:
+
+- **Anonymous upstream:** `executionBindings: []`, with no `securityScheme` setting.
+  Grants use `service` mode. There is no execution credential slot or personal
+  credential setup. Broker caller authentication and grants remain required.
+- **Static credential:** one or two execution bindings select service credentials,
+  personal credentials, or both, with the selected `securityScheme`. Missing or
+  invalid credentials never fall back to anonymous execution, even when the
+  document offers an anonymous alternative.
+
+Anonymous execution accepts only operations whose effective source security
+permits it: no inherited or operation-level security declaration, an empty
+`security: []`, or an empty alternative `{}` in the security array. An operation's
+security overrides the root declaration. Malformed security, including explicit
+`null`, is unsupported. Source-declared API-key parameters cannot be ordinary
+inputs to anonymous operations. Both formats use the same rules.
+
+Document-fetch authentication remains independent: a private document may describe
+an anonymous API, and public document discovery does not enable anonymous API
+execution. Authentication and delivery are fixed after actions are accepted.
+An API with public and protected operations can use separate imported services.
+
+Anonymous definitions and plans require a compatible Broker. This capability
+adds no database migration and preserves existing authenticated plan bytes. Before
+rolling back to an older binary, restore a compatible pre-feature database backup
+as described in [upgrade and rollback](operator-guide.md#upgrade-and-rollback).
 
 The API uses `adapterKind: "openapi_http"`, `endpoint` for the API base URL, and
 these string-valued `connectionSettings`:
@@ -107,7 +133,7 @@ these string-valued `connectionSettings`:
 | --- | --- |
 | `definitionUrl` | URL of the OpenAPI or Swagger JSON document; required for URL imports |
 | `definitionSource` | `upload` for an uploaded document; omit for a URL import |
-| `securityScheme` | Selected Swagger `securityDefinitions` or OpenAPI `components.securitySchemes` name; omitted in an empty draft |
+| `securityScheme` | Selected Swagger `securityDefinitions` or OpenAPI `components.securitySchemes` name for static execution; omitted in an empty static draft and forbidden for anonymous execution |
 | `definitionAuthKind` | `none`, `basic`, `bearer`, or `raw_header` |
 | `definitionAuthHeader` | Header name for `raw_header` document authentication |
 
@@ -119,8 +145,9 @@ operations as the portal.
 
 An upload definition uses `connectionSettings: {"definitionSource":"upload"}`
 and `discovery: {"kind":"anonymous"}`. It must omit `definitionUrl`,
-`definitionAuthKind` and `definitionAuthHeader`. Add `securityScheme` after
-discovery, or include it when its exact name is already known.
+`definitionAuthKind` and `definitionAuthHeader`. For static execution, add
+`securityScheme` after discovery or include it when its exact name is already
+known. Anonymous execution uses `executionBindings: []` and omits that setting.
 
 An empty draft can change its connection settings and authentication delivery;
 its service ID, adapter kind and API endpoint remain fixed. Any settings or
@@ -253,8 +280,7 @@ Schema references may carry descriptive annotations, but not sibling validation
 keywords. The Swagger profile rejects `x-nullable`, null or union types, and
 `readOnly: true` in request schemas. These limits apply to referenced schemas too.
 
-OpenAPI 3.0 conversion, 3.2, YAML, cookie/query API-key authentication, anonymous
-execution, combined security schemes, multipart or binary transfers, complex
+OpenAPI 3.0 conversion, 3.2, YAML, cookie/query API-key authentication, combined security schemes, multipart or binary transfers, complex
 parameter serialization, callbacks/webhooks and external
 references are outside this profile. Unsupported operations remain visible with a
 reason instead of becoming partially executable actions. The

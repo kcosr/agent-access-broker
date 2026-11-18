@@ -4,6 +4,7 @@ use crate::BrokerBuildStatus;
 use crate::composition::{BrokerComposition, CompositionError};
 use crate::identity::AssemblyIdentity;
 use crate::lifecycle::{self, ServeControl, ServeOptions};
+use crate::listener_tls::{ListenerTlsFiles, TlsIdentityFiles};
 use agent_access_core::{
     AuditStoreType, AuditVerifyReport, BrokerConfig, ConfigError, HostConfigError, RuntimeError,
     StateLockSet, load_broker_config, resolve_node_id, validate_broker_config,
@@ -372,6 +373,18 @@ struct ServeArgs {
     listen: SocketAddr,
     #[arg(long)]
     gateway_listen: Option<SocketAddr>,
+    /// PEM server certificate chain for the public listener, leaf first.
+    #[arg(long, requires = "tls_private_key")]
+    tls_cert_chain: Option<PathBuf>,
+    /// PEM private key for the public listener. Requires --tls-cert-chain.
+    #[arg(long, requires = "tls_cert_chain")]
+    tls_private_key: Option<PathBuf>,
+    /// PEM server certificate chain for the gateway listener, leaf first.
+    #[arg(long, requires_all = ["gateway_listen", "gateway_tls_private_key"])]
+    gateway_tls_cert_chain: Option<PathBuf>,
+    /// PEM private key for the gateway listener.
+    #[arg(long, requires_all = ["gateway_listen", "gateway_tls_cert_chain"])]
+    gateway_tls_private_key: Option<PathBuf>,
     #[arg(long)]
     max_http_body_hard_cap_bytes: Option<u64>,
     #[arg(long, default_value_t = DEFAULT_TIMEOUT_MS)]
@@ -385,6 +398,10 @@ impl Default for ServeArgs {
         Self {
             listen: DEFAULT_LISTEN.parse().expect("default listen address"),
             gateway_listen: None,
+            tls_cert_chain: None,
+            tls_private_key: None,
+            gateway_tls_cert_chain: None,
+            gateway_tls_private_key: None,
             max_http_body_hard_cap_bytes: None,
             reload_timeout_ms: DEFAULT_TIMEOUT_MS,
             shutdown_timeout_ms: DEFAULT_TIMEOUT_MS,
@@ -398,6 +415,21 @@ impl ServeArgs {
             config_path,
             listen: self.listen,
             gateway_listen: self.gateway_listen,
+            listener_tls_files: ListenerTlsFiles {
+                public: self.tls_cert_chain.zip(self.tls_private_key).map(
+                    |(cert_chain, private_key)| TlsIdentityFiles {
+                        cert_chain,
+                        private_key,
+                    },
+                ),
+                gateway: self
+                    .gateway_tls_cert_chain
+                    .zip(self.gateway_tls_private_key)
+                    .map(|(cert_chain, private_key)| TlsIdentityFiles {
+                        cert_chain,
+                        private_key,
+                    }),
+            },
             body_hard_cap: self.max_http_body_hard_cap_bytes,
             reload_timeout: Duration::from_millis(self.reload_timeout_ms),
             shutdown_timeout: Duration::from_millis(self.shutdown_timeout_ms),
@@ -483,6 +515,89 @@ default_decision = "deny"
             command.get_about().map(ToString::to_string).as_deref(),
             Some("Example broker service")
         );
+    }
+
+    #[test]
+    fn listener_tls_requires_complete_pairs_and_a_gateway_address() {
+        for flags in [
+            vec!["--tls-cert-chain", "server.pem"],
+            vec!["--tls-private-key", "server.key"],
+            vec![
+                "--gateway-listen",
+                "127.0.0.1:8788",
+                "--gateway-tls-cert-chain",
+                "server.pem",
+            ],
+            vec![
+                "--gateway-listen",
+                "127.0.0.1:8788",
+                "--gateway-tls-private-key",
+                "server.key",
+            ],
+            vec![
+                "--gateway-tls-cert-chain",
+                "server.pem",
+                "--gateway-tls-private-key",
+                "server.key",
+            ],
+        ] {
+            let result = application().parse(["example-broker", "serve"].into_iter().chain(flags));
+            assert!(
+                result.is_err(),
+                "incomplete listener TLS must be a usage error"
+            );
+        }
+    }
+
+    #[test]
+    fn listener_tls_is_selected_independently_for_each_existing_address() {
+        for public_tls in [false, true] {
+            for gateway_tls in [false, true] {
+                let mut args = vec![
+                    "example-broker",
+                    "serve",
+                    "--listen",
+                    "127.0.0.1:8787",
+                    "--gateway-listen",
+                    "127.0.0.1:8788",
+                ];
+                if public_tls {
+                    args.extend([
+                        "--tls-cert-chain",
+                        "public.pem",
+                        "--tls-private-key",
+                        "public.key",
+                    ]);
+                }
+                if gateway_tls {
+                    args.extend([
+                        "--gateway-tls-cert-chain",
+                        "gateway.pem",
+                        "--gateway-tls-private-key",
+                        "gateway.key",
+                    ]);
+                }
+                let Some(Command::Serve(args)) = application().parse(args).unwrap().command else {
+                    panic!("expected serve command");
+                };
+                let options = args.into_options(PathBuf::from("broker.toml"));
+                assert_eq!(options.listen, "127.0.0.1:8787".parse().unwrap());
+                assert_eq!(
+                    options.gateway_listen,
+                    Some("127.0.0.1:8788".parse().unwrap())
+                );
+                assert_eq!(options.listener_tls_files.public.is_some(), public_tls);
+                assert_eq!(options.listener_tls_files.gateway.is_some(), gateway_tls);
+                if let Some(files) = options.listener_tls_files.public {
+                    assert_eq!(files.cert_chain, PathBuf::from("public.pem"));
+                    assert_eq!(files.private_key, PathBuf::from("public.key"));
+                }
+                if let Some(files) = options.listener_tls_files.gateway {
+                    assert_eq!(files.cert_chain, PathBuf::from("gateway.pem"));
+                    assert_eq!(files.private_key, PathBuf::from("gateway.key"));
+                }
+            }
+        }
     }
 
     #[test]

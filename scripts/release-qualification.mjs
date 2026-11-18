@@ -5,7 +5,7 @@ export const REQUIRED_RELEASE_CHECKS = Object.freeze([
   "portal-dependencies", "node-tests", "rust-notice-tests", "release-prerequisite-tests", "launcher-tests",
   "audit-demo-tests", "doc-links", "changelog", "broker-sample", "broker-production-sample",
   "cli-sample", "portal-unit", "portal-build", "browser-prerequisites",
-  "portal-browser", "release-provenance", "rust-notices-generate", "rust-notices-check",
+  "portal-browser", "release-provenance", "listener-tls", "rust-notices-generate", "rust-notices-check",
 ]);
 
 const FULL_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -37,7 +37,7 @@ export function validateQualification(report, { commit, version }) {
   }
   for (const id of REQUIRED_RELEASE_CHECKS) {
     const check = checks.get(id);
-    const notApplicable = id === "unix-signals" && report.platform === "win32";
+    const notApplicable = ["unix-signals", "listener-tls"].includes(id) && report.platform === "win32";
     if (!check || (notApplicable
       ? check.status !== "not-applicable" || check.exitCode !== null
       : check.status !== "passed" || check.exitCode !== 0

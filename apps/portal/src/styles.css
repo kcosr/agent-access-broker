@@ -58,6 +58,20 @@
   background: var(--wb-border);
 }
 
+/* An application's approval page, in the sign-in frame. */
+.pt-consent-note {
+  display: block;
+  color: var(--wb-fg-2);
+}
+.pt-consent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pt-consent-switch {
+  margin-left: auto;
+}
+
 /* ---------- full-page content (entity pages, tabs) */
 .pt-page {
   display: flex;

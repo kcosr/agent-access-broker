@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import type { ImportPreviewResult, ImportRecordResult } from "../../import-types";
 import type { OpenApiDocumentFile } from "../../lib/import-document";
-import { isOpenApiImport, OPENAPI_GATEWAY_KIND, openApiDocumentSource } from "../../lib/import-openapi";
+import { isAnonymousOpenApi, isOpenApiImport, openApiDocumentSource } from "../../lib/import-openapi";
 import { errorMessage } from "../../lib/helpers";
 import { AdminButton } from "../../components/admin-access";
 import { FormError } from "../../components/form";
@@ -30,7 +30,7 @@ export function ImportDocumentModal({ data, initialFile, initialError, notice, r
   const [reloaded, setReloaded] = useState(false);
   const uploaded = openApiDocumentSource(data.service.definition.connectionSettings) === "upload";
   const allowed = isOpenApiImport(data.service.definition.adapterKind) && uploaded && data.operatorAllowed && data.service.status !== "retired";
-  const anonymous = data.service.definition.adapterKind === OPENAPI_GATEWAY_KIND && data.service.definition.connectionSettings.executionAuthentication === "anonymous";
+  const anonymous = isAnonymousOpenApi(data.service.definition);
   const ready = file.selected && !file.reading && !file.error && allowed && !needsReload;
   async function reload() {
     setPending(true);

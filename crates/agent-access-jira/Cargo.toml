@@ -30,5 +30,6 @@ url.workspace = true
 [dev-dependencies]
 agent-access-provider = { path = "../agent-access-provider", features = ["test-support"] }
 bytes.workspace = true
+jsonschema.workspace = true
 uuid.workspace = true
 wiremock.workspace = true

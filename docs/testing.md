@@ -6,13 +6,17 @@ syntax is documented in `docs/cli.md`; provider behavior is documented in
 
 ## Test Taxonomy
 
-The repository uses five test categories:
+The repository uses six test categories:
 
 - Deterministic local tests run with nextest and a separate Cargo doctest pass,
   or with ordinary `cargo test`, and require no live upstream credentials.
 - The Unix process-signal smoke is deterministic and local but explicitly
   `#[ignore]`-gated because it sends real signals to isolated child processes.
   It is required separately on Unix and not applicable on non-Unix platforms.
+- The native listener TLS smoke starts a separately built production Broker
+  executable on isolated loopback ports. It requires Node.js and OpenSSL on Unix,
+  uses synthetic certificates, and does not obtain protocol features from Cargo
+  test dependencies.
 - The portal Playwright e2e harness is deterministic and local, but it runs
   separately from Cargo. It combines real-service integration fixtures with
   mocked API contracts for UI behavior. Real-service fixtures start a Broker
@@ -42,6 +46,24 @@ Do not run a live-smoke binary broadly with `-- --ignored`. For example,
 the read smoke and the mutating write/download/verify smoke in that binary.
 
 ## Local Deterministic Suite
+
+Jira custom-field tests use a local HTTP fixture for the production provider
+to check the operator allowlist, JSON value preservation and clearing, required
+value and content limits, immutable-issue guards, a single-field PUT, credential
+selection, and write-uncertainty receipts. The `jira_smoke::custom_field` tests
+drive an isolated Broker with the real CLI to check the dedicated action grant,
+catalog/OpenAPI/send projections, typed and generic invocations, HTTP and stdio
+MCP, omission and size denial, and audit omission of field values. These tests
+do not contact Jira.
+
+OpenAPI anonymous-import tests exercise both Swagger and OpenAPI through real
+Broker/CLI, HTTP MCP and stdio MCP fixtures: credential-free setup, grant denials,
+service-only execution, source-security quarantine and offline restart. Adapter
+tests cover security inheritance, malformed declarations, declared credential
+parameters, independent private-document authentication and no authenticated
+fallback. The portal's `imports-openapi-anonymous-live.spec.ts` uses a real Broker
+and upstream recorder to verify onboarding and a query-parameter invocation with
+no upstream Authorization header.
 
 Security regressions cover pre-body concurrency/source admission, independent
 control-plane/metadata caps, anonymous and verified-principal body isolation,
@@ -122,7 +144,7 @@ they do not establish live provider access or runtime credential availability.
 The CLI's `published_typed_commands_match_clap_paths_and_usage` test resolves
 every native and OAuth fixture action's documented help path through the actual
 Clap command tree and compares its published Usage template with Clap's output.
-Optional action families are enabled, covering all 230 typed wrappers.
+Optional action families are enabled, covering all 231 typed wrappers.
 Budget tests check that large inputs and
 schemas with thousands of failing branches keep the provider's message
 without being validated. Command-authority tests check that imported and
@@ -521,6 +543,44 @@ SIGTERM stops its child processes and removes the stage. The
 [fixture README](../tests/downstream-consumer/README.md) describes the templates,
 pin rules, lockfile review, offline dependency source and evidence. The pure
 functions of the driver are tested with the other script tests.
+
+### Native listener TLS
+
+On Unix, build the Broker executable without test features and run:
+
+```bash
+cargo build --locked --target-dir target -p agent-access-broker --bin agent-access-broker
+node scripts/verify-listener-tls.mjs \
+  --broker "$PWD/target/debug/agent-access-broker" \
+  --output-dir /absolute/new-or-empty/listener-tls-evidence
+```
+
+The `--broker` path is required; `--output-dir` is optional. Use a freshly built
+executable from the candidate revision. The harness uses Node.js built-ins and
+the `openssl` executable to create a temporary private CA and server identities;
+it needs no npm packages, external services or live credentials. Its signal
+tests require Unix and it rejects Windows instead of silently skipping them.
+
+The smoke covers the independent main/gateway HTTP and HTTPS combinations,
+TLS 1.2/1.3, HTTP/1.1 and HTTP/2 ALPN, issuer and hostname verification, route isolation,
+invalid TLS startup, occupied-listener failure, certificate-only rotation with
+unchanged TOML through signal and admin reload, rejected candidates preserving
+both identities, connections surviving rotation, bounded handshakes, throttled
+capacity warnings and shutdown.
+A managed browser-auth fixture checks the canonical HTTPS origin, Secure cookies
+and CSRF over both HTTP/1.1 and HTTP/2; the HTTP/2 requests use `:authority`
+without `Host` and send the session and an unrelated cookie as separate fields.
+It does not render the portal in a browser. The smoke also invokes the fake
+service over both protocols, including an authenticated HTTP/2 POST without
+`Content-Length`, uses HTTP MCP sessions, forwards Git requests to a synthetic
+upstream, and checks HTTP/2 stream cancellation.
+This executable-level check is required because a Cargo test's development
+dependencies can enable HTTP/2 that a production dependency graph lacks.
+Host unit tests separately cover strict material loading, connection task
+ownership and request/stream cancellation. The harness terminates its own
+processes and removes temporary state.
+
+### Unix process signals
 
 On Unix, run the real-signal parent fixture separately:
 
@@ -1161,6 +1221,49 @@ authorization/CSRF, rollback, preflight refusal and committed-state retention
 after completion-audit failure. The API test
 `principal_creation_id_contract_projects_into_catalog_openapi_and_send` checks
 the same conditional input contract across all three projections.
+Application access is covered at four levels. Core
+`managed_store/application_access_tests.rs` exercises migration 037 from the
+previous schema, the request, code, refresh and revocation transactions, the
+settings version, the principal-disable trigger, idle expiry, the live-token
+bound, retention and that no raw secret reaches the database or `Debug`
+output; `lib_tests.rs` covers `[applications]` validation and client-secret
+loading. Host `tests/applications.rs` drives the authorization, token and
+revocation endpoints and the consent, personal and administrative routes
+through the router, including the RFC 6749 error contract for refusals made
+before the handlers, expired requests and codes, levels `none` and
+`read_only`, a person without self-service or issuance permission, reloads
+that remove and restore a registration, and a failed mint audit. CLI
+`tests/application_access.rs` runs the whole flow over HTTP against the real
+assembly, invokes a service with the minted token through the `agent-access`
+binary and administers the access with
+`admin principals application-access`.
+The portal's `unit/applications.test.ts` covers the request-ID, redirect
+address and state helpers, the API client and the rendered approval card,
+**Account > Applications** table and **Access paths** row.
+`tests/applications-live.spec.ts` starts a real Broker with two registered
+applications and plays the application's side of the OAuth flow over HTTP with
+its client secret; only the applications' redirect addresses are answered by
+the test. It covers sign-in returning to the request, the approval ending in a
+top-level navigation that carries the code, cancel, an answered request, the
+**Account** list for a person without self-service changing only at the code
+exchange, an administrator's **Read-only**, **Enabled** and **Remove**
+against the refresh token, a restriction surviving the person's **Remove** and
+being reused by the next approval, the auditor's view, a second account
+signing in under an open request (nothing is sent for the account that is no
+longer shown, and neither the Broker's CSRF refusal nor its `principalId`
+conflict is replayed), and a reload from the
+**System** page that narrows a registration: the notice naming the ended
+tokens, and pending requests answering as invalid for **Approve** and
+**Cancel** once their redirect address is removed. Its last test asserts that
+the portal document is served with `Referrer-Policy: no-referrer` and that no
+`Referer`, on assets, API calls or the navigation to the application, carries
+the request ID. `tests/applications.spec.ts`
+uses mocked browser contracts for what a real Broker does not reach
+deterministically: each denial reason, a refused approval, expiry between read
+and decision, the double-submit guard, a rotated CSRF token, a request read
+for another account than the portal's session, the Microsoft sign-in start, a session
+ending on the page, phone width, the list's empty and hidden states, stale
+versions, an unregistered application and a failed token step after a reload.
 The `microsoft_oidc` enrollment cases use `OidcBrowserFixture` for
 validated-email binding, claim fallback and refusals, immutable precedence,
 callback/admin/reload races and session rollback; no live Microsoft tenant is
@@ -2345,15 +2448,16 @@ tests allow already accepted JSON request bodies to finish before dispatch.
 For native-client validation, run a disposable broker with the development
 `fake` backend (`deployment.enable_fake_service = true` plus `[providers.fake]`),
 a static bearer token file, one exact TEST resource grant, a private
-audit directory, and `/mcp` enabled. Place a streaming loopback TLS reverse proxy
-in front, issue a leaf certificate for localhost from a disposable CA, and trust
-that CA in the clients (never disable certificate verification). Use isolated
+audit directory, and `/mcp` enabled. Use native HTTPS or place a streaming
+loopback TLS reverse proxy in front. Issue a leaf certificate for localhost
+from a disposable CA and trust that CA in the clients (never disable certificate
+verification). Use isolated
 client configuration and temporary credentials, with the documented HTTP MCP
 settings. Have each client discover `services_list`, invoke the discovered
 `fake.echo` tool for TEST, and invoke it for an ungranted project. Verify one
 allow and one deny audit for each client. The synthetic action can be
 preauthorized in the client's tool approval policy. No real provider mutation
-is needed. Clean up the clients, broker, proxy, tokens, and CA after the run.
+is needed. Clean up the clients, broker, any proxy, tokens, and CA after the run.
 
 ## Trusted ingress and managed identity
 

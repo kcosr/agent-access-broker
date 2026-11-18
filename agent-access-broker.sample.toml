@@ -7,6 +7,10 @@
 # agent-access-broker.production.sample.toml and docs/operator-guide.md.
 # That template uses required identity, managed broker tokens, deny-by-default
 # policy, and dedicated broker-owned state directories.
+# Listener transport is selected with serve flags, not TOML. HTTP is the default.
+# To enable HTTPS on --listen, provide --tls-cert-chain and --tls-private-key.
+# The optional --gateway-listen uses its own --gateway-tls-cert-chain and
+# --gateway-tls-private-key pair. See docs/operator-guide.md#listener-tls.
 
 [deployment]
 environment = "development"
@@ -37,7 +41,7 @@ environment = "development"
 # username_ref = "env:EGRESS_PROXY_USERNAME"
 # password_ref = "env:EGRESS_PROXY_PASSWORD"
 
-# Optional downstream MCP on the public listener behind trusted TLS ingress.
+# Optional downstream MCP on the public listener with native HTTPS or TLS ingress.
 # Requires the Authorization Bearer identity source below. Local file tools stay
 # in `agent-access mcp serve`; HTTP exposes JSON actions and discovery helpers.
 # /mcp/<service> and `mcp serve --service <service>` expose one service with raw names.
@@ -819,6 +823,12 @@ dependency_link_type = "Blocks"
 dependency_outward = "blocks"
 dependency_inward = "is blocked by"
 
+[providers.jira.custom_fields]
+# Only these custom fields may be set or cleared through issue.custom_field.set.
+# Empty by default; ordinary project/action grants remain required.
+# Each listed field permits any JSON value/clear Jira accepts and its field-specific effects.
+allowed_field_ids = [] # for example ["customfield_12345"]
+
 # Visibility restrictions are denied unless explicitly allowlisted.
 # [[providers.jira.comments.allowed_visibility]]
 # type = "role"
@@ -1077,6 +1087,22 @@ durability = "write" # write | sync_data | sync_all
 # Secrets for username callers are 16–8192 visible ASCII bytes without commas or
 # whitespace, distinct from each other and static principal credentials.
 # Direct secrets cannot start with aab_. See docs/trusted-callers.md.
+
+# Applications: operator-approved OAuth clients that obtain short-lived agent
+# tokens for a person who approved them in the portal. Requires managed
+# identity with a broker_tokens source, browser_auth with public_origin, and
+# management. The table name is the client ID. See docs/applications.md.
+# [applications.example-runner]
+# display_name = "Example Runner"
+# client_secret_ref = "file:/run/secrets/example-runner-client-secret"
+# redirect_uris = ["https://runner.example.test/auth/broker/callback"]
+# connect = "read_write"                    # none | read_only | read_write, for everyone
+# allowed_execution_contexts = ["internal"] # context caveat of every minted token
+# allowed_services = ["jira"]               # optional service ceiling of every minted token
+# access_token_ttl = "8h"                   # default; at most max_self_issued_agent_invoke_ttl
+# refresh_idle_ttl = "90d"                  # default; unused refresh tokens stop working
+# Client secrets are 16-1024 visible ASCII bytes, distinct from each other and
+# from trusted caller credentials, and cannot start with aab_.
 
 # Optional delegated OAuth test provider (non-production only). Requires managed
 # identity/store/encryption, browser auth, management and enable_fake_service.

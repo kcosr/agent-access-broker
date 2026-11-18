@@ -539,7 +539,7 @@ export function ImportReview({ data, onClose, onAccept, onConfigure, frame = mod
             </AdminButton>
           }
         >
-          {gateway ? "Review anonymous upstream access or select the definition's static API security scheme before accepting operations." : "Select the definition's API security scheme before accepting operations."}
+          Review anonymous upstream access or select the definition's static API security scheme before accepting operations.
         </Banner>
       ) : null}
       <FilterInput value={search} onChange={setSearch} placeholder={`Filter ${items}…`} label={`Filter discovered ${items}`} hotkey={null} />

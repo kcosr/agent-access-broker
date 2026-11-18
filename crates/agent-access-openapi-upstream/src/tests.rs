@@ -799,4 +799,7 @@ async fn statuses_bodies_and_receipts_conform_to_the_result_schemas() {
     }
 }
 
+
+#[path = "tests/anonymous.rs"]
+mod anonymous;
 mod unified;

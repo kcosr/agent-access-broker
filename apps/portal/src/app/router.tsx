@@ -4,6 +4,7 @@ import { createBrowserRouter, type RouteObject } from "react-router";
 import { canManagePolicies, canViewActivity, canViewAudit } from "../lib/helpers";
 import { AccessPage } from "../features/access/access-page";
 import { AccountPage } from "../features/account/account-page";
+import { AuthorizePage } from "../features/applications/authorize-page";
 import { ActivityPage, AuditPage } from "../features/audit/pages";
 import { CatalogPage, CatalogServicePage, ResourceGroupsPage, ResourcesPage } from "../features/catalog/pages";
 import { CredentialsPage } from "../features/credentials/credentials-page";
@@ -44,6 +45,8 @@ export const portalRoutes: RouteObject[] = [
           page(ROUTE.credentials, self("credentials", canUseSelfService), <CredentialsPage />),
           page(ROUTE.activity, self("activity", canViewActivity), <ActivityPage />),
           page(ROUTE.account, self("account"), <AccountPage />),
+          // An application's approval page: its own frame, for every signed-in account.
+          { path: ROUTE.authorize, element: <AuthorizePage /> },
           page(ROUTE.policies, admin("policies", canManagePolicies), <PoliciesPage />),
           page(ROUTE.grantNew, admin("policies", canWritePolicies), <GrantEditorPage />),
           page(ROUTE.grantEdit, admin("policies", hasPolicyScope), <GrantEditorPage />),
