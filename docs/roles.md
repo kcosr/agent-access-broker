@@ -19,6 +19,13 @@ verification, import discovery, and every administrative mutation require an
 administrator. Metadata never includes stored plaintext secrets. Read access
 and write access use distinct authorization scopes throughout the control plane.
 
+Administrators and auditors can inspect a person's OAuth connection status and
+nonsecret upstream account metadata, including its display name or email when
+the provider supplies one. Only administrators can disconnect it, including when
+the person's self-service is disabled. Connecting or reconnecting requires the
+person's own consent. Disconnect ends the connection without changing grants or
+preventing a later permitted connection. See [administrative OAuth management](oauth.md#administrator-management-api).
+
 Self-service permits personal token, credential, connection, and activity
 operations under their individual authorization rules. Personal OAuth
 connect/reconnect requires a credential connection with OAuth and a matching

@@ -458,10 +458,16 @@ connection that selects a token for that principal: service accounts' and
 type the principal's list accepts, chosen in **Token type** when it accepts
 several. That
 does not grant the target personal rights or complete the user's OAuth consent. The
-tab lists a person's OAuth connections read-only, one row per registration, for
-administrators and auditors alike; the row's drawer shows its remote revocation,
-and its status flags a failed or unconfirmed one. Only the person connects,
-reconnects or disconnects them. An `admin` bearer cannot call
+tab lists each person's OAuth registration with its connection status and
+nonsecret connected account metadata for administrators and auditors alike.
+An administrator can disconnect it using the same confirmation as the personal
+view, naming the person and affected services; an auditor cannot. This works
+after grant loss and when the person's self-service is disabled. The drawer
+also shows remote revocation, and the row flags a failed or unconfirmed one.
+Only the person connects or reconnects. Disconnecting does not block future
+consent while the person remains permitted to connect. See
+[administrative OAuth management](oauth.md#administrator-management-api).
+An `admin` bearer cannot call
 personal routes. Imported OAuth administrator discovery has a separate authority
 path described in [imported OAuth](imported-oauth.md).
 

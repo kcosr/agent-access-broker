@@ -287,6 +287,12 @@ export const brokerApi = {
   oauthConnections(session: Session) {
     return managementRequest<import("./types").OAuthConnectionTarget[]>("/v1/oauth/connections", {}, session);
   },
+  adminPrincipalOAuthConnections(session: Session, principal: string) {
+    return managementRequest<import("./types").AdminOAuthConnectionTarget[]>(`/v1/admin/principals/${enc(principal)}/oauth/connections`, {}, session);
+  },
+  adminPrincipalOAuthDisconnect(session: Session, principal: string, registration: string) {
+    return managementRequest<{ disconnected: boolean; remoteRevocation: import("./types").RemoteRevocation }>(`/v1/admin/principals/${enc(principal)}/oauth/connections/${enc(registration)}`, { method: "DELETE" }, session);
+  },
   /** Starts consent for a registration; `importedService` names the import an administrator discovers through. */
   oauthConnect(session: Session, registration: string, intent: "connect" | "reconnect" | "replace_account", returnPath?: OAuthReturnPath, importedService?: string) {
     return managementRequest<{ authorizationUrl: string; expiresAt: number }>("/v1/oauth/connect", {

@@ -142,8 +142,9 @@ wins invocation precedence. Setup does not broaden that grant: each invocation
 still needs its own action, resource, context and credential authorization.
 
 An existing owned connection stays visible and locally disconnectable after the
-last setup grant is removed, while self-service remains enabled and a credential
-connection still references the registration. Retired or blocked imports do not prevent
+last setup grant is removed, while self-service remains enabled and its
+registration stays configured, even if no credential connection selects it.
+Retired or blocked imports do not prevent
 local cleanup. Reconnect requires a current setup grant. An empty target without
 setup authority is hidden. Static API-token deletion retains its separate
 configured-target authorization; this OAuth cleanup rule does not change it.
@@ -159,6 +160,11 @@ provider; see [remote revocation](#remote-revocation). Other dialects do not
 revoke provider-side consent: remove it separately at the provider if desired.
 Disabling a Broker principal also removes its OAuth state, and revokes the
 same way. Existing provider requests already dispatched cannot be recalled.
+
+Administrators can inspect and disconnect a person's connection through
+[administrative management](#administrator-management-api), independently of
+that person's self-service setting. The disconnect has the same effect as the
+owner's. It changes no grants and does not prevent a later permitted reconnect.
 
 ## GitLab
 
@@ -985,6 +991,48 @@ transaction. A later withdrawal, or a configuration reload racing installation,
 can leave a stored connection; it cannot supply invocation authority that the
 current policy denies.
 
+## Administrator management API
+
+| Method/path | Access | Behavior |
+| --- | --- | --- |
+| `GET /v1/admin/principals/{principal}/oauth/connections` | `admin_read` | List the person's current connection metadata and retained revocation cleanup |
+| `DELETE /v1/admin/principals/{principal}/oauth/connections/{registration}` | `admin_write` | Disconnect the person's current connection and report `remoteRevocation` |
+
+These routes use the ordinary administrative authority, management envelopes,
+and browser CSRF rules. Administrative bearer credentials are also supported;
+the target's self-service setting does not govern them. Administrators and
+auditors may list; only administrators may disconnect. An unknown principal
+returns 404. The operations are `admin.principals.oauth_connections.list` and
+`admin.principals.oauth_connections.disconnect` in the catalog, OpenAPI, and
+generic JSON `send` interface.
+
+Each list row has the same fields as the owner's OAuth row except for
+`canConnect` and `connectUnavailableReason`, which are absent. `connection`
+contains the existing nonsecret status, reason, upstream account identity, and
+scope metadata; no access or refresh tokens are returned. Account display names
+may include email addresses. `canDisconnect` means a current connection exists;
+the caller must additionally have write authority. Consumers and their counts
+are evaluated for the target person. Listing neither contacts the provider nor
+checks the person's login binding.
+
+Owned connections stay listed after grant loss or removal of their last
+selecting credential connection. Pending, failed or unconfirmed revocations
+stay listed even for disabled principals or removed registrations. Disabling
+the principal has already ended its live connections. Unavailable OAuth state
+returns an error rather than a disconnected claim; no configured OAuth
+registrations and no OAuth manager produce an empty list.
+
+DELETE requires a configured registration and uses the same local invalidation
+and provider revocation as personal disconnect. It is idempotent and preserves
+pending initial consent when no current connection exists. It does not change
+grants or block future consent. The audit actor is the administrator; its target
+names the principal and registration, without upstream account names or tokens.
+Both routes return `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+
+The portal uses the same disconnect confirmation and outcome notices as the
+personal view, naming the person and affected services. Auditors have no
+disconnect control. Connect and reconnect remain owner-only browser operations.
+
 ## Refresh, durability and recovery
 
 The managed store persists registration fences and encrypted owner/registration
@@ -1126,7 +1174,7 @@ first, so no new lease is issued, and in the same managed-store transaction
 keeps the family's latest tokens in an encrypted pending revocation. This
 happens when:
 
-- the owner disconnects, including the cleanup disconnect of a connection that
+- the owner or an administrator disconnects, including the cleanup of a connection that
   no entitled consumer uses any more;
 - a new consent replaces the family: a reconnect or an account replacement;
 - an administrator disables the owner (offboarding);

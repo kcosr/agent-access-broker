@@ -245,6 +245,15 @@ late successor joins its family's revocation whenever its refresh reports,
 even after another process presumed it lost; each token keeps its own retry
 deadline.
 
+Administrative OAuth reads expose the target's current nonsecret account and
+connection metadata to admins and auditors; only AdminWrite can disconnect.
+Keep the administrator as audit actor and the principal/registration as target.
+Reuse owner disconnect semantics independently of the target's self-service
+setting, including preserving initial pending consent when no connection exists.
+Retain owned unselected registrations and revocation cleanup for disabled users;
+never report unavailable state as disconnected. Connect/reconnect remains the
+owner's browser-consent operation.
+
 New Microsoft-enrolled humans omit `principalId` on principal POST and the
 positional principal ID on CLI create; the server assigns `usr-<UUIDv4>` and
 returns it for subsequent operations. Reject an explicitly supplied ID with

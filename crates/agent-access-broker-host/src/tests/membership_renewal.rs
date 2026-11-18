@@ -2475,7 +2475,10 @@ async fn renewal_waits_hold_per_principal_capacity() {
             .header("mcp-session-id", &session)
             .header("mcp-protocol-version", "2025-11-25")
             .body(Body::from(
-                json!({"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}).to_string(),
+                // Concurrent requests in this session need distinct JSON-RPC
+                // IDs so the SDK can route and close each response stream.
+                json!({"jsonrpc":"2.0","id":request_id,"method":"tools/list","params":{}})
+                    .to_string(),
             ))
             .unwrap();
         async move { app.oneshot(request).await.unwrap() }

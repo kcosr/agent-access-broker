@@ -10,7 +10,7 @@ const ADMIN_WRITE: &str = "/v1/admin/groups";
 const GROUP: &str = r#"{"groupId":"reviewers"}"#;
 
 /// A `user_manage` or `agent_invoke` broker token issued to the admin.
-fn admin_token(
+pub(super) fn admin_token(
     fixture: &OAuthFixture,
     token_class: BrokerTokenClass,
 ) -> agent_access_core::IssuedBrokerToken {
@@ -39,7 +39,10 @@ fn admin_token(
 
 /// Sets the admin's local password and signs it in, returning the session
 /// cookie and CSRF token.
-async fn admin_session(fixture: &OAuthFixture, change_required: bool) -> (String, String) {
+pub(super) async fn admin_session(
+    fixture: &OAuthFixture,
+    change_required: bool,
+) -> (String, String) {
     let store = fixture.runtime.managed_store().unwrap();
     let hasher = fixture.runtime.local_password_hasher().unwrap();
     let password = || LocalPasswordWriteRequest {
@@ -109,7 +112,7 @@ async fn bearer(
     (response.status(), response_json(response).await)
 }
 
-async fn cookie(
+pub(super) async fn cookie(
     fixture: &OAuthFixture,
     (cookie, csrf): (&str, Option<&str>),
     method: Method,

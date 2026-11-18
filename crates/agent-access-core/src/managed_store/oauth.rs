@@ -332,13 +332,19 @@ fn active(conn: &Connection, owner: &str) -> Result<(), OAuthError> {
 }
 
 impl ManagedStore {
+    /// Applies a slot change under its ownership and configuration transaction.
+    /// Returning no replacement leaves the persisted slot untouched, including
+    /// its absence; any other work in the callback shares this transaction.
     pub(crate) fn oauth_update<T>(
         &self,
         ring: &CredentialKeyRing,
         owner: &str,
         registration: &str,
         configuration: &str,
-        change: impl FnOnce(&Connection, Option<SlotState>) -> Result<(SlotState, T), OAuthError>,
+        change: impl FnOnce(
+            &Connection,
+            Option<SlotState>,
+        ) -> Result<(Option<SlotState>, T), OAuthError>,
     ) -> Result<T, OAuthError> {
         let mut conn = self.connection.lock().map_err(|_| OAuthError::Storage)?;
         let tx = conn
@@ -348,7 +354,9 @@ impl ManagedStore {
         active(&tx, owner)?;
         let current = read(&tx, ring, owner, registration)?;
         let (next, result) = change(&tx, current)?;
-        write(&tx, ring, owner, registration, &next)?;
+        if let Some(next) = next {
+            write(&tx, ring, owner, registration, &next)?;
+        }
         tx.commit().map_err(|_| OAuthError::Storage)?;
         Ok(result)
     }
@@ -627,7 +635,9 @@ mod tests {
             connection: None,
         };
         store
-            .oauth_update(&ring, "user", "stub", "fingerprint", |_, _| Ok((state, ())))
+            .oauth_update(&ring, "user", "stub", "fingerprint", |_, _| {
+                Ok((Some(state), ()))
+            })
             .unwrap();
         assert!(store.active_credentials_need_key_ring().unwrap());
         assert_eq!(store.active_credential_key_ids().unwrap(), ["one"]);

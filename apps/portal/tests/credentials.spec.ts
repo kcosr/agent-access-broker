@@ -5,10 +5,11 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { RESOURCE_TYPES } from "../unit/resource-types.fixture";
 import { portalDist } from "./support/binaries";
+import type { AdminOAuthConnectionTarget } from "../src/types";
 
 // Deterministic browser contract for the one Credentials list: one row per
 // credential connection naming the entitled services it serves, one row per
-// OAuth registration (read-only for an administered principal) whose status
+// OAuth registration (administrators can disconnect; auditors read) whose status
 // flags a remote revocation that needs cleanup, retained stored rows deleted
 // by ID, and the token type a connection accepting several asks the saver to
 // choose. The real-store flows live in portal.spec.ts and
@@ -78,6 +79,11 @@ type Lists = {
   targets: unknown[];
   botCredentials: unknown;
   botTargets: unknown[];
+  adminOAuth?: AdminOAuthConnectionTarget[];
+  adminCredentials?: unknown;
+  oauthUnavailable?: boolean;
+  disconnectFailure?: boolean;
+  principalDisabled?: boolean;
   onPut?: (pathname: string, body: { profile: string; secret: Record<string, string> }) => void;
 };
 
@@ -88,6 +94,7 @@ type Lists = {
  */
 async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", start = "/ui/credentials", lists: Lists = { credentials, targets: [target], botCredentials, botTargets: [] }) {
   const session = { authenticated: true, principal: "viewer", role, selfServiceEnabled: true, policyManagementServices: [], auditQueryable: false, csrfHeader: "x-csrf-token", csrfToken: "test-csrf", signInMethods: { localPassword: "active", microsoft: "absent" }, loginOptions: { localPassword: { enabled: true } }, tokenIssuancePolicy: { selfAgentInvoke: { access: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, defaultTtl: "1h", maxTtl: "8h", options: ["1h"] } } };
+  const managedOAuth = structuredClone(lists.adminOAuth ?? morganOAuth);
   const writes: Array<{ request: string; body: unknown }> = [];
   const reads: string[] = [];
   const errors: string[] = [];
@@ -114,8 +121,26 @@ async function fixture(page: Page, role: "user" | "admin" | "auditor" = "user", 
     else if (pathname === "/v1/admin/principals/bot/credentials") result = lists.botCredentials;
     else if (pathname === "/v1/admin/principals/bot/credentials/targets") result = lists.botTargets;
     else if (pathname === "/v1/admin/principals/bot/credentials/connections/jira") result = botToken;
-    else if (pathname === "/v1/admin/principals/morgan") result = morgan;
-    else if (pathname === "/v1/admin/principals/morgan/credentials") result = morganCredentials;
+    else if (pathname === "/v1/admin/principals/morgan") result = lists.principalDisabled ? { ...morgan, status: "disabled", selfServiceEnabled: false } : morgan;
+    else if (pathname === "/v1/admin/principals/morgan/credentials") result = lists.adminCredentials ?? morganCredentials;
+    else if (pathname === "/v1/admin/principals/morgan/oauth/connections") {
+      if (lists.oauthUnavailable) {
+        await route.fulfill({ status: 503, json: { ok: false, reasonCode: "oauth_storage_unavailable", error: { message: "OAuth status is unavailable" } } });
+        return;
+      }
+      result = managedOAuth;
+    } else if (pathname.startsWith("/v1/admin/principals/morgan/oauth/connections/") && request.method() === "DELETE") {
+      if (lists.disconnectFailure) {
+        await route.fulfill({ status: 503, json: { ok: false, reasonCode: "oauth_storage_unavailable", error: { message: "OAuth disconnect is unavailable" } } });
+        return;
+      }
+      const registration = decodeURIComponent(pathname.split("/").at(-1)!);
+      const connection = managedOAuth.find((entry) => entry.registration === registration)!;
+      connection.connection = null;
+      connection.canDisconnect = false;
+      connection.remoteRevocation = "revoked";
+      result = { disconnected: true, remoteRevocation: "revoked" };
+    }
     await route.fulfill({ json: envelope(result) });
   });
   await page.goto(`${baseUrl}${start}`);
@@ -144,6 +169,25 @@ const morganCredentials = {
   ],
   retained: []
 };
+
+// The dedicated admin endpoint includes current metadata, independently of
+// the generic credential list, and omits personal connect controls.
+const morganOAuth: AdminOAuthConnectionTarget[] = [
+  {
+    registration: "gitlab", displayName: "GitLab", connectionDescription: "GitLab account access", consumers: [rest, git], otherConsumers: 0,
+    permissionProfile: "default", scopeMode: "explicit", requestedScopes: ["api", "write_repository"], target: "https://gitlab.example.test", canDisconnect: true, remoteRevocation: "unconfirmed",
+    connection: { connectionId: "morgan-gitlab", subjectId: "morgan-upstream", displayName: "Morgan upstream", status: "ready", reason: null, targets: [] }
+  },
+  {
+    registration: "google", displayName: "Gmail", connectionDescription: "Mailbox access", consumers: [mail], otherConsumers: 0,
+    permissionProfile: "mail", scopeMode: "explicit", requestedScopes: ["openid"], target: "me", canDisconnect: true, remoteRevocation: "not_requested",
+    connection: { connectionId: "morgan-google", subjectId: "morgan-mail", displayName: "morgan@example.test", status: "ready", reason: null, targets: [] }
+  },
+  {
+    registration: "gitlab-ops", displayName: "GitLab Ops", connectionDescription: null, consumers: [], otherConsumers: 1,
+    permissionProfile: null, scopeMode: null, requestedScopes: [], target: null, canDisconnect: false, remoteRevocation: "failed", connection: null
+  }
+];
 
 const list = (page: Page) => page.getByRole("table", { name: "Credentials", exact: true });
 const row = (page: Page, name: string) => list(page).getByRole("row").filter({ has: page.getByRole("link", { name, exact: true }) });
@@ -287,46 +331,102 @@ test("an administrator sees a principal's active token after it lost every grant
 });
 
 for (const role of ["admin", "auditor"] as const) {
-  test(`an ${role} sees a user's OAuth connections and their remote revocation read-only`, async ({ page }, testInfo) => {
+  test(`an ${role} sees the user's current OAuth account and revocation, with role-appropriate actions`, async ({ page }, testInfo) => {
     const { writes, reads, errors } = await fixture(page, role, "/ui/admin/principals/morgan/credentials");
-    await expect(page.getByText("OAuth connections are read-only here: only the user can connect, reconnect or disconnect them, from their own Credentials page.")).toBeVisible();
     const gitlab = row(page, "GitLab");
-    await expect(gitlab).toContainText("Managed by user");
+    await expect(gitlab).toContainText("Connected");
     await expect(gitlab).toContainText("GitLab REST and GitLab Git");
-    await expect(gitlab).toContainText("OAuth · gitlab");
-    const status = statusCell(page, "GitLab");
-    await expect(status).toContainText("Managed by user");
-    const badge = status.getByText("Revocation unconfirmed", { exact: true });
+    await expect(gitlab).toContainText("OAuth · Morgan upstream");
+    const badge = statusCell(page, "GitLab").getByText("Revocation unconfirmed", { exact: true });
     await expect(badge).toBeVisible();
-    // The state concerns the connection the broker ended; the user, or a provider administrator, revokes.
-    await expect(badge).toHaveAttribute("title", /outcome was lost for an ended connection.*The user must revoke the broker application's access at the provider.*Preferences › Applications › Authorized applications/);
+    await expect(badge).toHaveAttribute("title", /outcome was lost for an ended connection.*The user morgan must revoke.*Preferences › Applications › Authorized applications/);
     await expect(gitlab).not.toContainText("outcome was lost");
     await expect(row(page, "Gmail")).not.toContainText("Revocation");
     const cleanup = row(page, "GitLab Ops");
     await expect(cleanup).toContainText("No current grants");
+    await expect(cleanup).toContainText("Not connected");
     await expect(statusCell(page, "GitLab Ops").getByText("Revocation failed", { exact: true })).toBeVisible();
-    await expect(list(page).getByRole("button", { name: /^(Connect account|Reconnect|Disconnect|Return to authorization tab|Delete)$/ })).toHaveCount(0);
+    await expect(list(page).getByRole("button", { name: /^(Connect account|Reconnect|Return to authorization tab|Delete)$/ })).toHaveCount(0);
+    await expect(list(page).getByRole("button", { name: "Disconnect", exact: true })).toHaveCount(role === "admin" ? 2 : 0);
     await page.screenshot({ path: testInfo.outputPath(`credentials-administered-oauth-${role}.png`), fullPage: true });
 
     await page.getByRole("group", { name: "Credential status" }).getByRole("button", { name: /^Needs attention/ }).click();
     await expect(list(page).getByRole("row").filter({ has: page.getByRole("link") })).toHaveCount(2);
     await expect(row(page, "Gmail")).toHaveCount(0);
-
     await gitlab.getByRole("link", { name: "GitLab", exact: true }).click();
-    await expect(page).toHaveURL(/\/ui\/admin\/principals\/morgan\/credentials\?.*credential=oauth%3Agitlab/);
     const drawer = page.getByRole("complementary", { name: "GitLab credential", exact: true });
     await expect(drawer).toContainText("OAuth registration gitlab");
+    await expect(drawer).toContainText("Morgan upstream");
     await expect(drawer).toContainText("Revocation unconfirmed. A token renewal's outcome was lost for an ended connection");
-    await expect(drawer).toContainText("Only the user can connect, reconnect or disconnect this account, from their own Credentials page.");
+    await expect(drawer).toContainText("Only the user can connect or reconnect this account. Administrators can disconnect it.");
     await expect(drawer.getByText("GitLab Git", { exact: false })).toBeVisible();
-    await expect(drawer.getByRole("button", { name: /^(Connect account|Reconnect|Disconnect|Return to authorization tab|Delete|Verify)$/ })).toHaveCount(0);
+    await expect(drawer.getByRole("button", { name: "Disconnect", exact: true })).toHaveCount(role === "admin" ? 1 : 0);
     await page.screenshot({ path: testInfo.outputPath(`credentials-administered-oauth-${role}-drawer.png`), fullPage: true });
-    // The administered view reads only the principal's list, never the viewer's own OAuth connections.
+    expect(reads).toContain("/v1/admin/principals/morgan/oauth/connections");
     expect(reads).not.toContain("/v1/oauth/connections");
     expect(writes).toEqual([]);
     expect(errors).toEqual([]);
   });
 }
+
+test("an administrator disconnects through the same confirmation, naming the user and refreshing their status", async ({ page }) => {
+  const { writes, errors } = await fixture(page, "admin", "/ui/admin/principals/morgan/credentials");
+  const gitlab = row(page, "GitLab");
+  await gitlab.getByRole("button", { name: "Disconnect", exact: true }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Disconnect account?", exact: true });
+  await expect(confirm).toContainText("Disconnect morgan's GitLab connection from the broker?");
+  await expect(confirm).toContainText("GitLab REST and GitLab Git stop using this account.");
+  await expect(confirm).toContainText("The user can connect again while permitted by their account settings and grants.");
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(writes).toEqual([]);
+  await gitlab.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await confirm.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(gitlab).toContainText("Not connected");
+  await expect(gitlab.getByRole("button", { name: "Disconnect", exact: true })).toHaveCount(0);
+  await expect(row(page, "Gmail")).toContainText("Connected");
+  await expect(page.getByText("Account disconnected for morgan. Access through the broker has ended, and the provider revoked every token the broker held for the account.")).toBeVisible();
+  expect(writes.map((write) => write.request)).toEqual(["DELETE /v1/admin/principals/morgan/oauth/connections/gitlab"]);
+  expect(errors).toEqual([]);
+});
+
+test("failed administrative disconnect stays inside the shared confirmation and preserves the connection", async ({ page }) => {
+  const { writes, errors } = await fixture(page, "admin", "/ui/admin/principals/morgan/credentials", { credentials, targets: [target], botCredentials, botTargets: [], disconnectFailure: true });
+  await row(page, "GitLab").getByRole("button", { name: "Disconnect", exact: true }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Disconnect account?", exact: true });
+  await confirm.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await expect(confirm.getByRole("alert")).toHaveText("OAuth disconnect is unavailable");
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(row(page, "GitLab")).toContainText("Connected");
+  expect(writes).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
+test("OAuth status failure remains explicit while stored credentials stay available", async ({ page }) => {
+  const lists = { credentials, targets: [target], botCredentials, botTargets: [], adminCredentials: botCredentials, oauthUnavailable: true };
+  const { writes, errors } = await fixture(page, "admin", "/ui/admin/principals/morgan/credentials", lists);
+  await expect(page.getByText("OAuth connection status unavailable", { exact: true })).toBeVisible();
+  await expect(row(page, "Jira")).toContainText("Not verified");
+  await expect(row(page, "GitLab")).toHaveCount(0);
+  await expect(page.getByText("Not connected", { exact: true })).toHaveCount(0);
+  // Recovery uses the administrative query and restores status/action data.
+  lists.oauthUnavailable = false;
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(row(page, "GitLab")).toContainText("Connected");
+  await expect(page.getByText("OAuth connection status unavailable", { exact: true })).toHaveCount(0);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("a disabled user retains revocation-only OAuth rows without connect or disconnect controls", async ({ page }) => {
+  const { writes, errors } = await fixture(page, "admin", "/ui/admin/principals/morgan/credentials", { credentials, targets: [target], botCredentials, botTargets: [], adminOAuth: [morganOAuth[2]], principalDisabled: true });
+  await expect(row(page, "GitLab Ops")).toContainText("Not connected");
+  await expect(row(page, "GitLab Ops")).toContainText("Revocation failed");
+  await expect(row(page, "GitLab")).toHaveCount(0);
+  await expect(list(page).getByRole("button", { name: /^(Connect account|Reconnect|Disconnect)$/ })).toHaveCount(0);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
 
 // Token types. The Git gateway's two unlabelled types differ in kind: Basic
 // asks for a username and token, bearer for the token only. The conformance
