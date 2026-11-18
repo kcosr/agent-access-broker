@@ -5063,7 +5063,7 @@ pub(crate) mod tests {
         let slots = || {
             database
                 .query_row("SELECT count(*) FROM oauth_slots", [], |row| {
-                    row.get::<_, usize>(0)
+                    row.get::<_, i64>(0)
                 })
                 .unwrap()
         };
