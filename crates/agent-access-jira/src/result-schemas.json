@@ -521,6 +521,18 @@
         "required": ["operation", "issue"]
       }
     },
+    "issue.custom_field.set": {
+      "success": {
+        "type": "object",
+        "properties": {
+          "operation": {"const": "issue.custom_field.set"},
+          "issue": {"$ref": "#/definitions/issueRef"},
+          "fieldId": {"type": "string"},
+          "status": {"const": "set"}
+        },
+        "required": ["operation", "issue", "fieldId", "status"]
+      }
+    },
     "issue.update": {
       "success": {
         "type": "object",
