@@ -199,7 +199,8 @@ All notable changes to this project are documented in this file.
   catalog version are the same either way. See
   [output schemas](docs/mcp.md#output-schemas).
   ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
-  [#112](https://github.com/kcosr/agent-access-broker/pull/112))
+  [#112](https://github.com/kcosr/agent-access-broker/pull/112),
+  [#119](https://github.com/kcosr/agent-access-broker/pull/119))
 
 - **Catalog result schemas and typed OpenAPI responses.** Catalog actions add
   optional `resultSchemas` (`success`, optional `error`), and OpenAPI invoke
@@ -209,14 +210,16 @@ All notable changes to this project are documented in this file.
   connection that omits output schemas returns neither. See
   [result schemas](docs/http-api.md#result-schemas-and-typed-responses).
   ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
-  [#112](https://github.com/kcosr/agent-access-broker/pull/112))
+  [#112](https://github.com/kcosr/agent-access-broker/pull/112),
+  [#119](https://github.com/kcosr/agent-access-broker/pull/119))
 
 - **Provider SDK result schemas.** Providers declare payload schemas with
   `ActionDescriptor::result_schemas`, `ActionResultSchemas` and bundled
   `ResultSchemaBundle` files; descriptor validation enforces an authoring
   profile and an 8 KiB budget, and `test_support::assert_result_conforms`
   checks outcomes strictly. See [result schemas](docs/provider-sdk.md#result-schemas).
-  ([#111](https://github.com/kcosr/agent-access-broker/pull/111))
+  ([#111](https://github.com/kcosr/agent-access-broker/pull/111),
+  [#119](https://github.com/kcosr/agent-access-broker/pull/119))
 
 - Jira custom fields can be set or cleared with arbitrary JSON through
   `issue.custom_field.set` and the typed CLI, with an optional immutable issue-ID
