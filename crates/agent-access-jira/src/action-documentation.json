@@ -392,8 +392,13 @@
       {
         "label": "Find direct children by parent key or numeric ID",
         "inputs": {
-          "query": {"type": "jql", "value": "parent IN (PROJ-100, 10001) ORDER BY key"},
-          "projects": ["PROJ"]
+          "query": {
+            "type": "jql",
+            "value": "parent IN (PROJ-100, 10001) ORDER BY key"
+          },
+          "projects": [
+            "PROJ"
+          ]
         }
       },
       {
@@ -498,5 +503,64 @@
     ],
     "resultPresentation": "When advertised, whole-result Markdown preserves returned identifiers/timestamps as code spans and safe URLs as autolinks, neutralizes metadata controls/newlines and uses only the existing result. Selecting a format does not fetch bodies or add requests.",
     "typedCommand": "Typed CLI wrapper: agent-access jira issue verify [OPTIONS] <ISSUE>; run agent-access jira issue verify --help for flags and input alternatives."
+  },
+  "issue.transition.list": {
+    "workflow": "Discover the next transitions on this issue, then select a transitionId and its to.id for issue.transition.apply. Different projects and issue types may have different workflows. Keep list and apply grants in the same credential mode when possible; apply independently rechecks with its own selected execution credential. No workflow bypass flags are exposed.",
+    "result": "Returns issue identity, currentStatus with id/name/statusCategory, and transitions with id/name/to/hasScreen. Each collection contains at most 100 entries and reports count and truncated. includeFields adds fields.items with id/name/required/hasDefaultValue/brokerInput; only resolution advertises brokerInput=resolutionId and bounded allowedValues. Other field values, defaults, URLs and arbitrary schema objects are withheld. A missing fields value is null, meaning Jira did not supply metadata. Names are limited to 1024 UTF-8 bytes, numeric IDs to 64 bytes; malformed or oversized entries fail. Each upstream response is capped at the smaller of 1 MiB and the configured upstream response limit.",
+    "requirements": "The list describes Jira availability under this action's credential, not authority or guaranteed success for apply. An empty list may reflect permissions or current state. Field requirements are informative; existing values, defaults and workflow validators remain Jira-controlled. Unsupported submitted fields require a separately designed operation; apply never chains field or comment writes.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue transition list [OPTIONS] [ISSUE]; run agent-access jira issue transition list --help for flags and input alternatives.",
+    "inputExamples": [
+      {
+        "label": "Available transitions",
+        "inputs": {
+          "issue": "PROJ-123"
+        }
+      },
+      {
+        "label": "Include screen requirements",
+        "inputs": {
+          "url": "https://example.atlassian.net/browse/PROJ-123",
+          "includeFields": true
+        }
+      }
+    ],
+    "scope": "Authorization is by Jira project. Use an issue key or accepted browser URL; the current project is resolved and reconfirmed through issue metadata."
+  },
+  "issue.transition.apply": {
+    "workflow": "Apply exactly one transitionId discovered for this issue and its toStatusId. The issue is resolved for project authorization and reconfirmed; current status and selected transition are checked with the execution credential, and the POST targets the confirmed immutable issue ID. expectedIssueId and expectedStatusId are optional pre-send guards. Destination/current-state checks are not atomic with the POST and cannot establish safe replay.",
+    "fields": "Only optional resolutionId is submitted as fields.resolution.id. No custom fields, comments, descriptions, arbitrary fields/update, history metadata, properties or notification controls are accepted. Jira validates resolution and other workflow requirements. The action delegates the selected workflow transition, including Jira-controlled post-functions, automation and notifications. Existing issue-edit or custom-field grants do not grant this action.",
+    "result": "Jira acceptance returns status=transitioned and transitionId/fromStatusId/toStatusId. A compact readback yields verification.status=matched or differs and verification.observedStatus. A difference is a successful observation, not a failed mutation; neither value proves this request caused the observed state. If the readback fails, the error carries applied_unverified with post_transition_readback. A timeout, disconnect or ambiguous upstream failure may leave an unknown outcome; never automatically replay. The ordinary one-time Atlassian OAuth 401 renewal remains supported.",
+    "errors": "jira_transition_unavailable means the transition or expected state/destination did not match before sending. jira_transition_rejected means Jira rejected the submitted transition; check permissions, workflow requirements and resolution. Errors do not enumerate other transitions or expose raw Jira validation messages. A read-only caller cannot apply transitions. List and apply grants are independent and can select different credentials; discovery is advisory.",
+    "typedCommand": "Typed CLI wrapper: agent-access jira issue transition apply [OPTIONS] --transition-id <TRANSITION_ID> --to-status-id <TO_STATUS_ID> [ISSUE]; run agent-access jira issue transition apply --help for flags and input alternatives.",
+    "inputExamples": [
+      {
+        "label": "Transition to the discovered destination",
+        "inputs": {
+          "issue": "PROJ-123",
+          "transitionId": "31",
+          "toStatusId": "10002"
+        }
+      },
+      {
+        "label": "Guard issue identity and current status",
+        "inputs": {
+          "issue": "PROJ-123",
+          "transitionId": "31",
+          "toStatusId": "10002",
+          "expectedIssueId": "10001",
+          "expectedStatusId": "10000"
+        }
+      },
+      {
+        "label": "Transition with a permitted resolution",
+        "inputs": {
+          "issue": "PROJ-123",
+          "transitionId": "41",
+          "toStatusId": "10003",
+          "resolutionId": "1"
+        }
+      }
+    ],
+    "scope": "Authorization is by Jira project. Use an issue key or accepted browser URL; the current project is resolved and reconfirmed through issue metadata."
   }
 }

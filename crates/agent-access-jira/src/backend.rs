@@ -12,6 +12,31 @@ mod issue_types_tests;
 
 #[async_trait]
 pub trait JiraBackend: Send + Sync {
+    /// Compact identity and status read, addressed by confirmed immutable issue ID.
+    async fn issue_status(
+        &self,
+        issue_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError>;
+
+    /// Available transitions for the selected execution credential; no workflow bypass flags.
+    async fn issue_transitions(
+        &self,
+        issue_id: &str,
+        include_fields: bool,
+        transition_id: Option<&str>,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError>;
+
+    /// One transition with at most a resolution; never an arbitrary issue edit.
+    async fn transition_issue(
+        &self,
+        issue_id: &str,
+        transition_id: &str,
+        resolution_id: Option<&str>,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError>;
+
     /// One bounded project collection page, using the selected execution credential.
     async fn project_list(
         &self,
@@ -973,6 +998,130 @@ impl HttpJiraBackend {
 
 #[async_trait]
 impl JiraBackend for HttpJiraBackend {
+    async fn issue_status(
+        &self,
+        issue_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        let mut url = self
+            .api_base(credential)?
+            .join(&format!("issue/{issue_id}"))
+            .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("fields", "project,status");
+        let started = Instant::now();
+        let client = self.request_client(credential)?;
+        let response = send_jira_request(
+            client,
+            credential,
+            client
+                .request(Method::GET, url)
+                .header("Accept", "application/json"),
+            UpstreamCall::new("issue.status"),
+        )
+        .await?;
+        let status = response.status().as_u16();
+        let value = jira_response_value(
+            response,
+            self.limits
+                .max_upstream_response_bytes
+                .min(transitions::RESPONSE_BYTE_LIMIT),
+        )
+        .await?;
+        Ok(JiraBackendResponse {
+            value,
+            status,
+            duration_ms: elapsed_ms(started),
+        })
+    }
+
+    async fn issue_transitions(
+        &self,
+        issue_id: &str,
+        include_fields: bool,
+        transition_id: Option<&str>,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        let mut url = self
+            .api_base(credential)?
+            .join(&format!("issue/{issue_id}/transitions"))
+            .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
+        if include_fields {
+            url.query_pairs_mut()
+                .append_pair("expand", "transitions.fields");
+        }
+        if let Some(id) = transition_id {
+            url.query_pairs_mut().append_pair("transitionId", id);
+        }
+        let started = Instant::now();
+        let client = self.request_client(credential)?;
+        let response = send_jira_request(
+            client,
+            credential,
+            client
+                .request(Method::GET, url)
+                .header("Accept", "application/json"),
+            UpstreamCall::new("issue.transitions"),
+        )
+        .await?;
+        let status = response.status().as_u16();
+        let value = jira_response_value(
+            response,
+            self.limits
+                .max_upstream_response_bytes
+                .min(transitions::RESPONSE_BYTE_LIMIT),
+        )
+        .await?;
+        Ok(JiraBackendResponse {
+            value,
+            status,
+            duration_ms: elapsed_ms(started),
+        })
+    }
+
+    async fn transition_issue(
+        &self,
+        issue_id: &str,
+        transition_id: &str,
+        resolution_id: Option<&str>,
+        credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        let url = self
+            .api_base(credential)?
+            .join(&format!("issue/{issue_id}/transitions"))
+            .map_err(|error| JiraBackendError::Protocol(error.to_string()))?;
+        let mut body = json!({"transition":{"id":transition_id}});
+        if let Some(id) = resolution_id {
+            body["fields"] = json!({"resolution":{"id":id}});
+        }
+        let started = Instant::now();
+        let client = self.request_client(credential)?;
+        let response = send_jira_request(
+            client,
+            credential,
+            client
+                .request(Method::POST, url)
+                .header("Accept", "application/json")
+                .json(&body),
+            UpstreamCall::new("issue.transition.apply"),
+        )
+        .await?;
+        let status = response.status().as_u16();
+        transition_response_unit(
+            response,
+            self.limits
+                .max_upstream_response_bytes
+                .min(transitions::RESPONSE_BYTE_LIMIT),
+        )
+        .await
+        .map_err(accepted_if_success(status))?;
+        Ok(JiraBackendResponse {
+            value: (),
+            status,
+            duration_ms: elapsed_ms(started),
+        })
+    }
+
     async fn project_details(
         &self,
         project: &str,
@@ -2317,6 +2466,31 @@ async fn custom_field_response_unit(
     if let Some(trace) = trace {
         trace.complete(result.as_ref().err().map(|error| match error {
             JiraBackendError::HttpStatus(400 | 422) => (&custom_field::REJECTED).into(),
+            error => jira_backend_reason_code(error).into(),
+        }));
+    }
+    result
+}
+
+// Preserve the same value-free validation reason in the trace and invocation.
+async fn transition_response_unit(
+    mut response: reqwest::Response,
+    byte_cap: u64,
+) -> Result<(), JiraBackendError> {
+    let status = response.status().as_u16();
+    let trace = take_upstream_trace(&mut response);
+    let result = jira_response_unit(response, byte_cap).await.and_then(|()| {
+        if status == 204 {
+            Ok(())
+        } else {
+            Err(JiraBackendError::Protocol(
+                "Jira transition returned an unexpected success status".to_string(),
+            ))
+        }
+    });
+    if let Some(trace) = trace {
+        trace.complete(result.as_ref().err().map(|error| match error {
+            JiraBackendError::HttpStatus(400 | 422) => (&transitions::REJECTED).into(),
             error => jira_backend_reason_code(error).into(),
         }));
     }

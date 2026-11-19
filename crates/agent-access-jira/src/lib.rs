@@ -20,6 +20,7 @@ mod search_continuation;
 mod search_diagnostics;
 #[cfg(test)]
 mod tests;
+mod transitions;
 mod validation;
 
 pub use backend::*;
@@ -778,6 +779,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
     actions.push(project_list::descriptor(&config.listing));
     actions.push(project_view::descriptor());
     actions.push(custom_field::descriptor(&config.custom_fields));
+    actions.extend(transitions::descriptors());
     if !config
         .content
         .comment_formats
@@ -890,6 +892,8 @@ impl JiraProvider {
             "issue.view"
             | "issue.update"
             | "issue.custom_field.set"
+            | "issue.transition.list"
+            | "issue.transition.apply"
             | "issue.child.create"
             | "issue.parent.set"
             | "issue.dependency.add"
@@ -1027,6 +1031,8 @@ impl Provider for JiraProvider {
             "issue.child.create" => self.invoke_issue_child_create(request).await,
             "issue.update" => self.invoke_issue_update(request).await,
             "issue.custom_field.set" => self.invoke_issue_custom_field_set(request).await,
+            "issue.transition.list" => self.invoke_transition_list(request).await,
+            "issue.transition.apply" => self.invoke_transition_apply(request).await,
             "issue.parent.set" => self.invoke_issue_parent_set(request).await,
             "issue.dependency.add" => self.invoke_issue_dependency_add(request).await,
             "search" => self.invoke_search(request).await,
@@ -3726,6 +3732,12 @@ fn issue_locator_for_action(
         "issue.view" => parse_issue_view_inputs(inputs, config).map(|(locator, _)| locator),
         "issue.update" => parse_issue_update_inputs(inputs, config).map(|inputs| inputs.locator),
         "issue.custom_field.set" => custom_field::scope_locator(inputs, config),
+        "issue.transition.list" => {
+            transitions::parse_list(inputs, config).map(|inputs| inputs.locator)
+        }
+        "issue.transition.apply" => {
+            transitions::parse_apply(inputs, config).map(|inputs| inputs.locator)
+        }
         "comment.list" => parse_comment_list_inputs(inputs, config).map(|inputs| inputs.locator),
         "comment.view" => {
             parse_comment_view_inputs(action, inputs, config).map(|inputs| inputs.locator)

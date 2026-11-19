@@ -47,6 +47,15 @@ the read smoke and the mutating write/download/verify smoke in that binary.
 
 ## Local Deterministic Suite
 
+Jira workflow-transition tests use the production HTTP backend against a local
+synthetic Jira server to check credential selection, immutable issue identity,
+status/destination guards, bounded field discovery, exact transition POSTs,
+private rejection messages and uncertain-write/readback receipts. The CLI smoke
+runs a real isolated Broker with a recording backend across typed commands,
+invoke, send, direct HTTP and both MCP transports, checking independent action
+grants, project denial and service/personal credentials. These tests do not
+contact a live Jira tenant or validate a particular production workflow.
+
 Jira custom-field tests use a local HTTP fixture for the production provider
 to check the operator allowlist, JSON value preservation and clearing, required
 value and content limits, immutable-issue guards, a single-field PUT, credential

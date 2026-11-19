@@ -3359,6 +3359,8 @@ whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 | `cloudbees_ci_log_scan_exceeded` | CloudBees CI | deny | 413 |
 | `jira_custom_field_not_allowed` | Jira | deny | 403 |
 | `jira_custom_field_rejected` | Jira | deny | 400 |
+| `jira_transition_unavailable` | Jira | deny | 409 |
+| `jira_transition_rejected` | Jira | deny | 400 |
 
 See [CloudBees CI errors](providers-cloudbees-ci.md#errors) and
 [Jira custom-field updates](providers-jira.md#issuecustom_fieldset) for when

@@ -205,8 +205,8 @@ Each action needs these Atlassian OAuth scopes:
 
 | Actions | Scopes |
 | --- | --- |
-| `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
-| `issue.create`, `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
+| `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.transition.list`, `search`, `comment.list`, `comment.view`, `comment.property.list`, `comment.property.get`, `attachment.list`, `attachment.download`, `verify` | `read:jira-work` |
+| `issue.create`, `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.transition.apply`, `issue.parent.set`, `issue.dependency.add`, `comment.add`, `comment.reply`, `comment.update`, `comment.delete`, `comment.property.set`, `comment.property.delete`, `attachment.add` | `read:jira-work`, `write:jira-work` |
 
 `read:jira-user` serves only token verification and is not needed. The
 registration also requests `read:me` and `offline_access`; see
@@ -483,6 +483,8 @@ Twenty-five actions:
 | `issue.child.create` | `project` | yes |
 | `issue.update` | `project` | yes |
 | `issue.custom_field.set` | `project` | yes |
+| `issue.transition.list` | `project` | yes |
+| `issue.transition.apply` | `project` | yes |
 | `issue.parent.set` | `project` | yes |
 | `issue.dependency.add` | `project` | yes |
 | `search` | `project` | no |
@@ -534,14 +536,15 @@ allowlisted fields in Jira's structured error map. Body/description validation
 is classified as `body_malformed`; other recognized safe field validation is
 `input_invalid`. The broker ignores Jira's free-form error-message list and
 never returns the raw response body. Custom-field writes use only the fixed
-`jira_custom_field_rejected` message for 400/422 responses. Lookup, readback,
+`jira_custom_field_rejected` message for 400/422 responses; transition writes use
+only `jira_transition_rejected`. Lookup, readback,
 authentication, permission, existence, scope, conflict, throttling, and server-error bodies
 remain hidden. A Jira HTTP 429 returns `upstream_rate_limited` with the bounded
 `Retry-After` wait when Jira sends one; see
 [http-api.md](http-api.md#reason-code-table). A 429 on a mutation request itself
 means Jira did not apply it. When the mutation was applied but the readback that
 verifies it is throttled (`issue.create`, `issue.child.create`, `issue.update`,
-`issue.parent.set`, and `issue.dependency.add`), the error is instead
+`issue.transition.apply`, `issue.parent.set`, and `issue.dependency.add`), the error is instead
 `mutation_verification_failed` with `mutationStatus: "applied_unverified"`,
 `retrySafe: false`, `verificationStage` (the audit `failurePhase`, such as
 `post_create_readback`), and `safeLocators` holding the created or changed issue
@@ -570,7 +573,7 @@ ordinary reason and message and reports what Jira may have done:
 | --- | --- |
 | The mutation request may have been sent but got no response (a timeout, a stalled upload, a connection failure after sending, or an unclassified failure), or Jira or a proxy answered with a redirect, which the Broker never follows, or a 5xx | `mutationStatus: "unknown"`, `retrySafe: false` |
 | Jira answered the mutation with a success status, but its response then failed, stalled, exceeded the byte cap, did not parse or did not match the request (such as a created issue in another project), or Broker could not construct a bounded acknowledgement result | `mutationStatus: "applied_unverified"`, `retrySafe: false`, `verificationStage: "mutation_response"` |
-| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
+| The read-back after an applied `issue.create`, `issue.child.create`, `issue.update`, `issue.transition.apply`, `issue.parent.set` or `issue.dependency.add` failed or did not match, or the result exceeded the response limit | `mutationStatus: "applied_unverified"`, `retrySafe: false`, the read-back `verificationStage` (such as `post_update_readback`) |
 
 `safeLocators` name the target from the validated request and the reads before
 the write, never from the failed response: the `project` (and parent issue) of
@@ -1242,6 +1245,97 @@ metadata; it excludes submitted summary text, source content, converted ADF,
 returned description ADF, and raw upstream error bodies. Content attribution for
 `issue.update` applies only when the request supplies `content`; it never
 mutates summaries.
+
+## Issue workflow transitions
+
+`issue.transition.list` discovers transitions available on one issue using the
+selected execution credential. `issue.transition.apply` applies one explicitly
+selected transition. Both require independent grants on the issue's `project`;
+listing is read-only and applying is a write. The read-only caller ceiling
+therefore permits listing but refuses applying. Both support service and per-user
+credentials. Granting either action, or `issue.update`, does not grant the other.
+
+Project statuses from `project.view` are descriptive inventory. Workflow choices
+can differ by issue type, current state and Jira user, even within one project.
+Use issue-specific discovery and select the transition ID and its destination
+status ID. Names are display labels: multiple transitions can lead to the same
+status, and different statuses can have identical names.
+
+```bash
+agent-access jira issue transition list PROJ-123 --include-fields
+agent-access jira issue transition apply PROJ-123 \
+  --transition-id 31 --to-status-id 10002 \
+  --expected-issue-id 10001 --expected-status-id 10000
+```
+
+IDs in examples are illustrative; use IDs returned by your Jira instance.
+Both actions accept exactly one non-null `issue` key or `url`. The CLI uses a
+positional issue key or `--issue-url`. All transition,
+status, resolution and expected issue IDs are positive decimal strings of at most
+64 bytes. Unknown inputs are refused.
+
+### `issue.transition.list`
+
+Optional `includeFields` defaults to false. Results contain `operation`, bounded
+`issue` identity (`id`, `key`, `project`, `webUrl`), `currentStatus`, and
+`transitions`, with `count` and `truncated`. Status objects contain `id`, `name`
+and a nullable `statusCategory` (`id`, `key`, `name`). Each transition contains
+`id`, `name`, destination `to`, and nullable `hasScreen`.
+
+With `includeFields: true`, each transition additionally has nullable `fields`.
+An available field collection contains `items`, `count`, and `truncated`.
+Each item exposes `id`, `name`, `required`, nullable `hasDefaultValue`, and
+`brokerInput`. Only resolution has `brokerInput: "resolutionId"`; other fields
+have null because this action cannot submit them. Resolution may also have an
+`allowedValues` collection of ID/name pairs. Default contents, arbitrary schemas,
+custom-field choices and upstream URLs are omitted. Null metadata means Jira did
+not provide it; it does not mean that the transition has no requirements.
+
+Collections are capped at 100 transitions, fields per transition and resolution
+choices per field. Names are capped at 1,024 UTF-8 bytes. Metadata reads have a
+1 MiB ceiling, further restricted by the configured upstream response limit;
+the final result also obeys the configured limit. Truncation is explicit and has
+no continuation token. Metadata describes visible requirements only: workflow
+validators and permissions can still reject a transition.
+
+### `issue.transition.apply`
+
+Required `transitionId` and `toStatusId` identify the exact transition and intended
+destination. Optional `expectedIssueId` guards against a moved or reused issue
+key; optional `expectedStatusId` checks the current status before the write.
+Optional `resolutionId` is the only submitted transition-screen value. Jira
+validates whether it is supported, required or allowed. Transitions needing other
+caller-supplied fields cannot be completed by this action; any defaults and
+workflow validators remain Jira's responsibility. This action does not submit
+comments, descriptions, custom fields, notification controls or workflow bypasses.
+
+After project authorization and issue confirmation, Broker reads the status and
+rechecks the selected transition with the apply action's execution credential,
+then posts exactly one transition by immutable issue ID. A different grant may
+select a different credential from listing. `jira_transition_unavailable` (409)
+means the selection is no longer available, its destination differs, or the
+expected current status changed. `scope_unresolved` covers an expected issue-ID
+mismatch. `jira_transition_rejected` (400) reports Jira's 400/422 refusal without
+forwarding upstream validation text or field values.
+
+The checks are not atomic with Jira's write. Another actor, automation or a
+workflow post-function can change status between checks or after acceptance.
+A successful result has `status: "transitioned"`, issue identity, `transitionId`,
+`fromStatusId`, `toStatusId`, and `verification` with `status: "matched"` or
+`"differs"` and `observedStatus`. Both are successful accepted writes; `differs`
+reports the later observation and does not justify a replay. Failed readback
+returns an `applied_unverified` receipt at `post_transition_readback`. A timeout,
+disconnect or ambiguous upstream failure during POST can return `unknown`.
+These receipts have `retrySafe: false`; inspect the issue instead of resubmitting,
+even when `expectedStatusId` was supplied. Global and self-loop transitions make
+that guard insufficient for safe retries. Existing bounded OAuth 401 renewal
+still applies; uncertain mutations are never automatically replayed.
+
+Audit includes selected IDs, project and verification outcome, but omits status
+and transition names, field metadata and raw Jira validation responses. OAuth
+listing needs `read:jira-work`; applying also needs `write:jira-work`. If the
+configured OAuth profile was read-only, enable the write scope and reconnect
+existing connections before applying transitions.
 
 ## `issue.custom_field.set`
 

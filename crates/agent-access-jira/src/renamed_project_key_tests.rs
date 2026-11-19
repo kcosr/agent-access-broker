@@ -96,6 +96,32 @@ fn ok<T>(value: T) -> Result<JiraBackendResponse<T>, JiraBackendError> {
 
 #[async_trait]
 impl JiraBackend for RenamedJira {
+    async fn issue_status(
+        &self,
+        _issue_id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected status request in this fixture")
+    }
+    async fn issue_transitions(
+        &self,
+        _issue_id: &str,
+        _include_fields: bool,
+        _transition_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected transition discovery in this fixture")
+    }
+    async fn transition_issue(
+        &self,
+        _issue_id: &str,
+        _transition_id: &str,
+        _resolution_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        panic!("unexpected transition write in this fixture")
+    }
+
     async fn project_list(
         &self,
         _request: JiraProjectListRequest,

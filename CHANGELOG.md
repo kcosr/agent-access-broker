@@ -187,6 +187,12 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Jira issue workflow transitions.** Discover available transitions and apply
+  one selected transition with independent project grants and typed CLI commands.
+  Optional issue/status guards and resolution IDs support basic workflow changes;
+  readback reports the observed status and uncertain writes remain unsafe to retry.
+  See [Jira transitions](docs/providers-jira.md#issue-workflow-transitions).
+
 - **Administrators can inspect and disconnect personal OAuth connections.**
   Administrators and auditors see current status and nonsecret connected-account
   metadata in Credentials; only administrators can disconnect, using the same

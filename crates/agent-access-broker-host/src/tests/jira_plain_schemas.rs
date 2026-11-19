@@ -81,7 +81,7 @@ async fn jira_plain_inputs_project_through_stdio_http_send_and_openapi() {
         .iter()
         .find(|service| service.service == "jira")
         .unwrap();
-    assert_eq!(jira.actions.len(), 25);
+    assert_eq!(jira.actions.len(), 27);
     for action in &jira.actions {
         let schema = &action.input_schema;
         assert_eq!(schema["type"], "object", "{}", action.action);

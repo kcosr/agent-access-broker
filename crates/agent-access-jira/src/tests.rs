@@ -26,6 +26,9 @@ mod issue_type_tests;
 #[path = "custom_field_tests.rs"]
 mod custom_field_tests;
 
+#[path = "transitions_tests.rs"]
+mod transitions_tests;
+
 #[path = "jql_custom_field_tests.rs"]
 mod jql_custom_field_tests;
 
@@ -496,6 +499,32 @@ impl StubJiraBackend {
 
 #[async_trait]
 impl JiraBackend for StubJiraBackend {
+    async fn issue_status(
+        &self,
+        _issue_id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected status request in this fixture")
+    }
+    async fn issue_transitions(
+        &self,
+        _issue_id: &str,
+        _include_fields: bool,
+        _transition_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<Value>, JiraBackendError> {
+        panic!("unexpected transition discovery in this fixture")
+    }
+    async fn transition_issue(
+        &self,
+        _issue_id: &str,
+        _transition_id: &str,
+        _resolution_id: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        panic!("unexpected transition write in this fixture")
+    }
+
     async fn project_list(
         &self,
         _request: JiraProjectListRequest,
