@@ -192,6 +192,7 @@ All notable changes to this project are documented in this file.
   Optional issue/status guards and resolution IDs support basic workflow changes;
   readback reports the observed status and uncertain writes remain unsafe to retry.
   See [Jira transitions](docs/providers-jira.md#issue-workflow-transitions).
+  ([#121](https://github.com/kcosr/agent-access-broker/pull/121))
 
 - **Administrators can inspect and disconnect personal OAuth connections.**
   Administrators and auditors see current status and nonsecret connected-account
