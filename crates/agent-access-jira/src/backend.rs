@@ -2491,6 +2491,7 @@ async fn transition_response_unit(
     if let Some(trace) = trace {
         trace.complete(result.as_ref().err().map(|error| match error {
             JiraBackendError::HttpStatus(400 | 422) => (&transitions::REJECTED).into(),
+            JiraBackendError::HttpStatus(409) => (&transitions::UNAVAILABLE).into(),
             error => jira_backend_reason_code(error).into(),
         }));
     }

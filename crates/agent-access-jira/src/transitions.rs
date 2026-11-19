@@ -252,7 +252,18 @@ fn transition(value: &Value, include_fields: bool) -> Result<Value, ProviderErro
             Some(fields) => fields.as_object().ok_or_else(protocol)?,
         };
         let mut items = Vec::new();
-        for (key, field) in fields.iter().take(ITEM_LIMIT) {
+        // Keep the one supported submitted field discoverable even on large screens.
+        let ordered = fields
+            .get("resolution")
+            .map(|field| ("resolution", field))
+            .into_iter()
+            .chain(
+                fields
+                    .iter()
+                    .filter(|(key, _)| key.as_str() != "resolution")
+                    .map(|(key, field)| (key.as_str(), field)),
+            );
+        for (key, field) in ordered.take(ITEM_LIMIT) {
             if key.is_empty()
                 || key.len() > 128
                 || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -411,6 +422,7 @@ impl JiraProvider {
         );
         let response = self.backend.transition_issue(&metadata.id, &inputs.transition_id, inputs.resolution_id.as_deref(), &credential).await.map_err(|error| match error {
             JiraBackendError::HttpStatus(status @ (400 | 422)) | JiraBackendError::Validation { status: status @ (400 | 422), .. } => ProviderError::domain(&REJECTED, "Jira rejected the transition; check workflow permissions, requirements and any resolution value. Other submitted transition fields are not supported").with_upstream(Some(status), None),
+            JiraBackendError::HttpStatus(409) => unavailable().with_upstream(Some(409), None),
             error => write.failed(error),
         })?;
         after_accepted_write("post_transition_readback", write.locators(), async {

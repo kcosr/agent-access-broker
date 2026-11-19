@@ -471,7 +471,7 @@ separately authorized, paginated Create issues workflow.
 
 ## Actions and lookup requirements
 
-Twenty-five actions:
+Twenty-seven actions:
 
 | Action | Required scope type | Lookup requirement |
 | --- | --- | --- |
@@ -1292,7 +1292,8 @@ custom-field choices and upstream URLs are omitted. Null metadata means Jira did
 not provide it; it does not mean that the transition has no requirements.
 
 Collections are capped at 100 transitions, fields per transition and resolution
-choices per field. Names are capped at 1,024 UTF-8 bytes. Metadata reads have a
+choices per field. Resolution is projected first so it survives field truncation.
+Names are capped at 1,024 UTF-8 bytes. Metadata reads have a
 1 MiB ceiling, further restricted by the configured upstream response limit;
 the final result also obeys the configured limit. Truncation is explicit and has
 no continuation token. Metadata describes visible requirements only: workflow
@@ -1314,7 +1315,9 @@ rechecks the selected transition with the apply action's execution credential,
 then posts exactly one transition by immutable issue ID. A different grant may
 select a different credential from listing. `jira_transition_unavailable` (409)
 means the selection is no longer available, its destination differs, or the
-expected current status changed. `scope_unresolved` covers an expected issue-ID
+expected current status changed. Jira rejecting the POST with HTTP 409 also
+returns `jira_transition_unavailable`, without a mutation receipt; rediscover
+before choosing a transition. `scope_unresolved` covers an expected issue-ID
 mismatch. `jira_transition_rejected` (400) reports Jira's 400/422 refusal without
 forwarding upstream validation text or field values.
 

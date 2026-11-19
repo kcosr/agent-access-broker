@@ -3362,8 +3362,9 @@ whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 | `jira_transition_unavailable` | Jira | deny | 409 |
 | `jira_transition_rejected` | Jira | deny | 400 |
 
-See [CloudBees CI errors](providers-cloudbees-ci.md#errors) and
-[Jira custom-field updates](providers-jira.md#issuecustom_fieldset) for when
+See [CloudBees CI errors](providers-cloudbees-ci.md#errors),
+[Jira custom-field updates](providers-jira.md#issuecustom_fieldset), and
+[Jira workflow transitions](providers-jira.md#issue-workflow-transitions) for when
 they occur.
 
 `upstream_rate_limited` means the upstream service throttled the request; the

@@ -211,13 +211,7 @@ async fn jira_transition_grants_are_independent_and_project_denial_does_not_exec
             .await
             .unwrap();
         assert_eq!(response["decision"], "deny", "{response}");
-        assert!(
-            matches!(
-                response["reasonCode"].as_str(),
-                Some("service_action_denied" | "scope_unresolved")
-            ),
-            "{response}"
-        );
+        assert_eq!(response["reasonCode"], "scope_unresolved", "{response}");
         assert!(backend.transition_writes.lock().unwrap().is_empty());
         assert!(
             backend
@@ -249,13 +243,7 @@ async fn jira_transition_grants_are_independent_and_project_denial_does_not_exec
             .await
             .unwrap();
         assert_eq!(response["decision"], "deny", "{response}");
-        assert!(
-            matches!(
-                response["reasonCode"].as_str(),
-                Some("service_action_denied" | "scope_unresolved")
-            ),
-            "{response}"
-        );
+        assert_eq!(response["reasonCode"], "scope_unresolved", "{response}");
         assert!(backend.transition_writes.lock().unwrap().is_empty());
         assert!(
             backend

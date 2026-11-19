@@ -376,33 +376,47 @@ async fn transition_invalid_metadata_and_project_movement_fail_before_execution(
             .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
-    for (key, value) in [
-        ("id", json!("99999")),
-        ("key", json!("OTHER-1")),
+    let mut cases = Vec::new();
+    for (key, value, reason) in [
+        ("id", json!("99999"), ReasonCode::ScopeUnresolved),
+        ("key", json!("OTHER-1"), ReasonCode::UpstreamProtocolFailed),
         (
             "fields",
             json!({"project":{"key":"OTHER"},"status":{"id":"10000","name":"New"}}),
+            ReasonCode::UpstreamProtocolFailed,
         ),
     ] {
-        let fixture = Fixture::ready(offered()).await;
-        let mut moved = issue_status("10000", "New");
-        moved[key] = value;
-        Mock::given(method("GET"))
-            .and(path("/rest/api/3/issue/10001"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(moved))
-            .with_priority(1)
-            .mount(&fixture.api)
-            .await;
-        let error = fixture
-            .invoke("issue.transition.apply", apply_inputs())
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error.reason_code().as_str(),
-            "scope_unresolved" | "upstream_protocol_failed"
-        ));
-        assert_eq!(fixture.posts.load(Ordering::SeqCst), 0);
-        assert_eq!(fixture.api.received_requests().await.unwrap().len(), 2);
+        let mut value_status = issue_status("10000", "New");
+        value_status[key] = value;
+        cases.push((value_status, reason));
+    }
+    let mut moved = issue_status("10000", "New");
+    moved["key"] = json!("OTHER-1");
+    moved["fields"]["project"]["key"] = json!("OTHER");
+    cases.push((moved, ReasonCode::ScopeUnresolved));
+    for (value, reason) in cases {
+        for (action, inputs) in [
+            ("issue.transition.list", json!({"issue":"PROJ-1"})),
+            ("issue.transition.apply", apply_inputs()),
+        ] {
+            let fixture = Fixture::ready(offered()).await;
+            Mock::given(method("GET"))
+                .and(path("/rest/api/3/issue/10001"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(value.clone()))
+                .with_priority(1)
+                .mount(&fixture.api)
+                .await;
+            let error = fixture.invoke(action, inputs).await.unwrap_err();
+            assert_eq!(error.reason_code(), reason);
+            assert_eq!(fixture.posts.load(Ordering::SeqCst), 0);
+            let requests = fixture.api.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(
+                requests
+                    .iter()
+                    .all(|r| !r.url.path().ends_with("/transitions"))
+            );
+        }
     }
 }
 
@@ -448,6 +462,7 @@ async fn transition_upstream_rejection_is_private_and_ambiguous_writes_are_not_r
         (400, "jira_transition_rejected", None),
         (422, "jira_transition_rejected", None),
         (403, "upstream_forbidden", None),
+        (409, "jira_transition_unavailable", None),
         (503, "upstream_failed", Some("unknown")),
         (200, "upstream_protocol_failed", Some("applied_unverified")),
     ] {
@@ -539,4 +554,43 @@ async fn transition_names_and_destinations_do_not_collapse_distinct_transition_i
         serde_json::from_slice::<Value>(&post.body).unwrap(),
         json!({"transition":{"id":"41"}})
     );
+}
+
+#[tokio::test]
+async fn transition_field_limit_retains_resolution_and_bounds_its_choices() {
+    let mut fields = (1..=101)
+        .map(|i| {
+            (
+                format!("customfield_{i}"),
+                json!({"name":"Custom field","required":false}),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    fields.insert("resolution".into(), json!({"name":"Resolution","required":true,"allowedValues":(1..=101).map(|i|json!({"id":i.to_string(),"name":"Choice"})).collect::<Vec<_>>()}));
+    let mut value = offered();
+    value["transitions"][0]["fields"] = json!(fields);
+    let fixture = Fixture::ready(value).await;
+    let response = fixture
+        .invoke(
+            "issue.transition.list",
+            json!({"issue":"PROJ-1","includeFields":true}),
+        )
+        .await
+        .unwrap();
+    let fields = &response.result["transitions"][0]["fields"];
+    assert_eq!(fields["count"], 100);
+    assert_eq!(fields["items"].as_array().unwrap().len(), 100);
+    assert_eq!(fields["truncated"], true);
+    let resolution = &fields["items"][0];
+    assert_eq!(resolution["id"], "resolution");
+    assert_eq!(resolution["brokerInput"], "resolutionId");
+    assert_eq!(resolution["allowedValues"]["count"], 100);
+    assert_eq!(
+        resolution["allowedValues"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        100
+    );
+    assert_eq!(resolution["allowedValues"]["truncated"], true);
 }
