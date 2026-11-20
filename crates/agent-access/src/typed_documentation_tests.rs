@@ -122,7 +122,7 @@ fn published_typed_commands_match_clap_paths_and_usage() {
     }
     assert_eq!(
         actions.len(),
-        231,
+        233,
         "cover every native and OAuth fixture action"
     );
 }

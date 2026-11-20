@@ -2120,6 +2120,10 @@ enum JiraIssueCommand {
         #[command(subcommand)]
         command: JiraIssueCustomFieldCommand,
     },
+    Transition {
+        #[command(subcommand)]
+        command: JiraIssueTransitionCommand,
+    },
     Dependency {
         #[command(subcommand)]
         command: JiraIssueDependencyCommand,
@@ -2163,6 +2167,40 @@ enum JiraIssueCommand {
         expect_attachment_id: Option<String>,
         #[arg(long, value_enum)]
         output_format: Option<OutputFormatArg>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum JiraIssueTransitionCommand {
+    /// Discover the transitions currently available on an issue.
+    List {
+        issue: Option<String>,
+        #[arg(long)]
+        issue_url: Option<String>,
+        #[arg(
+            long,
+            help = "Include transition-screen requirements and resolution choices"
+        )]
+        include_fields: bool,
+    },
+    /// Apply one transition discovered for this issue, checking its destination.
+    Apply {
+        issue: Option<String>,
+        #[arg(long)]
+        issue_url: Option<String>,
+        #[arg(long)]
+        transition_id: String,
+        #[arg(long)]
+        to_status_id: String,
+        #[arg(long)]
+        expected_issue_id: Option<String>,
+        #[arg(
+            long,
+            help = "Check the current status before sending; does not make retries safe"
+        )]
+        expected_status_id: Option<String>,
+        #[arg(long)]
+        resolution_id: Option<String>,
     },
 }
 
@@ -15360,6 +15398,53 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     .await
                 }
             },
+            JiraIssueCommand::Transition { command } => {
+                let (action, inputs) = match command {
+                    JiraIssueTransitionCommand::List {
+                        issue,
+                        issue_url,
+                        include_fields,
+                    } => {
+                        let mut inputs = jira_issue_argument_locator_inputs(
+                            issue.as_deref(),
+                            issue_url.as_deref(),
+                            "jira issue transition list",
+                        );
+                        if *include_fields {
+                            inputs.insert("includeFields".into(), serde_json::json!(true));
+                        }
+                        ("jira.issue.transition.list", inputs)
+                    }
+                    JiraIssueTransitionCommand::Apply {
+                        issue,
+                        issue_url,
+                        transition_id,
+                        to_status_id,
+                        expected_issue_id,
+                        expected_status_id,
+                        resolution_id,
+                    } => {
+                        let mut inputs = jira_issue_argument_locator_inputs(
+                            issue.as_deref(),
+                            issue_url.as_deref(),
+                            "jira issue transition apply",
+                        );
+                        inputs.insert("transitionId".into(), serde_json::json!(transition_id));
+                        inputs.insert("toStatusId".into(), serde_json::json!(to_status_id));
+                        for (key, value) in [
+                            ("expectedIssueId", expected_issue_id),
+                            ("expectedStatusId", expected_status_id),
+                            ("resolutionId", resolution_id),
+                        ] {
+                            if let Some(value) = value {
+                                inputs.insert(key.into(), serde_json::json!(value));
+                            }
+                        }
+                        ("jira.issue.transition.apply", inputs)
+                    }
+                };
+                run_invoke_value(ctx, action, serde_json::Value::Object(inputs)).await
+            }
             JiraIssueCommand::Dependency { command } => match command {
                 JiraIssueDependencyCommand::Add {
                     blocking,

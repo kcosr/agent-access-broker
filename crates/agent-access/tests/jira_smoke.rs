@@ -12,6 +12,8 @@ mod project_view;
 mod search_access;
 #[path = "jira_smoke/search_exclusions.rs"]
 mod search_exclusions;
+#[path = "jira_smoke/transitions.rs"]
+mod transitions;
 use agent_access_broker_host::test_support::{
     FixtureDir, IsolatedBroker, ProviderFixture, RunningBroker,
 };
@@ -3495,6 +3497,7 @@ struct StubJiraBackend {
     created_issues: Mutex<Vec<JiraIssueCreateRequest>>,
     updated_issues: Mutex<Vec<(String, JiraIssueUpdateRequest)>>,
     custom_field_updates: Mutex<Vec<(String, String, serde_json::Value)>>,
+    transition_writes: Mutex<Vec<(String, String, Option<String>)>>,
     parent_updates: Mutex<Vec<(String, JiraIssueParentSetRequest)>>,
     issue_parent_readbacks: Mutex<BTreeMap<String, JiraIssueParentReadback>>,
     issue_link_types: Mutex<Vec<JiraIssueLinkType>>,
@@ -3547,6 +3550,64 @@ impl StubJiraBackend {
 
 #[async_trait]
 impl JiraBackend for StubJiraBackend {
+    async fn issue_status(
+        &self,
+        issue_id: &str,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
+        self.record_credential("issue_status", credential);
+        let issue = self
+            .issues
+            .values()
+            .find(|issue| issue.id == issue_id)
+            .unwrap();
+        let changed = !self.transition_writes.lock().unwrap().is_empty();
+        Ok(JiraBackendResponse {
+            value: serde_json::json!({"id":issue.id,"key":issue.key,"fields":{"project":{"key":issue.project},"status":{"id":if changed {"10002"} else {"10000"},"name":if changed {"Stalled"} else {"New"}}}}),
+            status: 200,
+            duration_ms: 1,
+        })
+    }
+    async fn issue_transitions(
+        &self,
+        issue_id: &str,
+        include_fields: bool,
+        transition_id: Option<&str>,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<serde_json::Value>, JiraBackendError> {
+        self.record_credential("issue_transitions", credential);
+        assert_eq!(issue_id, "10001");
+        assert!(transition_id.is_none() || transition_id == Some("31"));
+        let mut value = serde_json::json!({"transitions":[{"id":"31","name":"Stall work","to":{"id":"10002","name":"Stalled"}}]});
+        if include_fields {
+            value["transitions"][0]["fields"] = serde_json::json!({"resolution":{"name":"Resolution","required":false,"allowedValues":[{"id":"1","name":"Fixed"}]}});
+        }
+        Ok(JiraBackendResponse {
+            value,
+            status: 200,
+            duration_ms: 1,
+        })
+    }
+    async fn transition_issue(
+        &self,
+        issue_id: &str,
+        transition_id: &str,
+        resolution_id: Option<&str>,
+        credential: &agent_access_jira::AtlassianCredential,
+    ) -> Result<JiraBackendResponse<()>, JiraBackendError> {
+        self.record_credential("transition_issue", credential);
+        self.transition_writes.lock().unwrap().push((
+            issue_id.into(),
+            transition_id.into(),
+            resolution_id.map(str::to_owned),
+        ));
+        Ok(JiraBackendResponse {
+            value: (),
+            status: 204,
+            duration_ms: 1,
+        })
+    }
+
     async fn project_list(
         &self,
         _request: agent_access_jira::JiraProjectListRequest,

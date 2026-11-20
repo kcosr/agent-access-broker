@@ -314,7 +314,12 @@ pub static JIRA_BACKEND: BackendRegistration = BackendRegistration::new(
     parse_backend_config::<JiraProviderConfig>,
 )
 .with_resource_types(&[&JIRA_PROJECT_RESOURCE])
-.with_domain_reasons(&[&custom_field::NOT_ALLOWED, &custom_field::REJECTED]);
+.with_domain_reasons(&[
+    &custom_field::NOT_ALLOWED,
+    &custom_field::REJECTED,
+    &transitions::UNAVAILABLE,
+    &transitions::REJECTED,
+]);
 
 impl BackendConfig for JiraProviderConfig {
     fn kind(&self) -> &'static str {

@@ -1108,6 +1108,10 @@ Confluence verification mismatches returned as `allow_with_result` also print
 the Markdown value and retain exit 2. Denials and errors remain JSON. Direct HTTP and `send`
 always preserve the JSON envelope.
 
+Jira workflow commands use `jira issue transition list` and `jira issue transition apply`
+with JSON results. See [workflow transitions](providers-jira.md#issue-workflow-transitions)
+for discovery, required destination IDs and optional status guards.
+
 For Jira, embedded read formats are supported by `issue view`, `issue create`,
 `issue update`, `issue comment list`, `issue comment view`, `issue comment add`,
 `issue comment reply`, and `issue comment update`. Whole-result output is supported by `project list`, `project view`, `issue-type list`, `issue view`,
@@ -1620,6 +1624,8 @@ agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --output-forma
 agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout'
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout' --content-file description.md --content-format markdown
+agent-access --url http://127.0.0.1:8787 jira issue transition list PROJ-123
+agent-access --url http://127.0.0.1:8787 jira issue transition apply PROJ-123 --transition-id 31 --to-status-id 10002
 agent-access --url http://127.0.0.1:8787 jira issue update PROJ-123 --summary 'Clarify startup failure handling'
 agent-access --url http://127.0.0.1:8787 jira issue custom-field set PROJ-123 --field-id customfield_12345 --value-json '"https://reports.example.com/issues/PROJ-123"'
 agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ --issue-type-id 10001 --summary 'Add rollout checklist' --parent PROJ-100 --content 'Follow the deployment checklist.' --content-format plain_text

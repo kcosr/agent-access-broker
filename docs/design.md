@@ -792,8 +792,9 @@ metadata. When a concealed `scope_unresolved` result repeats that value under
 fixed independently of the requested locator and must never encode resource
 existence, ownership of a particular object, or an authorization outcome.
 
-- **Jira** (`jira`) — twenty-five actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
-  `issue.child.create`, `issue.update`, `issue.custom_field.set`, `issue.parent.set`,
+- **Jira** (`jira`) — twenty-seven actions: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `issue.create`,
+  `issue.child.create`, `issue.update`, `issue.custom_field.set`,
+  `issue.transition.list`, `issue.transition.apply`, `issue.parent.set`,
   `issue.dependency.add`, `search`,
   `comment.list`, `comment.view`, `comment.add`, `comment.reply`, `comment.update`,
   `comment.delete`, `comment.property.list`, `comment.property.get`,
@@ -824,6 +825,10 @@ existence, ownership of a particular object, or an authorization outcome.
   Jira validates the field's type, context and editability. The provider-global
   allowlist defaults to empty and is checked after authorization; field values
   are neither returned nor audited.
+  [Workflow transitions](providers-jira.md#issue-workflow-transitions) use the
+  execution credential to discover issue-specific choices and apply one selected
+  transition by immutable issue ID, with resolution as the only submitted field.
+  Current-state and destination guards are non-atomic; readback is a later observation.
   `issue.view` can include one chronological page of full comment bodies through
   `includeComments`; `comment.list` returns metadata by default and full bodies
   only with `includeBodies`. Both use the dedicated collection endpoint and

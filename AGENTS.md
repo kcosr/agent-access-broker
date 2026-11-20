@@ -693,6 +693,7 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   `project_view.rs` authorized project details and searchable-field discovery,
   `backend.rs` wire seam and HTTP client, `custom_fields.rs` issue-view custom-field projection and validation,
   `custom_field.rs` acknowledgement-only writes to one operator-allowlisted custom field,
+  `transitions.rs` issue-specific discovery and single workflow transitions,
   `issue_view_context.rs` standard context and guarded hierarchy projection,
   `jql.rs` search and JQL parser, `config.rs`, `present.rs`). Detailed context,
   embedded hierarchy and general custom-field projection belong only to `JiraIssueView`; search
@@ -705,6 +706,11 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   and send exactly one fields entry. Jira owns type/context/editability rules.
   Return a value-free acknowledgement without reading the field. Preserve write
   uncertainty receipts; never audit field values or raw Jira validation errors.
+  Transition discovery and apply use the selected execution credential and the
+  confirmed immutable issue ID. Apply rechecks its own credential's transition
+  availability and destination; only resolution is a supported submitted field.
+  Preserve independent grants, non-atomic guard semantics and no replay after
+  uncertain writes. Readback is a later observation, not an atomic state proof.
   Preserve exact schema allowlisting, null/empty sentinels, explicit unsupported
   or withheld statuses, and shared ADF budgets without raw JSON passthrough. Its
   project discovery uses the selected execution credential after authorization,
