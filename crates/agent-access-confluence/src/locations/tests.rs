@@ -79,6 +79,30 @@ fn vectors() -> Value {
             "12345678901234567890",
         ),
         ("folder", "/wiki/spaces/ENG/folder/456/", "folder", "456"),
+        (
+            "folder-title",
+            "/wiki/spaces/ENG/folder/456/Runbooks",
+            "folder",
+            "456",
+        ),
+        (
+            "folder-plus-title",
+            "/wiki/spaces/ENG/folder/456/Operations+Runbooks",
+            "folder",
+            "456",
+        ),
+        (
+            "folder-encoded-title",
+            "/wiki/spaces/ENG/folder/456/Operations%20Runbooks/",
+            "folder",
+            "456",
+        ),
+        (
+            "folder-unicode-title",
+            "/wiki/spaces/OLD/folder/456/日本語",
+            "folder",
+            "456",
+        ),
         ("blog", "/wiki/spaces/ENG/blog/789", "blog", "789"),
         (
             "blog-title",
@@ -230,7 +254,15 @@ fn vectors() -> Value {
         ("query", "/wiki/spaces/ENG/pages/1?"),
         ("fragment", "/wiki/spaces/ENG/pages/1#"),
         ("extra-tail", "/wiki/spaces/ENG/pages/1/a/b"),
-        ("folder-title", "/wiki/spaces/ENG/folder/1/title"),
+        ("folder-extra-tail", "/wiki/spaces/ENG/folder/1/title/extra"),
+        (
+            "folder-title-encoded-slash",
+            "/wiki/spaces/ENG/folder/1/Title%2Fextra",
+        ),
+        (
+            "folder-title-encoded-dot",
+            "/wiki/spaces/ENG/folder/1/%2e%2e",
+        ),
         ("bad-date", "/wiki/spaces/ENG/blog/2026/13/20/1/title"),
         ("backslash", "/wiki/spaces/ENG/pages/1\\title"),
         ("control", "/wiki/spaces/ENG/pages/1/ti\ttle"),
@@ -368,6 +400,7 @@ fn strict_identities_reject_browser_routes_decoration_and_unsupported_coverage()
     for value in [
         format!("{page}/"),
         format!("{page}/title"),
+        format!("{folder}/Runbooks"),
         page.replace("example", "EXAMPLE"),
         format!("{SITE}/wiki/spaces/ENG/pages/123"),
         format!("{SITE}/wiki/content/page/01"),
@@ -380,6 +413,19 @@ fn strict_identities_reject_browser_routes_decoration_and_unsupported_coverage()
         serde_json::to_value(projection).unwrap(),
         json!({"siteOrigin":SITE,"rootKind":"folder"})
     );
+}
+
+#[test]
+fn folder_parent_urls_ignore_titles_but_preserve_site_and_space_assertions() {
+    for suffix in ["", "/Operations+Runbooks", "/Operations%20Runbooks/"] {
+        let url = format!("{SITE}/wiki/spaces/ENG/folder/67890{suffix}");
+        let parent = parse_creation_parent_url(&url, "example.atlassian.net").unwrap();
+        assert_eq!(parent.kind, ContentLocationKind::Folder);
+        assert_eq!(parent.id.as_deref(), Some("67890"));
+        assert_eq!(parent.space_key, "ENG");
+        assert_eq!(parent.site_origin, SITE);
+        assert!(parse_creation_parent_url(&url, "other.atlassian.net").is_err());
+    }
 }
 
 #[test]

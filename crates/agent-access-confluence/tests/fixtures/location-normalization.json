@@ -1025,6 +1025,298 @@
       "coverage": "space",
       "declaredSite": "https://example.atlassian.net",
       "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-plus-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-encoded-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-unicode-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
         "id": "789",
         "kind": "blog"
       },
@@ -1810,8 +2102,28 @@
       "expectedResult": {
         "rejectedField": "url"
       },
-      "id": "folder-title",
-      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/title"
+      "id": "folder-extra-tail",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/title/extra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "folder-title-encoded-slash",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/Title%2Fextra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "folder-title-encoded-dot",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/%2e%2e"
     },
     {
       "coverage": "exact",
@@ -1951,7 +2263,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-137",
+      "id": "invalid-service-159",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     },
     {
@@ -1961,7 +2273,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-138",
+      "id": "invalid-service-160",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     },
     {
@@ -1971,7 +2283,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-139",
+      "id": "invalid-service-161",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     },
     {
@@ -1981,7 +2293,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-140",
+      "id": "invalid-service-162",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     }
   ],

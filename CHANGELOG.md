@@ -208,8 +208,9 @@ All notable changes to this project are documented in this file.
   folder subtrees.** Content identities bind site, kind and ID and follow external
   cross-space moves; subtree membership uses current ancestry. The portal infers
   content type/service from a URL, shows page coverage immediately and normalizes
-  on Save. Standalone space-key and all-spaces editing remain available. Bounded
-  location checks apply across reads, writes, creation, moves, drafts, comments,
+  on Save; folder URLs accept their optional title suffix. Standalone space-key
+  and all-spaces editing remain available. Bounded location checks apply across
+  reads, writes, creation, moves, drafts, comments,
   attachments and content-constrained search. Such searches add current metadata
   reads and can fail while a restricted/deleted index candidate remains visible;
   pure scalar-space searches retain their indexed path. Search preserves every

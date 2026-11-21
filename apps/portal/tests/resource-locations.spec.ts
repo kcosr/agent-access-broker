@@ -147,6 +147,26 @@ for (const [path, label, coverage, type, id] of [
   });
 }
 
+test("folder URL with a title saves only the immutable folder identity", async ({ page }) => {
+  const model = await fixture(page);
+  const editor = await open(page);
+  const url = "https://example.atlassian.net/wiki/spaces/ENG/folder/67890/Operations+Runbooks";
+  await prepare(editor, url);
+  await expect(editor.getByText("This folder and descendants", { exact: true })).toBeVisible();
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveCount(0);
+  await expect(editor).toContainText("Folder ID: 67890");
+  expect(model.requests).toEqual([]);
+  await save(editor);
+  await expect.poll(() => model.api.createdResources.length).toBe(1);
+  expect(model.order).toEqual(["normalize", "mutation"]);
+  expect(model.requests).toEqual([{ service: "confluence", url, coverage: "subtree", csrf: "fixture" }]);
+  expect(model.api.createdResources[0]).toMatchObject({
+    resourceType: "confluence_content",
+    selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/content/folder/67890" }
+  });
+  expect(model.api.errors).toEqual([]);
+});
+
 test("page choice is explicit and resets with a changed URL", async ({ page }) => {
   const model = await fixture(page);
   const editor = await open(page);

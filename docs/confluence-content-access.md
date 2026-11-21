@@ -53,7 +53,9 @@ those fields, and a saved page can switch exact/subtree coverage without a URL.
 **Change location** starts a new URL entry.
 
 For content URL normalization, the browser space segment, title and date do not
-enter identity. The space segment must still have the supported key-or-alias
+enter identity. Folder URLs accept an optional title segment, such as
+`/wiki/spaces/ENG/folder/67890/Operations+Runbooks`, including for nested folders.
+The space segment must still have the supported key-or-alias
 syntax. Unsupported paths, queries, fragments, credentials, ports, IP hosts,
 encoded delimiters and dot segments are rejected. There is no editable
 content-space or identity override. Normalization accepts browser URLs; direct

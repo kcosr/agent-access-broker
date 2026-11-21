@@ -521,6 +521,13 @@ async fn resource_locations_are_offline_normalization_for_admins_and_auditors() 
                 "https://docs.example.test/wiki/content/folder/456",
             ),
             (
+                "subtree",
+                "/wiki/spaces/ENG/folder/456/Operations+Runbooks",
+                "confluence_content",
+                "folder",
+                "https://docs.example.test/wiki/content/folder/456",
+            ),
+            (
                 "exact",
                 "/wiki/spaces/OtherAlias/pages/123/Another-title",
                 "confluence_content",

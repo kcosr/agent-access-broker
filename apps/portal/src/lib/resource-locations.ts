@@ -51,7 +51,7 @@ export function locationInputHints(value: string): LocationHints | null {
   let kind: Exclude<LocationKind, "space">;
   let content = tail.slice(1);
   if (tail[0] === "pages" && (content.length === 1 || content.length === 2)) kind = "page";
-  else if (tail[0] === "folder" && content.length === 1) kind = "folder";
+  else if (tail[0] === "folder" && (content.length === 1 || content.length === 2)) kind = "folder";
   else if (tail[0] === "blog") {
     kind = "blog";
     if (content.length >= 3 && /^\d{4}$/.test(content[0]) && dateNumber(content[1], 12) && dateNumber(content[2], 31)) content = content.slice(3);

@@ -212,7 +212,7 @@ fn parse_browser_location(raw: &str) -> Result<BrowserContentLocation, LocationN
     let (kind, id) = match tail {
         [] | ["overview"] => (ContentLocationKind::Space, None),
         ["pages", id] | ["pages", id, _] => (ContentLocationKind::Page, Some(*id)),
-        ["folder", id] => (ContentLocationKind::Folder, Some(*id)),
+        ["folder", id] | ["folder", id, _] => (ContentLocationKind::Folder, Some(*id)),
         ["blog", tail @ ..] => {
             let tail = modern_blog_tail_after_date(tail)
                 .map_err(|_| invalid_url("Location URL has an invalid blog date"))?;
