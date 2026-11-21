@@ -192,7 +192,7 @@ export function GrantResourcePicker({
     ];
     return <>
       <span className="block">{parts.filter(Boolean).join(" · ")}</span>
-      {browserUrl ? <a className="wb-link block break-all mt-1" href={browserUrl} target="_blank" rel="noopener noreferrer">{browserUrl}</a> : null}
+      {browserUrl ? <span className="block break-all mt-1"><a className="wb-link" href={browserUrl} target="_blank" rel="noopener noreferrer">{browserUrl}</a></span> : null}
     </>;
   }
 
