@@ -7,7 +7,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path_regex};
 
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const PREFIX: &str = "/ex/confluence/11111111-2222-4333-8444-555555555555/wiki";
-const FOLDER: &str = "https://example.atlassian.net/wiki/spaces/ENG/folder/10";
+const FOLDER: &str = "https://example.atlassian.net/wiki/content/folder/10";
 const ACTIONS: &[&str] = &[
     "page.view",
     "page.update",
@@ -17,6 +17,15 @@ const ACTIONS: &[&str] = &[
 ];
 
 async fn start(server: &MockServer, grant_folder: bool) -> (RunningBroker, Tokens) {
+    start_with_content_resource(server, grant_folder, "subtree", FOLDER).await
+}
+
+async fn start_with_content_resource(
+    server: &MockServer,
+    grant_content: bool,
+    selector_kind: &str,
+    selector_value: &str,
+) -> (RunningBroker, Tokens) {
     let application = IsolatedBroker::new(
         agent_access_broker::composition().unwrap(),
         agent_access_broker::build_identity(),
@@ -38,11 +47,11 @@ async fn start(server: &MockServer, grant_folder: bool) -> (RunningBroker, Token
     // reference into a folder ceiling, while the grant can remain space-wide.
     document["policy"]["resources"][0]["resource_type"] = "confluence_content".into();
     document["policy"]["resources"][0]["selector"] =
-        toml::Value::try_from(json!({"kind":"subtree","value":FOLDER})).unwrap();
+        toml::Value::try_from(json!({"kind":selector_kind,"value":selector_value})).unwrap();
     document["policy"]["resources"][1]["selector"] =
         toml::Value::try_from(json!({"kind":"exact","value":"ENG"})).unwrap();
     document["policy"]["grants"][0]["resources"] = toml::Value::try_from(
-        json!({"resource_ids":[if grant_folder { "first" } else { "second" }]}),
+        json!({"resource_ids":[if grant_content { "first" } else { "second" }]}),
     )
     .unwrap();
     document["credentials"]
@@ -435,6 +444,103 @@ async fn rpc_body(response: reqwest::Response) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovered_content_identity_invokes_by_id_and_is_rejected_as_a_browser_url() {
+    let server = MockServer::start().await;
+    mount(&server).await;
+    let (broker, tokens) = start_with_content_resource(
+        &server,
+        true,
+        "exact",
+        "https://example.atlassian.net/wiki/content/page/101",
+    )
+    .await;
+    let token = &tokens.unrestricted;
+    let discovery = access::run(
+        &broker,
+        token,
+        &[
+            "resource-access",
+            "describe",
+            "--service",
+            "confluence",
+            "--action",
+            "page.view",
+        ],
+        true,
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+    let reference = discovery["registeredResources"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "first")
+        .expect("authorized exact content reference");
+    assert_eq!(reference["type"], "confluence_content");
+    let identity = reference["value"].as_str().unwrap();
+    let id = identity
+        .strip_prefix("https://example.atlassian.net/wiki/content/page/")
+        .expect("typed stable page identity from discovery");
+    assert_eq!(id, "101");
+    allowed(
+        &access::run(&broker, token, &["confluence", "page", "view", id], true),
+        id,
+    );
+    let requests = server.received_requests().await.unwrap().len();
+    assert!(
+        requests > 0,
+        "the successful ID invocation uses real HTTP metadata"
+    );
+
+    // Valid caller and execution credentials allow the ordinary provider parser
+    // to run. Identity text is never interpreted as a browser navigation URL.
+    for value in [
+        access::run(
+            &broker,
+            token,
+            &["confluence", "page", "view", "--page-url", identity],
+            false,
+        ),
+        access::invoke(
+            &broker,
+            token,
+            "confluence.page.view",
+            &json!({"url":identity}),
+            false,
+        ),
+        access::http(
+            &broker,
+            token,
+            "confluence",
+            "page.view",
+            &json!({"url":identity}),
+        )
+        .await,
+    ] {
+        denied(&value);
+        assert_eq!(value["reasonCode"], "locator_invalid", "{value}");
+    }
+    assert_eq!(server.received_requests().await.unwrap().len(), requests);
+    let unauthenticated = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/invoke/confluence/page.view",
+            broker.public_url()
+        ))
+        .header(
+            agent_access_provider::REQUEST_ID_HEADER,
+            "identity-discovery-fixture",
+        )
+        .json(&json!({"inputs":{"url":identity}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let body: Value = unauthenticated.json().await.unwrap();
+    assert_eq!(body["reasonCode"], "identity_required", "{body}");
+    assert_eq!(server.received_requests().await.unwrap().len(), requests);
+    stop(broker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn content_folder_ceiling_matches_cli_send_http_and_both_mcp_transports() {
     let server = MockServer::start().await;
     let state = mount(&server).await;
@@ -641,7 +747,7 @@ async fn content_grant_denies_sibling_and_execution_move_or_hidden_ancestor_befo
             assert!(result.get("result").is_none(), "{result}");
             assert_eq!(
                 result["resourceScopes"],
-                json!({"page_location":["https://example.atlassian.net/wiki/spaces/ENG/pages/101"]}),
+                json!({"page_location":["https://example.atlassian.net/wiki/content/page/101"]}),
                 "final denial keeps only the admitted operation location: {result}"
             );
             assert!(!result.to_string().contains("Allowed body"));

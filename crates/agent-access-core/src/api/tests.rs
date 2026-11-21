@@ -498,7 +498,7 @@ fn resource_mutation_schemas_match_core_selector_kind_support() {
             ("oauth_collection", "alpha", &["exact", "all"][..]),
             (
                 "confluence_content",
-                "https://example.atlassian.net/wiki/spaces/ENG/pages/123",
+                "https://example.atlassian.net/wiki/content/page/123",
                 &["exact", "subtree"][..],
             ),
         ] {
@@ -3434,14 +3434,44 @@ fn resource_location_routes_project_management_schemas_and_required_preview_mode
     let normalize = &document["paths"]["/v1/admin/policy/resource-locations/normalize"]["post"];
     let schema = &normalize["requestBody"]["content"]["application/json"]["schema"];
     let validator = jsonschema::validator_for(schema).unwrap();
-    assert!(validator.is_valid(&json!({"service":"confluence","url":"https://example.atlassian.net/wiki/spaces/ENG/pages/123","coverage":"subtree","spaceKey":"Engineering"})));
+    let body = json!({"service":"confluence","url":"https://example.atlassian.net/wiki/spaces/ENG/pages/123","coverage":"subtree"});
+    assert!(validator.is_valid(&body));
+    for obsolete in [json!("Engineering"), Value::Null] {
+        let mut obsolete_body = body.clone();
+        obsolete_body["spaceKey"] = obsolete;
+        assert!(!validator.is_valid(&obsolete_body));
+    }
     assert!(!validator.is_valid(&json!({"service":"confluence","url":"https://example.atlassian.net/wiki/spaces/ENG/pages/123","coverage":"all"})));
     let send = send_schema_from_catalog(&catalog);
-    assert!(send["oneOf"].as_array().unwrap().iter().any(
-        |variant| variant["properties"]["method"]["const"] == "POST"
-            && variant["properties"]["route"]["const"]
-                == "/v1/admin/policy/resource-locations/normalize"
-    ));
+    let variant = send["oneOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|variant| {
+            variant["properties"]["method"]["const"] == "POST"
+                && variant["properties"]["route"]["const"]
+                    == "/v1/admin/policy/resource-locations/normalize"
+        })
+        .unwrap();
+    assert_eq!(&variant["properties"]["body"], schema);
+    let route = catalog
+        .routes
+        .iter()
+        .find(|route| route.operation == "admin.policy.resource_locations.normalize")
+        .unwrap();
+    assert_eq!(route.access, RouteAccess::PolicyRead);
+    assert_eq!(route.request_body_schema.as_ref(), Some(schema));
+    let result = route.result_schema.as_ref().unwrap();
+    let validator = jsonschema::validator_for(result).unwrap();
+    let mut normalized = json!({"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/content/page/123"},"locationKind":"page","verification":"not_checked"});
+    assert!(validator.is_valid(&normalized));
+    normalized["configuredSpaceKey"] = json!("ENG");
+    assert!(!validator.is_valid(&normalized));
+    assert!(
+        !normalize["responses"]["200"]
+            .to_string()
+            .contains("configuredSpaceKey")
+    );
     let preview = &document["paths"]["/v1/admin/policy/effective-access"]["post"];
     let schema = &preview["requestBody"]["content"]["application/json"]["schema"];
     let validator = jsonschema::validator_for(schema).unwrap();
@@ -3493,7 +3523,7 @@ fn resource_access_location_response_schema_preserves_conditions_without_private
         "coverageSemantics":"single_target",
         "access":[{"action":"page.view","scope":"location","resourceTypes":["confluence_space","confluence_content"],
             "domain":"page","enforcement":"request","containmentVerification":"at_invocation",
-            "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/spaces/ENG/pages/123"},"restricted":true,"conditional":true}]}],
+            "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/content/page/123"},"restricted":true,"conditional":true}]}],
         "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}
     });
     assert!(validator.is_valid(&response));

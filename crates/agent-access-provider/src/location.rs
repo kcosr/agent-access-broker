@@ -1,10 +1,10 @@
-//! Pure, type-owned location entry and authored-coordinate projection.
+//! Pure, type-owned location entry and stable identity projection.
 use crate::{ResourceSelector, ResourceType, ResourceTypeRegistry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// An authored container coordinate, such as a canonical space key. It is not
-/// evidence that a content object exists in that container.
+/// A container coordinate, such as a canonical space key. Authenticated evidence
+/// associates it with current content; stable authored identities do not contain it.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,7 +22,7 @@ impl ResourceContainer {
     }
 }
 
-/// Coordinates a resource type extracts from its canonical locator. The host
+/// Stable identity fields a resource type extracts from its canonical locator. The host
 /// consumes these fields without parsing a provider-specific URL.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -30,48 +30,22 @@ impl ResourceContainer {
 pub struct ResourceSelectorProjection {
     pub site_origin: String,
     pub root_kind: String,
-    pub containers: Vec<ResourceContainer>,
 }
 
 impl ResourceSelectorProjection {
-    pub fn new(
-        site_origin: impl Into<String>,
-        root_kind: impl Into<String>,
-        containers: Vec<ResourceContainer>,
-    ) -> Self {
+    pub fn new(site_origin: impl Into<String>, root_kind: impl Into<String>) -> Self {
         Self {
             site_origin: site_origin.into(),
             root_kind: root_kind.into(),
-            containers,
         }
     }
 
-    pub(crate) fn validate(
-        &self,
-        registry: &ResourceTypeRegistry,
-    ) -> Result<(), LocationNormalizationError> {
-        if !is_canonical_https_dns_origin(&self.site_origin)
-            || !is_kind(&self.root_kind)
-            || self.containers.is_empty()
-            || self.containers.len() > 8
-        {
+    pub(crate) fn validate(&self) -> Result<(), LocationNormalizationError> {
+        if !is_canonical_https_dns_origin(&self.site_origin) || !is_kind(&self.root_kind) {
             return Err(LocationNormalizationError::new(
                 "selector",
-                "invalid authored location coordinates",
+                "invalid stable location identity",
             ));
-        }
-        let mut types = BTreeSet::new();
-        for container in &self.containers {
-            if !types.insert(&container.resource_type)
-                || registry
-                    .get(&container.resource_type)
-                    .is_none_or(|descriptor| !descriptor.is_canonical_target(&container.value))
-            {
-                return Err(LocationNormalizationError::new(
-                    "selector",
-                    "invalid authored container coordinates",
-                ));
-            }
         }
         Ok(())
     }
@@ -94,7 +68,6 @@ pub struct LocationNormalizationRequest<'a> {
     declared_site: &'a str,
     url: &'a str,
     coverage: &'a str,
-    space_key: Option<&'a str>,
 }
 
 impl<'a> LocationNormalizationRequest<'a> {
@@ -103,12 +76,7 @@ impl<'a> LocationNormalizationRequest<'a> {
             declared_site,
             url,
             coverage,
-            space_key: None,
         }
-    }
-    pub fn with_space_key(mut self, space_key: Option<&'a str>) -> Self {
-        self.space_key = space_key;
-        self
     }
     pub fn declared_site(&self) -> &'a str {
         self.declared_site
@@ -119,12 +87,9 @@ impl<'a> LocationNormalizationRequest<'a> {
     pub fn coverage(&self) -> &'a str {
         self.coverage
     }
-    pub fn space_key(&self) -> Option<&'a str> {
-        self.space_key
-    }
 }
 
-/// A lexical preview. `verification` deliberately never claims upstream validation.
+/// A lexical normalization result. `verification` never claims upstream validation.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,7 +97,6 @@ pub struct NormalizedResourceLocation {
     pub resource_type: ResourceType,
     pub selector: ResourceSelector,
     pub location_kind: String,
-    pub configured_space_key: String,
     pub verification: &'static str,
 }
 
@@ -141,13 +105,11 @@ impl NormalizedResourceLocation {
         resource_type: ResourceType,
         selector: ResourceSelector,
         location_kind: impl Into<String>,
-        configured_space_key: impl Into<String>,
     ) -> Self {
         Self {
             resource_type,
             selector,
             location_kind: location_kind.into(),
-            configured_space_key: configured_space_key.into(),
             verification: "not_checked",
         }
     }
@@ -259,8 +221,6 @@ impl ResourceTypeRegistry {
         if !output_type.accepts(&normalized.selector)
             || normalized.verification != "not_checked"
             || !is_kind(&normalized.location_kind)
-            || normalized.configured_space_key.is_empty()
-            || normalized.configured_space_key.len() > 8192
         {
             return Err(LocationNormalizationError::new(
                 "selector",
@@ -268,7 +228,7 @@ impl ResourceTypeRegistry {
             ));
         }
         if let Some(projection) = output_type.project_selector(&normalized.selector)? {
-            projection.validate(self)?;
+            projection.validate()?;
             if projection.site_origin != request.declared_site {
                 return Err(LocationNormalizationError::new(
                     "url",
@@ -316,10 +276,7 @@ mod tests {
     fn normalize(
         request: &LocationNormalizationRequest<'_>,
     ) -> Result<NormalizedResourceLocation, LocationNormalizationError> {
-        if request.url() != "https://docs.example.test/ENG"
-            || request.coverage() != "space"
-            || request.space_key().is_some_and(|key| key != "ENG")
-        {
+        if request.url() != "https://docs.example.test/ENG" || request.coverage() != "space" {
             return Err(LocationNormalizationError::new(
                 "url",
                 "unsupported location shape",
@@ -331,7 +288,6 @@ mod tests {
                 value: "ENG".into(),
             },
             "space",
-            "ENG",
         ))
     }
     fn invalid_output(
@@ -343,7 +299,6 @@ mod tests {
                 value: "ENG".into(),
             },
             "space",
-            "ENG",
         ))
     }
     static AREA: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
@@ -372,14 +327,13 @@ mod tests {
             "https://docs.example.test",
             "https://docs.example.test/ENG",
             "space",
-        )
-        .with_space_key(Some("ENG"));
+        );
         let result = registry
             .normalize_location(&ResourceType::from_static("normalizer_area"), &request)
             .unwrap();
         assert_eq!(
             serde_json::to_value(result).unwrap(),
-            serde_json::json!({"resourceType":"normalizer_area","selector":{"kind":"exact","value":"ENG"},"locationKind":"space","configuredSpaceKey":"ENG","verification":"not_checked"})
+            serde_json::json!({"resourceType":"normalizer_area","selector":{"kind":"exact","value":"ENG"},"locationKind":"space","verification":"not_checked"})
         );
         let invalid = LocationNormalizationRequest::new(
             "https://docs.example.test",

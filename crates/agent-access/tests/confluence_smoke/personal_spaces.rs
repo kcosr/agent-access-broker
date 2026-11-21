@@ -302,7 +302,7 @@ async fn cli_personal_space_exact_grant_uses_per_user_credentials_and_contains_w
         let page = personal_cli(&broker, &token, &locator, true);
         assert_eq!(
             page["resourceScopes"],
-            json!({"page_location":["https://example.atlassian.net/wiki/spaces/~alice/pages/111"]})
+            json!({"page_location":["https://example.atlassian.net/wiki/content/page/111"]})
         );
         assert_eq!(
             page["result"]["spaceUrl"],

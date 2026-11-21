@@ -2,6 +2,7 @@
 //! on Confluence's URL grammar, metadata adapter or network fixtures.
 use super::*;
 use crate::{BackendRegistry, ProvidersConfig};
+use agent_access_provider::ContainmentAncestor;
 use async_trait::async_trait;
 use std::sync::atomic::AtomicUsize;
 
@@ -20,13 +21,12 @@ fn coordinates(value: &str) -> Result<ResourceSelectorProjection, LocationNormal
     let invalid = || LocationNormalizationError::new("selector", "invalid fixture locator");
     let url = Url::parse(value).map_err(|_| invalid())?;
     let parts: Vec<_> = url.path().split('/').collect();
-    if parts.len() != 5
-        || parts[1] != "s"
-        || !area(parts[2])
-        || !matches!(parts[3], "document" | "directory" | "journal")
-        || parts[4].is_empty()
-        || parts[4].starts_with('0')
-        || !parts[4].bytes().all(|byte| byte.is_ascii_digit())
+    if parts.len() != 4
+        || parts[1] != "content"
+        || !matches!(parts[2], "document" | "directory" | "journal")
+        || parts[3].is_empty()
+        || parts[3].starts_with('0')
+        || !parts[3].bytes().all(|byte| byte.is_ascii_digit())
         || url.query().is_some()
         || url.fragment().is_some()
         || url.as_str() != value
@@ -35,8 +35,7 @@ fn coordinates(value: &str) -> Result<ResourceSelectorProjection, LocationNormal
     }
     Ok(ResourceSelectorProjection::new(
         url.origin().ascii_serialization(),
-        parts[3],
-        vec![ResourceContainer::new(area_type(), parts[2])],
+        parts[2],
     ))
 }
 fn project(
@@ -60,7 +59,7 @@ static CONTENT: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     ResourceType::from_static("location_content"),
     "Content",
     "Contents",
-    "https://docs.example.test/s/ENG/document/1",
+    "https://docs.example.test/content/document/1",
     |value| coordinates(value).is_ok(),
     &[],
 )
@@ -77,7 +76,7 @@ static CONTENT: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     },
     "Subtree",
     "Members",
-    "https://docs.example.test/s/ENG/directory/10",
+    "https://docs.example.test/content/directory/10",
 ))
 .with_selector_projection(project);
 static BACKEND: BackendRegistration = BackendRegistration::new(
@@ -257,7 +256,7 @@ impl Provider for Fixture {
             return Err(ProviderError::deny(ReasonCode::ScopeUnresolved, "private upstream root failure")
                 .with_result(json!({"private":"root-result"}))
                 .with_audit(json!({"private":"root-audit", "locationProof": {
-                    "finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"not_visible_or_absent"
+                    "finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"not_visible_or_absent", "rootOrdinal":0
                 }})));
         }
         if state.initial_failure {
@@ -282,7 +281,7 @@ impl Provider for Fixture {
         if state.final_root_failure {
             return Err(ProviderError::deny(ReasonCode::ScopeUnresolved, "relevant root unavailable")
                 .with_audit(json!({"locationProof": {
-                    "finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"not_visible_or_absent"
+                    "finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"not_visible_or_absent", "rootOrdinal":0
                 }})));
         }
         if state.final_failure {
@@ -321,27 +320,46 @@ fn identity() -> IdentityContext {
     identity
 }
 fn locator(kind: &str, id: usize) -> String {
-    format!("{ORIGIN}/s/ENG/{kind}/{id}")
+    format!("{ORIGIN}/content/{kind}/{id}")
 }
 fn content(kind: &str, id: usize) -> ContainmentIdentity {
     ContainmentIdentity::new(content_type(), kind, locator(kind, id))
 }
 fn location(kind: &str, id: usize, ancestors: Vec<ContainmentIdentity>) -> ContentLocation {
+    location_in(kind, id, ancestors, "ENG")
+}
+fn location_in(
+    kind: &str,
+    id: usize,
+    ancestors: Vec<ContainmentIdentity>,
+    area: &str,
+) -> ContentLocation {
     ContentLocation::new(
         content(kind, id),
-        vec![ResourceContainer::new(area_type(), "ENG")],
+        vec![ResourceContainer::new(area_type(), area)],
         ContainmentEvidenceLevel::CompleteLineage,
     )
-    .with_ancestors(ancestors)
+    .with_ancestors(
+        ancestors
+            .into_iter()
+            .map(|identity| {
+                ContainmentAncestor::new(identity, vec![ResourceContainer::new(area_type(), area)])
+            })
+            .collect(),
+    )
 }
 fn point(id: usize, parent: usize) -> ContainmentEvidence {
+    point_in(id, parent, "ENG")
+}
+fn point_in(id: usize, parent: usize, area: &str) -> ContainmentEvidence {
     ContainmentEvidence::new(
         "document",
         ORIGIN,
-        vec![ContainmentObligation::Content(location(
+        vec![ContainmentObligation::Content(location_in(
             "document",
             id,
             vec![content("directory", parent)],
+            area,
         ))],
     )
 }
@@ -586,7 +604,9 @@ fn equal_rank_group_modes_are_ambiguous_only_for_matching_complete_requests() {
 #[test]
 fn publication_rejects_proven_mixed_modes_and_preserves_conditional_and_lookup_universe_rules() {
     for (action, left, right, accepted) in [
-        ("update", "eng", "folder-a", false),
+        ("update", "eng", "folder-a", true),
+        ("update", "document-one", "document-subtree", false),
+        ("update", "document-one", "document-one", false),
         ("update", "folder-a", "folder-b", true),
         ("update", "all", "folder-a", true),
         ("search", "all", "folder-a", false),
@@ -606,6 +626,189 @@ fn publication_rejects_proven_mixed_modes_and_preserves_conditional_and_lookup_u
             );
         }
     }
+}
+
+#[test]
+fn conditional_same_subject_space_and_content_modes_publish_then_deny_current_overlap() {
+    let (mut config, _) = fixture();
+    config.policy.grants = vec![
+        grant("user:person", "update", "service", 0, &["eng"]),
+        grant("user:person", "update", "per_user", 0, &["document-one"]),
+    ];
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let error = match admit(&runtime, "update", point(1, 10), None) {
+        Ok(_) => panic!("current ENG placement must be ambiguous"),
+        Err(error) => error,
+    };
+    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+    assert_eq!(error.message, "ambiguous credential mode precedence");
+    assert_eq!(
+        admit(&runtime, "update", point_in(1, 10, "OTHER"), None)
+            .unwrap_or_else(|error| panic!("{error:?}"))
+            .policy
+            .credential_mode,
+        "per_user",
+    );
+    assert_eq!(
+        runtime.plan_pre_scope_lookup(
+            &runtime.policy_snapshot(),
+            &identity(),
+            &context(),
+            SERVICE,
+            "update",
+        ),
+        PreScopeLookupPlan::UseSharedLookupCredential,
+        "conditional content coverage never creates a personal universe",
+    );
+}
+
+#[test]
+fn stable_content_identity_follows_current_space_but_space_and_token_boundaries_do_not() {
+    for authored in ["document-one", "folder-a"] {
+        let (mut config, _) = fixture();
+        config.policy.grants = vec![grant("group:agents", "view", "service", 0, &[authored])];
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let initial = admit(&runtime, "view", point(1, 10), None).unwrap();
+        let moved = admit(&runtime, "view", point_in(1, 10, "OTHER"), None).unwrap();
+        assert_eq!(initial.scopes, moved.scopes);
+        assert_eq!(moved.scopes["document_location"], [locator("document", 1)]);
+        let space_token = token(selection(&["eng"], &[]), "view");
+        assert!(admit(&runtime, "view", point(1, 10), Some(&space_token)).is_ok());
+        assert!(
+            admit(
+                &runtime,
+                "view",
+                point_in(1, 10, "OTHER"),
+                Some(&space_token)
+            )
+            .is_err()
+        );
+        let content_token = token(selection(&["document-one"], &[]), "view");
+        assert!(
+            admit(
+                &runtime,
+                "view",
+                point_in(1, 10, "OTHER"),
+                Some(&content_token)
+            )
+            .is_ok()
+        );
+        if authored == "folder-a" {
+            assert!(admit(&runtime, "view", point_in(1, 20, "OTHER"), None).is_err());
+        }
+    }
+    let (mut config, _) = fixture();
+    config.policy.grants = vec![grant("group:agents", "view", "service", 0, &["eng"])];
+    let only_space = BrokerRuntime::new(config.clone()).unwrap();
+    let content_token = token(selection(&["document-one"], &[]), "view");
+    assert!(admit(&only_space, "view", point(1, 10), Some(&content_token)).is_ok());
+    assert!(
+        admit(
+            &only_space,
+            "view",
+            point_in(1, 10, "OTHER"),
+            Some(&content_token)
+        )
+        .is_err()
+    );
+    config.policy.grants.push(grant(
+        "group:agents",
+        "view",
+        "service",
+        0,
+        &["document-one"],
+    ));
+    let additive = BrokerRuntime::new(config).unwrap();
+    assert!(
+        admit(
+            &additive,
+            "view",
+            point_in(1, 10, "OTHER"),
+            Some(&content_token)
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn content_exclusions_follow_relocated_roots_and_token_exclusions_remain_independent() {
+    for excluded_id in ["document-one", "folder-a"] {
+        let (mut config, _) = fixture();
+        config
+            .policy
+            .resources
+            .iter_mut()
+            .find(|entry| entry.id == excluded_id)
+            .unwrap()
+            .enabled = false;
+        config.policy.resource_groups.push(ResourceGroupDefinition {
+            id: "filtered".into(),
+            name: "Filtered".into(),
+            included_resource_ids: vec!["all".into()],
+            excluded_resource_ids: vec![excluded_id.into()],
+        });
+        let mut filtered = grant("group:agents", "view", "service", 0, &[]);
+        filtered.resources = selection(&[], &["filtered"]);
+        config.policy.grants.push(filtered);
+        let runtime = BrokerRuntime::new(config.clone()).unwrap();
+        for current_area in ["ENG", "OTHER"] {
+            assert!(admit(&runtime, "view", point_in(1, 10, current_area), None).is_err());
+            assert!(admit(&runtime, "view", point_in(2, 20, current_area), None).is_ok());
+        }
+        // A separately selected positive root can restore a grant-local
+        // exclusion, while the same exclusion in a token remains a ceiling.
+        config
+            .policy
+            .resources
+            .iter_mut()
+            .find(|entry| entry.id == "document-one")
+            .unwrap()
+            .enabled = true;
+        config.policy.grants.push(grant(
+            "group:agents",
+            "view",
+            "service",
+            0,
+            &["document-one"],
+        ));
+        let restored = BrokerRuntime::new(config).unwrap();
+        let ceiling = token(selection(&[], &["filtered"]), "view");
+        assert!(admit(&restored, "view", point_in(1, 10, "OTHER"), None).is_ok());
+        assert!(admit(&restored, "view", point_in(1, 10, "OTHER"), Some(&ceiling)).is_err());
+    }
+}
+
+#[tokio::test]
+async fn pure_personal_content_grants_follow_relocation_without_shared_lookup_material() {
+    let (mut config, fixture) = fixture();
+    config.credentials.service.clear();
+    config.credentials.lookup.clear();
+    config.policy.grants = vec![grant(
+        "group:agents",
+        "view",
+        "per_user",
+        0,
+        &["document-one"],
+    )];
+    let runtime = BrokerRuntime::new(config).unwrap();
+    for current_area in ["ENG", "OTHER"] {
+        fixture.state.lock().unwrap().evidence = Some(point_in(1, 10, current_area));
+        let response = runtime
+            .invoke(operation("view"), InvokeRequest::new(json!({})))
+            .await;
+        assert_eq!(
+            response.envelope.decision,
+            Decision::Allow,
+            "{current_area}: {:?}",
+            response.envelope
+        );
+        assert_eq!(
+            response.envelope.resource_scopes["document_location"],
+            [locator("document", 1)]
+        );
+    }
+    assert_eq!(fixture.scope_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.invoke_calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]
@@ -834,6 +1037,117 @@ fn collections_select_global_band_before_token_and_keep_a_complete_protected_pla
         subtree("directory", 10)
     );
     assert!(audit.token_boundary.is_some());
+}
+
+#[test]
+fn requested_space_proof_retains_content_grant_token_and_requested_space_conjunction() {
+    for (grant_id, token_id, requested, expected) in [
+        (
+            "document-one",
+            None,
+            "ENG",
+            OfflineContainmentProof::Conditional,
+        ),
+        (
+            "document-one",
+            Some("eng"),
+            "OTHER",
+            OfflineContainmentProof::Empty,
+        ),
+        (
+            "eng",
+            Some("document-one"),
+            "ENG",
+            OfflineContainmentProof::Conditional,
+        ),
+        (
+            "eng",
+            Some("document-one"),
+            "OTHER",
+            OfflineContainmentProof::Empty,
+        ),
+        ("all", Some("eng"), "ENG", OfflineContainmentProof::Covered),
+    ] {
+        let (mut config, _) = fixture();
+        config.policy.grants = vec![grant("group:agents", "search", "service", 0, &[grant_id])];
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let ceiling = token_id.map(|id| token(selection(&[id], &[]), "search"));
+        let admitted = runtime
+            .admit_containment_collection(
+                &runtime.policy_snapshot(),
+                &identity(),
+                &context(),
+                SERVICE,
+                "search",
+                ceiling.as_ref(),
+            )
+            .unwrap();
+        let InvocationAuthority::ContainmentCollection(authority) = admitted.authority else {
+            panic!("collection authority");
+        };
+        assert_eq!(
+            authority.requested_container_coverage(&ResourceContainer::new(area_type(), requested)),
+            expected,
+            "grant={grant_id} token={token_id:?} requested={requested}",
+        );
+        if grant_id == "eng" && token_id == Some("document-one") {
+            assert!(
+                authority
+                    .matches_candidate(&location("document", 1, vec![]))
+                    .unwrap()
+            );
+            assert!(
+                !authority
+                    .matches_candidate(&location_in("document", 1, vec![], "OTHER"))
+                    .unwrap()
+            );
+        }
+    }
+    let (mut config, _) = fixture();
+    config.policy.grants = vec![
+        grant("group:agents", "search", "service", 0, &["eng"]),
+        grant("group:agents", "search", "service", 5, &["document-one"]),
+    ];
+    config.policy.resource_groups.push(ResourceGroupDefinition {
+        id: "token-without-eng".into(),
+        name: "Token without ENG".into(),
+        included_resource_ids: vec!["all".into()],
+        excluded_resource_ids: vec!["eng".into()],
+    });
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let ceiling = token(selection(&[], &["token-without-eng"]), "search");
+    let admitted = runtime
+        .admit_containment_collection(
+            &runtime.policy_snapshot(),
+            &identity(),
+            &context(),
+            SERVICE,
+            "search",
+            Some(&ceiling),
+        )
+        .unwrap();
+    assert_eq!(admitted.policy.matched_grant.priority, Some(5));
+    let InvocationAuthority::ContainmentCollection(authority) = admitted.authority else {
+        panic!("collection authority");
+    };
+    assert_eq!(
+        authority.requested_container_coverage(&ResourceContainer::new(area_type(), "ENG")),
+        OfflineContainmentProof::Empty
+    );
+    assert_eq!(
+        authority.requested_container_coverage(&ResourceContainer::new(area_type(), "OTHER")),
+        OfflineContainmentProof::Conditional
+    );
+    assert!(
+        !authority
+            .matches_candidate(&location("document", 1, vec![]))
+            .unwrap()
+    );
+    assert!(
+        authority
+            .matches_candidate(&location_in("document", 1, vec![], "OTHER"))
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1140,7 +1454,7 @@ fn token_intersection_never_rescues_a_lower_collection_band_and_foreign_roots_st
     );
     let mut foreign = resource("foreign", content_type(), subtree("directory", 10));
     foreign.selector = ResourceSelector::Subtree {
-        value: "https://other.example.test/s/ENG/directory/10".into(),
+        value: "https://other.example.test/content/directory/10".into(),
     };
     config.policy.resources.push(foreign);
     config.policy.grants = vec![grant("group:agents", "view", "service", 0, &["foreign"])];
@@ -1516,6 +1830,7 @@ async fn unresolved_move_roots_keep_bounded_provenance_in_protected_audit_and_of
         );
         assert!(summary.get("_rootVisibilityProvenance").is_none());
         assert!(audit.get("private").is_none());
+        assert!(!audit.to_string().contains("rootOrdinal"));
     }
     let success_summary = &rows[2].provider_audit.as_ref().unwrap()["locationAuthorization"];
     assert_eq!(success_summary["finalCheck"], "matched");
@@ -1585,7 +1900,7 @@ fn projection_byte_preflight_borrows_long_selectors_and_matches_the_published_sh
     let selectors = (1..=2300)
         .map(|id| {
             let selector = ResourceSelector::Exact {
-                value: format!("{ORIGIN}/s/ENG/document/{long}{id}"),
+                value: format!("{ORIGIN}/content/document/{long}{id}"),
             };
             runtime
                 .resource_types
@@ -1680,14 +1995,192 @@ fn move_root_provenance_is_bounded_and_includes_token_exclusions_only_from_selec
             &roots,
         )
         .unwrap();
+    assert_eq!(provenance["policyGeneration"], snapshot.generation());
+    assert_eq!(provenance["roots"].as_array().unwrap().len(), roots.len());
+    let document = roots
+        .iter()
+        .position(|root| root.selector() == &exact("document", 2))
+        .unwrap();
+    let folder = roots
+        .iter()
+        .position(|root| root.selector() == &subtree("directory", 20))
+        .unwrap();
     assert_eq!(
-        provenance["resourceIds"],
-        json!(["document-two", "folder-b"])
+        provenance["roots"][document]["resourceIds"],
+        json!(["document-two"])
     );
-    assert_eq!(provenance["resourceGroupIds"].as_array().unwrap().len(), 16);
-    assert_eq!(provenance["additionalProvenanceCount"], 18);
+    assert_eq!(
+        provenance["roots"][document]["resourceGroupIds"]
+            .as_array()
+            .unwrap()
+            .len(),
+        16
+    );
+    assert_eq!(
+        provenance["roots"][document]["additionalProvenanceCount"],
+        17
+    );
+    assert_eq!(
+        provenance["roots"][folder]["resourceIds"],
+        json!(["folder-b"])
+    );
+    assert_eq!(
+        provenance["roots"][folder]["resourceGroupIds"],
+        json!(["token-boundary"])
+    );
+    assert_eq!(provenance["roots"][folder]["additionalProvenanceCount"], 0);
     assert!(!provenance.to_string().contains("unselected"));
-    assert!(root_visibility_diagnostic(Some(&json!({"locationProof":{"finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"private-value"}})), Some(&provenance)).is_none());
+    assert!(root_visibility_diagnostic(Some(&json!({"locationProof":{"finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"private-value"}})), Some(&provenance), snapshot.generation()).is_none());
+}
+
+#[test]
+fn failed_root_ordinals_identify_only_the_issued_root_and_preserve_exact_subtree_provenance() {
+    let (mut config, _) = fixture();
+    let mut selected = grant("group:agents", "move", "service", 0, &[]);
+    for index in 0..20 {
+        let resource_id = format!("excluded-{index:02}");
+        let group_id = format!("root-group-{index:02}");
+        config.policy.resources.push(resource(
+            &resource_id,
+            content_type(),
+            exact("document", 100 + index),
+        ));
+        config.policy.resource_groups.push(ResourceGroupDefinition {
+            id: group_id.clone(),
+            name: group_id.clone(),
+            included_resource_ids: vec!["eng".into()],
+            excluded_resource_ids: vec![resource_id],
+        });
+        selected.resources.resource_group_ids.push(group_id);
+    }
+    config.policy.resources.push(resource(
+        "same-root-subtree",
+        content_type(),
+        subtree("document", 119),
+    ));
+    config.policy.resource_groups.push(ResourceGroupDefinition {
+        id: "same-root-group".into(),
+        name: "Same root group".into(),
+        included_resource_ids: vec!["eng".into()],
+        excluded_resource_ids: vec!["same-root-subtree".into()],
+    });
+    selected
+        .resources
+        .resource_group_ids
+        .push("same-root-group".into());
+    config.policy.grants.push(selected);
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let snapshot = runtime.policy_snapshot();
+    let (_, roots) = runtime.containment_lookup_requirements(
+        &snapshot,
+        &identity(),
+        &context(),
+        SERVICE,
+        "move",
+        None,
+    );
+    let exact_ordinal = roots
+        .iter()
+        .position(|root| root.selector() == &exact("document", 119))
+        .unwrap();
+    let subtree_ordinal = roots
+        .iter()
+        .position(|root| root.selector() == &subtree("document", 119))
+        .unwrap();
+    assert!(exact_ordinal >= 16);
+    assert_ne!(exact_ordinal, subtree_ordinal);
+    let provenance = runtime
+        .containment_root_provenance(
+            &snapshot,
+            &identity(),
+            &context(),
+            SERVICE,
+            "move",
+            None,
+            &roots,
+        )
+        .unwrap();
+    let marker = |ordinal: Value, category: &str| {
+        json!({"locationProof": {
+            "finalCheck": "unresolved", "diagnostic": "confluence_move_relation_unresolved", "category": category,
+            "rootOrdinal": ordinal,
+        }})
+    };
+    for ordinal in [exact_ordinal, subtree_ordinal] {
+        let provider = marker(json!(ordinal), "not_visible_or_absent");
+        let diagnostic =
+            root_visibility_diagnostic(Some(&provider), Some(&provenance), snapshot.generation())
+                .unwrap();
+        assert_eq!(
+            diagnostic["resourceIds"],
+            json!(["excluded-19", "same-root-subtree"])
+        );
+        assert_eq!(
+            diagnostic["resourceGroupIds"],
+            json!(["root-group-19", "same-root-group"])
+        );
+        assert!(!diagnostic.to_string().contains("excluded-00"));
+        assert!(diagnostic.get("rootOrdinal").is_none());
+        let audit = attach_containment_audit(
+            Some(provider),
+            Some(with_root_provenance(
+                json!({"kind": "point"}),
+                Some(&provenance),
+            )),
+            snapshot.generation(),
+        )
+        .unwrap();
+        assert_eq!(audit["locationAuthorization"]["rootVisibility"], diagnostic);
+        assert!(!audit.to_string().contains("rootOrdinal"));
+        assert!(!audit.to_string().contains("_rootVisibilityProvenance"));
+        assert!(!audit.to_string().contains("policyGeneration"));
+    }
+    for invalid in [
+        Value::Null,
+        json!(-1),
+        json!(1.5),
+        json!("19"),
+        json!(roots.len()),
+        json!(u64::MAX),
+    ] {
+        let provider = marker(invalid, "unconfirmed");
+        let diagnostic =
+            root_visibility_diagnostic(Some(&provider), Some(&provenance), snapshot.generation())
+                .unwrap();
+        assert_eq!(diagnostic["resourceIds"], json!([]));
+        assert_eq!(diagnostic["resourceGroupIds"], json!([]));
+        assert_eq!(diagnostic["additionalProvenanceCount"], 0);
+    }
+    let mut global = marker(Value::Null, "root_budget_exhausted");
+    global["locationProof"]
+        .as_object_mut()
+        .unwrap()
+        .remove("rootOrdinal");
+    let diagnostic =
+        root_visibility_diagnostic(Some(&global), Some(&provenance), snapshot.generation())
+            .unwrap();
+    assert_eq!(diagnostic["category"], "root_budget_exhausted");
+    assert_eq!(diagnostic["resourceIds"], json!([]));
+    let known_budget = marker(json!(exact_ordinal), "root_budget_exhausted");
+    let diagnostic = root_visibility_diagnostic(
+        Some(&known_budget),
+        Some(&provenance),
+        snapshot.generation(),
+    )
+    .unwrap();
+    assert_eq!(
+        diagnostic["resourceIds"],
+        json!(["excluded-19", "same-root-subtree"])
+    );
+    assert!(
+        root_visibility_diagnostic(
+            Some(&known_budget),
+            Some(&provenance),
+            snapshot.generation() + 1
+        )
+        .is_none()
+    );
+    assert!(root_visibility_diagnostic(Some(&known_budget), None, snapshot.generation()).is_none());
 }
 
 #[test]
@@ -1804,7 +2297,7 @@ fn token_picker_offers_unauthored_location_groups_with_visible_enabled_members()
     config
         .policy
         .grants
-        .push(grant("group:agents", "view", "service", 0, &["eng"]));
+        .push(grant("group:agents", "view", "service", 0, &["all"]));
     let mut disabled = resource("disabled", content_type(), exact("document", 90));
     disabled.enabled = false;
     let mut external = resource("external", content_type(), exact("document", 91));
@@ -1816,7 +2309,7 @@ fn token_picker_offers_unauthored_location_groups_with_visible_enabled_members()
             "outside",
             content_type(),
             ResourceSelector::Exact {
-                value: locator("document", 92).replace("/s/ENG/", "/s/OTHER/"),
+                value: locator("document", 92).replace(ORIGIN, "https://other.example.test"),
             },
         ),
     ]);
@@ -1853,6 +2346,61 @@ fn token_picker_offers_unauthored_location_groups_with_visible_enabled_members()
     assert!(
         matches!(&preview.access[0].scope, EffectiveAccessScope::Location(access) if !access.is_empty())
     );
+}
+
+#[test]
+fn finite_space_authority_keeps_conditional_access_without_enumerating_unpinned_catalog_roots() {
+    let (mut config, fixture) = fixture();
+    config
+        .policy
+        .grants
+        .push(grant("group:agents", "view", "service", 0, &["eng"]));
+    config.policy.resource_groups.push(ResourceGroupDefinition {
+        id: "hidden-catalog-root".into(),
+        name: "Hidden catalog root".into(),
+        included_resource_ids: vec!["folder-a".into()],
+        excluded_resource_ids: vec!["document-two".into()],
+    });
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let options = runtime.agent_token_options_for_identity(&identity());
+    assert!(
+        !options
+            .resource_groups
+            .iter()
+            .any(|group| group.id == "hidden-catalog-root")
+    );
+    let serialized = serde_json::to_string(&options.resources).unwrap();
+    assert!(!serialized.contains("folder-a") && !serialized.contains("document-one"));
+    let ceiling = token(selection(&["folder-a"], &[]), "view");
+    let preview = runtime
+        .preview_agent_token_access(&identity(), &ceiling.caveats)
+        .unwrap();
+    assert_eq!(preview.access.len(), 1);
+    let detail = serde_json::to_string(&preview).unwrap();
+    assert!(detail.contains(&locator("directory", 10)) && detail.contains("ENG"));
+    let coverage = runtime.containment_coverage(
+        &runtime.policy_snapshot(),
+        &identity(),
+        &context(),
+        SERVICE,
+        "view",
+        Some(&ceiling),
+        |_| true,
+    );
+    assert!(
+        coverage
+            .iter()
+            .any(|entry| entry.selector == subtree("directory", 10)
+                && entry.restricted
+                && entry.conditional)
+    );
+    assert!(
+        !serde_json::to_string(&coverage)
+            .unwrap()
+            .contains(&locator("document", 2))
+    );
+    assert_eq!(fixture.scope_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.invoke_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1980,7 +2528,7 @@ async fn move_root_requirements_reach_provider_before_its_relevant_container_lim
                 id,
                 content_type(),
                 ResourceSelector::Exact {
-                    value: locator("document", index + 100).replace("/s/ENG/", "/s/OTHER/"),
+                    value: locator("document", index + 100),
                 },
             )
         }));
@@ -1996,19 +2544,36 @@ async fn move_root_requirements_reach_provider_before_its_relevant_container_lim
         .resource_group_ids
         .push("move-boundary".into());
     config.policy.grants.push(access);
-    fixture.state.lock().unwrap().evidence = Some(ContainmentEvidence::new(
-        "document_move",
-        ORIGIN,
-        vec![
-            ContainmentObligation::SubtreeImpact {
-                current: location("document", 1, vec![content("directory", 10)]),
-                proposed: location("document", 1, vec![content("directory", 20)])
-                    .with_provenance(ContainmentProvenance::Proposed),
-            },
-            ContainmentObligation::ChildPlacement(location("directory", 20, vec![])),
-            ContainmentObligation::Content(location("document", 3, vec![content("directory", 20)])),
-        ],
-    ));
+    fixture.state.lock().unwrap().evidence = Some(
+        ContainmentEvidence::new(
+            "document_move",
+            ORIGIN,
+            vec![
+                ContainmentObligation::SubtreeImpact {
+                    current: location("document", 1, vec![content("directory", 10)]),
+                    proposed: location("document", 1, vec![content("directory", 20)])
+                        .with_provenance(ContainmentProvenance::Proposed),
+                },
+                ContainmentObligation::ChildPlacement(location("directory", 20, vec![])),
+                ContainmentObligation::Content(location(
+                    "document",
+                    3,
+                    vec![content("directory", 20)],
+                )),
+            ],
+        )
+        .with_related_roots(
+            (0..65)
+                .map(|index| {
+                    ContentLocation::new(
+                        content("document", index + 100),
+                        vec![ResourceContainer::new(area_type(), "OTHER")],
+                        ContainmentEvidenceLevel::ContainerOnly,
+                    )
+                })
+                .collect(),
+        ),
+    );
     let runtime = BrokerRuntime::new(config).unwrap();
     let admitted = runtime
         .invoke(operation("move"), InvokeRequest::new(json!({})))
@@ -2065,6 +2630,65 @@ fn collection_digest_tracks_canonical_authority_and_survives_unrelated_publicati
 }
 
 #[test]
+fn collection_digest_and_scope_identity_survive_external_root_relocation() {
+    let (mut config, fixture) = fixture();
+    config.policy.grants = vec![grant("group:agents", "search", "service", 0, &["folder-a"])];
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let mut digests = Vec::new();
+    let mut scopes = Vec::new();
+    for area in ["ENG", "OTHER"] {
+        let candidate = location_in("document", 1, vec![content("directory", 10)], area);
+        fixture.state.lock().unwrap().candidates = vec![candidate.clone()];
+        let admission = runtime
+            .admit_containment_collection(
+                &runtime.policy_snapshot(),
+                &identity(),
+                &context(),
+                SERVICE,
+                "search",
+                None,
+            )
+            .unwrap();
+        scopes.push(admission.scopes);
+        let InvocationAuthority::ContainmentCollection(authority) = admission.authority else {
+            panic!("collection authority");
+        };
+        assert!(authority.matches_candidate(&candidate).unwrap());
+        digests.push(authority.authority_digest().to_owned());
+        let space_ceiling = token(selection(&["eng"], &[]), "search");
+        let restricted = runtime
+            .admit_containment_collection(
+                &runtime.policy_snapshot(),
+                &identity(),
+                &context(),
+                SERVICE,
+                "search",
+                Some(&space_ceiling),
+            )
+            .unwrap();
+        let InvocationAuthority::ContainmentCollection(restricted) = restricted.authority else {
+            panic!("collection authority");
+        };
+        assert_eq!(
+            restricted.matches_candidate(&candidate).unwrap(),
+            area == "ENG"
+        );
+        assert_ne!(restricted.authority_digest(), authority.authority_digest());
+    }
+    assert_eq!(digests[0], digests[1]);
+    assert_eq!(scopes[0], scopes[1]);
+    assert!(
+        !scopes[0].contains_key("area"),
+        "stable content identity invents no container scope"
+    );
+    assert_eq!(
+        fixture.scope_calls.load(Ordering::SeqCst),
+        0,
+        "collection planning stays offline"
+    );
+}
+
+#[test]
 fn confluence_collection_summary_retains_space_and_existing_content_scope_keys() {
     let (mut config, _) = fixture();
     config.providers = ProvidersConfig::new(crate::tests::test_backend_registry()).with(
@@ -2086,8 +2710,8 @@ fn confluence_collection_summary_retains_space_and_existing_content_scope_keys()
     let content_type = agent_access_confluence::CONFLUENCE_CONTENT_RESOURCE
         .id()
         .clone();
-    let page = "https://example.atlassian.net/wiki/spaces/OPS/folder/10";
-    let blog = "https://example.atlassian.net/wiki/spaces/OPS/blog/30";
+    let page = "https://example.atlassian.net/wiki/content/folder/10";
+    let blog = "https://example.atlassian.net/wiki/content/blog/30";
     config.policy.resources = vec![
         resource("all", space_type.clone(), ResourceSelector::All),
         resource(
@@ -2155,7 +2779,11 @@ fn confluence_collection_summary_retains_space_and_existing_content_scope_keys()
             .unwrap();
         assert_eq!(
             narrowed.scopes,
-            BTreeMap::from([("space".into(), vec!["ENG".into()])])
+            BTreeMap::from([
+                ("space".into(), vec!["ENG".into()]),
+                (key.into(), vec![root.into()]),
+            ]),
+            "the unpinned content/space intersection remains conditional",
         );
     }
     config.policy.grants[0].resources = selection(&["all"], &[]);
@@ -2174,4 +2802,47 @@ fn confluence_collection_summary_retains_space_and_existing_content_scope_keys()
         admitted.scopes,
         BTreeMap::from([("space".into(), vec!["*".into()])])
     );
+}
+
+#[test]
+fn global_config_rejects_old_content_selector_forms_even_when_disabled_and_unused() {
+    let (mut config, _) = fixture();
+    config.providers = ProvidersConfig::new(crate::tests::test_backend_registry()).with(
+        serde_json::from_value::<agent_access_confluence::ConfluenceProviderConfig>(json!({
+            "tenant_host":"example.atlassian.net", "allowed_upstream_hosts":["https://example.atlassian.net/wiki/**"]
+        })).unwrap());
+    config.credentials = Default::default();
+    config.policy.resources = vec![resource(
+        "unused-page",
+        agent_access_confluence::CONFLUENCE_CONTENT_RESOURCE
+            .id()
+            .clone(),
+        ResourceSelector::Exact {
+            value: "https://example.atlassian.net/wiki/content/page/123".into(),
+        },
+    )];
+    assert!(config.policy.grants.is_empty());
+    assert!(crate::validate_broker_config(&config).is_ok());
+    for enabled in [true, false] {
+        for kind in ["exact", "subtree"] {
+            config.policy.resources[0].enabled = enabled;
+            config.policy.resources[0].selector = if kind == "exact" {
+                ResourceSelector::Exact {
+                    value: "https://example.atlassian.net/wiki/spaces/ENG/pages/123".into(),
+                }
+            } else {
+                ResourceSelector::Subtree {
+                    value: "https://example.atlassian.net/wiki/spaces/ENG/pages/123".into(),
+                }
+            };
+            assert!(
+                crate::validate_broker_config(&config).is_err(),
+                "{kind} enabled={enabled}"
+            );
+            assert_eq!(
+                config.policy.resources[0].selector.value(),
+                Some("https://example.atlassian.net/wiki/spaces/ENG/pages/123")
+            );
+        }
+    }
 }

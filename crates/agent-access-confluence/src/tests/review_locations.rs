@@ -297,16 +297,29 @@ async fn space_only_creation_admission_does_not_read_parent_ancestors() {
 }
 
 #[tokio::test]
-async fn move_root_limit_counts_only_roots_in_the_current_space() {
+async fn move_root_limit_classifies_current_space_before_counting_potential_overlap() {
     for (space_key, count, allowed) in [("OPS", 65, true), ("ENG", 64, true), ("ENG", 65, false)] {
         let (server, provider) = fixture("current").await;
+        let foreign = space_key == "OPS";
+        if foreign {
+            get(
+                &server,
+                "/wiki/api/v2/spaces/11",
+                json!({"id":"11","key":"OPS","status":"current"}),
+            )
+            .await;
+        }
         Mock::given(method("GET"))
             .and(wiremock::matchers::path_regex(
                 "^/wiki/api/v2/pages/1[0-9]{3}$",
             ))
-            .respond_with(|request: &wiremock::Request| {
+            .respond_with(move |request: &wiremock::Request| {
                 let id = request.url.path().rsplit('/').next().unwrap();
-                ResponseTemplate::new(200).set_body_json(page(id))
+                let mut value = page(id);
+                if foreign {
+                    value["spaceId"] = json!("11");
+                }
+                ResponseTemplate::new(200).set_body_json(value)
             })
             .mount(&server)
             .await;
@@ -319,9 +332,7 @@ async fn move_root_limit_counts_only_roots_in_the_current_space() {
                     .typed_selector(
                         CONFLUENCE_CONTENT_RESOURCE.id(),
                         &ResourceSelector::Subtree {
-                            value: format!(
-                                "https://example.atlassian.net/wiki/spaces/{space_key}/pages/{id}"
-                            ),
+                            value: format!("https://example.atlassian.net/wiki/content/page/{id}"),
                         },
                     )
                     .unwrap()
@@ -355,7 +366,25 @@ async fn move_root_limit_counts_only_roots_in_the_current_space() {
                     .is_some_and(|id| id.len() == 4)
             })
             .count();
-        assert_eq!(root_reads, if space_key == "OPS" { 0 } else { 64 });
+        // Foreign roots still require one observed ID/space proof. Same-space
+        // roots upgrade their weak classification to explicit parent metadata;
+        // the 65th overlap is refused immediately after classification.
+        assert_eq!(
+            root_reads,
+            if foreign {
+                count as usize
+            } else {
+                128 + usize::from(count > 64)
+            }
+        );
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .all(|request| request.method == "GET")
+        );
     }
 }
 

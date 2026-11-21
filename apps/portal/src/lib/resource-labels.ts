@@ -2,12 +2,19 @@
 // effective-access clauses.
 import type { EffectiveAccessClause, EffectiveAccessScope, LocationBoundary, ResourceCatalog, ResourceDefinition, ResourceSelection, ResourceSelector, ResourceType } from "../types";
 import { resourceTypePluralLabel, type ResourceTypes } from "./resource-types";
+import { parseContentIdentity } from "./resource-locations";
 
 export function selectorLabel(types: ResourceTypes, type: ResourceType, selector: ResourceSelector): string {
   if (selector.kind === "all") return `All ${resourceTypePluralLabel(types, type)}`;
   if (selector.kind === "namespace") return `${types.get(type)?.namespace?.membersLabel ?? type} under ${selector.value}`;
+  if (type === "confluence_content") {
+    const identity = parseContentIdentity(selector.value);
+    if (!identity) return selector.value;
+    const noun = identity.kind === "blog" ? "Blog post" : identity.kind === "folder" ? "Folder" : "Page";
+    const coverage = selector.kind === "subtree" ? "root and descendants" : identity.kind === "blog" ? "this blog post only" : "this page only";
+    return `${noun} ${identity.id} · ${identity.siteOrigin.slice("https://".length)} · ${coverage}`;
+  }
   if (selector.kind === "subtree") return `${selector.value} · root and descendants`;
-  if (type === "confluence_content") return `${selector.value} · this ${/\/wiki\/spaces\/[^/]+\/blog\/\d+$/.test(selector.value) ? "blog post" : "page"} only`;
   return selector.value;
 }
 

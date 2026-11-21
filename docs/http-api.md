@@ -1887,8 +1887,8 @@ permission and preserves its effect in exclusions. See [resources.md](resources.
 
 `GET /v1/admin/policy/resource-locations` lists authorized services offering
 pure URL entry. `POST /v1/admin/policy/resource-locations/normalize` accepts
-`{service, url, coverage, spaceKey?}` and returns canonical resource type and
-selector plus `locationKind`, `configuredSpaceKey` and
+`{service, url, coverage}` and returns canonical resource type and
+selector plus `locationKind` and
 `verification: "not_checked"`. Both require management-class policy-read access;
 normalization applies browser CSRF. Ordinary agent credentials, including an
 administrator's agent token, cannot use them. The service scope is checked before
@@ -2893,6 +2893,11 @@ Location entries instead have `action`, `scope: "location"`, `resourceTypes`,
 `coverage`. Each positive coverage entry carries `resourceType`, `selector`,
 `restricted`, and `conditional`; Confluence content selectors are `exact` or
 `subtree`. Conditional coverage needs current location evidence at invocation.
+Confluence content values such as `https://example.atlassian.net/wiki/content/page/12345`
+are stable policy identities, not action browser URLs. Use the selected action's
+documented ID input (`pageId`, `blogId` or typed parent as appropriate); action
+schemas and examples define the mapping. Point audit keeps observed space in
+protected `locationProof.space`/`spaceId`, separate from stable `resourceScopes`.
 Excluded and competing private roots are withheld; useful token roots can appear
 under broader grant coverage. Authorized management projections separately
 retain full conditions, as described under

@@ -6,6 +6,8 @@ const MAX_LINEAGE_NODES: usize = 64;
 const POINT_PASS_READS: u32 = 65;
 const MOVE_PASS_READS: u32 = 256;
 const MAX_MOVE_ROOTS: usize = 64;
+const MAX_ROOT_ENTRIES: usize = 256;
+const MAX_OPERATION_NODES: usize = 256;
 const MOVE_RELATION_DIAGNOSTIC: &str = "confluence_move_relation_unresolved";
 
 #[derive(Clone, Debug)]
@@ -116,15 +118,18 @@ fn location_provider_error(error: ProviderError) -> ProviderError {
 
 /// Only the protected audit identifies failure to resolve a policy root. The
 /// caller keeps the original value-free location denial or upstream failure.
-fn move_relation_failure(mut error: ProviderError) -> ProviderError {
-    let category = if error.reason_code() == ReasonCode::ScopeUnresolved {
-        "not_visible_or_absent"
-    } else {
-        "unconfirmed"
-    };
-    error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] = json!({
+fn move_relation_failure(
+    mut error: ProviderError,
+    ordinal: Option<usize>,
+    category: &'static str,
+) -> ProviderError {
+    let mut proof = json!({
         "finalCheck":"unresolved", "diagnostic":MOVE_RELATION_DIAGNOSTIC, "category":category,
     });
+    if let Some(ordinal) = ordinal {
+        proof["rootOrdinal"] = json!(ordinal);
+    }
+    error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] = proof;
     error
 }
 
@@ -135,17 +140,11 @@ fn malformed_location() -> ProviderError {
     )
 }
 
-fn content_identity(site: &str, space: &str, kind: &str, id: &str) -> ContainmentIdentity {
-    let segment = match kind {
-        "page" => "pages",
-        "folder" => "folder",
-        "blog" => "blog",
-        _ => unreachable!("only selectable identities are projected"),
-    };
+fn content_identity(site: &str, kind: &str, id: &str) -> ContainmentIdentity {
     ContainmentIdentity::new(
         CONFLUENCE_CONTENT_RESOURCE.id().clone(),
         kind,
-        format!("{site}/wiki/spaces/{space}/{segment}/{id}"),
+        format!("{site}/wiki/content/{kind}/{id}"),
     )
 }
 
@@ -157,7 +156,9 @@ struct LocationPass<'a> {
     site: String,
     logical_reads: u32,
     max_reads: u32,
-    current_nodes: BTreeMap<(ConfluenceNodeKind, String), ConfluenceNode>,
+    current_nodes: BTreeMap<(ConfluenceNodeKind, String), (ConfluenceNode, bool)>,
+    observed_nodes: BTreeSet<(ConfluenceNodeKind, String)>,
+    failure_category: &'static str,
     spaces: BTreeMap<String, ConfluenceSpace>,
     graph: Vec<NodeFact>,
     blogs: Vec<(String, String, ConfluenceContentStatus)>,
@@ -185,6 +186,8 @@ impl<'a> LocationPass<'a> {
                 POINT_PASS_READS
             },
             current_nodes: BTreeMap::new(),
+            observed_nodes: BTreeSet::new(),
+            failure_category: "unconfirmed",
             spaces: BTreeMap::new(),
             graph: Vec::new(),
             blogs: Vec::new(),
@@ -194,9 +197,35 @@ impl<'a> LocationPass<'a> {
 
     fn charge(&mut self) -> Result<(), ProviderError> {
         if self.logical_reads >= self.max_reads {
+            self.failure_category = "root_budget_exhausted";
             return Err(location_unresolved());
         }
         self.logical_reads += 1;
+        Ok(())
+    }
+
+    fn backend_error(&mut self, error: ConfluenceBackendError) -> ProviderError {
+        self.failure_category = if self.budget.exhausted() {
+            "root_budget_exhausted"
+        } else if matches!(
+            error,
+            ConfluenceBackendError::Forbidden | ConfluenceBackendError::NotFound
+        ) {
+            "not_visible_or_absent"
+        } else {
+            "unconfirmed"
+        };
+        location_backend_error(error)
+    }
+
+    fn observe_node(&mut self, kind: ConfluenceNodeKind, id: &str) -> Result<(), ProviderError> {
+        if !self.observed_nodes.contains(&(kind, id.to_owned())) {
+            if self.observed_nodes.len() >= MAX_OPERATION_NODES {
+                self.failure_category = "root_budget_exhausted";
+                return Err(location_unresolved());
+            }
+            self.observed_nodes.insert((kind, id.to_owned()));
+        }
         Ok(())
     }
 
@@ -210,7 +239,7 @@ impl<'a> LocationPass<'a> {
             .backend
             .space_location_metadata(id, self.credential, self.budget)
             .await
-            .map_err(location_backend_error)?
+            .map_err(|error| self.backend_error(error))?
             .value;
         if space.id != id || !locations::is_canonical_content_id(id) || !is_space_key(&space.key) {
             return Err(malformed_location());
@@ -229,25 +258,36 @@ impl<'a> LocationPass<'a> {
         status: ConfluenceContentStatus,
         regular: bool,
     ) -> Result<ConfluenceNode, ProviderError> {
+        self.node_at_level(kind, id, status, regular, self.level)
+            .await
+    }
+
+    async fn node_at_level(
+        &mut self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        regular: bool,
+        level: ContainmentEvidenceLevel,
+    ) -> Result<ConfluenceNode, ProviderError> {
+        let require_parent = level == ContainmentEvidenceLevel::CompleteLineage
+            || status == ConfluenceContentStatus::Draft;
         if !regular
             && status == ConfluenceContentStatus::Current
-            && let Some(node) = self.current_nodes.get(&(kind, id.to_owned()))
+            && let Some((node, strict)) = self.current_nodes.get(&(kind, id.to_owned()))
+            && (!require_parent || *strict)
         {
             return Ok(node.clone());
         }
+        self.observe_node(kind, id)?;
         self.charge()?;
         let node = if regular {
             let page = self
                 .provider
                 .backend
-                .regular_page_metadata(
-                    id,
-                    self.level == ContainmentEvidenceLevel::CompleteLineage,
-                    self.credential,
-                    self.budget,
-                )
+                .regular_page_metadata(id, require_parent, self.credential, self.budget)
                 .await
-                .map_err(location_backend_error)?
+                .map_err(|error| self.backend_error(error))?
                 .value;
             let node = page.node.clone();
             self.regular_page = Some(page);
@@ -259,13 +299,12 @@ impl<'a> LocationPass<'a> {
                     kind,
                     id,
                     status,
-                    self.level == ContainmentEvidenceLevel::CompleteLineage
-                        || status == ConfluenceContentStatus::Draft,
+                    require_parent,
                     self.credential,
                     self.budget,
                 )
                 .await
-                .map_err(location_backend_error)?
+                .map_err(|error| self.backend_error(error))?
                 .value
         };
         if node.status != status {
@@ -282,8 +321,15 @@ impl<'a> LocationPass<'a> {
             return Err(malformed_location());
         }
         if status == ConfluenceContentStatus::Current {
+            if let Some((previous, strict)) = self.current_nodes.get(&(kind, id.to_owned()))
+                && (previous.space_id != node.space_id
+                    || previous.status != node.status
+                    || (*strict && require_parent && previous.parent != node.parent))
+            {
+                return Err(location_unresolved());
+            }
             self.current_nodes
-                .insert((kind, id.to_owned()), node.clone());
+                .insert((kind, id.to_owned()), (node.clone(), require_parent));
         }
         Ok(node)
     }
@@ -293,31 +339,46 @@ impl<'a> LocationPass<'a> {
         first: ConfluenceNode,
         provenance: ContainmentProvenance,
     ) -> Result<(ContentLocation, ConfluenceSpace), ProviderError> {
+        self.location_at_level(first, provenance, self.level).await
+    }
+
+    async fn location_at_level(
+        &mut self,
+        first: ConfluenceNode,
+        provenance: ContainmentProvenance,
+        level: ContainmentEvidenceLevel,
+    ) -> Result<(ContentLocation, ConfluenceSpace), ProviderError> {
+        self.observe_node(first.kind, &first.id)?;
         let space = self.space(&first.space_id).await?;
-        let target = content_identity(&self.site, &space.key, first.kind.as_str(), &first.id);
+        let target = content_identity(&self.site, first.kind.as_str(), &first.id);
         let mut location = ContentLocation::new(
             target,
             vec![ResourceContainer::new(
                 CONFLUENCE_SPACE_RESOURCE.id().clone(),
                 &space.key,
             )],
-            self.level,
+            level,
         )
         .with_provenance(provenance);
-        self.graph.push(NodeFact::of(&first, self.level));
-        if self.level == ContainmentEvidenceLevel::CompleteLineage {
+        self.graph.push(NodeFact::of(&first, level));
+        if level == ContainmentEvidenceLevel::CompleteLineage {
             let mut visited = BTreeSet::from([first.id.clone()]);
             let mut parent = first.parent;
             while let Some(reference) = parent {
-                if visited.len() >= MAX_LINEAGE_NODES || !visited.insert(reference.id.clone()) {
+                if visited.len() >= MAX_LINEAGE_NODES {
+                    self.failure_category = "root_budget_exhausted";
+                    return Err(location_unresolved());
+                }
+                if !visited.insert(reference.id.clone()) {
                     return Err(location_unresolved());
                 }
                 let node = self
-                    .node(
+                    .node_at_level(
                         reference.kind,
                         &reference.id,
                         ConfluenceContentStatus::Current,
                         false,
+                        level,
                     )
                     .await?;
                 if node.space_id != space.id {
@@ -327,14 +388,12 @@ impl<'a> LocationPass<'a> {
                     node.kind,
                     ConfluenceNodeKind::Page | ConfluenceNodeKind::Folder
                 ) {
-                    location.ancestors.push(content_identity(
-                        &self.site,
-                        &space.key,
-                        node.kind.as_str(),
-                        &node.id,
+                    location.ancestors.push(ContainmentAncestor::new(
+                        content_identity(&self.site, node.kind.as_str(), &node.id),
+                        location.containers.clone(),
                     ));
                 }
-                self.graph.push(NodeFact::of(&node, self.level));
+                self.graph.push(NodeFact::of(&node, level));
                 parent = node.parent;
             }
         }
@@ -368,7 +427,7 @@ impl<'a> LocationPass<'a> {
             .backend
             .blog_location_metadata(id, status, self.credential, self.budget)
             .await
-            .map_err(location_backend_error)?
+            .map_err(|error| self.backend_error(error))?
             .value;
         if blog.status != status {
             return Err(location_unresolved());
@@ -384,7 +443,7 @@ impl<'a> LocationPass<'a> {
             .push((blog.id.clone(), blog.space_id.clone(), blog.status));
         Ok((
             ContentLocation::new(
-                content_identity(&self.site, &space.key, "blog", id),
+                content_identity(&self.site, "blog", id),
                 vec![ResourceContainer::new(
                     CONFLUENCE_SPACE_RESOURCE.id().clone(),
                     &space.key,
@@ -691,7 +750,7 @@ impl ConfluenceProvider {
                             ConfluenceContentStatus::Draft,
                         ));
                         ContentLocation::new(
-                            content_identity(&pass.site, &space.key, "blog", &handle.content_id),
+                            content_identity(&pass.site, "blog", &handle.content_id),
                             vec![ResourceContainer::new(
                                 CONFLUENCE_SPACE_RESOURCE.id().clone(),
                                 &space.key,
@@ -794,14 +853,20 @@ impl ConfluenceProvider {
                     .location(destination_node, ContainmentProvenance::Observed)
                     .await?;
                 if placement.target == current.target
-                    || placement.ancestors.contains(&current.target)
+                    || placement
+                        .ancestors
+                        .iter()
+                        .any(|ancestor| ancestor.identity == current.target)
                 {
                     return Err(location_unresolved());
                 }
                 let mut proposed = current.clone();
-                proposed.ancestors = std::iter::once(placement.target.clone())
-                    .chain(placement.ancestors.iter().cloned())
-                    .collect();
+                proposed.ancestors = std::iter::once(ContainmentAncestor::new(
+                    placement.target.clone(),
+                    placement.containers.clone(),
+                ))
+                .chain(placement.ancestors.iter().cloned())
+                .collect();
                 proposed.provenance = ContainmentProvenance::Proposed;
                 destination = Some(selected);
                 (
@@ -817,8 +882,16 @@ impl ConfluenceProvider {
         };
         let mut related = Vec::new();
         if is_move {
+            if roots.len() > MAX_ROOT_ENTRIES {
+                return Err(move_relation_failure(
+                    location_unresolved(),
+                    None,
+                    "root_budget_exhausted",
+                ));
+            }
             let mut seen = BTreeSet::new();
-            for selector in roots {
+            let mut overlapping = 0;
+            for (ordinal, selector) in roots.iter().enumerate() {
                 if selector.resource_type() != CONFLUENCE_CONTENT_RESOURCE.id() {
                     continue;
                 }
@@ -831,40 +904,69 @@ impl ConfluenceProvider {
                 let root = locations::parse_canonical_content_location(value)
                     .map_err(|_| ProviderStateError::TypeMismatch)?;
                 if root.site_origin != pass.site
-                    || root.space_key != space.key
                     || root.kind == locations::ContentLocationKind::Blog
                 {
                     continue;
                 }
+                // Dedup after recording the original issued-slice ordinal. Exact
+                // and subtree selectors share one stable identity and witness.
                 if !seen.insert(value.clone()) {
                     continue;
-                }
-                if seen.len() > MAX_MOVE_ROOTS {
-                    return Err(location_unresolved());
                 }
                 let kind = match root.kind {
                     locations::ContentLocationKind::Page => ConfluenceNodeKind::Page,
                     locations::ContentLocationKind::Folder => ConfluenceNodeKind::Folder,
                     _ => return Err(ProviderStateError::TypeMismatch.into()),
                 };
-                let node = pass
-                    .node(
-                        kind,
-                        root.id.as_deref().ok_or(ProviderStateError::Missing)?,
-                        ConfluenceContentStatus::Current,
-                        false,
-                    )
-                    .await
-                    .map_err(move_relation_failure)?;
-                if node.space_id != space.id {
-                    return Err(move_relation_failure(location_unresolved()));
-                }
-                related.push(
-                    pass.location(node, ContainmentProvenance::Observed)
+                let id = root.id.as_deref().ok_or(ProviderStateError::Missing)?;
+                pass.failure_category = "unconfirmed";
+                let witness = async {
+                    let first = pass
+                        .node_at_level(
+                            kind,
+                            id,
+                            ConfluenceContentStatus::Current,
+                            false,
+                            ContainmentEvidenceLevel::ContainerOnly,
+                        )
+                        .await?;
+                    let root_space = pass.space(&first.space_id).await?;
+                    // All move regions have the operation's observed space. Both
+                    // immutable numeric ID and current key must prove separation.
+                    let disjoint = root_space.id != space.id && root_space.key != space.key;
+                    let witness_level = if disjoint {
+                        ContainmentEvidenceLevel::ContainerOnly
+                    } else {
+                        ContainmentEvidenceLevel::CompleteLineage
+                    };
+                    if !disjoint {
+                        overlapping += 1;
+                        if overlapping > MAX_MOVE_ROOTS {
+                            pass.failure_category = "root_budget_exhausted";
+                            return Err(location_unresolved());
+                        }
+                    }
+                    let node = if disjoint {
+                        first
+                    } else {
+                        pass.node_at_level(
+                            kind,
+                            id,
+                            ConfluenceContentStatus::Current,
+                            false,
+                            witness_level,
+                        )
+                        .await?
+                    };
+                    pass.location_at_level(node, ContainmentProvenance::Observed, witness_level)
                         .await
-                        .map_err(move_relation_failure)?
-                        .0,
-                );
+                        .map(|(location, _)| location)
+                }
+                .await
+                .map_err(|error| {
+                    move_relation_failure(error, Some(ordinal), pass.failure_category)
+                })?;
+                related.push(witness);
             }
         }
         Ok(ContentProof {
@@ -1104,12 +1206,21 @@ impl ContentOperationState {
             .and_then(|proof| proof.get("diagnostic"))
             .and_then(Value::as_str)
             == Some(MOVE_RELATION_DIAGNOSTIC)
-            && let Some(category @ ("not_visible_or_absent" | "unconfirmed")) = previous
+            && let Some(
+                category @ ("not_visible_or_absent" | "unconfirmed" | "root_budget_exhausted"),
+            ) = previous
                 .and_then(|proof| proof.get("category"))
                 .and_then(Value::as_str)
         {
             proof["diagnostic"] = json!(MOVE_RELATION_DIAGNOSTIC);
             proof["category"] = json!(category);
+            proof["finalCheck"] = json!("unresolved");
+            if let Some(ordinal) = previous
+                .and_then(|proof| proof.get("rootOrdinal"))
+                .and_then(Value::as_u64)
+            {
+                proof["rootOrdinal"] = json!(ordinal);
+            }
         }
         error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] = proof;
     }

@@ -1868,9 +1868,8 @@ fn resource_policy_route_specs(
             "type":"object", "additionalProperties":false, "required":["service","url","coverage"],
             "properties": {
                 "service":service_name_schema(),
-                "url":{"type":"string","minLength":1,"description":"HTTPS location on the selected service's configured site. Preview performs no upstream lookup."},
-                "coverage":{"enum":["space","exact","subtree"]},
-                "spaceKey":{"type":"string","minLength":1,"description":"Optional canonical space-key assertion; not an upstream-verified alias."}
+                "url":{"type":"string","minLength":1,"description":"HTTPS browser location on the selected service's configured site. Normalization performs no upstream lookup."},
+                "coverage":{"enum":["space","exact","subtree"]}
             }
         }),
     );
@@ -1900,13 +1899,12 @@ fn resource_policy_route_specs(
         normalize,
         json!({
             "type":"object", "additionalProperties":false,
-            "required":["resourceType","selector","locationKind","configuredSpaceKey","verification"],
+            "required":["resourceType","selector","locationKind","verification"],
             "properties":{
                 "resourceType":{"type":"string"},
                 "selector":{"type":"object","additionalProperties":false,"required":["kind","value"],
                     "properties":{"kind":{"enum":["exact","subtree"]},"value":{"type":"string","minLength":1}}},
                 "locationKind":{"type":"string"},
-                "configuredSpaceKey":{"type":"string"},
                 "verification":{"const":"not_checked"}
             }
         }),

@@ -55,7 +55,7 @@ fn selector(resource_type: &str, selector: ResourceSelector) -> TypedResourceSel
 }
 
 fn content(kind: &str, id: &str, subtree: bool) -> TypedResourceSelector {
-    let value = format!("{SITE}/wiki/spaces/ENG/{kind}/{id}");
+    let value = format!("{SITE}/wiki/content/{kind}/{id}");
     selector(
         "confluence_content",
         if subtree {
@@ -79,35 +79,32 @@ fn compile_boundary(boundary: ContainmentBoundary) -> String {
 }
 
 #[test]
-fn folder_exclusion_negates_the_whole_pinned_selector() {
+fn folder_exclusion_negates_unpinned_ancestry_predicate() {
     let value = compile_boundary(ContainmentBoundary::new(
         vec![selector("confluence_space", ResourceSelector::All)],
         vec![content("folder", "123", true)],
     ));
-    assert_eq!(
-        value,
-        "((type = page) AND NOT ((space = \"ENG\" AND ancestor = 123)))"
-    );
-    // It must not exclude the same numeric ID in every site/space, and must not
-    // omit the ancestor constraint in favor of a broader space-only scan.
-    assert!(value.contains("NOT ((space = \"ENG\" AND ancestor = 123))"));
+    assert_eq!(value, "((type = page) AND NOT (ancestor = 123))");
+    // Site identity is checked before compilation; current space never narrows
+    // a content selector, including a negative subtree predicate.
+    assert!(value.contains("NOT (ancestor = 123)"));
 }
 
 #[test]
 fn page_subtree_includes_self_but_exact_page_has_no_ancestor_predicate() {
     assert_eq!(
         compile_boundary(ContainmentBoundary::new(
-            vec![content("pages", "123", true)],
+            vec![content("page", "123", true)],
             vec![]
         )),
-        "(((space = \"ENG\" AND (id = 123 OR ancestor = 123))))"
+        "(((id = 123 OR ancestor = 123)))"
     );
     assert_eq!(
         compile_boundary(ContainmentBoundary::new(
-            vec![content("pages", "123", false)],
+            vec![content("page", "123", false)],
             vec![]
         )),
-        "(((space = \"ENG\" AND id = 123)))"
+        "((id = 123))"
     );
 }
 
@@ -125,7 +122,7 @@ fn inapplicable_blog_or_other_site_never_broadens_page_authority() {
     let mut output = QueryWriter::new();
     write_selector(
         &mut output,
-        &content("pages", "123", false),
+        &content("page", "123", false),
         ConfluenceSearchContentKind::Page,
         "https://other.atlassian.net",
     )
@@ -166,16 +163,16 @@ fn winning_union_preserves_local_subtraction_and_independent_token_conjunction()
                 vec![content("folder", "10", true)],
             ),
             // Another same-band grant restores the page but not the token's deny.
-            ContainmentBoundary::new(vec![content("pages", "20", false)], vec![]),
+            ContainmentBoundary::new(vec![content("page", "20", false)], vec![]),
         ],
         Some(ContainmentBoundary::new(
             vec![content("folder", "30", true)],
-            vec![content("pages", "40", false)],
+            vec![content("page", "40", false)],
         )),
     );
     assert_eq!(
         compile_content_authority(&authorization, SITE).unwrap(),
-        "(((type = page) AND NOT ((space = \"ENG\" AND ancestor = 10))) OR (((space = \"ENG\" AND id = 20)))) AND (((space = \"ENG\" AND ancestor = 30)) AND NOT ((space = \"ENG\" AND id = 40)))"
+        "(((type = page) AND NOT (ancestor = 10)) OR ((id = 20))) AND ((ancestor = 30) AND NOT (id = 40))"
     );
 }
 
@@ -205,14 +202,14 @@ fn caller_filter_is_grouped_after_complete_authority_and_sort_is_last() {
     .unwrap();
     assert_eq!(
         built.cql,
-        "type = page AND (((((space = \"ENG\" AND ancestor = 10)))) AND (((space = \"ENG\" AND ancestor = 20)))) AND (space = \"ENG\") AND (title ~ \"sentinel\" OR space = OTHER) ORDER BY title ASC"
+        "type = page AND ((((ancestor = 10))) AND ((ancestor = 20))) AND (space = \"ENG\") AND (title ~ \"sentinel\" OR space = OTHER) ORDER BY title ASC"
     );
     assert!(!built.canonical_caller_cql.contains("ancestor"));
     assert_eq!(built.kind, "cql");
 }
 
 #[test]
-fn requested_spaces_accept_content_roots_but_one_proven_empty_space_denies_all() {
+fn requested_spaces_keep_unpinned_content_roots_conditional_in_every_space() {
     let authorization = authority(
         vec![ContainmentBoundary::new(
             vec![content("folder", "10", true)],
@@ -229,9 +226,9 @@ fn requested_spaces_accept_content_roots_but_one_proven_empty_space_denies_all()
     );
     assert_eq!(
         requested_space_coverage(&authorization, "OTHER").unwrap(),
-        OfflineContainmentProof::Empty
+        OfflineContainmentProof::Conditional
     );
-    let error = build_containment_search_query(
+    let query = build_containment_search_query(
         &ConfluenceSearchQueryInput::Cql {
             value: String::new(),
         },
@@ -241,8 +238,8 @@ fn requested_spaces_accept_content_roots_but_one_proven_empty_space_denies_all()
         ConfluenceSearchContentKind::Page,
         SITE,
     )
-    .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+    .unwrap();
+    assert!(query.cql.contains("(space = \"ENG\" OR space = \"OTHER\")"));
 }
 
 #[test]
@@ -273,7 +270,7 @@ fn empty_token_and_foreign_site_never_widen_collection_authority() {
 
 #[test]
 fn compiler_counts_occurrences_and_bounds_output_before_transport_encoding() {
-    let repeated = ContainmentBoundary::new(vec![content("pages", "10", false)], vec![]);
+    let repeated = ContainmentBoundary::new(vec![content("page", "10", false)], vec![]);
     let authorization = authority(vec![repeated; MAX_AUTHORITY_SELECTOR_OCCURRENCES + 1], None);
     assert_eq!(
         compile_content_authority(&authorization, SITE)
@@ -283,10 +280,10 @@ fn compiler_counts_occurrences_and_bounds_output_before_transport_encoding() {
     );
     // Below the occurrence ceiling, long canonical IDs still exceed the private
     // output allocation cap. The backend separately checks percent-encoded URI size.
-    let selected = (0..2000u64)
+    let selected = (0..3000u64)
         .map(|index| {
             content(
-                "pages",
+                "page",
                 &(10000000000000000000u64 + index).to_string(),
                 false,
             )

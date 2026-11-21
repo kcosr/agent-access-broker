@@ -177,13 +177,19 @@ fn schemas_expose_plain_fields_and_effective_content_types() {
                 assert_eq!(schema["properties"][field]["type"], "string");
                 let meaning = match (action, field) {
                     ("page.move", "pageId") => "ID of the page to move",
-                    ("page.move", "url") => "Web URL of the page to move",
+                    ("page.move", "url") => {
+                        "Current browser URL of the page to move, not a resource identity URI"
+                    }
                     (_, "pageId") => "Page ID",
                     (_, "blogId") => "Blog post ID",
-                    (_, "url") if id == "blogId" => "Blog post web URL",
-                    (_, "url") => "Page web URL",
+                    (_, "url") if id == "blogId" => {
+                        "Current blog browser URL, not a resource identity URI"
+                    }
+                    (_, "url") => "Current page browser URL, not a resource identity URI",
                     (_, "targetPageId") => "Target page ID",
-                    (_, "targetUrl") => "Target page web URL",
+                    (_, "targetUrl") => {
+                        "Current target page browser URL, not a resource identity URI"
+                    }
                     _ => panic!("unexpected locator field {field}"),
                 };
                 assert_eq!(
@@ -206,7 +212,7 @@ fn schemas_expose_plain_fields_and_effective_content_types() {
                 );
                 assert_eq!(
                     properties["parentUrl"]["description"],
-                    "Parent page or folder URL. Do not combine with parent."
+                    "Current parent page or folder browser URL, not a resource identity URI. Do not combine with parent."
                 );
             }
         }

@@ -861,8 +861,9 @@ expected upstream incompatibility when present.
 Scope composition emits the fixed positive content-type predicate first, then
 the complete winning-grant union and independent token boundary, then requested
 spaces and the grouped caller filter. Each grant keeps its own exclusions.
-Content roots pin both space and ID/ancestor predicates. `ORDER BY` follows the
-complete expression. Caller predicates never grant authority or remove a policy
+Content roots use ID/ancestor predicates without an authored space pin; explicit
+space resources and requested-space filters remain independent constraints.
+`ORDER BY` follows the complete expression. Caller predicates never grant authority or remove a policy
 exclusion. The separate trusted compiler can emit grouped negation without
 extending the caller CQL grammar.
 
@@ -874,14 +875,18 @@ empty requested space denies the request. A conditional intersection can return
 an exhausted empty result. Caller aliases do not change the canonical space key
 used for authorization.
 
-Space-only and exact-only collection authority validates returned rows without
-per-candidate metadata requests. Hierarchy-dependent authority obtains current
-bounded proofs and rechecks selected results. A valid candidate outside authority
-is discarded; lost containment fails with `scope_unresolved`, while malformed
-upstream evidence fails with `upstream_protocol_failed`. Neither releases partial
-results. Counts include released rows only. Candidate/request/byte
-limits can yield an empty page with continuation and `scanStatus`; they do not
-imply exhaustion. See [search containment](confluence-content-access.md#search-and-discovery).
+Only complete scalar-space authority (all winning-grant and token inclusions
+and exclusions) validates indexed rows without per-candidate metadata requests.
+That path retains index-lag behavior. Any content selector requires fresh bounded
+content/space proof initially and before release; hierarchy-dependent authority
+also proves current ancestry. Stale indexed space, a valid boundary mismatch or
+changed final placement filters the row. A failed proof, including an unreadable
+candidate or ancestor, fails the whole response with the existing scope/upstream
+reason and releases no partial rows or token. Sequential metadata work shares
+request/byte/deadline limits; a content-constrained page can be shorter than
+`maxResults`. A scan stopped before starting a later candidate may return checked
+rows and `scanStatus` with continuation. Counts include released rows only; an
+empty page with continuation does not imply exhaustion. See [search containment](confluence-content-access.md#search-and-discovery).
 
 Examples with a finite space scope of `ENG`:
 

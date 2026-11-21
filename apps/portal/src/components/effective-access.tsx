@@ -54,7 +54,7 @@ export function AccessCoverage({ coverage }: { coverage: EffectiveAccessScope })
   if (coverage.scope === "resource") return <AccessClauses type={coverage.resourceType} clauses={coverage.clauses} />;
   if (coverage.projectionStatus === "complete" && coverage.clauses.length === 0) return <span>No access currently</span>;
   const rootVisibilityWarning = coverage.requiresRuntimeRootVisibility
-    ? <p className="pt-clause-note">Moves require runtime visibility of relevant excluded roots. This offline preview does not check whether those roots are current or readable. A stale, absent or unreadable root can block moves throughout its space. An administrator can inspect the configured exclusion and correct or remove it.</p>
+    ? <p className="pt-clause-note">Moves require runtime visibility of relevant excluded roots. This offline preview does not check whether those roots are current or readable. A stale, absent or unreadable root can block moves throughout the site. A root may be unreadable because the selected user legitimately lacks access. An administrator can inspect protected diagnostics and deliberately adjust visibility or policy when appropriate.</p>
     : null;
   if (coverage.projectionStatus === "too_complex") return <div className="flex flex-col gap-2"><p className="pt-prose">Coverage preview unavailable. Existing selections still apply; current policy is checked at invocation.</p>{rootVisibilityWarning}</div>;
   return <div className="flex flex-col gap-2">

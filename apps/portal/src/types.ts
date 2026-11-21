@@ -181,10 +181,10 @@ export type ResourceLocationService = {
   service: string; resourceTypes: ResourceType[]; siteHost: string;
   locationKinds: string[]; coverageKinds: string[]; normalizationRoute: string;
 };
-export type ResourceLocationRequest = { service: string; url: string; coverage: "space" | "exact" | "subtree"; spaceKey?: string };
+export type ResourceLocationRequest = { service: string; url: string; coverage: "space" | "exact" | "subtree" };
 export type NormalizedResourceLocation = {
   resourceType: ResourceType; selector: ResourceSelector; locationKind: string;
-  configuredSpaceKey: string; verification: "not_checked";
+  verification: "not_checked";
 };
 export type EffectiveAccessResult = { policyGeneration: number; access: EffectiveAccessItem[] };
 export type GrantEffectiveAccessBody = { service: string; credentialMode: string; actions: string[]; executionContexts: string[]; resources: ResourceSelection };

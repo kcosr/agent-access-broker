@@ -1223,8 +1223,10 @@ priority = 0                  # optional
   `confluence_content` does not.
 - The type and selector combination must be unique, independent of name,
   contexts, and enabled state. Unknown fields and invalid combinations are
-  rejected. Confluence content uses exact canonical page/blog URLs or
-  page/folder `subtree` URLs; see [content access](confluence-content-access.md).
+  rejected. Confluence content uses strict identity values
+  `https://<site>/wiki/content/{page|folder|blog}/<ID>` with exact page/blog or
+  page/folder subtree coverage. These values have no space coordinate and are
+  not browser URLs; see [content access](confluence-content-access.md).
   Jira issues have no separate policy scope.
 
 `[[policy.resource_groups]]` fields are `id`, `name`, `included_resource_ids`,

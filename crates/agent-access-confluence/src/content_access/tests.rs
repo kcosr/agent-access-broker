@@ -62,6 +62,8 @@ struct EvidenceBackend {
     hidden_nodes: Mutex<BTreeSet<String>>,
     hidden_for_credential: Mutex<Option<ExecutionCredential>>,
     hierarchy_credentials: Mutex<Vec<ExecutionCredential>>,
+    hierarchy_reads: Mutex<Vec<(String, bool)>>,
+    weak_parent_omissions: bool,
     space: Mutex<ConfluenceSpace>,
     extra_spaces: Mutex<BTreeMap<String, ConfluenceSpace>>,
     page_reads: AtomicUsize,
@@ -112,6 +114,8 @@ impl EvidenceBackend {
             hidden_nodes: Mutex::new(BTreeSet::new()),
             hidden_for_credential: Mutex::new(None),
             hierarchy_credentials: Mutex::new(Vec::new()),
+            hierarchy_reads: Mutex::new(Vec::new()),
+            weak_parent_omissions: false,
             space: Mutex::new(space()),
             extra_spaces: Mutex::new(BTreeMap::new()),
             page_reads: AtomicUsize::new(0),
@@ -199,12 +203,16 @@ impl ConfluenceBackend for EvidenceBackend {
         kind: ConfluenceNodeKind,
         id: &str,
         status: ConfluenceContentStatus,
-        _require_parent: bool,
+        require_parent: bool,
         credential: &AtlassianCredential,
         budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
         budget.charge_request()?;
         budget.charge_bytes(100)?;
+        self.hierarchy_reads
+            .lock()
+            .unwrap()
+            .push((id.to_owned(), require_parent));
         let material = credential
             .static_credential()
             .expect("fixture uses static credentials");
@@ -241,6 +249,9 @@ impl ConfluenceBackend for EvidenceBackend {
         }
         if node.status != status {
             return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        if self.weak_parent_omissions && !require_parent {
+            node.parent = None;
         }
         ok(node)
     }
@@ -343,7 +354,14 @@ impl ConfluenceBackend for EvidenceBackend {
         budget.charge_bytes(100)?;
         let s = self.space.lock().unwrap().clone();
         if s.id != id {
-            return Err(ConfluenceBackendError::NotFound);
+            return self
+                .extra_spaces
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .map(ok)
+                .unwrap_or(Err(ConfluenceBackendError::NotFound));
         }
         ok(s)
     }
@@ -1052,7 +1070,7 @@ async fn mixed_lineage_keeps_private_edges_and_detects_changes_below_public_proj
         location
             .ancestors
             .iter()
-            .map(|id| id.content_kind.as_str())
+            .map(|ancestor| ancestor.identity.content_kind.as_str())
             .collect::<Vec<_>>(),
         ["folder", "page"]
     );
@@ -1141,7 +1159,7 @@ fn diagnostic_root() -> TypedResourceSelector {
         .typed_selector(
             CONFLUENCE_CONTENT_RESOURCE.id(),
             &ResourceSelector::Subtree {
-                value: "https://example.atlassian.net/wiki/spaces/ENG/pages/900000000001".into(),
+                value: "https://example.atlassian.net/wiki/content/page/900000000001".into(),
             },
         )
         .unwrap()
@@ -1172,6 +1190,7 @@ fn assert_private_move_diagnostic(error: &ProviderError) {
     let proof = &error.audit.as_deref().unwrap()["locationProof"];
     assert_eq!(proof["diagnostic"], "confluence_move_relation_unresolved");
     assert_eq!(proof["category"], "not_visible_or_absent");
+    assert_eq!(proof["rootOrdinal"], 0);
     assert_eq!(proof["finalCheck"], "unresolved");
     let diagnostic = serde_json::to_string(&error.audit).unwrap();
     for forbidden in [
@@ -1224,7 +1243,7 @@ async fn unresolved_move_roots_and_ancestors_are_only_identified_in_protected_au
                 .as_object()
                 .unwrap()
                 .len(),
-            3
+            4
         );
         assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
     }
@@ -1764,3 +1783,5 @@ async fn draft_stage_accepts_only_absent_or_matching_current_probe_responses() {
         }
     }
 }
+
+mod stable_identity;

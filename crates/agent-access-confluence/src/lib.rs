@@ -642,7 +642,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "type": "object",
                 "properties": {
                     "pageId": { "type": "string", "description": "Page ID. Give exactly one of pageId or url." },
-                    "url": { "type": "string", "description": "Page web URL. Give exactly one of pageId or url." }
+                    "url": { "type": "string", "description": "Current page browser URL, not a resource identity URI. Give exactly one of pageId or url." }
                 },
                 "additionalProperties": false
             }),
@@ -692,7 +692,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                         "space": { "type": "string" },
                         "title": { "type": "string" },
                         "parent": creation_parent_schema(),
-                        "parentUrl": { "type": "string", "description": "Parent page or folder URL. Do not combine with parent." }
+                        "parentUrl": { "type": "string", "description": "Current parent page or folder browser URL, not a resource identity URI. Do not combine with parent." }
                     },
                     "additionalProperties": false
                 }),
@@ -712,13 +712,13 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "required": ["position"],
                 "properties": {
                     "pageId": { "type": "string", "description": "ID of the page to move. Give exactly one of pageId or url." },
-                    "url": { "type": "string", "description": "Web URL of the page to move. Give exactly one of pageId or url." },
+                    "url": { "type": "string", "description": "Current browser URL of the page to move, not a resource identity URI. Give exactly one of pageId or url." },
                     "position": {
                         "type": "string",
                         "enum": ["before", "after", "append"]
                     },
                     "targetPageId": { "type": "string", "description": "Target page ID. Give exactly one of targetPageId or targetUrl." },
-                    "targetUrl": { "type": "string", "description": "Target page web URL. Give exactly one of targetPageId or targetUrl." }
+                    "targetUrl": { "type": "string", "description": "Current target page browser URL, not a resource identity URI. Give exactly one of targetPageId or targetUrl." }
                 },
                 "additionalProperties": false
             }),
@@ -800,7 +800,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "type": "object",
                 "properties": {
                     "pageId": { "type": "string", "description": "Page ID. Give exactly one of pageId or url." },
-                    "url": { "type": "string", "description": "Page web URL. Give exactly one of pageId or url." },
+                    "url": { "type": "string", "description": "Current page browser URL, not a resource identity URI. Give exactly one of pageId or url." },
                     "maxResults": { "type": "integer", "minimum": 1 },
                     "nextPageToken": { "type": "string" }
                 },
@@ -833,7 +833,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "type": "object",
                 "properties": {
                     "blogId": { "type": "string", "description": "Blog post ID. Give exactly one of blogId or url." },
-                    "url": { "type": "string", "description": "Blog post web URL. Give exactly one of blogId or url." }
+                    "url": { "type": "string", "description": "Current blog browser URL, not a resource identity URI. Give exactly one of blogId or url." }
                 },
                 "additionalProperties": false
             }),
@@ -964,7 +964,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                 "type": "object",
                 "properties": {
                     "blogId": { "type": "string", "description": "Blog post ID. Give exactly one of blogId or url." },
-                    "url": { "type": "string", "description": "Blog post web URL. Give exactly one of blogId or url." },
+                    "url": { "type": "string", "description": "Current blog browser URL, not a resource identity URI. Give exactly one of blogId or url." },
                     "maxResults": { "type": "integer", "minimum": 1 },
                     "nextPageToken": { "type": "string" }
                 },
@@ -1033,7 +1033,7 @@ fn confluence_draft_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDesc
             create_properties.insert("parent".to_string(), creation_parent_schema());
             create_properties.insert(
                 "parentUrl".to_string(),
-                json!({ "type": "string", "description": "Parent page or folder URL. Do not combine with parent." }),
+                json!({ "type": "string", "description": "Current parent page or folder browser URL, not a resource identity URI. Do not combine with parent." }),
             );
         }
         let create_schema = required_confluence_content_schema(

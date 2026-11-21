@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-const ROOT: &str = "https://example.atlassian.net/wiki/spaces/ENG/pages/200";
+const ROOT: &str = "https://example.atlassian.net/wiki/content/page/200";
 const BODY: &str = "<p>matrix content</p>";
 
 struct MatrixBackend {
@@ -1064,7 +1064,7 @@ async fn admitted(
     } else if action.starts_with("blog.") {
         ResourceSelector::Exact {
             value: format!(
-                "https://example.atlassian.net/wiki/spaces/ENG/blog/{}",
+                "https://example.atlassian.net/wiki/content/blog/{}",
                 if consumes_draft_handle(action) {
                     "800"
                 } else {
@@ -1074,7 +1074,7 @@ async fn admitted(
         }
     } else if consumes_draft_handle(action) {
         ResourceSelector::Exact {
-            value: "https://example.atlassian.net/wiki/spaces/ENG/pages/400".into(),
+            value: "https://example.atlassian.net/wiki/content/page/400".into(),
         }
     } else {
         ResourceSelector::Subtree { value: ROOT.into() }

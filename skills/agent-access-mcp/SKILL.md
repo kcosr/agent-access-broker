@@ -123,6 +123,11 @@ Provider continuation is separate: follow the action's documented fields,
 preserve its query settings, and stop at the requested scope or end of results.
 Never manufacture a cursor or assume a saved page is a complete collection.
 
+Policy selector values can be stable identities rather than callable URLs.
+Use the selected action's schema, documentation and input examples to map an
+identity to its ID or typed locator; do not pass it as a URL merely because it
+has URL syntax. Provided action `inputs` remain usable as supplied.
+
 ## Local files and sensitive values
 
 HTTP MCP requires inline `inputs` for provider calls and excludes multipart

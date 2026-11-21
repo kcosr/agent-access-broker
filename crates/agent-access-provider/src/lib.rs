@@ -244,9 +244,9 @@ pub use config::{
     validate_upstream_allowlist, validate_upstream_base_url, validate_url_patterns,
 };
 pub use containment::{
-    ContainmentAuthorization, ContainmentBoundary, ContainmentCollectionAuthorization,
-    ContainmentEffect, ContainmentError, ContainmentEvidence, ContainmentEvidenceLevel,
-    ContainmentIdentity, ContainmentObligation, ContainmentProvenance,
+    ContainmentAncestor, ContainmentAuthorization, ContainmentBoundary,
+    ContainmentCollectionAuthorization, ContainmentEffect, ContainmentError, ContainmentEvidence,
+    ContainmentEvidenceLevel, ContainmentIdentity, ContainmentObligation, ContainmentProvenance,
     ContainmentScopeCapabilities, ContentLocation, OfflineContainmentProof, TypedResourceSelector,
 };
 pub use continuation::{

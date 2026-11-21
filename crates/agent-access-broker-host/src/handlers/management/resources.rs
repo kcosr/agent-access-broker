@@ -842,8 +842,6 @@ struct ResourceLocationBody {
     service: String,
     url: String,
     coverage: String,
-    #[serde(default, deserialize_with = "deserialize_patch")]
-    space_key: Option<String>,
 }
 
 pub(crate) async fn admin_policy_resource_locations_normalize(
@@ -917,8 +915,7 @@ pub(crate) async fn admin_policy_resource_locations_normalize(
         authority.origin(),
         &body.url,
         &body.coverage,
-    )
-    .with_space_key(body.space_key.as_deref());
+    );
     match runtime
         .resource_types()
         .normalize_location(capability.normalizer(), &request)

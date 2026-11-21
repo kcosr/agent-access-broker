@@ -742,6 +742,13 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   Space keys preserve exact upstream case, including ordinary keys with mixed
   case, a leading digit, or one character; keep the shared catalog, input, CQL,
   and response validator aligned. Never normalize keys for authorization.
+  Content policy identities bind site/kind/ID in `/wiki/content/{kind}/{ID}`;
+  current space and ancestor containers are observed evidence. Keep action browser
+  URL key-or-alias consistency separate from offline resource normalization. Pure
+  scalar-container search may retain indexed rows only after checking every
+  winning-grant/token inclusion and exclusion; content participation requires
+  fresh candidate proof. Preserve exact failed-root audit provenance without
+  exposing upstream root values or substituting unrelated configured IDs.
 - `crates/agent-access-gitlab`: the GitLab backend (`backend.rs` wire seam,
   pagination headers, and HTTP client, `access.rs` the credential each request
   presents: a static token, or delegated access pinned to the instance before

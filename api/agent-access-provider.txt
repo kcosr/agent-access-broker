@@ -2616,6 +2616,26 @@ impl core::marker::Unpin for agent_access_provider::ConnectedIdentity
 impl core::marker::UnsafeUnpin for agent_access_provider::ConnectedIdentity
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ConnectedIdentity
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ConnectedIdentity
+#[non_exhaustive] pub struct agent_access_provider::ContainmentAncestor
+pub agent_access_provider::ContainmentAncestor::containers: alloc::vec::Vec<agent_access_provider::ResourceContainer>
+pub agent_access_provider::ContainmentAncestor::identity: agent_access_provider::ContainmentIdentity
+impl agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::new(agent_access_provider::ContainmentIdentity, alloc::vec::Vec<agent_access_provider::ResourceContainer>) -> Self
+impl core::clone::Clone for agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::clone(&self) -> agent_access_provider::ContainmentAncestor
+impl core::cmp::Eq for agent_access_provider::ContainmentAncestor
+impl core::cmp::PartialEq for agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::eq(&self, &agent_access_provider::ContainmentAncestor) -> bool
+impl core::fmt::Debug for agent_access_provider::ContainmentAncestor
+pub fn agent_access_provider::ContainmentAncestor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::ContainmentAncestor
+impl core::marker::Freeze for agent_access_provider::ContainmentAncestor
+impl core::marker::Send for agent_access_provider::ContainmentAncestor
+impl core::marker::Sync for agent_access_provider::ContainmentAncestor
+impl core::marker::Unpin for agent_access_provider::ContainmentAncestor
+impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentAncestor
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentAncestor
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentAncestor
 pub struct agent_access_provider::ContainmentAuthorization
 impl agent_access_provider::ContainmentAuthorization
 pub fn agent_access_provider::ContainmentAuthorization::authority_digest(&self) -> &str
@@ -2674,6 +2694,7 @@ pub fn agent_access_provider::ContainmentCollectionAuthorization::matches_candid
 pub fn agent_access_provider::ContainmentCollectionAuthorization::requested_container_coverage(&self, &agent_access_provider::ResourceContainer) -> agent_access_provider::OfflineContainmentProof
 pub fn agent_access_provider::ContainmentCollectionAuthorization::site_origin(&self) -> &str
 pub fn agent_access_provider::ContainmentCollectionAuthorization::token_boundary(&self) -> core::option::Option<&agent_access_provider::ContainmentBoundary>
+pub fn agent_access_provider::ContainmentCollectionAuthorization::uses_only_scalar_container_selectors(&self) -> bool
 impl core::clone::Clone for agent_access_provider::ContainmentCollectionAuthorization
 pub fn agent_access_provider::ContainmentCollectionAuthorization::clone(&self) -> agent_access_provider::ContainmentCollectionAuthorization
 impl core::fmt::Debug for agent_access_provider::ContainmentCollectionAuthorization
@@ -2772,14 +2793,14 @@ impl core::marker::UnsafeUnpin for agent_access_provider::ContainmentScopeCapabi
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ContainmentScopeCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ContainmentScopeCapabilities
 #[non_exhaustive] pub struct agent_access_provider::ContentLocation
-pub agent_access_provider::ContentLocation::ancestors: alloc::vec::Vec<agent_access_provider::ContainmentIdentity>
+pub agent_access_provider::ContentLocation::ancestors: alloc::vec::Vec<agent_access_provider::ContainmentAncestor>
 pub agent_access_provider::ContentLocation::containers: alloc::vec::Vec<agent_access_provider::ResourceContainer>
 pub agent_access_provider::ContentLocation::evidence_level: agent_access_provider::ContainmentEvidenceLevel
 pub agent_access_provider::ContentLocation::provenance: agent_access_provider::ContainmentProvenance
 pub agent_access_provider::ContentLocation::target: agent_access_provider::ContainmentIdentity
 impl agent_access_provider::ContentLocation
 pub fn agent_access_provider::ContentLocation::new(agent_access_provider::ContainmentIdentity, alloc::vec::Vec<agent_access_provider::ResourceContainer>, agent_access_provider::ContainmentEvidenceLevel) -> Self
-pub fn agent_access_provider::ContentLocation::with_ancestors(self, alloc::vec::Vec<agent_access_provider::ContainmentIdentity>) -> Self
+pub fn agent_access_provider::ContentLocation::with_ancestors(self, alloc::vec::Vec<agent_access_provider::ContainmentAncestor>) -> Self
 pub fn agent_access_provider::ContentLocation::with_provenance(self, agent_access_provider::ContainmentProvenance) -> Self
 impl core::clone::Clone for agent_access_provider::ContentLocation
 pub fn agent_access_provider::ContentLocation::clone(&self) -> agent_access_provider::ContentLocation
@@ -3558,9 +3579,7 @@ impl<'a> agent_access_provider::LocationNormalizationRequest<'a>
 pub fn agent_access_provider::LocationNormalizationRequest<'a>::coverage(&self) -> &'a str
 pub fn agent_access_provider::LocationNormalizationRequest<'a>::declared_site(&self) -> &'a str
 pub fn agent_access_provider::LocationNormalizationRequest<'a>::new(&'a str, &'a str, &'a str) -> Self
-pub fn agent_access_provider::LocationNormalizationRequest<'a>::space_key(&self) -> core::option::Option<&'a str>
 pub fn agent_access_provider::LocationNormalizationRequest<'a>::url(&self) -> &'a str
-pub fn agent_access_provider::LocationNormalizationRequest<'a>::with_space_key(self, core::option::Option<&'a str>) -> Self
 impl<'a> core::clone::Clone for agent_access_provider::LocationNormalizationRequest<'a>
 pub fn agent_access_provider::LocationNormalizationRequest<'a>::clone(&self) -> agent_access_provider::LocationNormalizationRequest<'a>
 impl<'a> core::fmt::Debug for agent_access_provider::LocationNormalizationRequest<'a>
@@ -3763,13 +3782,12 @@ impl core::marker::UnsafeUnpin for agent_access_provider::NonScalarResourceSelec
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::NonScalarResourceSelector
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::NonScalarResourceSelector
 #[non_exhaustive] pub struct agent_access_provider::NormalizedResourceLocation
-pub agent_access_provider::NormalizedResourceLocation::configured_space_key: alloc::string::String
 pub agent_access_provider::NormalizedResourceLocation::location_kind: alloc::string::String
 pub agent_access_provider::NormalizedResourceLocation::resource_type: agent_access_provider::ResourceType
 pub agent_access_provider::NormalizedResourceLocation::selector: agent_access_provider::ResourceSelector
 pub agent_access_provider::NormalizedResourceLocation::verification: &'static str
 impl agent_access_provider::NormalizedResourceLocation
-pub fn agent_access_provider::NormalizedResourceLocation::new(agent_access_provider::ResourceType, agent_access_provider::ResourceSelector, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::NormalizedResourceLocation::new(agent_access_provider::ResourceType, agent_access_provider::ResourceSelector, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::NormalizedResourceLocation
 pub fn agent_access_provider::NormalizedResourceLocation::clone(&self) -> agent_access_provider::NormalizedResourceLocation
 impl core::cmp::Eq for agent_access_provider::NormalizedResourceLocation
@@ -4574,11 +4592,10 @@ impl core::marker::UnsafeUnpin for agent_access_provider::ResourcePattern
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::ResourcePattern
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ResourcePattern
 #[non_exhaustive] pub struct agent_access_provider::ResourceSelectorProjection
-pub agent_access_provider::ResourceSelectorProjection::containers: alloc::vec::Vec<agent_access_provider::ResourceContainer>
 pub agent_access_provider::ResourceSelectorProjection::root_kind: alloc::string::String
 pub agent_access_provider::ResourceSelectorProjection::site_origin: alloc::string::String
 impl agent_access_provider::ResourceSelectorProjection
-pub fn agent_access_provider::ResourceSelectorProjection::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<agent_access_provider::ResourceContainer>) -> Self
+pub fn agent_access_provider::ResourceSelectorProjection::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for agent_access_provider::ResourceSelectorProjection
 pub fn agent_access_provider::ResourceSelectorProjection::clone(&self) -> agent_access_provider::ResourceSelectorProjection
 impl core::cmp::Eq for agent_access_provider::ResourceSelectorProjection
@@ -5619,6 +5636,7 @@ struct agent_access_provider::BrokerBodyPartSpec: named fields, non-exhaustive
 struct agent_access_provider::BuildContext: named fields, private fields
 struct agent_access_provider::CodeExchange: named fields, non-exhaustive
 struct agent_access_provider::ConnectedIdentity: named fields, non-exhaustive
+struct agent_access_provider::ContainmentAncestor: named fields, non-exhaustive
 struct agent_access_provider::ContainmentAuthorization: named fields, private fields
 struct agent_access_provider::ContainmentBoundary: named fields, private fields
 struct agent_access_provider::ContainmentCollectionAuthorization: named fields, private fields

@@ -29,13 +29,12 @@ fn project_value(value: &str) -> Result<ResourceSelectorProjection, LocationNorm
         || LocationNormalizationError::new("selector", "invalid synthetic canonical locator");
     let url = url::Url::parse(value).map_err(|_| invalid())?;
     let parts: Vec<_> = url.path().split('/').collect();
-    if parts.len() != 5
-        || parts[1] != "s"
-        || !area(parts[2])
-        || !matches!(parts[3], "document" | "directory" | "journal")
-        || parts[4].is_empty()
-        || !parts[4].bytes().all(|byte| byte.is_ascii_digit())
-        || parts[4].starts_with('0')
+    if parts.len() != 4
+        || parts[1] != "content"
+        || !matches!(parts[2], "document" | "directory" | "journal")
+        || parts[3].is_empty()
+        || !parts[3].bytes().all(|byte| byte.is_ascii_digit())
+        || parts[3].starts_with('0')
         || url.query().is_some()
         || url.fragment().is_some()
         || url.as_str() != value
@@ -44,8 +43,7 @@ fn project_value(value: &str) -> Result<ResourceSelectorProjection, LocationNorm
     }
     Ok(ResourceSelectorProjection::new(
         url.origin().ascii_serialization(),
-        parts[3],
-        vec![ResourceContainer::new(area_type(), parts[2])],
+        parts[2],
     ))
 }
 fn project(
@@ -69,7 +67,7 @@ static CONTENT: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     ResourceType::from_static("content_item"),
     "Content",
     "Content",
-    "https://docs.example.test/s/ENG/document/1",
+    "https://docs.example.test/content/document/1",
     canonical,
     &[],
 )
@@ -79,7 +77,7 @@ static CONTENT: ResourceTypeDescriptor = ResourceTypeDescriptor::new(
     subtree,
     "This content and descendants",
     "Content",
-    "https://docs.example.test/s/ENG/directory/10",
+    "https://docs.example.test/content/directory/10",
 ))
 .with_selector_projection(project);
 fn registry() -> ResourceTypeRegistry {
@@ -99,13 +97,13 @@ fn contract(effects: Vec<ContainmentEffect>) -> ContainmentScopeCapabilities {
     )
 }
 fn identity(kind: &str, id: u64) -> ContainmentIdentity {
-    identity_in(ORIGIN, "ENG", kind, id)
+    identity_in(ORIGIN, kind, id)
 }
-fn identity_in(origin: &str, area: &str, kind: &str, id: u64) -> ContainmentIdentity {
+fn identity_in(origin: &str, kind: &str, id: u64) -> ContainmentIdentity {
     ContainmentIdentity::new(
         content_type(),
         kind,
-        format!("{origin}/s/{area}/{kind}/{id}"),
+        format!("{origin}/content/{kind}/{id}"),
     )
 }
 fn location(kind: &str, id: u64, ancestors: Vec<ContainmentIdentity>) -> ContentLocation {
@@ -114,7 +112,14 @@ fn location(kind: &str, id: u64, ancestors: Vec<ContainmentIdentity>) -> Content
         vec![ResourceContainer::new(area_type(), "ENG")],
         ContainmentEvidenceLevel::CompleteLineage,
     )
-    .with_ancestors(ancestors)
+    .with_ancestors(
+        ancestors
+            .into_iter()
+            .map(|identity| {
+                ContainmentAncestor::new(identity, vec![ResourceContainer::new(area_type(), "ENG")])
+            })
+            .collect(),
+    )
 }
 fn point(location: ContentLocation) -> ContainmentEvidence {
     ContainmentEvidence::new(
@@ -308,7 +313,7 @@ fn exact_subtree_and_cross_type_exclusions_match_current_facts() {
             .unwrap()
     );
     let other_site = typed(ResourceSelector::Subtree {
-        value: identity_in("https://other.example.test", "ENG", "directory", 10).value,
+        value: identity_in("https://other.example.test", "directory", 10).value,
     });
     assert!(
         boundary(vec![space("ENG")], vec![other_site])
@@ -429,7 +434,10 @@ fn hidden_descendant_exclusion_and_unresolved_root_never_disappear() {
 fn region_transform_and_provenance_are_structurally_checked() {
     let mut evidence = move_evidence();
     if let ContainmentObligation::SubtreeImpact { proposed, .. } = &mut evidence.obligations[0] {
-        proposed.ancestors = vec![identity("directory", 99)];
+        proposed.ancestors = vec![ContainmentAncestor::new(
+            identity("directory", 99),
+            proposed.containers.clone(),
+        )];
     }
     assert_eq!(
         evidence.validate(
@@ -619,11 +627,11 @@ fn offline_proofs_keep_unknown_subtrees_conditional_and_kind_site_filters_explic
     );
     assert_eq!(
         a.prove_intersection(&boundary(vec![space("OPS")], vec![]), &contract, ORIGIN),
-        OfflineContainmentProof::Empty
+        OfflineContainmentProof::Conditional
     );
     assert_eq!(
         boundary(vec![space("ENG")], vec![]).prove_covers(&a, &contract, ORIGIN),
-        OfflineContainmentProof::Covered
+        OfflineContainmentProof::Conditional
     );
     assert_eq!(
         boundary(vec![space("ENG")], vec![subtree_id("directory", 10)])
@@ -687,7 +695,7 @@ fn requested_space_proof_keeps_the_token_conjunction_and_local_exclusions() {
     );
     assert_eq!(
         conditional.requested_container_coverage(&ResourceContainer::new(area_type(), "OPS")),
-        OfflineContainmentProof::Empty
+        OfflineContainmentProof::Conditional
     );
     assert!(
         crate::host::containment_collection_authorization(
@@ -941,3 +949,5 @@ fn native_containment_descriptor_rejects_imported_private_gateway_and_invalid_lo
         });
     assert!(invalid.validate().is_err());
 }
+
+mod refinement;

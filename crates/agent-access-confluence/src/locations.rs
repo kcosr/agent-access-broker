@@ -2,8 +2,8 @@
 use super::{is_space_key, modern_blog_tail_after_date};
 use agent_access_provider::{
     LocationNormalizationError, LocationNormalizationRequest, NormalizedResourceLocation,
-    ResourceContainer, ResourceSelector, ResourceSelectorProjection, ResourceType,
-    ResourceTypeDescriptor, SubtreeSelectorDescriptor,
+    ResourceSelector, ResourceSelectorProjection, ResourceType, ResourceTypeDescriptor,
+    SubtreeSelectorDescriptor,
 };
 use url::{Host, Url};
 
@@ -12,7 +12,7 @@ pub static CONFLUENCE_CONTENT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDes
     ResourceType::from_static("confluence_content"),
     "Confluence content",
     "Confluence content locations",
-    "https://example.atlassian.net/wiki/spaces/ENG/pages/12345",
+    "https://example.atlassian.net/wiki/content/page/12345",
     is_content_location,
     &[],
 )
@@ -22,7 +22,7 @@ pub static CONFLUENCE_CONTENT_RESOURCE: ResourceTypeDescriptor = ResourceTypeDes
     is_subtree_content_location,
     "Page or folder and descendants",
     "Current descendants",
-    "https://example.atlassian.net/wiki/spaces/ENG/folder/67890",
+    "https://example.atlassian.net/wiki/content/folder/67890",
 ))
 .with_selector_projection(project_selector)
 .with_location_normalizer(normalize_location);
@@ -44,37 +44,47 @@ impl ContentLocationKind {
             Self::Blog => "blog",
         }
     }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Space => "",
-            Self::Page => "pages",
-            Self::Folder => "folder",
-            Self::Blog => "blog",
-        }
-    }
 }
 
-/// Authored coordinates only: this value does not prove existence or ancestry.
+/// Stable authored identity, independent of observed content placement.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CanonicalContentLocation {
     pub(crate) site_origin: String,
-    pub(crate) space_key: String,
     pub(crate) kind: ContentLocationKind,
     pub(crate) id: Option<String>,
 }
 
 impl CanonicalContentLocation {
     pub(crate) fn value(&self) -> String {
-        match &self.id {
-            Some(id) => format!(
-                "{}/wiki/spaces/{}/{}/{id}",
-                self.site_origin,
-                self.space_key,
-                self.kind.segment()
-            ),
-            None => format!("{}/wiki/spaces/{}", self.site_origin, self.space_key),
+        format!(
+            "{}/wiki/content/{}/{}",
+            self.site_origin,
+            self.kind.as_str(),
+            self.id
+                .as_deref()
+                .expect("canonical content has an immutable ID")
+        )
+    }
+}
+
+/// A browser locator keeps its route segment only for action URL consistency.
+/// Resource normalization discards that segment for every content identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BrowserContentLocation {
+    pub(crate) site_origin: String,
+    pub(crate) space_key: String,
+    pub(crate) kind: ContentLocationKind,
+    pub(crate) id: Option<String>,
+}
+
+impl BrowserContentLocation {
+    fn content_value(&self) -> String {
+        CanonicalContentLocation {
+            site_origin: self.site_origin.clone(),
+            kind: self.kind,
+            id: self.id.clone(),
         }
+        .value()
     }
 }
 
@@ -96,7 +106,7 @@ fn valid_dns_name(host: &str) -> bool {
         })
 }
 
-fn raw_url_checks(raw: &str) -> Result<(), LocationNormalizationError> {
+fn raw_url_character_checks(raw: &str) -> Result<(), LocationNormalizationError> {
     if raw
         .bytes()
         .any(|byte| byte.is_ascii_control() || byte == b'\\')
@@ -105,6 +115,11 @@ fn raw_url_checks(raw: &str) -> Result<(), LocationNormalizationError> {
             "Location URL contains an unsupported character",
         ));
     }
+    Ok(())
+}
+
+fn raw_url_checks(raw: &str) -> Result<(), LocationNormalizationError> {
+    raw_url_character_checks(raw)?;
     let Some((scheme, rest)) = raw.split_once("://") else {
         return Err(invalid_url("Location URL must use HTTPS"));
     };
@@ -177,42 +192,32 @@ pub(crate) fn is_canonical_content_id(value: &str) -> bool {
         && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn parse_location(
-    raw: &str,
-    decorated: bool,
-) -> Result<CanonicalContentLocation, LocationNormalizationError> {
-    let (url, site_origin) = parsed_url(raw)?;
-    let mut path = url.path();
-    if decorated {
-        path = path.strip_suffix('/').unwrap_or(path);
-    }
+fn parse_browser_location(raw: &str) -> Result<BrowserContentLocation, LocationNormalizationError> {
+    raw_url_character_checks(raw)?;
+    let (url, site_origin) = parsed_url(raw.trim())?;
+    let path = url.path().strip_suffix('/').unwrap_or(url.path());
     let segments = path.split('/').collect::<Vec<_>>();
     let ["", "wiki", "spaces", space_key, tail @ ..] = segments.as_slice() else {
         return Err(invalid_url(
             "Location URL must identify a Confluence space, page, folder or blog",
         ));
     };
+    // The grammar bounds an inert routing segment. It does not establish current
+    // space membership or resolve an alias to a canonical key.
     if !is_space_key(space_key) || space_key.contains('%') {
         return Err(invalid_url(
-            "Location URL must contain a canonical space key",
+            "Location URL must contain a supported space key or alias segment",
         ));
     }
     let (kind, id) = match tail {
-        [] => (ContentLocationKind::Space, None),
-        ["overview"] if decorated => (ContentLocationKind::Space, None),
-        ["pages", id] => (ContentLocationKind::Page, Some(*id)),
-        ["pages", id, _title] if decorated => (ContentLocationKind::Page, Some(*id)),
+        [] | ["overview"] => (ContentLocationKind::Space, None),
+        ["pages", id] | ["pages", id, _] => (ContentLocationKind::Page, Some(*id)),
         ["folder", id] => (ContentLocationKind::Folder, Some(*id)),
         ["blog", tail @ ..] => {
-            let tail = if decorated {
-                modern_blog_tail_after_date(tail)
-                    .map_err(|_| invalid_url("Location URL has an invalid blog date"))?
-            } else {
-                tail
-            };
+            let tail = modern_blog_tail_after_date(tail)
+                .map_err(|_| invalid_url("Location URL has an invalid blog date"))?;
             match tail {
-                [id] => (ContentLocationKind::Blog, Some(*id)),
-                [id, _title] if decorated => (ContentLocationKind::Blog, Some(*id)),
+                [id] | [id, _] => (ContentLocationKind::Blog, Some(*id)),
                 _ => return Err(invalid_url("Location URL has an unsupported blog path")),
             }
         }
@@ -223,27 +228,43 @@ fn parse_location(
             "Location URL content ID must be a nonzero decimal value of at most 20 digits",
         ));
     }
-    let location = CanonicalContentLocation {
+    Ok(BrowserContentLocation {
         site_origin,
         space_key: (*space_key).to_owned(),
         kind,
         id: id.map(str::to_owned),
-    };
-    if !decorated && location.value() != raw {
-        return Err(invalid_url(
-            "Content selector must use its exact canonical URL",
-        ));
-    }
-    Ok(location)
+    })
 }
 
 pub(crate) fn parse_canonical_content_location(
     value: &str,
 ) -> Result<CanonicalContentLocation, LocationNormalizationError> {
-    let location = parse_location(value, false)?;
-    if location.kind == ContentLocationKind::Space {
+    let (url, site_origin) = parsed_url(value)?;
+    let segments = url.path().split('/').collect::<Vec<_>>();
+    let ["", "wiki", "content", kind, id] = segments.as_slice() else {
         return Err(invalid_url(
-            "Content selector must identify a page, folder or blog",
+            "Content selector must identify a canonical page, folder or blog",
+        ));
+    };
+    let kind = match *kind {
+        "page" => ContentLocationKind::Page,
+        "folder" => ContentLocationKind::Folder,
+        "blog" => ContentLocationKind::Blog,
+        _ => return Err(invalid_url("Content selector kind is unsupported")),
+    };
+    if !is_canonical_content_id(id) {
+        return Err(invalid_url(
+            "Content selector ID must be a nonzero decimal value of at most 20 digits",
+        ));
+    }
+    let location = CanonicalContentLocation {
+        site_origin,
+        kind,
+        id: Some((*id).to_owned()),
+    };
+    if location.value() != value {
+        return Err(invalid_url(
+            "Content selector must use its exact canonical identity",
         ));
     }
     Ok(location)
@@ -252,8 +273,8 @@ pub(crate) fn parse_canonical_content_location(
 pub(crate) fn parse_creation_parent_url(
     value: &str,
     tenant_host: &str,
-) -> Result<CanonicalContentLocation, LocationNormalizationError> {
-    let location = parse_location(value.trim(), true)?;
+) -> Result<BrowserContentLocation, LocationNormalizationError> {
+    let location = parse_browser_location(value.trim())?;
     if location.site_origin != format!("https://{tenant_host}")
         || !matches!(
             location.kind,
@@ -312,17 +333,18 @@ fn project_selector(
     Ok(ResourceSelectorProjection::new(
         location.site_origin,
         location.kind.as_str(),
-        vec![ResourceContainer::new(
-            ResourceType::from_static("confluence_space"),
-            location.space_key,
-        )],
     ))
 }
 
 pub(crate) fn normalize_location(
     request: &LocationNormalizationRequest<'_>,
 ) -> Result<NormalizedResourceLocation, LocationNormalizationError> {
-    let (declared, declared_origin) = parsed_url(request.declared_site())?;
+    let (declared, declared_origin) = parsed_url(request.declared_site()).map_err(|_| {
+        LocationNormalizationError::new(
+            "service",
+            "Service must declare a canonical HTTPS site origin",
+        )
+    })?;
     if !matches!(declared.path(), "" | "/")
         || declared_origin != request.declared_site().trim_end_matches('/')
     {
@@ -331,20 +353,11 @@ pub(crate) fn normalize_location(
             "Service must declare a canonical HTTPS site origin",
         ));
     }
-    let mut location = parse_location(request.url().trim(), true)?;
+    let location = parse_browser_location(request.url())?;
     if location.site_origin != declared_origin {
         return Err(invalid_url(
             "Location URL host does not match the selected service",
         ));
-    }
-    if let Some(space_key) = request.space_key() {
-        if !is_space_key(space_key) {
-            return Err(LocationNormalizationError::new(
-                "spaceKey",
-                "Space key must use the canonical Confluence key grammar",
-            ));
-        }
-        location.space_key = space_key.to_owned();
     }
     let (resource_type, selector) = match (location.kind, request.coverage()) {
         (ContentLocationKind::Space, "space") => (
@@ -356,13 +369,13 @@ pub(crate) fn normalize_location(
         (ContentLocationKind::Page | ContentLocationKind::Blog, "exact") => (
             ResourceType::from_static("confluence_content"),
             ResourceSelector::Exact {
-                value: location.value(),
+                value: location.content_value(),
             },
         ),
         (ContentLocationKind::Page | ContentLocationKind::Folder, "subtree") => (
             ResourceType::from_static("confluence_content"),
             ResourceSelector::Subtree {
-                value: location.value(),
+                value: location.content_value(),
             },
         ),
         _ => {
@@ -376,209 +389,8 @@ pub(crate) fn normalize_location(
         resource_type,
         selector,
         location.kind.as_str(),
-        location.space_key,
     ))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    const SITE: &str = "https://example.atlassian.net";
-
-    fn normalize(url: &str, coverage: &str) -> serde_json::Value {
-        serde_json::to_value(
-            normalize_location(&LocationNormalizationRequest::new(SITE, url, coverage)).unwrap(),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn every_location_kind_normalizes_offline_with_explicit_coverage() {
-        for (path, coverage, kind, resource_type, expected) in [
-            (
-                "/wiki/spaces/ENG",
-                "space",
-                "space",
-                "confluence_space",
-                "ENG",
-            ),
-            (
-                "/wiki/spaces/ENG/overview/",
-                "space",
-                "space",
-                "confluence_space",
-                "ENG",
-            ),
-            (
-                "/wiki/spaces/ENG/pages/12345/Runbooks/",
-                "exact",
-                "page",
-                "confluence_content",
-                "https://example.atlassian.net/wiki/spaces/ENG/pages/12345",
-            ),
-            (
-                "/wiki/spaces/ENG/pages/12345/",
-                "subtree",
-                "page",
-                "confluence_content",
-                "https://example.atlassian.net/wiki/spaces/ENG/pages/12345",
-            ),
-            (
-                "/wiki/spaces/ENG/folder/67890/",
-                "subtree",
-                "folder",
-                "confluence_content",
-                "https://example.atlassian.net/wiki/spaces/ENG/folder/67890",
-            ),
-            (
-                "/wiki/spaces/ENG/blog/54321/Release",
-                "exact",
-                "blog",
-                "confluence_content",
-                "https://example.atlassian.net/wiki/spaces/ENG/blog/54321",
-            ),
-            (
-                "/wiki/spaces/ENG/blog/2026/11/20/54321/Release/",
-                "exact",
-                "blog",
-                "confluence_content",
-                "https://example.atlassian.net/wiki/spaces/ENG/blog/54321",
-            ),
-        ] {
-            let result = normalize(&format!("{SITE}{path}"), coverage);
-            assert_eq!(result["resourceType"], resource_type);
-            assert_eq!(result["locationKind"], kind);
-            assert_eq!(result["configuredSpaceKey"], "ENG");
-            assert_eq!(result["verification"], "not_checked");
-            assert_eq!(result["selector"]["value"], expected);
-        }
-    }
-
-    #[test]
-    fn normalized_identity_ignores_titles_and_dns_case_but_preserves_key_case() {
-        let first = normalize(
-            "https://EXAMPLE.atlassian.net/wiki/spaces/Eng/pages/123/A",
-            "exact",
-        );
-        let second = normalize(
-            "https://example.atlassian.net/wiki/spaces/Eng/pages/123/B",
-            "exact",
-        );
-        assert_eq!(first, second);
-        assert_eq!(first["configuredSpaceKey"], "Eng");
-        assert_ne!(
-            first,
-            normalize(
-                "https://example.atlassian.net/wiki/spaces/ENG/pages/123",
-                "exact"
-            )
-        );
-        for key in ["x", "1", "~account-id", "~user.name@example.com"] {
-            let result = normalize(&format!("{SITE}/wiki/spaces/{key}/pages/1"), "exact");
-            assert_eq!(result["configuredSpaceKey"], key);
-        }
-    }
-
-    #[test]
-    fn override_is_an_explicit_canonical_key_assertion() {
-        let request = LocationNormalizationRequest::new(
-            SITE,
-            "https://example.atlassian.net/wiki/spaces/alias/folder/123",
-            "subtree",
-        )
-        .with_space_key(Some("RealKey"));
-        let result = serde_json::to_value(normalize_location(&request).unwrap()).unwrap();
-        assert_eq!(result["configuredSpaceKey"], "RealKey");
-        assert_eq!(
-            result["selector"]["value"],
-            "https://example.atlassian.net/wiki/spaces/RealKey/folder/123"
-        );
-        assert!(normalize_location(&request.with_space_key(Some("%45NG"))).is_err());
-    }
-
-    #[test]
-    fn rejects_ambiguous_or_credential_bearing_urls_before_url_normalization() {
-        for url in [
-            "http://example.atlassian.net/wiki/spaces/ENG/pages/1",
-            "https://elsewhere.atlassian.net/wiki/spaces/ENG/pages/1",
-            "https://user:secret@example.atlassian.net/wiki/spaces/ENG/pages/1",
-            "https://@example.atlassian.net/wiki/spaces/ENG/pages/1",
-            "https://example.atlassian.net:443/wiki/spaces/ENG/pages/1",
-            "https://127.0.0.1/wiki/spaces/ENG/pages/1",
-            "https://example.atlassian.net/wiki/spaces/ENG/../ENG/pages/1",
-            "https://example.atlassian.net/wiki/spaces/ENG/%2e%2e/ENG/pages/1",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%2Fextra",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%5cextra",
-            "https://example.atlassian.net/wiki/spaces/%45NG/pages/1",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/01",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/0",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/123456789012345678901",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/1?",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/1#",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/1/a/b",
-            "https://example.atlassian.net/wiki/spaces/ENG/folder/1/title",
-            "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/13/20/1/title",
-            "https://example.atlassian.net/wiki/spaces/ENG/pages/1\\title",
-            "https://example.atlassian.net/wiki/x/share",
-        ] {
-            assert!(
-                normalize_location(&LocationNormalizationRequest::new(SITE, url, "exact")).is_err(),
-                "{url}"
-            );
-        }
-    }
-
-    #[test]
-    fn strict_selectors_reject_decoration_and_unsupported_coverage() {
-        let page = "https://example.atlassian.net/wiki/spaces/ENG/pages/123";
-        let folder = "https://example.atlassian.net/wiki/spaces/ENG/folder/123";
-        let blog = "https://example.atlassian.net/wiki/spaces/ENG/blog/123";
-        assert!(is_exact_content_location(page));
-        assert!(is_subtree_content_location(page));
-        assert!(is_subtree_content_location(folder));
-        assert!(is_exact_content_location(blog));
-        assert!(!is_exact_content_location(folder));
-        assert!(!is_subtree_content_location(blog));
-        for value in [
-            format!("{page}/"),
-            format!("{page}/title"),
-            page.replace("example", "EXAMPLE"),
-            page.replace("/ENG/", "/%45NG/"),
-        ] {
-            assert!(!is_exact_content_location(&value));
-            assert!(!is_subtree_content_location(&value));
-        }
-        for (url, coverage) in [
-            (folder, "exact"),
-            (blog, "subtree"),
-            (page, "space"),
-            (page, "all"),
-            (page, "namespace"),
-        ] {
-            assert!(
-                normalize_location(&LocationNormalizationRequest::new(SITE, url, coverage))
-                    .is_err()
-            );
-        }
-        assert!(project_selector(&ResourceSelector::All).is_err());
-    }
-
-    #[test]
-    fn authored_projection_has_only_pinned_identity_coordinates() {
-        let value = "https://other.atlassian.net/wiki/spaces/Mixed/folder/123".to_string();
-        assert!(is_subtree_content_location(&value));
-        let projection =
-            serde_json::to_value(project_selector(&ResourceSelector::Subtree { value }).unwrap())
-                .unwrap();
-        assert_eq!(
-            projection,
-            json!({
-                "siteOrigin": "https://other.atlassian.net",
-                "rootKind": "folder",
-                "containers": [{"resourceType":"confluence_space","value":"Mixed"}]
-            })
-        );
-    }
-}
+mod tests;

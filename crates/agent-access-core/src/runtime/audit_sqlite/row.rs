@@ -459,8 +459,8 @@ mod tests {
             "evidenceLevel":"complete_lineage", "credentialMode":"per_user",
             "authorityDigest":"d".repeat(64), "matchedGrants":[],
             "grantBoundaries":[{
-                "included":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/spaces/ENG/folder/100"}}],
-                "excluded":[{"resourceType":"confluence_content","selector":{"kind":"exact","value":"https://example.atlassian.net/wiki/spaces/ENG/pages/200"}}]
+                "included":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/content/folder/100"}}],
+                "excluded":[{"resourceType":"confluence_content","selector":{"kind":"exact","value":"https://example.atlassian.net/wiki/content/page/200"}}]
             }],
             "tokenBoundary":{
                 "included":[{"resourceType":"confluence_space","selector":{"kind":"exact","value":"ENG"}}],
@@ -477,7 +477,7 @@ mod tests {
             "confluence_content",
             "confluence_space",
             "/folder/100",
-            "/pages/200",
+            "/page/200",
             "ENG",
         ] {
             assert!(text.contains(value), "{value}: {text}");

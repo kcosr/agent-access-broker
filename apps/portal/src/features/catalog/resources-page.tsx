@@ -1,12 +1,12 @@
 import { CatalogMutationError, CatalogUnavailableDrawer } from "./catalog-target";
-import { canWriteAdmin } from "../../lib/capabilities";
+import { capabilityKey, canWriteAdmin } from "../../lib/capabilities";
 import { AdminButton, AdminIconButton, AdminForm } from "../../components/admin-access";
 // Admin › Catalog › Resources: shared resource scopes used by grants and token
 // restrictions. URL-driven table (`?item=<id>`, `?item=new` to add) with a
 // drawer for details, private attributes, used-by, edit, enable, and delete.
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { brokerApi } from "../../api";
-import type { NormalizedResourceLocation, ResourceGroupRecord, ResourceRecord, ResourceSelector, ResourceType, ResourceWriteBody } from "../../types";
+import type { ResourceGroupRecord, ResourceRecord, ResourceSelector, ResourceType, ResourceWriteBody, Session } from "../../types";
 import { resourceLabel, selectorLabel } from "../../lib/resource-labels";
 import { creatableResourceTypes, namespaceCoverage, resourceTypeLabel, resourceTypePluralLabel, selectorPlaceholder, useResourceTypes, type ResourceTypes } from "../../lib/resource-types";
 import { groupRows, sortRows } from "../../lib/table-sort";
@@ -22,6 +22,7 @@ import { CatalogFrame } from "./catalog-frame";
 import { ResourceAttributeField, ResourceAttributeValue } from "./resource-attributes";
 import { useResourceActions } from "./resource-actions";
 import { ResourceLocationEntry } from "./resource-location-entry";
+import { configuredLocationService, locationCoverage, locationInputHints, locationResourceType, normalizedLocationMatches, parseContentIdentity, trimLocationInput, type PageCoverage } from "../../lib/resource-locations";
 import { UsedBySection } from "./used-by";
 
 const STATUSES = ["all", "active", "disabled"] as const;
@@ -494,22 +495,34 @@ function ResourceDetailDrawer({ model, resource, onEdit }: { model: ResourcesMod
   );
 }
 
-function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel; record: ResourceRecord | null; onDone?: () => void }) {
+function resourceEditorAccount(session: Session): string {
+  return JSON.stringify([capabilityKey(session), session.passwordChangeRequired, session.tokenClass, session.loginMethod, session.expiresAt]);
+}
+
+type LocationEntryMode = "url" | "saved" | "key" | "all";
+
+function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: ResourcesModel; record: ResourceRecord | null; onDone?: () => void }) {
   const { types, contexts, list } = model;
-  const { attempt } = useSession();
+  const { session, getSession, attempt } = useSession();
   const actions = useResourceActions();
   const formId = useId();
+  // A refetch must not silently advance the optimistic version of this draft.
+  const [record] = useState(latestRecord);
   const [chosenType, setType] = useState<ResourceType | null>(record?.resourceType ?? null);
-  // Removed imported types accept no new resources; an existing resource keeps its own.
   const offered = creatableResourceTypes(types, record?.resourceType);
-  // New resources start with the first type the broker lists.
   const type = chosenType ?? offered[0]?.id ?? "";
   const namespace = namespaceCoverage(types, type);
   const locations = useResourceLocations();
-  const services = locations.data?.services.filter((service) => service.resourceTypes.includes(type)) ?? [];
-  const [entryMode, setEntryMode] = useState<"canonical" | "url">("canonical");
-  const [locationPreview, setLocationPreview] = useState<NormalizedResourceLocation | null>(null);
-  const urlMode = entryMode === "url";
+  const [entryMode, setEntryMode] = useState<LocationEntryMode>(record?.resourceType === "confluence_content" ? "saved" : record?.selector.kind === "all" ? "all" : "key");
+  const [url, setUrl] = useState("");
+  const [choice, setChoice] = useState<PageCoverage>("");
+  const contentType = type === "confluence_content";
+  const spaceType = type === "confluence_space";
+  const urlMode = contentType && entryMode !== "saved" || spaceType && entryMode === "url";
+  const hints = urlMode ? locationInputHints(url) : null;
+  const coverage = locationCoverage(hints?.kind, choice);
+  const selectedService = configuredLocationService(locations.data?.services ?? [], type, hints);
+  const service = selectedService.service;
   const selectorKinds = types.get(type)?.selectors ?? [];
   const subtree = types.get(type)?.subtree;
   const [kind, setKind] = useState<ResourceSelector["kind"]>(record?.selector.kind ?? "exact");
@@ -517,124 +530,164 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
   const [name, setName] = useState(record?.displayName ?? "");
   const [selectedContexts, setContexts] = useState(record?.allowedExecutionContexts ?? []);
   const [enabled, setEnabled] = useState(record?.enabled ?? true);
-  // Attribute values and issues by attribute name. Names come from the type's
-  // declaration, which an imported command supplies, so they are Map keys:
-  // a name such as `constructor` or `value` must not meet an inherited or
-  // another field's entry.
   const [attributes, setAttributes] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [attempted, setAttempted] = useState(false);
+  const account = resourceEditorAccount(session);
+  const lifetime = useRef({ mounted: true, generation: 0, account });
+  const operation = useRef<object | null>(null);
+  if (lifetime.current.account !== account) {
+    lifetime.current.account = account;
+    lifetime.current.generation += 1;
+  }
+  useEffect(() => {
+    lifetime.current.mounted = true;
+    return () => { lifetime.current.mounted = false; lifetime.current.generation += 1; };
+  }, []);
+  const currentCapability = useRef({ ready: locations.isSuccess && !locations.isError, service });
+  currentCapability.current = { ready: locations.isSuccess && !locations.isError, service };
   const configured = record?.configuredAttributes ?? [];
   const fields = kind === "exact" ? types.get(type)?.attributes ?? [] : [];
+  const savedContent = record?.resourceType === "confluence_content" && record.selector.kind !== "all" ? parseContentIdentity(record.selector.value) : null;
+  const serviceIssue = !urlMode ? null : locations.isError ? "Location services are unavailable. Retry to save a URL."
+    : !locations.isSuccess ? "Loading configured location services…"
+    : selectedService.issue === "absent" ? "No applicable Confluence service is configured. URL entry is unavailable."
+    : selectedService.issue === "wrong_site" ? "The URL does not match a configured Confluence site."
+    : selectedService.issue === "ambiguous" ? "More than one configured service matches this location. URL entry requires one applicable service."
+    : hints && service && (!service.locationKinds.includes(hints.kind) || coverage && !service.coverageKinds.includes(coverage)) ? "The configured service does not support this location coverage."
+    : null;
   const issues: Record<string, string> = {};
   if (!type) issues.type = "Choose a resource type.";
-  if (urlMode && !locationPreview) issues.location = "Preview the location before saving.";
-  if (!urlMode && !selectorKinds.includes(kind)) issues.value = "Choose supported coverage.";
-  if (!urlMode && kind !== "all" && !value.trim()) issues.value = kind === "namespace" ? "Enter the namespace." : "Enter the canonical identifier.";
+  if (urlMode) {
+    if (!trimLocationInput(url)) issues.location = "Enter a location URL.";
+    else if (!hints) issues.location = "Enter a supported Confluence space, page, folder or blog URL.";
+    else if (!coverage) issues.location = "Choose whether to include this page only or its descendants.";
+    if (serviceIssue) issues.service = serviceIssue;
+  } else if (!contentType) {
+    const selectedKind = spaceType ? entryMode === "all" ? "all" : "exact" : kind;
+    if (!selectorKinds.includes(selectedKind)) issues.value = "Choose supported coverage.";
+    if (selectedKind !== "all" && !value.trim()) issues.value = spaceType ? "Enter the canonical space key." : kind === "namespace" ? "Enter the namespace." : "Enter the canonical identifier.";
+  }
   if (!selectedContexts.length) issues.contexts = "Select at least one execution context.";
-  const attributeIssues = new Map(
-    fields.filter((field) => field.required && !configured.includes(field.name) && !attributes.get(field.name)).map((field) => [field.name, `Enter the ${field.label.toLowerCase()}.`])
-  );
+  const attributeIssues = new Map(fields.filter((field) => field.required && !configured.includes(field.name) && !attributes.get(field.name)).map((field) => [field.name, `Enter the ${field.label.toLowerCase()}.`]));
   const shown = attempted ? issues : {};
   const shownAttributeIssues = attempted ? attributeIssues : new Map<string, string>();
-  const close = () => (onDone ? onDone() : list.close());
+  const finish = () => onDone ? onDone() : list.close();
+  const close = () => { if (!operation.current) finish(); };
+
+  function change(update: () => void) {
+    if (operation.current) return;
+    lifetime.current.generation += 1;
+    setError(null);
+    update();
+  }
+
+  function changeType(next: string) {
+    change(() => {
+      const confluence = (type === "confluence_content" || type === "confluence_space") && (next === "confluence_content" || next === "confluence_space");
+      setAttributes(new Map());
+      // A recognized URL owns its displayed type, including within this family.
+      if (confluence && urlMode) {
+        setType(hints ? locationResourceType(hints.kind) : next);
+        setEntryMode("url");
+      }
+      else {
+        setType(next);
+        setEntryMode(next === "confluence_content" ? "url" : "key");
+        setUrl(""); setChoice(""); setValue("");
+      }
+      if (!types.get(next)?.selectors.includes(kind)) setKind("exact");
+    });
+  }
+
+  function changeMode(mode: LocationEntryMode) {
+    change(() => {
+      setEntryMode(mode);
+      setUrl("");
+      setChoice("");
+      setValue("");
+      setKind(mode === "all" ? "all" : "exact");
+    });
+  }
 
   async function save() {
+    if (operation.current) return;
     setAttempted(true);
     if (Object.keys(issues).length || attributeIssues.size) return;
-    const privateValues = Object.fromEntries(
-      fields.flatMap((field) => {
-        const entered = attributes.get(field.name);
-        return entered ? [[field.name, entered]] : [];
-      })
-    );
-    const body: ResourceWriteBody = {
-      resourceType: urlMode ? locationPreview!.resourceType : type,
-      selector: urlMode ? locationPreview!.selector : kind === "all" ? { kind } : { kind, value: value.trim() },
+    const token = {};
+    operation.current = token;
+    const generation = lifetime.current.generation;
+    const savedAccount = account;
+    const isCurrent = (current = getSession()) => lifetime.current.mounted && lifetime.current.generation === generation
+      && operation.current === token && resourceEditorAccount(current) === savedAccount && canWriteAdmin(current) && !current.passwordChangeRequired;
+    const declaredService = service ? JSON.stringify(service) : null;
+    const ordinary = {
       displayName: name.trim() || null,
-      allowedExecutionContexts: selectedContexts,
+      allowedExecutionContexts: [...selectedContexts],
       enabled,
-      ...(Object.keys(privateValues).length ? { attributes: privateValues } : {}),
       ...(record ? { expectedVersion: record.version } : {})
     };
+    const privateValues = Object.fromEntries(fields.flatMap((field) => {
+      const entered = attributes.get(field.name);
+      return entered ? [[field.name, entered]] : [];
+    }));
     setPending(true);
     setError(null);
     try {
-      const saved = await actions.saveResource(body, record?.id);
+      let resourceType = type;
+      let selector: ResourceSelector;
+      if (urlMode) {
+        if (!service || !hints || !coverage) throw new Error("Review the location before saving.");
+        const result = await attempt((current) => {
+          if (!isCurrent(current)) throw new Error("The resource form or signed-in account changed. Save again.");
+          return brokerApi.normalizeResourceLocation(current, { service: service.service, url: trimLocationInput(url), coverage });
+        });
+        if (!isCurrent()) return;
+        if (!currentCapability.current.ready || JSON.stringify(currentCapability.current.service) !== declaredService) throw new Error("The configured location service changed. Review the location and save again.");
+        if (!normalizedLocationMatches(hints, coverage, result)) throw new Error("The normalized location differs from the displayed location. Review the URL and save again.");
+        resourceType = result.resourceType;
+        selector = result.selector;
+      } else if (contentType && record?.resourceType === "confluence_content") {
+        selector = savedContent?.kind === "page" && (kind === "exact" || kind === "subtree")
+          ? { kind, value: record.selector.kind === "all" ? "" : record.selector.value } : record.selector;
+      } else {
+        const selectedKind = spaceType ? entryMode === "all" ? "all" : "exact" : kind;
+        selector = selectedKind === "all" ? { kind: "all" } : { kind: selectedKind, value: value.trim() };
+      }
+      const body: ResourceWriteBody = { resourceType, selector, ...ordinary, ...(Object.keys(privateValues).length ? { attributes: privateValues } : {}) };
+      const saved = await actions.saveResource(body, record?.id, isCurrent);
+      if (!isCurrent()) return;
       setAttributes(new Map());
-      if (record) close();
+      if (record) finish();
       else list.open(saved.id, "replace");
     } catch (failure) {
-      setError(failure);
-      setPending(false);
+      if (isCurrent()) setError(failure);
+    } finally {
+      if (operation.current === token) {
+        operation.current = null;
+        if (lifetime.current.mounted) setPending(false);
+      }
     }
   }
 
   return (
-    <Drawer
-      resetKey={record?.id ?? "new"}
-      onClose={close}
-      returnFocus={record ? list.returnFocus : undefined}
+    <Drawer resetKey={record?.id ?? "new"} onClose={close} returnFocus={record ? list.returnFocus : undefined}
       label={record ? `Edit resource ${resourceTitle(types, record)}` : "Add resource"}
-      kicker={
-        <>
-          <Icon name="database" /> {record ? <>Edit resource <span className="wb-num">{record.id}</span></> : "New resource"}
-        </>
-      }
+      kicker={<><Icon name="database" /> {record ? <>Edit resource <span className="wb-num">{record.id}</span></> : "New resource"}</>}
       title={record ? resourceTitle(types, record) : "Add resource"}
-      footer={
-        <>
-          <span className="wb-spacer" />
-          <Button onClick={close} disabled={pending}>
-            Cancel
-          </Button>
-          <AdminButton type="submit" form={formId} variant="primary" pending={pending}>
-            Save resource
-          </AdminButton>
-        </>
-      }
+      footer={<><span className="wb-spacer" /><Button onClick={close} disabled={pending}>Cancel</Button><AdminButton type="submit" form={formId} variant="primary" pending={pending}>Save resource</AdminButton></>}
     >
-      <AdminForm
-        id={formId}
-        className="wb-form-stack pt-catalog-form pt-catalog-drawer-form"
-        noValidate
-        onSubmit={(event) => {
-          event.preventDefault();
-          void save();
-        }}
-      >
+      <AdminForm id={formId} className="wb-form-stack pt-catalog-form pt-catalog-drawer-form" noValidate onSubmit={(event) => { event.preventDefault(); void save(); }}>
         <div className="pt-catalog-row">
           <Field label="Resource type" hint={configured.length ? "Fixed while private attributes are stored." : undefined} error={shown.type}>
-            <Select
-              value={type}
-              disabled={configured.length > 0 || pending}
-              onChange={(event) => {
-                setAttributes(new Map());
-                setType(event.target.value);
-                setEntryMode("canonical");
-                setLocationPreview(null);
-                if (!types.get(event.target.value)?.selectors.includes(kind)) setKind("exact");
-              }}
-            >
+            <Select value={type} disabled={configured.length > 0 || pending} onChange={(event) => changeType(event.target.value)}>
               {type && !types.has(type) ? <option value={type}>{type}</option> : null}
-              {offered.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                  {option.removed ? " (removed)" : ""}
-                </option>
-              ))}
+              {offered.map((option) => <option key={option.id} value={option.id}>{option.label}{option.removed ? " (removed)" : ""}</option>)}
             </Select>
           </Field>
-          {!urlMode ? <Field label="Coverage">
-            <Select
-              value={kind}
-              disabled={configured.length > 0 || pending}
-              onChange={(event) => {
-                setAttributes(new Map());
-                setKind(event.target.value as ResourceSelector["kind"]);
-              }}
-            >
+          {!urlMode && !contentType && !spaceType ? <Field label="Coverage">
+            <Select value={kind} disabled={configured.length > 0 || pending} onChange={(event) => change(() => { setAttributes(new Map()); setKind(event.target.value as ResourceSelector["kind"]); })}>
               {selectorKinds.includes("exact") ? <option value="exact">Specific resource</option> : null}
               {namespace ? <option value="namespace">{namespace.label}</option> : null}
               {subtree && selectorKinds.includes("subtree") ? <option value="subtree">{subtree.label}</option> : null}
@@ -642,51 +695,48 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
             </Select>
           </Field> : null}
         </div>
-        {services.length > 0 || urlMode ? <Seg label="Resource entry" value={entryMode} onChange={(mode) => { setEntryMode(mode); setLocationPreview(null); }} options={[{ value: "canonical", label: "Canonical identifier", disabled: pending }, { value: "url", label: "Enter location URL", disabled: pending || configured.length > 0 }]} /> : null}
-        {locations.isError ? <ErrorState compact title="Location services unavailable" error={locations.error} onRetry={() => void locations.refetch()} /> : null}
-        {type === "confluence_content" && locations.isSuccess && services.length === 0 ? <p className="pt-prose">No applicable service is configured. Enter a strict canonical selector; this resource is currently dormant.</p> : null}
-        {urlMode ? <ResourceLocationEntry key={type} services={services} disabled={pending} preview={locationPreview} onPreview={setLocationPreview} /> : null}
-        {shown.location ? <p className="wb-field-error">{shown.location}</p> : null}
-        {!urlMode && kind !== "all" ? (
-          <Field label={kind === "namespace" ? "Namespace" : kind === "subtree" ? "Canonical subtree root" : "Canonical identifier"} error={shown.value}>
-            <Input mono value={value} disabled={pending} onChange={(event) => setValue(event.target.value)} placeholder={selectorPlaceholder(types, type, kind)} spellCheck={false} />
-          </Field>
-        ) : null}
-        <Field label="Display name" optional>
-          <Input value={name} disabled={pending} onChange={(event) => setName(event.target.value)} placeholder="Defaults to the resource coverage" />
-        </Field>
-        {fields.map((field) => (
-          <div key={`${type}:${field.name}`}>
-            <ResourceAttributeField
-              field={field}
-              configured={configured.includes(field.name)}
-              value={attributes.get(field.name) ?? ""}
-              busy={pending}
-              onChange={(next) => setAttributes((current) => new Map(current).set(field.name, next))}
-              onReveal={async () => (await attempt((current) => brokerApi.revealResourceAttribute(current, record!.id, field.name))).value}
-            />
-            {shownAttributeIssues.has(field.name) ? <p className="wb-field-error">{shownAttributeIssues.get(field.name)}</p> : null}
-          </div>
-        ))}
+        {spaceType ? <Seg label="Space entry" value={entryMode === "url" ? "url" : entryMode === "all" ? "all" : "key"} onChange={changeMode} options={[
+          { value: "key", label: "By space key", disabled: pending },
+          { value: "url", label: "From space URL", disabled: pending },
+          { value: "all", label: "All spaces", disabled: pending }
+        ]} /> : null}
+        {urlMode ? <>
+          <ResourceLocationEntry url={url} choice={choice} hints={hints} service={service} disabled={pending} issue={shown.location}
+            onUrl={(next) => change(() => { setUrl(next); setChoice(""); const nextHints = locationInputHints(next); if (nextHints) setType(locationResourceType(nextHints.kind)); setEntryMode("url"); })}
+            onChoice={(next) => change(() => setChoice(next))} />
+          {locations.isError ? <ErrorState compact title="Location services unavailable" error={locations.error} onRetry={() => void locations.refetch()} />
+            : serviceIssue ? <p className="pt-prose" role="status">{serviceIssue}</p> : null}
+          {record?.resourceType === "confluence_content" ? <Button disabled={pending} onClick={() => change(() => { setType(record.resourceType); setEntryMode("saved"); setUrl(""); setChoice(""); setKind(record.selector.kind); })}>Keep saved location</Button> : null}
+        </> : contentType && record?.resourceType === "confluence_content" ? <>
+          <KeyValue items={savedContent ? [
+            { label: "Location", value: `${savedContent.kind === "blog" ? "Blog post" : savedContent.kind === "folder" ? "Folder" : "Page"} ${savedContent.id}` },
+            { label: "Site", value: savedContent.siteOrigin.slice("https://".length) }
+          ] : [{ label: "Saved identity", value: record.selector.kind === "all" ? "All" : record.selector.value }]} />
+          {savedContent?.kind === "page" ? <Field label="Location coverage"><Select value={kind} disabled={pending} onChange={(event) => change(() => setKind(event.target.value as "exact" | "subtree"))}>
+            <option value="exact">This page only</option><option value="subtree">This page and descendants</option>
+          </Select></Field> : <p>{savedContent?.kind === "folder" ? "This folder and descendants" : savedContent?.kind === "blog" ? "This blog post only" : selectorLabel(types, record.resourceType, record.selector)}</p>}
+          <Button disabled={pending} onClick={() => changeMode("url")}>Change location</Button>
+        </> : spaceType ? entryMode === "all" ? <p>All Confluence spaces</p> : <Field label="Space key" hint="Enter the canonical, case-sensitive key. A browser alias may differ." error={shown.value}>
+          <Input value={value} disabled={pending} onChange={(event) => change(() => setValue(event.target.value))} placeholder="ENG" spellCheck={false} />
+        </Field> : kind !== "all" ? <Field label={kind === "namespace" ? "Namespace" : kind === "subtree" ? "Canonical subtree root" : "Canonical identifier"} error={shown.value}>
+          <Input mono value={value} disabled={pending} onChange={(event) => change(() => setValue(event.target.value))} placeholder={selectorPlaceholder(types, type, kind)} spellCheck={false} />
+        </Field> : null}
+        <Field label="Display name" optional><Input value={name} disabled={pending} onChange={(event) => change(() => setName(event.target.value))} placeholder="Defaults to the resource coverage" /></Field>
+        {fields.map((field) => <div key={`${type}:${field.name}`}>
+          <ResourceAttributeField field={field} configured={configured.includes(field.name)} value={attributes.get(field.name) ?? ""} busy={pending}
+            onChange={(next) => change(() => setAttributes((current) => new Map(current).set(field.name, next)))}
+            onReveal={async () => (await attempt((current) => brokerApi.revealResourceAttribute(current, record!.id, field.name))).value} />
+          {shownAttributeIssues.has(field.name) ? <p className="wb-field-error">{shownAttributeIssues.get(field.name)}</p> : null}
+        </div>)}
         <FieldGroup label="Allowed execution contexts" hint={shown.contexts ? <span className="pt-error">{shown.contexts}</span> : undefined}>
           <div className="pt-checks">
-            {contexts.map((context) => (
-              <Checkbox
-                key={context}
-                label={<span className="wb-mono">{context}</span>}
-                checked={selectedContexts.includes(context)}
-                disabled={pending}
-                onChange={(event) => setContexts(event.target.checked ? [...selectedContexts, context] : selectedContexts.filter((item) => item !== context))}
-              />
-            ))}
-            {selectedContexts
-              .filter((context) => !contexts.includes(context))
-              .map((context) => (
-                <Checkbox key={context} label={<span className="wb-mono">{context}</span>} description="Not an allowed context" checked disabled={pending} onChange={() => setContexts(selectedContexts.filter((item) => item !== context))} />
-              ))}
+            {contexts.map((context) => <Checkbox key={context} label={<span className="wb-mono">{context}</span>} checked={selectedContexts.includes(context)} disabled={pending}
+              onChange={(event) => change(() => setContexts(event.target.checked ? [...selectedContexts, context] : selectedContexts.filter((item) => item !== context)))} />)}
+            {selectedContexts.filter((context) => !contexts.includes(context)).map((context) => <Checkbox key={context} label={<span className="wb-mono">{context}</span>} description="Not an allowed context" checked disabled={pending}
+              onChange={() => change(() => setContexts(selectedContexts.filter((item) => item !== context)))} />)}
           </div>
         </FieldGroup>
-        <Switch label="Enabled" checked={enabled} disabled={pending} onChange={(event) => setEnabled(event.target.checked)} />
+        <Switch label="Enabled" checked={enabled} disabled={pending} onChange={(event) => change(() => setEnabled(event.target.checked))} />
         <p className="pt-prose wb-small">Changes affect existing grants and tokens. Disabled resources still apply when excluded by a group.</p>
         <CatalogMutationError error={error} />
       </AdminForm>

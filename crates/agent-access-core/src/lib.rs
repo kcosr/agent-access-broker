@@ -3850,6 +3850,9 @@ impl PolicyValidationBoundary {
                     boundary: right, ..
                 },
             ) => {
+                // Stable content identities do not identify their current
+                // container. Conditional space/content overlap may publish;
+                // concrete whole-operation matching diagnoses tied modes.
                 left.prove_intersection(right, contract, site_origin)
                     == agent_access_provider::OfflineContainmentProof::Covered
             }

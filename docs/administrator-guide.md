@@ -479,12 +479,16 @@ exact/all/namespace/subtree selectors,
 execution contexts, and an identifiable label. Flat resource groups may include
 and exclude entries; inspect their current members before reuse.
 
-For Confluence, the resource editor can normalize a pasted space, page, blog or
-folder URL after selecting the service and intended coverage. Review and save
-the resulting selector. This preview is offline and reports
-`verification: "not_checked"`; no administrator connection is required and
-existence or upstream permissions are checked only at invocation. Exact pages
-cover the page itself; a page or folder subtree covers its current descendants.
+For Confluence content, paste a page, blog or folder browser URL; service and
+kind are inferred. Choose page-only or page-and-descendants when entering a page,
+then Save normalizes and saves the entry. Whole spaces retain separate By space
+key, From space URL and All spaces modes. A space URL shows the key to be saved;
+use By space key if its browser segment is an alias. Normalization is offline and
+reports `verification: "not_checked"`, without an administrator connection.
+Content identities bind site, kind and ID and follow external cross-space moves;
+subtrees cover current descendants. Existing resources can retain their identity
+while changing name, contexts or enabled state. Existence and upstream permissions
+are checked at invocation.
 Space grants remain broad when a narrower resource is added. See
 [content access](confluence-content-access.md) for supported URLs, exclusions,
 overlap and token restrictions.

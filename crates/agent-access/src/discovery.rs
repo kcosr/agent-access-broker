@@ -652,7 +652,7 @@ mod tests {
             "coverageSemantics":"single_target",
             "access":[{"action":"page.view","scope":"location","resourceTypes":["confluence_space","confluence_content"],
                 "domain":"page","enforcement":"request","containmentVerification":"at_invocation",
-                "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/spaces/ENG/folder/12"},"restricted":true,"conditional":true}]}],
+                "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/content/folder/12"},"restricted":true,"conditional":true}]}],
             "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null},"liveListings":[]
         });
         Mock::given(method("GET"))

@@ -33,12 +33,17 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO resources VALUES
              ('existing', 'teams_destination', 'exact', 'release', 'Release',
-              '[\"default\"]', 0, 7, '2026-01-01', 'creator', '2026-02-01', 'editor');
+              '[\"default\"]', 0, 7, '2026-01-01', 'creator', '2026-02-01', 'editor'),
+             ('space', 'confluence_space', 'exact', '~Alex', 'Personal space',
+              '[\"default\"]', 1, 4, '2026-01-01', 'creator', '2026-02-01', 'editor'),
+             ('all-spaces', 'confluence_space', 'all', '', 'All spaces',
+              '[\"default\"]', 0, 9, '2026-01-01', 'creator', '2026-02-01', 'editor');
              INSERT INTO resource_groups VALUES
              ('included', 'Included', 3, '2026-01-01', 'creator', '2026-02-01', 'editor'),
              ('excluded', 'Excluded', 4, '2026-01-01', 'creator', '2026-02-01', 'editor');
              INSERT INTO resource_group_members VALUES
-             ('included', 'existing', 'include'), ('excluded', 'existing', 'exclude');
+             ('included', 'existing', 'include'), ('excluded', 'existing', 'exclude'),
+             ('included', 'all-spaces', 'include'), ('excluded', 'space', 'exclude');
              INSERT INTO resource_secret_material VALUES
              ('existing', 'webhookUrl', 'material-v1', 'key-v1',
               X'000102030405060708090A0B', X'000102030405060708090A0B0C0D0E0F');",
@@ -71,7 +76,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO resources VALUES
              ('folder', 'confluence_content', 'subtree',
-              'https://example.atlassian.net/wiki/spaces/ENG/folder/123', NULL,
+              'https://example.atlassian.net/wiki/content/folder/123', NULL,
               '[\"default\"]', 1, 1, '2026-01-01', 'admin', '2026-01-01', 'admin');",
         )
         .unwrap();
@@ -197,7 +202,7 @@ mod tests {
                 ledger.last().unwrap().1,
                 sha256_hex(include_str!("confluence_content_resources.sql").as_bytes())
             );
-            conn.execute_batch("INSERT INTO resources VALUES ('page-tree','confluence_content','subtree','https://example.atlassian.net/wiki/spaces/ENG/pages/123',NULL,'[\"default\"]',1,1,'2026-01-01','admin','2026-01-01','admin');").unwrap();
+            conn.execute_batch("INSERT INTO resources VALUES ('page-tree','confluence_content','subtree','https://example.atlassian.net/wiki/content/page/123',NULL,'[\"default\"]',1,1,'2026-01-01','admin','2026-01-01','admin');").unwrap();
         }
         let expected = upgraded.resource("page-tree").unwrap();
         assert!(matches!(

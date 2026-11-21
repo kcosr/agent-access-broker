@@ -10,7 +10,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page attach [OPTIONS] <PAGE_ID> <FILES>...; run agent-access confluence page attach --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page attach [OPTIONS] <PAGE_ID> <FILES>...; run agent-access confluence page attach --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "attachment.download": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -24,7 +25,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page attachment download [OPTIONS] --attachment-id <ATTACHMENT_ID> <PAGE_ID>; run agent-access confluence page attachment download --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page attachment download [OPTIONS] --attachment-id <ATTACHMENT_ID> <PAGE_ID>; run agent-access confluence page attachment download --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "attachment.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -38,7 +40,8 @@
       }
     ],
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page attachment list [OPTIONS] [PAGE_ID]; run agent-access confluence page attachment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page attachment list [OPTIONS] [PAGE_ID]; run agent-access confluence page attachment list --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.attachment.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -51,7 +54,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attach [OPTIONS] <BLOG_ID> <FILES>...; run agent-access confluence blog attach --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attach [OPTIONS] <BLOG_ID> <FILES>...; run agent-access confluence blog attach --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.attachment.download": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -65,7 +69,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attachment download [OPTIONS] --attachment-id <ATTACHMENT_ID> <BLOG_ID>; run agent-access confluence blog attachment download --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attachment download [OPTIONS] --attachment-id <ATTACHMENT_ID> <BLOG_ID>; run agent-access confluence blog attachment download --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.attachment.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -79,7 +84,8 @@
       }
     ],
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attachment list [OPTIONS] [BLOG_ID]; run agent-access confluence blog attachment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog attachment list [OPTIONS] [BLOG_ID]; run agent-access confluence blog attachment list --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.create": {
     "scope": "Creating an independent blog requires authority for the confirmed space. An exact existing-blog resource is insufficient.",
@@ -96,7 +102,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence blog create --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence blog create --help for flags and input alternatives.",
+    "resourceIdentities": "Creating a new independent blog requires the actual current space input and matching space authority. An existing blog identity does not authorize this creation, and no resource identity URI is accepted as an action locator."
   },
   "blog.draft.attachment.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -111,7 +118,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attach [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID> <FILES>...; run agent-access confluence blog draft attach --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attach [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID> <FILES>...; run agent-access confluence blog draft attach --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.attachment.download": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -127,7 +135,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attachment download [OPTIONS] --draft-handle <DRAFT_HANDLE> --attachment-id <ATTACHMENT_ID> <BLOG_ID>; run agent-access confluence blog draft attachment download --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attachment download [OPTIONS] --draft-handle <DRAFT_HANDLE> --attachment-id <ATTACHMENT_ID> <BLOG_ID>; run agent-access confluence blog draft attachment download --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.attachment.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -143,7 +152,8 @@
       }
     ],
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attachment list [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft attachment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft attachment list [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft attachment list --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.create": {
     "scope": "Creating an independent blog requires authority for the confirmed space. An exact existing-blog resource is insufficient.",
@@ -162,7 +172,8 @@
     ],
     "draftHandle": "Returns draftHandle for later draft actions; preserve it exactly. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
     "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence blog draft create --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence blog draft create --help for flags and input alternatives.",
+    "resourceIdentities": "Creating a new independent blog requires the actual current space input and matching space authority. An existing blog identity does not authorize this creation, and no resource identity URI is accepted as an action locator."
   },
   "blog.draft.discard": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -177,7 +188,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft discard [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft discard --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft discard [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft discard --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.publish": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -193,7 +205,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft publish [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <BLOG_ID>; run agent-access confluence blog draft publish --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft publish [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <BLOG_ID>; run agent-access confluence blog draft publish --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.stage": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -211,7 +224,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft stage [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog draft stage --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft stage [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog draft stage --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.draft.update": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -229,7 +243,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft update [OPTIONS] --draft-handle <DRAFT_HANDLE> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog draft update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft update [OPTIONS] --draft-handle <DRAFT_HANDLE> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog draft update --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.verify": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -245,7 +260,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft verify [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft verify --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft verify [OPTIONS] --draft-handle <DRAFT_HANDLE> <BLOG_ID>; run agent-access confluence blog draft verify --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.draft.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -262,7 +278,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft view [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <BLOG_ID>; run agent-access confluence blog draft view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog draft view [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <BLOG_ID>; run agent-access confluence blog draft view --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply blogId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "blog.footer_comment.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -278,11 +295,13 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment add [OPTIONS] --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog footer-comment add --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment add [OPTIONS] --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog footer-comment add --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.footer_comment.delete": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment delete --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment delete --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.footer_comment.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -296,7 +315,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment list [OPTIONS] <BLOG_ID>; run agent-access confluence blog footer-comment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment list [OPTIONS] <BLOG_ID>; run agent-access confluence blog footer-comment list --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.footer_comment.reply.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -312,7 +332,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog footer-comment reply --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog footer-comment reply --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.footer_comment.reply.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -326,7 +347,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment replies --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment replies --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.footer_comment.update": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -344,7 +366,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog footer-comment update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog footer-comment update --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.footer_comment.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -357,11 +380,13 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog footer-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence blog footer-comment view --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.inline_comment.delete": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment delete --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment delete --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.inline_comment.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -375,7 +400,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment list [OPTIONS] <BLOG_ID>; run agent-access confluence blog inline-comment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment list [OPTIONS] <BLOG_ID>; run agent-access confluence blog inline-comment list --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.inline_comment.reply.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -391,7 +417,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog inline-comment reply --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog inline-comment reply --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.inline_comment.reply.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -405,7 +432,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment replies --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment replies --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.inline_comment.update": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -423,7 +451,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog inline-comment update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence blog inline-comment update --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.inline_comment.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -436,7 +465,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog inline-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence blog inline-comment view --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "blog.search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; any change to the bound effective authority rejects continuation, while an unrelated policy publication does not. The token also binds execution context, principal, credential mode/method and the service route. scanStatus is more when upstream candidates remain, scan_budget when a bounded scan stopped before exhaustion, or exhausted when no continuation remains. An empty page with more or scan_budget can still continue. On a rejected continuation, repeat the search without the token.",
@@ -488,7 +518,8 @@
       }
     ],
     "typedCommand": "Typed CLI wrapper: agent-access confluence blog search [OPTIONS]; run agent-access confluence blog search --help for flags and input alternatives.",
-    "scope": "Search selects one global winning grant band and credential mode. Broker compiles every winning inclusion/exclusion and the independent token boundary into CQL before adding caller filters, then validates every released result. Counts describe released results, not upstream totals; bounded scans can return an empty page with confidential continuation."
+    "scope": "Search selects one global winning grant band and credential mode. Broker compiles every winning inclusion/exclusion and the independent token boundary into CQL before adding caller filters, then validates every released result. Counts describe released results, not upstream totals; bounded scans can return an empty page with confidential continuation.",
+    "resourceIdentities": "Disclosed confluence_content selectors use stable https://<site>/wiki/content/{page|folder|blog}/<ID> identities. They are not browser URLs or search text. Search current authorized content normally; explicit spaces narrow current placement."
   },
   "blog.update": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -505,7 +536,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <BLOG_ID>; run agent-access confluence blog update --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.verify": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -519,7 +551,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog verify [OPTIONS] <BLOG_ID>; run agent-access confluence blog verify --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog verify [OPTIONS] <BLOG_ID>; run agent-access confluence blog verify --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "blog.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
@@ -533,7 +566,8 @@
       }
     ],
     "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence blog view [OPTIONS] [BLOG_ID]; run agent-access confluence blog view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence blog view [OPTIONS] [BLOG_ID]; run agent-access confluence blog view --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/blog/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply blogId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "page.create": {
     "scope": "Authorize prospective child placement under the confirmed page or folder parent. A covering space or subtree is required; an exact parent resource cannot authorize child creation.",
@@ -555,7 +589,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence page create --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence page create --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed page/folder identity ends with its immutable ID. Use parent {kind: \"page\" or \"folder\", id: \"ID\"} and the actual current space; do not pass the identity URI as parentUrl. A browser parentUrl must still name its resolved current space key or alias. Subtree authority follows the root and current descendants after an external move."
   },
   "page.draft.attachment.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -570,7 +605,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attach [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID> <FILES>...; run agent-access confluence page draft attach --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attach [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID> <FILES>...; run agent-access confluence page draft attach --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.attachment.download": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -586,7 +622,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attachment download [OPTIONS] --draft-handle <DRAFT_HANDLE> --attachment-id <ATTACHMENT_ID> <PAGE_ID>; run agent-access confluence page draft attachment download --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attachment download [OPTIONS] --draft-handle <DRAFT_HANDLE> --attachment-id <ATTACHMENT_ID> <PAGE_ID>; run agent-access confluence page draft attachment download --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.attachment.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -602,7 +639,8 @@
       }
     ],
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken with the same target and effective maxResults. Tokens expire 15 minutes after issuance and every page is reauthorized. Stable signing-key configuration lets list tokens survive reload/restart while their bindings remain valid; runtime-key tokens do not. Rejecting a token requires restarting this listing without it; do not treat it as an upstream cursor.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attachment list [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft attachment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft attachment list [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft attachment list --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.create": {
     "scope": "Authorize prospective child placement under the confirmed page or folder parent. A covering space or subtree is required; an exact parent resource cannot authorize child creation.",
@@ -622,7 +660,8 @@
     ],
     "draftHandle": "Returns draftHandle for later draft actions; preserve it exactly. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
     "draftOperation": "Creates new unpublished draft content. Current-content actions do not accept it; continue through this content family's draft actions.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence page draft create --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft create [OPTIONS] --space <SPACE> --title <TITLE> --content-format <CONTENT_FORMAT>; run agent-access confluence page draft create --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed page/folder identity ends with its immutable ID. Use parent {kind: \"page\" or \"folder\", id: \"ID\"} and the actual current space; do not pass the identity URI as parentUrl. A browser parentUrl must still name its resolved current space key or alias. Subtree authority follows the root and current descendants after an external move."
   },
   "page.draft.discard": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -637,7 +676,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft discard [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft discard --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft discard [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft discard --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.publish": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -653,7 +693,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft publish [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <PAGE_ID>; run agent-access confluence page draft publish --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft publish [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <PAGE_ID>; run agent-access confluence page draft publish --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.stage": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -671,7 +712,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft stage [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page draft stage --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft stage [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page draft stage --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "page.draft.update": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -689,7 +731,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft update [OPTIONS] --draft-handle <DRAFT_HANDLE> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page draft update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft update [OPTIONS] --draft-handle <DRAFT_HANDLE> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page draft update --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.verify": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -705,7 +748,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft verify [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft verify --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft verify [OPTIONS] --draft-handle <DRAFT_HANDLE> <PAGE_ID>; run agent-access confluence page draft verify --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.draft.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -722,7 +766,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft view [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <PAGE_ID>; run agent-access confluence page draft view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page draft view [OPTIONS] --draft-handle <DRAFT_HANDLE> --body-format <BODY_FORMAT> <PAGE_ID>; run agent-access confluence page draft view --help for flags and input alternatives.",
+    "resourceIdentities": "Resource identity URIs are neither browser URLs nor signed draft handles. Supply pageId and draftHandle from the returned draft receipt. The handle remains bound to its operational space and parent; a content grant following an externally moved root does not repair or rebind an existing handle."
   },
   "page.footer_comment.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -738,11 +783,13 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment add [OPTIONS] --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page footer-comment add --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment add [OPTIONS] --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page footer-comment add --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "page.footer_comment.delete": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment delete --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment delete --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.footer_comment.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -756,7 +803,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment list [OPTIONS] <PAGE_ID>; run agent-access confluence page footer-comment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment list [OPTIONS] <PAGE_ID>; run agent-access confluence page footer-comment list --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "page.footer_comment.reply.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -772,7 +820,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page footer-comment reply --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page footer-comment reply --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.footer_comment.reply.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -786,7 +835,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment replies --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment replies --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.footer_comment.update": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -804,7 +854,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page footer-comment update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page footer-comment update --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.footer_comment.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -817,11 +868,13 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page footer-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence page footer-comment view --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.inline_comment.delete": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment delete --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment delete [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment delete --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.inline_comment.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -835,7 +888,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment list [OPTIONS] <PAGE_ID>; run agent-access confluence page inline-comment list --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment list [OPTIONS] <PAGE_ID>; run agent-access confluence page inline-comment list --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "page.inline_comment.reply.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -851,7 +905,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page inline-comment reply --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment reply [OPTIONS] --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page inline-comment reply --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.inline_comment.reply.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -865,7 +920,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment replies --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment replies [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment replies --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.inline_comment.update": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -883,7 +939,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page inline-comment update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <COMMENT_ID>; run agent-access confluence page inline-comment update --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.inline_comment.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -896,7 +953,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page inline-comment view [OPTIONS] <COMMENT_ID>; run agent-access confluence page inline-comment view --help for flags and input alternatives.",
+    "resourceIdentities": "Content resource selectors are stable identities, not executable URLs. Use this action’s declared comment/draft/owner inputs; a content grant does not substitute for those locators. The actual owner and current placement are rechecked before release or mutation."
   },
   "page.move": {
     "placement": "Give exactly one of pageId/url, position before/after/append, and exactly one of targetPageId/targetUrl. The source and target must be distinct current pages in one authorized space. append makes the target the parent and places the page last; before/after place it beside a sibling target with a page parent. The action verifies effective parent and direct-child ordering by readback. Parent clearing, cross-space moves and non-page targets are unsupported.",
@@ -927,7 +985,8 @@
       }
     ],
     "typedCommand": "Typed CLI wrapper: agent-access confluence page move [OPTIONS] --position <POSITION> [PAGE_ID]; run agent-access confluence page move --help for flags and input alternatives.",
-    "scope": "One grant and the independent token boundary must cover the complete moved subtree before and after placement, the destination slot and the ordering anchor. Exact-page authority is insufficient; partial source/destination grants cannot be stitched together. Relevant unreadable exclusion roots fail closed."
+    "scope": "One grant and the independent token boundary must cover the complete moved subtree before and after placement, the destination slot and the ordering anchor. Exact-page authority is insufficient; partial source/destination grants cannot be stitched together. Relevant unreadable exclusion roots fail closed.",
+    "resourceIdentities": "For a disclosed /wiki/content/page/ID identity use pageId or targetPageId, as appropriate. It is not a browser url or targetUrl. Browser URLs must name the resolved current space key or alias; moves remain same-space. Excluded/required roots are classified with current metadata. A root hidden from the selected access can block moves anywhere on this site because disjointness cannot be proved; it is not necessarily deleted or stale. Do not remove an exclusion automatically."
   },
   "page.update": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -944,7 +1003,8 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page update --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page update [OPTIONS] --base-version <BASE_VERSION> --content-format <CONTENT_FORMAT> <PAGE_ID>; run agent-access confluence page update --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "page.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
@@ -964,7 +1024,8 @@
       }
     ],
     "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page view [OPTIONS] [PAGE_ID]; run agent-access confluence page view --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page view [OPTIONS] [PAGE_ID]; run agent-access confluence page view --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   },
   "search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; any change to the bound effective authority rejects continuation, while an unrelated policy publication does not. The token also binds execution context, principal, credential mode/method and the service route. scanStatus is more when upstream candidates remain, scan_budget when a bounded scan stopped before exhaustion, or exhausted when no continuation remains. An empty page with more or scan_budget can still continue. On a rejected continuation, repeat the search without the token.",
@@ -1016,7 +1077,8 @@
       }
     ],
     "typedCommand": "Typed CLI wrapper: agent-access confluence page search [OPTIONS]; run agent-access confluence page search --help for flags and input alternatives.",
-    "scope": "Search selects one global winning grant band and credential mode. Broker compiles every winning inclusion/exclusion and the independent token boundary into CQL before adding caller filters, then validates every released result. Counts describe released results, not upstream totals; bounded scans can return an empty page with confidential continuation."
+    "scope": "Search selects one global winning grant band and credential mode. Broker compiles every winning inclusion/exclusion and the independent token boundary into CQL before adding caller filters, then validates every released result. Counts describe released results, not upstream totals; bounded scans can return an empty page with confidential continuation.",
+    "resourceIdentities": "Disclosed confluence_content selectors use stable https://<site>/wiki/content/{page|folder|blog}/<ID> identities. They are not browser URLs or search text. Search current authorized content normally; explicit spaces narrow current placement."
   },
   "space.list": {
     "request": "Omitting maxResults uses the configured maximum advertised by this action (50 in the default configuration, at most 100). Whole-result Markdown is supported. Keep actual space keys, including personal-space tilde and case; a personal-space grant does not imply ownership.",
@@ -1043,6 +1105,7 @@
         }
       }
     ],
-    "typedCommand": "Typed CLI wrapper: agent-access confluence page verify [OPTIONS] <PAGE_ID>; run agent-access confluence page verify --help for flags and input alternatives."
+    "typedCommand": "Typed CLI wrapper: agent-access confluence page verify [OPTIONS] <PAGE_ID>; run agent-access confluence page verify --help for flags and input alternatives.",
+    "resourceIdentities": "A disclosed /wiki/content/page/ID selector is a stable identity, not a browser URL. Extract its immutable ID and supply pageId. Exact identity follows the same object after an external move; space/token boundaries still test current placement. Browser URL alternatives must name the resolved current space key or alias."
   }
 }

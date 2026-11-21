@@ -101,8 +101,14 @@ entry's contexts or enabled state and reuse it in groups and grants.
 
 Jira issues use their containing project as the authorization boundary.
 Confluence pages and blogs can use exact content resources, and page/folder
-subtrees cover current descendants. These are typed containment relations,
-not string-prefix namespace matches.
+subtrees cover current descendants. Content selector values identify site, kind
+and immutable ID, such as `https://example.atlassian.net/wiki/content/page/12345`;
+exact/subtree coverage is separate. They follow an external cross-space move,
+while actual space and ancestry determine space grants and subtree membership.
+They are policy identities, not action browser URLs. Use the action's documented
+ID input. These are typed containment relations, not string-prefix namespace
+matches. See [Confluence content access](confluence-content-access.md) for URL
+entry, whole-space key editing and conditional overlap behavior.
 
 ### Catalog change history
 

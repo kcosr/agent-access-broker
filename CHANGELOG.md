@@ -205,10 +205,17 @@ All notable changes to this project are documented in this file.
 ### Added
 
 - **Confluence grants and token restrictions cover exact pages/blogs and page or
-  folder subtrees.** Offline URL entry, overlap-aware previews and bounded current
+  folder subtrees.** Content identities bind site, kind and ID and follow external
+  cross-space moves; subtree membership uses current ancestry. The portal infers
+  content type/service from a URL, shows page coverage immediately and normalizes
+  on Save. Standalone space-key and all-spaces editing remain available. Bounded
   location checks apply across reads, writes, creation, moves, drafts, comments,
-  attachments and search. Search preserves every policy exclusion upstream and
-  checks results before release. See [content access](docs/confluence-content-access.md).
+  attachments and content-constrained search. Such searches add current metadata
+  reads and can fail while a restricted/deleted index candidate remains visible;
+  pure scalar-space searches retain their indexed path. Search preserves every
+  policy exclusion upstream and checks results before release. Conditional
+  space/content mixed-mode overlap is resolved at invocation, and protected move
+  diagnostics identify the required configured root or proof-budget exhaustion. See [content access](docs/confluence-content-access.md).
   ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
 - **Jira issue workflow transitions.** Discover available transitions and apply

@@ -149,8 +149,10 @@ impl BrokerRuntime {
         )
     }
 
-    /// Resolve only policy-authored provenance for the roots the provider must
-    /// observe. No upstream identity or URL enters this bounded diagnostic.
+    /// Bind policy-authored provenance to the exact root slice issued for this
+    /// operation. Provider filtering and fetch deduplication never change these
+    /// ordinals. Each entry describes only one typed root, including references
+    /// to both its exact and subtree selectors; no upstream value is published.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn containment_root_provenance(
         &self,
@@ -171,8 +173,7 @@ impl BrokerRuntime {
             .and_then(|token| token.caveats.service_restrictions.as_ref())
             .and_then(|restrictions| restrictions.get(service))
             .and_then(|restriction| restriction.resources.as_ref());
-        let mut resources = BTreeSet::new();
-        let mut groups = BTreeSet::new();
+        let mut by_root = BTreeMap::<_, (BTreeSet<&str>, BTreeSet<&str>)>::new();
         for selection in candidates
             .iter()
             .map(|candidate| &candidate.resources)
@@ -193,18 +194,37 @@ impl BrokerRuntime {
                     else {
                         continue;
                     };
-                    if roots.contains(&selector) {
-                        resources.insert(resource_id);
-                        groups.insert(group_id);
-                    }
+                    let Some(key) = content_root_key(&selector) else {
+                        continue;
+                    };
+                    let (resources, groups) = by_root.entry(key).or_default();
+                    resources.insert(resource_id);
+                    groups.insert(group_id);
                 }
             }
         }
-        let resource_ids: Vec<_> = resources.iter().take(16).collect();
-        let group_ids: Vec<_> = groups.iter().take(16).collect();
+        let entries: Vec<_> = roots
+            .iter()
+            .map(|root| {
+                let selected = content_root_key(root).and_then(|key| by_root.get(&key));
+                let resource_ids: Vec<_> = selected
+                    .into_iter()
+                    .flat_map(|(resources, _)| resources.iter().take(16))
+                    .collect();
+                let group_ids: Vec<_> = selected
+                    .into_iter()
+                    .flat_map(|(_, groups)| groups.iter().take(16))
+                    .collect();
+                let total =
+                    selected.map_or(0, |(resources, groups)| resources.len() + groups.len());
+                json!({
+                    "resourceIds": resource_ids, "resourceGroupIds": group_ids,
+                    "additionalProvenanceCount": total - resource_ids.len() - group_ids.len(),
+                })
+            })
+            .collect();
         Some(json!({
-            "resourceIds": resource_ids, "resourceGroupIds": group_ids,
-            "additionalProvenanceCount": resources.len() + groups.len() - resource_ids.len() - group_ids.len(),
+            "policyGeneration": snapshot.generation(), "roots": entries,
         }))
     }
 
@@ -514,6 +534,18 @@ impl BrokerRuntime {
     }
 }
 
+fn content_root_key(
+    selector: &TypedResourceSelector,
+) -> Option<(ResourceType, String, String, String)> {
+    let projection = selector.projection()?;
+    Some((
+        selector.resource_type().clone(),
+        projection.site_origin.clone(),
+        projection.root_kind.clone(),
+        selector.selector().value()?.to_owned(),
+    ))
+}
+
 fn point_authorization_audit(
     contract: &ContainmentScopeCapabilities,
     evidence: &ContainmentEvidence,
@@ -539,7 +571,10 @@ fn point_authorization_audit(
             _ => Vec::new(),
         };
         for location in locations {
-            nodes.extend(std::iter::once(&location.target).chain(&location.ancestors));
+            nodes.extend(
+                std::iter::once(&location.target)
+                    .chain(location.ancestors.iter().map(|ancestor| &ancestor.identity)),
+            );
         }
     }
     json!({
@@ -562,6 +597,7 @@ pub(super) fn with_root_provenance(mut summary: Value, provenance: Option<&Value
 pub(super) fn root_visibility_diagnostic(
     provider: Option<&Value>,
     provenance: Option<&Value>,
+    policy_generation: u64,
 ) -> Option<Value> {
     let proof = provider?.get("locationProof")?;
     if proof.get("finalCheck")?.as_str()? != "unresolved"
@@ -570,28 +606,64 @@ pub(super) fn root_visibility_diagnostic(
         return None;
     }
     let category = proof.get("category")?.as_str()?;
-    if !matches!(category, "not_visible_or_absent" | "unconfirmed") {
+    if !matches!(
+        category,
+        "not_visible_or_absent" | "unconfirmed" | "root_budget_exhausted"
+    ) {
         return None;
     }
-    let mut diagnostic = provenance?.clone();
+    let provenance = provenance?;
+    if provenance.get("policyGeneration")?.as_u64()? != policy_generation {
+        return None;
+    }
+    let entries = provenance.get("roots")?.as_array()?;
+    // An invalid/missing ordinal carries no configured IDs. In particular a
+    // global budget refusal must not nominate an arbitrary unfinished root.
+    let mut diagnostic = proof
+        .get("rootOrdinal")
+        .and_then(Value::as_u64)
+        .and_then(|ordinal| usize::try_from(ordinal).ok())
+        .and_then(|ordinal| entries.get(ordinal))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "resourceIds": [], "resourceGroupIds": [], "additionalProvenanceCount": 0,
+            })
+        });
     diagnostic["diagnostic"] = json!("confluence_move_relation_unresolved");
     diagnostic["category"] = json!(category);
     Some(diagnostic)
 }
 
 pub(super) fn attach_containment_audit(
-    provider: Option<Value>,
+    mut provider: Option<Value>,
     summary: Option<Value>,
+    policy_generation: u64,
 ) -> Option<Value> {
     let Some(mut summary) = summary else {
+        if let Some(proof) = provider
+            .as_mut()
+            .and_then(|audit| audit.get_mut("locationProof"))
+            .and_then(Value::as_object_mut)
+        {
+            proof.remove("rootOrdinal");
+        }
         return provider;
     };
     let mut provider = provider.unwrap_or_else(|| json!({}));
     let provenance = summary
         .as_object_mut()
         .and_then(|summary| summary.remove("_rootVisibilityProvenance"));
-    if let Some(diagnostic) = root_visibility_diagnostic(Some(&provider), provenance.as_ref()) {
+    if let Some(diagnostic) =
+        root_visibility_diagnostic(Some(&provider), provenance.as_ref(), policy_generation)
+    {
         summary["rootVisibility"] = diagnostic;
+    }
+    if let Some(proof) = provider
+        .get_mut("locationProof")
+        .and_then(Value::as_object_mut)
+    {
+        proof.remove("rootOrdinal");
     }
     let final_check = provider
         .pointer("/locationProof/finalCheck")
@@ -644,9 +716,14 @@ fn containment_digest(
 
 fn evidence_digest_value(evidence: &ContainmentEvidence) -> Value {
     let location = |location: &ContentLocation| {
+        let ancestors: Vec<_> = location
+            .ancestors
+            .iter()
+            .map(|ancestor| json!({"identity": ancestor.identity, "containers": ancestor.containers}))
+            .collect();
         json!({
             "target": location.target, "containers": location.containers,
-            "ancestors": location.ancestors, "level": location.evidence_level,
+            "ancestors": ancestors, "level": location.evidence_level,
             "provenance": format!("{:?}", location.provenance),
         })
     };
@@ -1060,21 +1137,18 @@ impl BrokerRuntime {
             let competitors = (0..plan.candidates.len()).any(|other| plan.competing(index, other));
             for selector in boundary.included() {
                 let singleton = ContainmentBoundary::new(vec![selector.clone()], Vec::new());
-                if singleton.prove_intersection(
-                    boundary,
-                    &plan.scope.contract,
-                    &plan.scope.site_origin,
-                ) == OfflineContainmentProof::Empty
+                let selected_root =
+                    ContainmentBoundary::new(vec![selector.clone()], boundary.excluded().to_vec());
+                if selected_root.prove_nonempty(&plan.scope.contract, &plan.scope.site_origin)
+                    == OfflineContainmentProof::Empty
+                    || plan.token.as_ref().is_some_and(|token| {
+                        selected_root.prove_intersection(
+                            token,
+                            &plan.scope.contract,
+                            &plan.scope.site_origin,
+                        ) == OfflineContainmentProof::Empty
+                    })
                 {
-                    continue;
-                }
-                if plan.token.as_ref().is_some_and(|token| {
-                    singleton.prove_intersection(
-                        token,
-                        &plan.scope.contract,
-                        &plan.scope.site_origin,
-                    ) == OfflineContainmentProof::Empty
-                }) {
                     continue;
                 }
                 let restricted = !boundary.excluded().is_empty()
@@ -1107,16 +1181,18 @@ impl BrokerRuntime {
                 }) {
                     continue;
                 }
-                let singleton = ContainmentBoundary::new(vec![selector.clone()], Vec::new());
-                if singleton.prove_intersection(
-                    token,
-                    &plan.scope.contract,
-                    &plan.scope.site_origin,
-                ) == OfflineContainmentProof::Empty
+                // This positive root is already known to the caller through
+                // its token. Preserve the complete grant AND token condition,
+                // including token exclusions, without demanding offline proof
+                // of the root's current container or ancestry.
+                let selected_root =
+                    ContainmentBoundary::new(vec![selector.clone()], token.excluded().to_vec());
+                if selected_root.prove_nonempty(&plan.scope.contract, &plan.scope.site_origin)
+                    == OfflineContainmentProof::Empty
                 {
                     continue;
                 }
-                let covered = plan
+                let possible = plan
                     .candidates
                     .iter()
                     .enumerate()
@@ -1129,13 +1205,13 @@ impl BrokerRuntime {
                                 &candidate.credential_mode,
                             )
                             && plan.possible(index)
-                            && plan.boundary(index).prove_covers(
-                                &singleton,
+                            && plan.boundary(index).prove_intersection(
+                                &selected_root,
                                 &plan.scope.contract,
                                 &plan.scope.site_origin,
-                            ) == OfflineContainmentProof::Covered
+                            ) != OfflineContainmentProof::Empty
                     });
-                if covered {
+                if possible {
                     result.push(LocationCoverage {
                         resource_type: selector.resource_type().clone(),
                         selector: selector.selector().clone(),
@@ -1148,7 +1224,7 @@ impl BrokerRuntime {
         result
     }
 
-    /// A registered reference is disclosed only with an authored-coordinate
+    /// A registered reference is disclosed only with an authored-identity
     /// proof. Unknown hierarchy is sufficient for conditional availability,
     /// but cannot disclose unrelated catalog identities.
     #[allow(clippy::too_many_arguments)]

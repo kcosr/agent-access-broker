@@ -1727,7 +1727,10 @@ and CloudBees CI uses
 controller-alias/full-job-name resources. CloudBees job selectors use exact,
 strict descendant namespace, or all. Confluence containment scopes compose
 space and content selectors using current evidence; subtree is not a namespace
-string match. Jira issue scopes are not supported. An all or namespace entry covers matching upstream objects
+string match. Authored content identity binds only site, kind and immutable ID,
+with exact/subtree coverage separate. Current container and ancestor observations
+are runtime evidence, so a content grant follows an external cross-space move
+without implying a space grant. Jira issue scopes are not supported. An all or namespace entry covers matching upstream objects
 without catalog registration.
 
 A grant unions its direct selections and selected groups' inclusions, retains
@@ -1757,8 +1760,11 @@ overrides a user grant.
 `credential_mode`, the request is denied as `ServiceActionDenied` with reason
 "ambiguous credential mode precedence". Static config validation independently
 rejects duplicate same-subject grants and overlapping containment-scope grants
-with differing modes, except lookup-backed wildcard-vs-finite overlaps that can
-be resolved after authoritative metadata lookup. A command import's
+with differing modes when overlap is proved. Conditional intersections, including
+finite Confluence space versus an unpinned content root and lookup-backed
+wildcard-vs-finite overlaps, may publish and require authoritative runtime
+resolution. Identical content roots and same-root exact/subtree mixed-mode
+overlaps remain statically rejectable. A command import's
 command-enforced actions are exempt from both: every grant of their top band is
 passed with its own credential mode, so mixed modes are not ambiguous.
 

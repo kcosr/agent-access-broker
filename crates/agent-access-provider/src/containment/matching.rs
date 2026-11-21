@@ -122,136 +122,17 @@ impl ContainmentBoundary {
         contract: &ContainmentScopeCapabilities,
         site_origin: &str,
     ) -> OfflineContainmentProof {
-        let positives: Vec<_> = self
-            .included
-            .iter()
-            .filter(|selector| contract.selector_applicable(selector, site_origin))
-            .collect();
-        let negatives: Vec<_> = self
-            .excluded
-            .iter()
-            .filter(|selector| contract.selector_applicable(selector, site_origin))
-            .collect();
-        if positives.is_empty() {
-            return OfflineContainmentProof::Empty;
-        }
-        let mut conditional = false;
-        for effect in &contract.effects {
-            let mut found = false;
-            let mut uncertain = false;
-            for positive in &positives {
-                if !can_cover_effect(positive, *effect) {
-                    continue;
-                }
-                if negatives
-                    .iter()
-                    .any(|negative| selector_relation(negative, positive) == Relation::Contains)
-                {
-                    continue;
-                }
-                if negatives.iter().all(|negative| {
-                    selector_relation(negative, positive) == Relation::Disjoint
-                        && selector_relation(positive, negative) == Relation::Disjoint
-                }) {
-                    found = true;
-                } else {
-                    uncertain = true;
-                }
-            }
-            if !found && !uncertain {
-                return OfflineContainmentProof::Empty;
-            }
-            conditional |= !found;
-        }
-        if conditional {
-            OfflineContainmentProof::Conditional
-        } else {
-            OfflineContainmentProof::Covered
-        }
+        prove_conjunction(&[self], contract, site_origin)
     }
 
-    /// Proves nonempty overlap without inferring relations between distinct
-    /// subtree roots. Exclusions stay local to each input boundary.
+    /// Proves nonempty overlap while preserving both boundaries and exclusions.
     pub fn prove_intersection(
         &self,
         other: &Self,
         contract: &ContainmentScopeCapabilities,
         site_origin: &str,
     ) -> OfflineContainmentProof {
-        if self.prove_nonempty(contract, site_origin) == OfflineContainmentProof::Empty
-            || other.prove_nonempty(contract, site_origin) == OfflineContainmentProof::Empty
-        {
-            return OfflineContainmentProof::Empty;
-        }
-        let negatives: Vec<_> = self
-            .excluded
-            .iter()
-            .chain(&other.excluded)
-            .filter(|selector| contract.selector_applicable(selector, site_origin))
-            .collect();
-        let mut conditional = false;
-        for effect in &contract.effects {
-            let mut found = false;
-            let mut uncertain = false;
-            for left in self.included.iter().filter(|selector| {
-                contract.selector_applicable(selector, site_origin)
-                    && can_cover_effect(selector, *effect)
-            }) {
-                for right in other.included.iter().filter(|selector| {
-                    contract.selector_applicable(selector, site_origin)
-                        && can_cover_effect(selector, *effect)
-                }) {
-                    let left_relation = selector_relation(left, right);
-                    let right_relation = selector_relation(right, left);
-                    if left_relation == Relation::Disjoint || right_relation == Relation::Disjoint {
-                        continue;
-                    }
-                    let witness = if left_relation == Relation::Contains {
-                        Some(right)
-                    } else if right_relation == Relation::Contains {
-                        Some(left)
-                    } else {
-                        None
-                    };
-                    match witness {
-                        Some(witness) => {
-                            if negatives.iter().any(|negative| {
-                                selector_relation(negative, witness) == Relation::Contains
-                            }) {
-                                continue;
-                            }
-                            if negatives.iter().all(|negative| {
-                                selector_relation(negative, witness) == Relation::Disjoint
-                                    && selector_relation(witness, negative) == Relation::Disjoint
-                            }) {
-                                found = true;
-                            } else {
-                                uncertain = true;
-                            }
-                        }
-                        None => {
-                            // If either complete positive is excluded, their
-                            // intersection is excluded as well.
-                            if !negatives.iter().any(|negative| {
-                                selector_relation(negative, left) == Relation::Contains
-                                    || selector_relation(negative, right) == Relation::Contains
-                            }) {
-                                uncertain = true;
-                            }
-                        }
-                    }
-                }
-            }
-            if !found && !uncertain {
-                return OfflineContainmentProof::Empty;
-            }
-            conditional |= !found;
-        }
-        if conditional {
-            OfflineContainmentProof::Conditional
-        } else {
-            OfflineContainmentProof::Covered
-        }
+        prove_conjunction(&[self, other], contract, site_origin)
     }
 
     /// Proves complete coverage of the other boundary. Empty means provably
@@ -291,22 +172,21 @@ impl ContainmentBoundary {
             .filter(|selector| contract.selector_applicable(selector, site_origin))
             .all(|required| {
                 // An entirely excluded positive contributes no requested members.
-                if other_negatives
-                    .iter()
-                    .any(|negative| selector_relation(negative, required) == Relation::Contains)
-                {
+                if other_negatives.iter().any(|negative| {
+                    selector_relation(negative, required, contract) == Relation::Contains
+                }) {
                     return true;
                 }
-                positives
-                    .iter()
-                    .any(|positive| selector_relation(positive, required) == Relation::Contains)
-                    && negatives.iter().all(|negative| {
-                        (selector_relation(negative, required) == Relation::Disjoint
-                            && selector_relation(required, negative) == Relation::Disjoint)
-                            || other_negatives.iter().any(|already_excluded| {
-                                selector_relation(already_excluded, negative) == Relation::Contains
-                            })
-                    })
+                positives.iter().any(|positive| {
+                    selector_relation(positive, required, contract) == Relation::Contains
+                }) && negatives.iter().all(|negative| {
+                    (selector_relation(negative, required, contract) == Relation::Disjoint
+                        && selector_relation(required, negative, contract) == Relation::Disjoint)
+                        || other_negatives.iter().any(|already_excluded| {
+                            selector_relation(already_excluded, negative, contract)
+                                == Relation::Contains
+                        })
+                })
             });
         if covered {
             OfflineContainmentProof::Covered
@@ -332,30 +212,155 @@ impl ContainmentBoundary {
                     && contract.container_types.contains(&selector.resource_type)
             })
     }
+}
 
-    /// Restricts a proof operand to one explicit scalar container. This helper
-    /// is not an authority constructor: it is used solely for offline emptiness
-    /// proofs, and any unknown relationship retains the original positive.
-    pub(super) fn restrict_to_container(&self, restriction: &Self) -> Self {
-        let Some(container) = restriction.included.first() else {
-            return Self::new(vec![], vec![]);
-        };
-        let included = self
-            .included
+/// Bounded conjunction proof. Operands remain separate; the traversal retains
+/// every positive and every local exclusion without constructing a DNF result.
+/// Exhausting the proof budget preserves a possible intersection as Conditional.
+pub(super) fn prove_conjunction(
+    boundaries: &[&ContainmentBoundary],
+    contract: &ContainmentScopeCapabilities,
+    site_origin: &str,
+) -> OfflineContainmentProof {
+    const MAX_PROOF_STEPS: usize = 16_384;
+    if boundaries.is_empty() || boundaries.len() > 3 {
+        return OfflineContainmentProof::Conditional;
+    }
+    let mut remaining = MAX_PROOF_STEPS;
+    let mut conditional = false;
+    for effect in &contract.effects {
+        let choices: Vec<Vec<_>> = boundaries
             .iter()
-            .filter_map(|selector| {
-                match (
-                    selector_relation(container, selector),
-                    selector_relation(selector, container),
-                ) {
-                    (Relation::Disjoint, _) | (_, Relation::Disjoint) => None,
-                    (Relation::Contains, _) => Some(selector.clone()),
-                    (_, Relation::Contains) => Some(container.clone()),
-                    _ => Some(selector.clone()),
-                }
+            .map(|boundary| {
+                boundary
+                    .included
+                    .iter()
+                    .filter(|selector| {
+                        contract.selector_applicable(selector, site_origin)
+                            && can_cover_effect(selector, *effect)
+                    })
+                    .collect()
             })
             .collect();
-        Self::new(included, self.excluded.clone())
+        if choices.iter().any(Vec::is_empty) {
+            return OfflineContainmentProof::Empty;
+        }
+        let negatives: Vec<_> = boundaries
+            .iter()
+            .flat_map(|boundary| &boundary.excluded)
+            .filter(|selector| contract.selector_applicable(selector, site_origin))
+            .collect();
+        let mut selected = Vec::with_capacity(boundaries.len());
+        let proof = prove_choices(
+            &choices,
+            &negatives,
+            &mut selected,
+            contract,
+            &mut remaining,
+        );
+        if proof == OfflineContainmentProof::Empty {
+            return proof;
+        }
+        conditional |= proof == OfflineContainmentProof::Conditional;
+    }
+    if conditional {
+        OfflineContainmentProof::Conditional
+    } else {
+        OfflineContainmentProof::Covered
+    }
+}
+
+fn prove_choices<'a>(
+    choices: &[Vec<&'a TypedResourceSelector>],
+    negatives: &[&TypedResourceSelector],
+    selected: &mut Vec<&'a TypedResourceSelector>,
+    contract: &ContainmentScopeCapabilities,
+    remaining: &mut usize,
+) -> OfflineContainmentProof {
+    let mut conditional = false;
+    if selected.len() < choices.len() {
+        for candidate in &choices[selected.len()] {
+            if *remaining == 0 {
+                return OfflineContainmentProof::Conditional;
+            }
+            *remaining -= 1;
+            let mut impossible = false;
+            for previous in selected.iter() {
+                if *remaining == 0 {
+                    return OfflineContainmentProof::Conditional;
+                }
+                *remaining -= 1;
+                if selector_relation(previous, candidate, contract) == Relation::Disjoint
+                    || selector_relation(candidate, previous, contract) == Relation::Disjoint
+                {
+                    impossible = true;
+                    break;
+                }
+            }
+            if impossible {
+                continue;
+            }
+            for negative in negatives {
+                if *remaining == 0 {
+                    return OfflineContainmentProof::Conditional;
+                }
+                *remaining -= 1;
+                if selector_relation(negative, candidate, contract) == Relation::Contains {
+                    impossible = true;
+                    break;
+                }
+            }
+            if impossible {
+                continue;
+            }
+            selected.push(candidate);
+            let proof = prove_choices(choices, negatives, selected, contract, remaining);
+            selected.pop();
+            match proof {
+                OfflineContainmentProof::Covered => return proof,
+                OfflineContainmentProof::Conditional => conditional = true,
+                OfflineContainmentProof::Empty => {}
+            }
+        }
+    } else {
+        for witness in selected.iter() {
+            let mut contained = true;
+            for operand in selected.iter() {
+                if *remaining == 0 {
+                    return OfflineContainmentProof::Conditional;
+                }
+                *remaining -= 1;
+                if selector_relation(operand, witness, contract) != Relation::Contains {
+                    contained = false;
+                    break;
+                }
+            }
+            if !contained {
+                continue;
+            }
+            let mut unexcluded = true;
+            for negative in negatives {
+                if *remaining == 0 {
+                    return OfflineContainmentProof::Conditional;
+                }
+                *remaining -= 1;
+                if selector_relation(negative, witness, contract) != Relation::Disjoint
+                    || selector_relation(witness, negative, contract) != Relation::Disjoint
+                {
+                    unexcluded = false;
+                    break;
+                }
+            }
+            if unexcluded {
+                return OfflineContainmentProof::Covered;
+            }
+        }
+        return OfflineContainmentProof::Conditional;
+    }
+    if conditional {
+        OfflineContainmentProof::Conditional
+    } else {
+        OfflineContainmentProof::Empty
     }
 }
 
@@ -374,9 +379,6 @@ fn matches_point(
     location: &ContentLocation,
 ) -> Result<bool, ContainmentError> {
     if let Some(projection) = &selector.projection {
-        if coordinates_disjoint(&projection.containers, &location.containers) {
-            return Ok(false);
-        }
         // Canonical identity contains its site; projection is checked when
         // evidence is validated. Comparing value never parses a provider URL.
         match &selector.selector {
@@ -396,7 +398,10 @@ fn matches_point(
                 if location.evidence_level != ContainmentEvidenceLevel::CompleteLineage {
                     return Err(ContainmentError::InsufficientEvidence);
                 }
-                Ok(location.ancestors.iter().any(identity_matches))
+                Ok(location
+                    .ancestors
+                    .iter()
+                    .any(|ancestor| identity_matches(&ancestor.identity)))
             }
             _ => Err(ContainmentError::InvalidSelector),
         }
@@ -441,9 +446,6 @@ fn region_intersects(
     let Some(projection) = &selector.projection else {
         return matches_point(selector, current);
     };
-    if coordinates_disjoint(&projection.containers, &current.containers) {
-        return Ok(false);
-    }
     if matches_point(selector, current)? || matches_point(selector, proposed)? {
         return Ok(true);
     }
@@ -462,7 +464,7 @@ fn region_intersects(
         .ancestors
         .iter()
         .chain(&proposed.ancestors)
-        .any(is_root)
+        .any(|ancestor| is_root(&ancestor.identity))
     {
         return Ok(false);
     }
@@ -470,11 +472,20 @@ fn region_intersects(
         .iter()
         .find(|location| is_root(&location.target))
         .ok_or(ContainmentError::UnresolvedRelation)?;
+    if coordinates_disjoint(&root.containers, &current.containers)
+        && coordinates_disjoint(&root.containers, &proposed.containers)
+    {
+        return Ok(false);
+    }
     if root.evidence_level != ContainmentEvidenceLevel::CompleteLineage {
         return Err(ContainmentError::InsufficientEvidence);
     }
     // Relationships internal to the carried region are preserved by the move.
-    Ok(root.target == current.target || root.ancestors.contains(&current.target))
+    Ok(root.target == current.target
+        || root
+            .ancestors
+            .iter()
+            .any(|ancestor| ancestor.identity == current.target))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -485,11 +496,23 @@ enum Relation {
 }
 
 /// Authored set relation only. Unknown never becomes false/disjoint.
-fn selector_relation(left: &TypedResourceSelector, right: &TypedResourceSelector) -> Relation {
+fn selector_relation(
+    left: &TypedResourceSelector,
+    right: &TypedResourceSelector,
+    contract: &ContainmentScopeCapabilities,
+) -> Relation {
     match (&left.projection, &right.projection) {
         (None, None) => {
             if left.resource_type != right.resource_type {
-                return Relation::Unknown;
+                return if contract.container_types.contains(&left.resource_type)
+                    && contract.container_types.contains(&right.resource_type)
+                    && matches!(left.selector, ResourceSelector::All)
+                {
+                    Relation::Contains
+                } else {
+                    // Distinct declared dimensions coexist on the same content.
+                    Relation::Unknown
+                };
             }
             let (Ok(left), Ok(right)) = (
                 ScalarResourceSelector::try_from(&left.selector),
@@ -505,31 +528,22 @@ fn selector_relation(left: &TypedResourceSelector, right: &TypedResourceSelector
                 Relation::Unknown
             }
         }
-        (None, Some(right_projection)) => {
-            let Some(container) = right_projection
-                .containers
-                .iter()
-                .find(|container| container.resource_type == left.resource_type)
-            else {
-                return Relation::Unknown;
-            };
-            let Ok(selector) = ScalarResourceSelector::try_from(&left.selector) else {
-                return Relation::Unknown;
-            };
-            if selector.matches(&container.value) {
+        (None, Some(_)) => {
+            if contract.container_types.contains(&left.resource_type)
+                && matches!(left.selector, ResourceSelector::All)
+            {
                 Relation::Contains
             } else {
-                Relation::Disjoint
+                // Stable content identity carries no observed container value.
+                Relation::Unknown
             }
         }
-        (Some(_), None) => match selector_relation(right, left) {
+        (Some(_), None) => match selector_relation(right, left, contract) {
             Relation::Disjoint => Relation::Disjoint,
             _ => Relation::Unknown,
         },
         (Some(left_projection), Some(right_projection)) => {
-            if left_projection.site_origin != right_projection.site_origin
-                || coordinates_disjoint(&left_projection.containers, &right_projection.containers)
-            {
+            if left_projection.site_origin != right_projection.site_origin {
                 return Relation::Disjoint;
             }
             match (&left.selector, &right.selector) {
@@ -562,7 +576,10 @@ fn selector_relation(left: &TypedResourceSelector, right: &TypedResourceSelector
     }
 }
 
-fn coordinates_disjoint(left: &[ResourceContainer], right: &[ResourceContainer]) -> bool {
+pub(super) fn coordinates_disjoint(
+    left: &[ResourceContainer],
+    right: &[ResourceContainer],
+) -> bool {
     left.iter().any(|left| {
         right
             .iter()

@@ -14,7 +14,7 @@ pub(crate) enum ResourcesCommand {
     Types,
     /// List services offering offline URL normalization for resource entry.
     Locations,
-    /// Preview canonical resource coverage without contacting the upstream service.
+    /// Normalize resource coverage without contacting the upstream service.
     NormalizeLocation {
         #[arg(long)]
         service: String,
@@ -22,8 +22,6 @@ pub(crate) enum ResourcesCommand {
         url: String,
         #[arg(long, value_parser = ["space", "exact", "subtree"])]
         coverage: String,
-        #[arg(long)]
-        space_key: Option<String>,
     },
     Get {
         id: String,
@@ -195,13 +193,8 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             service,
             url,
             coverage,
-            space_key,
         } => {
-            let mut body =
-                serde_json::json!({"service": service, "url": url, "coverage": coverage});
-            if let Some(key) = space_key {
-                body["spaceKey"] = serde_json::json!(key);
-            }
+            let body = serde_json::json!({"service": service, "url": url, "coverage": coverage});
             run_broker_json_method(
                 ctx,
                 reqwest::Method::POST,
@@ -409,7 +402,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn location_preview_and_content_subtree_commands_parse() {
+    fn location_normalization_and_content_subtree_commands_parse() {
         let cli = Cli::try_parse_from([
             "agent-access",
             "admin",
@@ -422,8 +415,6 @@ mod tests {
             "https://example.atlassian.net/wiki/spaces/alias/folder/12",
             "--coverage",
             "subtree",
-            "--space-key",
-            "ENG",
         ])
         .unwrap();
         let Command::Admin {
@@ -436,7 +427,6 @@ mod tests {
                                     service,
                                     url,
                                     coverage,
-                                    space_key,
                                 },
                         },
                 },
@@ -450,7 +440,24 @@ mod tests {
             "https://example.atlassian.net/wiki/spaces/alias/folder/12"
         );
         assert_eq!(coverage, "subtree");
-        assert_eq!(space_key.as_deref(), Some("ENG"));
+        assert!(
+            Cli::try_parse_from([
+                "agent-access",
+                "admin",
+                "policy",
+                "resources",
+                "normalize-location",
+                "--service",
+                "confluence",
+                "--url",
+                "https://example.atlassian.net/wiki/spaces/alias/folder/12",
+                "--coverage",
+                "subtree",
+                "--space-key",
+                "ENG",
+            ])
+            .is_err()
+        );
         assert!(
             Cli::try_parse_from(["agent-access", "admin", "policy", "resources", "locations"])
                 .is_ok()
@@ -467,7 +474,7 @@ mod tests {
                 "--selector-kind",
                 "subtree",
                 "--selector-value",
-                "https://example.atlassian.net/wiki/spaces/ENG/folder/12",
+                "https://example.atlassian.net/wiki/content/folder/12",
                 "--execution-context",
                 "default",
             ])
@@ -483,10 +490,10 @@ mod tests {
         assert_eq!(
             selector_value(
                 "subtree",
-                &Some("https://example.atlassian.net/wiki/spaces/ENG/folder/12".into())
+                &Some("https://example.atlassian.net/wiki/content/folder/12".into())
             )
             .unwrap(),
-            serde_json::json!({"kind":"subtree","value":"https://example.atlassian.net/wiki/spaces/ENG/folder/12"})
+            serde_json::json!({"kind":"subtree","value":"https://example.atlassian.net/wiki/content/folder/12"})
         );
         assert!(selector_value("namespace", &Some(String::new())).is_err());
         assert_eq!(

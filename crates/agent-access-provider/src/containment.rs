@@ -14,7 +14,8 @@ mod matching;
 mod tests;
 
 const MAX_LOCATION_NODES: usize = 64;
-const MAX_RELATED_ROOTS: usize = 64;
+const MAX_RELATED_ROOTS: usize = 256;
+const MAX_OVERLAPPING_ROOTS: usize = 64;
 const MAX_OPERATION_NODES: usize = 256;
 const MAX_OBLIGATIONS: usize = 64;
 
@@ -190,10 +191,6 @@ impl ContainmentScopeCapabilities {
             }
             Some(projection) => {
                 projection.site_origin == site_origin
-                    && projection
-                        .containers
-                        .iter()
-                        .any(|container| self.container_types.contains(&container.resource_type))
                     && match selector.selector() {
                         ResourceSelector::Exact { .. } => {
                             self.effects
@@ -234,6 +231,30 @@ impl ContainmentIdentity {
     }
 }
 
+/// One selectable ancestor with authenticated current container observations.
+/// Evidence is provider-constructed, non-deserializable and redacted in Debug.
+#[non_exhaustive]
+#[derive(Clone, PartialEq, Eq)]
+pub struct ContainmentAncestor {
+    pub identity: ContainmentIdentity,
+    pub containers: Vec<ResourceContainer>,
+}
+impl ContainmentAncestor {
+    pub fn new(identity: ContainmentIdentity, mut containers: Vec<ResourceContainer>) -> Self {
+        containers.sort();
+        Self {
+            identity,
+            containers,
+        }
+    }
+}
+impl std::fmt::Debug for ContainmentAncestor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainmentAncestor")
+            .finish_non_exhaustive()
+    }
+}
+
 /// One point or parent with authenticated coordinates. Public ancestors contain
 /// selectable kinds only, in immediate-parent-first order. Providers retain all
 /// other typed edges privately and compare those graphs at the final fence.
@@ -242,7 +263,7 @@ impl ContainmentIdentity {
 pub struct ContentLocation {
     pub target: ContainmentIdentity,
     pub containers: Vec<ResourceContainer>,
-    pub ancestors: Vec<ContainmentIdentity>,
+    pub ancestors: Vec<ContainmentAncestor>,
     pub evidence_level: ContainmentEvidenceLevel,
     pub provenance: ContainmentProvenance,
 }
@@ -261,7 +282,7 @@ impl ContentLocation {
             provenance: ContainmentProvenance::Observed,
         }
     }
-    pub fn with_ancestors(mut self, ancestors: Vec<ContainmentIdentity>) -> Self {
+    pub fn with_ancestors(mut self, ancestors: Vec<ContainmentAncestor>) -> Self {
         self.ancestors = ancestors;
         self
     }
@@ -273,7 +294,6 @@ impl ContentLocation {
 impl std::fmt::Debug for ContentLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContentLocation")
-            .field("target", &self.target)
             .field("evidence_level", &self.evidence_level)
             .field("provenance", &self.provenance)
             .field("ancestor_count", &self.ancestors.len())
@@ -361,9 +381,11 @@ impl ContainmentEvidence {
             || !crate::location::is_canonical_https_dns_origin(&self.site_origin)
             || self.obligations.is_empty()
             || self.obligations.len() > MAX_OBLIGATIONS
-            || self.related_roots.len() > MAX_RELATED_ROOTS
         {
             return Err(ContainmentError::InvalidEvidence);
+        }
+        if self.related_roots.len() > MAX_RELATED_ROOTS {
+            return Err(ContainmentError::BudgetExceeded);
         }
         if !self.related_roots.is_empty()
             && !self
@@ -375,7 +397,7 @@ impl ContainmentEvidence {
         }
         let mut roles = BTreeSet::new();
         let mut effects = BTreeSet::new();
-        let mut nodes = BTreeSet::new();
+        let mut nodes = BTreeMap::new();
         for obligation in &self.obligations {
             let effect = obligation.effect();
             if !contract.effects.contains(&effect) || !roles.insert((effect, obligation.target())) {
@@ -444,6 +466,7 @@ impl ContainmentEvidence {
             return Err(ContainmentError::InvalidEvidence);
         }
         let mut roots = BTreeSet::new();
+        let mut overlapping_roots = 0;
         for root in &self.related_roots {
             if !roots.insert(&root.target) || root.provenance != ContainmentProvenance::Observed {
                 return Err(ContainmentError::InvalidEvidence);
@@ -454,11 +477,28 @@ impl ContainmentEvidence {
                 .chain(&contract.ancestor_kinds)
                 .cloned()
                 .collect();
+            let disjoint = self.obligations.iter().all(|obligation| {
+                let ContainmentObligation::SubtreeImpact { current, proposed } = obligation else {
+                    return true;
+                };
+                matching::coordinates_disjoint(&root.containers, &current.containers)
+                    && matching::coordinates_disjoint(&root.containers, &proposed.containers)
+            });
+            if !disjoint {
+                overlapping_roots += 1;
+                if overlapping_roots > MAX_OVERLAPPING_ROOTS {
+                    return Err(ContainmentError::BudgetExceeded);
+                }
+            }
             validate_location(
                 root,
                 contract,
                 registry,
-                ContainmentEvidenceLevel::CompleteLineage,
+                if disjoint {
+                    ContainmentEvidenceLevel::ContainerOnly
+                } else {
+                    ContainmentEvidenceLevel::CompleteLineage
+                },
                 &self.site_origin,
                 &kinds,
                 &mut nodes,
@@ -477,7 +517,10 @@ impl ContainmentEvidence {
                         return false;
                     };
                     proposed.containers == parent.containers
-                        && proposed.ancestors.first() == Some(&parent.target)
+                        && proposed.ancestors.first().is_some_and(|ancestor| {
+                            ancestor.identity == parent.target
+                                && ancestor.containers == parent.containers
+                        })
                         && proposed.ancestors[1..] == parent.ancestors
                 });
                 if !valid_destination {
@@ -519,36 +562,31 @@ fn validate_location<'a>(
     required_level: ContainmentEvidenceLevel,
     origin: &str,
     target_kinds: &[String],
-    nodes: &mut BTreeSet<&'a ContainmentIdentity>,
+    nodes: &mut BTreeMap<&'a ContainmentIdentity, &'a [ResourceContainer]>,
 ) -> Result<(), ContainmentError> {
     if location.evidence_level < required_level {
         return Err(ContainmentError::InsufficientEvidence);
     }
     if location.ancestors.len() >= MAX_LOCATION_NODES
-        || location.containers.len() != contract.container_types.len()
         || !target_kinds.contains(&location.target.content_kind)
         || (location.evidence_level == ContainmentEvidenceLevel::ContainerOnly
             && !location.ancestors.is_empty())
     {
         return Err(ContainmentError::InvalidEvidence);
     }
-    let mut types = BTreeSet::new();
-    for container in &location.containers {
-        if !contract.container_types.contains(&container.resource_type)
-            || !types.insert(&container.resource_type)
-            || registry
-                .get(&container.resource_type)
-                .is_none_or(|descriptor| !descriptor.is_canonical_target(&container.value))
-        {
-            return Err(ContainmentError::InvalidEvidence);
-        }
-    }
     let mut lineage = BTreeSet::new();
-    for (index, identity) in std::iter::once(&location.target)
-        .chain(&location.ancestors)
+    for (index, (identity, containers)) in std::iter::once((&location.target, &location.containers))
+        .chain(
+            location
+                .ancestors
+                .iter()
+                .map(|ancestor| (&ancestor.identity, &ancestor.containers)),
+        )
         .enumerate()
     {
-        if !lineage.insert(identity)
+        if containers.len() != contract.container_types.len()
+            || containers != &location.containers
+            || !lineage.insert(identity)
             || (index > 0 && !contract.ancestor_kinds.contains(&identity.content_kind))
             || !contract
                 .selectors_by_type
@@ -556,6 +594,17 @@ fn validate_location<'a>(
             || contract.container_types.contains(&identity.resource_type)
         {
             return Err(ContainmentError::InvalidEvidence);
+        }
+        let mut types = BTreeSet::new();
+        for container in containers {
+            if !contract.container_types.contains(&container.resource_type)
+                || !types.insert(&container.resource_type)
+                || registry
+                    .get(&container.resource_type)
+                    .is_none_or(|descriptor| !descriptor.is_canonical_target(&container.value))
+            {
+                return Err(ContainmentError::InvalidEvidence);
+            }
         }
         let descriptor = registry
             .get(&identity.resource_type)
@@ -565,17 +614,20 @@ fn validate_location<'a>(
             .map_err(|_| ContainmentError::InvalidEvidence)?
             .ok_or(ContainmentError::InvalidEvidence)?;
         projection
-            .validate(registry)
+            .validate()
             .map_err(|_| ContainmentError::InvalidEvidence)?;
-        let mut containers = projection.containers;
-        containers.sort();
-        if projection.site_origin != origin
-            || projection.root_kind != identity.content_kind
-            || containers != location.containers
+        if projection.site_origin != origin || projection.root_kind != identity.content_kind {
+            return Err(ContainmentError::InvalidEvidence);
+        }
+        if nodes
+            .insert(identity, containers)
+            .is_some_and(|previous| previous != containers)
         {
             return Err(ContainmentError::InvalidEvidence);
         }
-        nodes.insert(identity);
+        if nodes.len() > MAX_OPERATION_NODES {
+            return Err(ContainmentError::BudgetExceeded);
+        }
     }
     Ok(())
 }
@@ -623,7 +675,7 @@ impl ResourceTypeRegistry {
             .map_err(|_| ContainmentError::InvalidSelector)?;
         if let Some(projection) = &projection {
             projection
-                .validate(self)
+                .validate()
                 .map_err(|_| ContainmentError::InvalidSelector)?;
         }
         if matches!(selector, ResourceSelector::Subtree { .. }) && projection.is_none() {
@@ -673,7 +725,7 @@ impl std::fmt::Debug for ContainmentBoundary {
     }
 }
 
-/// A conservative authored-coordinate proof. Empty proves no possible member;
+/// A conservative authored-identity proof. Empty proves no possible member;
 /// Covered proves the requested predicate (nonemptiness or complete coverage,
 /// as documented by the method); Conditional requires live relationships.
 #[non_exhaustive]
@@ -807,7 +859,11 @@ impl ContainmentAuthorization {
             }
         }
         for (before, after) in self.evidence.related_roots.iter().zip(&fresh.related_roots) {
-            same_location(before, after, ContainmentEvidenceLevel::CompleteLineage)?;
+            same_location(
+                before,
+                after,
+                before.evidence_level.max(after.evidence_level),
+            )?;
         }
         Ok(())
     }
@@ -917,6 +973,32 @@ impl ContainmentCollectionAuthorization {
     pub fn authority_digest(&self) -> &str {
         &self.authority_digest
     }
+    /// True only when every selected grant and token selector is a declared
+    /// scalar container Exact/All and no hierarchy proof is required.
+    pub fn uses_only_scalar_container_selectors(&self) -> bool {
+        self.evidence_level == ContainmentEvidenceLevel::ContainerOnly
+            && self
+                .grant_boundaries
+                .iter()
+                .chain(self.token_boundary.iter())
+                .all(|boundary| {
+                    boundary
+                        .included
+                        .iter()
+                        .chain(&boundary.excluded)
+                        .all(|selector| {
+                            selector.projection.is_none()
+                                && self
+                                    .contract
+                                    .container_types
+                                    .contains(&selector.resource_type)
+                                && matches!(
+                                    selector.selector,
+                                    ResourceSelector::Exact { .. } | ResourceSelector::All
+                                )
+                        })
+                })
+    }
     pub fn matches_candidate(&self, candidate: &ContentLocation) -> Result<bool, ContainmentError> {
         if candidate.provenance != ContainmentProvenance::Observed {
             return Err(ContainmentError::InvalidEvidence);
@@ -964,19 +1046,13 @@ impl ContainmentCollectionAuthorization {
             return OfflineContainmentProof::Empty;
         };
         let restriction = ContainmentBoundary::new(vec![selector], vec![]);
-        let token = self
-            .token_boundary
-            .as_ref()
-            .map(|boundary| boundary.restrict_to_container(&restriction));
         let mut conditional = false;
         for boundary in &self.grant_boundaries {
-            let restricted = boundary.restrict_to_container(&restriction);
-            let proof = match &token {
-                Some(token) => {
-                    restricted.prove_intersection(token, &self.contract, &self.site_origin)
-                }
-                None => restricted.prove_nonempty(&self.contract, &self.site_origin),
-            };
+            let mut operands = vec![boundary, &restriction];
+            if let Some(token) = &self.token_boundary {
+                operands.push(token);
+            }
+            let proof = matching::prove_conjunction(&operands, &self.contract, &self.site_origin);
             match proof {
                 OfflineContainmentProof::Covered => return OfflineContainmentProof::Covered,
                 OfflineContainmentProof::Conditional => conditional = true,

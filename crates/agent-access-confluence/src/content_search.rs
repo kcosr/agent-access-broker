@@ -1,12 +1,13 @@
-//! Collection authority is compiled upstream, then checked against current
-//! evidence before any candidate metadata is released. Cursors contain only an
-//! encrypted resume position and consistency commitment, never cached bodies.
+//! Collection authority is compiled upstream. Content-participating authority
+//! additionally requires fresh location evidence before candidate release;
+//! scalar-only space authority retains its indexed-space contract. Cursors hold
+//! an encrypted resume position and consistency commitment, never cached bodies.
 use super::*;
 
 const TOKENS: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "content-search",
-    3,
+    4,
     ContinuationLifetime::Generation,
     0,
 )
@@ -16,9 +17,10 @@ const CURSOR_HISTORY_SLOTS: usize = 8;
 const EMPTY_CURSOR_DIGEST: &str =
     "0000000000000000000000000000000000000000000000000000000000000000";
 const MAX_CURSOR_TRAVERSALS: u32 = 4096;
-// Each complete pass can read 64 typed nodes and one space. The operation's
-// actual HTTP counters additionally count the one shared delegated recovery.
-const PROOF_PASS_REQUESTS: u32 = 65;
+// Each pass needs a typed node and its current space; complete lineage can read
+// 64 typed nodes. HTTP counters additionally charge shared delegated recovery.
+const CONTAINER_PROOF_PASS_REQUESTS: u32 = 2;
+const LINEAGE_PROOF_PASS_REQUESTS: u32 = 65;
 
 fn family(limits: &ProviderLimits) -> ContinuationFamily {
     let cap = usize::try_from(limits.max_upstream_response_bytes).unwrap_or(usize::MAX);
@@ -201,15 +203,15 @@ impl Row {
         {
             return Err(protocol());
         }
-        let (kind, segment) = match self {
-            Self::Page(_) => ("page", "pages"),
-            Self::Blog(_) => ("blog", "blog"),
+        let kind = match self {
+            Self::Page(_) => "page",
+            Self::Blog(_) => "blog",
         };
         Ok(ContentLocation::new(
             ContainmentIdentity::new(
                 CONFLUENCE_CONTENT_RESOURCE.id().clone(),
                 kind,
-                format!("{site}/wiki/spaces/{space}/{segment}/{id}"),
+                format!("{site}/wiki/content/{kind}/{id}"),
             ),
             vec![ResourceContainer::new(
                 CONFLUENCE_SPACE_RESOURCE.id().clone(),
@@ -217,6 +219,15 @@ impl Row {
             )],
             ContainmentEvidenceLevel::ContainerOnly,
         ))
+    }
+
+    fn matches_current_space(
+        &self,
+        proof: &SearchLocationProof,
+        requested: &BTreeSet<String>,
+    ) -> bool {
+        self.space() == proof.space.key
+            && (requested.is_empty() || requested.contains(&proof.space.key))
     }
 }
 
@@ -379,12 +390,18 @@ impl ConfluenceProvider {
         });
         let metadata = ConfluenceMetadataBudget::with_parent(&self.config.content_access, &scan);
         let credential = self.execution_credential(request.admitted())?;
-        let complete = authority.evidence_level() == ContainmentEvidenceLevel::CompleteLineage;
+        let fresh = authority.evidence_level() != ContainmentEvidenceLevel::ContainerOnly
+            || !authority.uses_only_scalar_container_selectors();
+        let proof_pass_requests = match authority.evidence_level() {
+            ContainmentEvidenceLevel::ContainerOnly => CONTAINER_PROOF_PASS_REQUESTS,
+            ContainmentEvidenceLevel::CompleteLineage => LINEAGE_PROOF_PASS_REQUESTS,
+            _ => return Err(protocol()),
+        };
         let recovery = u32::from(matches!(request.execution(), ExecutionAccess::Delegated(_)));
-        let reserve_one = PROOF_PASS_REQUESTS * 2 + recovery;
+        let reserve_one = proof_pass_requests * 2 + recovery;
         // A fresh request that cannot possibly complete one candidate must not
         // return a token at the same position forever.
-        if complete
+        if fresh
             && (metadata
                 .remaining_requests()
                 .map_err(confluence_backend_error)?
@@ -434,10 +451,10 @@ impl ConfluenceProvider {
                         }
                         let reserved_final = u32::try_from(retained.len())
                             .map_err(|_| budget_error())?
-                            .checked_mul(PROOF_PASS_REQUESTS)
+                            .checked_mul(proof_pass_requests)
                             .ok_or_else(budget_error)?;
                         if scanned >= limits.max_candidates
-                            || (complete
+                            || (fresh
                                 && metadata
                                     .remaining_requests()
                                     .map_err(confluence_backend_error)?
@@ -451,7 +468,7 @@ impl ConfluenceProvider {
                             return Ok((retained, Some(position), "scan_budget"));
                         }
                         scanned += 1;
-                        if complete {
+                        if fresh {
                             let proof = self
                                 .search_location_proof(
                                     kind,
@@ -461,7 +478,9 @@ impl ConfluenceProvider {
                                     &metadata,
                                 )
                                 .await?;
-                            if proof.location.target != indexed.target {
+                            if proof.location.target != indexed.target
+                                || !row.matches_current_space(&proof, &requested)
+                            {
                                 continue;
                             }
                             if authority
@@ -516,6 +535,9 @@ impl ConfluenceProvider {
                         error
                     })?;
                 if !initial.same_location(&final_proof)
+                    || !candidate
+                        .row
+                        .matches_current_space(&final_proof, &requested)
                     || !authority
                         .matches_candidate(&final_proof.location)
                         .map_err(|_| protocol())?

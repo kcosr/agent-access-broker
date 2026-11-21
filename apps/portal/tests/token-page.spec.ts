@@ -1085,10 +1085,10 @@ test("unavailable location preview preserves explicit token resources and disabl
   const location = {
     resourceTypes: ["confluence_space", "confluence_content"], domain: "page", enforcement: "request" as const, containmentVerification: "at_invocation" as const,
     projectionStatus: "complete" as const,
-    boundaries: [{ included: [{ resourceType: "confluence_content", selector: { kind: "subtree" as const, value: "https://example.atlassian.net/wiki/spaces/ENG/folder/12" } }], excluded: [] }],
+    boundaries: [{ included: [{ resourceType: "confluence_content", selector: { kind: "subtree" as const, value: "https://example.atlassian.net/wiki/content/folder/12" } }], excluded: [] }],
     clauses: [{ required: [0], excludedRequests: [], credentialMode: "per_user" }]
   };
-  model.options.resources.push({ id: "folder", displayName: "Runbooks", resourceType: "confluence_content", selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/spaces/ENG/folder/12" }, allowedExecutionContexts: [context], enabled: true });
+  model.options.resources.push({ id: "folder", displayName: "Runbooks", resourceType: "confluence_content", selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/content/folder/12" }, allowedExecutionContexts: [context], enabled: true });
   model.options.services.push({ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: [context], actions: [{
     action: "page.view", description: "View page", readOnly: true, requiredScopeTypes: ["location"], executionContexts: [context], scope: "location", resourceTypes: location.resourceTypes, domain: "page", effectiveAccessByExecutionContext: { internal: location }
   }] });

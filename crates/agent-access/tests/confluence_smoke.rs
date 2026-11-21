@@ -182,7 +182,7 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     assert_eq!(page_by_url_json["result"]["id"], "123456");
     assert_eq!(
         page_by_url_json["resourceScopes"],
-        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/spaces/ENG/pages/123456"]})
+        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/content/page/123456"]})
     );
 
     let search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -337,7 +337,8 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
     let outside_inputs = audit_text_without_inputs(&broker);
     assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
+    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/content/page/123456"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
     assert!(!outside_inputs.contains("\"spaceUrl\":\"https://"));
     assert!(!audit.contains("private deploy steps"));
     assert!(!audit.contains("<p>"));
@@ -399,7 +400,7 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     assert_eq!(denied_audit.len(), 1);
     assert_eq!(
         denied_audit[0]["resourceScopes"],
-        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/spaces/OPS/pages/654321"]})
+        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/content/page/654321"]})
     );
     assert!(
         denied_audit[0]["providerAudit"]
@@ -2677,7 +2678,8 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     );
     let outside_inputs = audit_text_without_inputs(&broker);
     assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
+    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/content/page/123456"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
     assert!(!outside_inputs.contains("\"spaceUrl\":\"https://"));
     assert!(!audit.contains("create secret body"));
     assert!(!audit.contains("updated secret body"));

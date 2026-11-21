@@ -81,9 +81,10 @@ async fn exact_draft_publish_only_grant_needs_no_create_update_or_parent_coverag
         toml::from_str(&std::fs::read_to_string(broker.config_path()).unwrap()).unwrap();
     document["policy"]["resources"] = toml::Value::try_from(json!([{
         "id":"exact-draft", "resource_type":"confluence_content",
-        "selector":{"kind":"exact","value":"https://example.atlassian.net/wiki/spaces/ENG/pages/200"},
+        "selector":{"kind":"exact","value":"https://example.atlassian.net/wiki/content/page/200"},
         "allowed_execution_contexts":["default"]
-    }])).unwrap();
+    }]))
+    .unwrap();
     document["policy"]["grants"][0]["resources"] =
         toml::Value::try_from(json!({"resource_ids":["exact-draft"]})).unwrap();
     document["policy"]["grants"][0]["actions"] =

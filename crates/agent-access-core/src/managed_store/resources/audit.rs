@@ -503,12 +503,12 @@ mod tests {
         };
         assert_eq!(resource_entity(&record).to_string(), "team/*");
         record.definition.selector = ResourceSelector::Subtree {
-            value: "https://example.atlassian.net/wiki/spaces/ENG/folder/123".into(),
+            value: "https://example.atlassian.net/wiki/content/folder/123".into(),
         };
         let subtree = resource_entity(&record);
         assert_eq!(
             subtree.to_string(),
-            "Subtree https://example.atlassian.net/wiki/spaces/ENG/folder/123"
+            "Subtree https://example.atlassian.net/wiki/content/folder/123"
         );
         assert_eq!(subtree.selector, Some(record.definition.selector.clone()));
         assert_eq!(subtree.selector_truncated, Some(false));

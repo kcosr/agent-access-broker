@@ -315,8 +315,10 @@ and `coverage` of `exact`, `namespace`, or `all` selectors with optional action
 `inputs`. Location entries use `scope: "location"`, `resourceTypes`, `domain`,
 and `containmentVerification: "at_invocation"`. Their safe positive coverage
 includes each selector's `resourceType`, `restricted` and `conditional` flags;
-Confluence content supports `exact` and `subtree` selectors. Excluded and competing
-private roots are withheld. Their `enforcement` is `request` for
+Confluence content supports `exact` and `subtree` selectors. Its identity values
+use `/wiki/content/{page|folder|blog}/ID`; pass the ID through the selected action's
+documented ID argument, not as a browser URL. Excluded and competing private roots
+are withheld. Their `enforcement` is `request` for
 Broker request checks, `results` for native query/result containment, or `command`
 for grants passed to a command that must enforce them. `restricted: true` means
 some values inside are withheld. Useful exact or narrower entries remain under restricted
@@ -1014,7 +1016,7 @@ the same effective group.
   must reference typed resource entries or resource groups.
   The CLI percent-encodes grant refs in paths, so refs such as `toml:0` can be
   passed directly.
-- `admin policy resources list | types | locations | normalize-location --service SERVICE --url URL --coverage space|exact|subtree [--space-key KEY] | get <id> | create | update <id> | delete <id> | used-by <id> | reveal <id> <attribute>`.
+- `admin policy resources list | types | locations | normalize-location --service SERVICE --url URL --coverage space|exact|subtree | get <id> | create | update <id> | delete <id> | used-by <id> | reveal <id> <attribute>`.
   Create/update accept `--attributes-file PATH`, a JSON object of private string
   attributes. Ordinary responses remain redacted; omission on update preserves
   values. Explicit admin `reveal` returns the secret in `result.value`. Keep this
@@ -1024,9 +1026,10 @@ the same effective group.
   `locations` lists services offering offline resource URL entry.
   `normalize-location` previews a canonical selector without contacting the
   upstream or reading credentials; `verification: "not_checked"` means no
-  existence or permission check occurred. An optional `--space-key` is an
-  administrator assertion checked against current facts when the resource is
-  used. These commands need policy-read access to the selected service, not
+  existence or permission check occurred. Content selectors preserve the site,
+  kind and immutable ID independently of current space. A space URL preserves
+  its explicit key; use direct creation to enter a known space key instead.
+  These commands need policy-read access to the selected service, not
   resource-write permission. Save the selector through `create` separately.
   See [Confluence URL entry](confluence-content-access.md#resources-and-url-entry).
   Create accepts optional `--id`, `--resource-type TYPE` (a registered type ID),

@@ -5431,6 +5431,7 @@ impl BrokerRuntime {
                     let root_diagnostic = containment::root_visibility_diagnostic(
                         error.audit.as_deref(),
                         containment_root_provenance.as_ref(),
+                        policy_generation,
                     );
                     let mut error = if lookup_scopes_before_policy {
                         public_lookup_scope_error(error)
@@ -7117,8 +7118,11 @@ impl BrokerRuntime {
         } else {
             provider_audit
         };
-        let provider_audit =
-            containment::attach_containment_audit(provider_audit, location_authorization);
+        let provider_audit = containment::attach_containment_audit(
+            provider_audit,
+            location_authorization,
+            policy_generation,
+        );
         let provider_audit = attach_admission_audit(provider_audit, admission_audit);
         let credential_connection = self.audit_credential_connection(
             &service,

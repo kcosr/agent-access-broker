@@ -475,7 +475,7 @@ async fn location_request(
 }
 
 #[tokio::test]
-async fn resource_locations_are_offline_management_previews_for_admins_and_auditors() {
+async fn resource_locations_are_offline_normalization_for_admins_and_auditors() {
     let fixture = resource_location_fixture().await;
     let runtime = fixture._broker.runtime();
     let audit_path = Path::new(&runtime.config().audit.as_ref().unwrap().path);
@@ -511,14 +511,35 @@ async fn resource_locations_are_offline_management_previews_for_admins_and_audit
                 "/wiki/spaces/ENG/pages/123/Discarded-title",
                 "confluence_content",
                 "page",
-                "https://docs.example.test/wiki/spaces/ENG/pages/123",
+                "https://docs.example.test/wiki/content/page/123",
             ),
             (
                 "subtree",
                 "/wiki/spaces/ENG/folder/456",
                 "confluence_content",
                 "folder",
-                "https://docs.example.test/wiki/spaces/ENG/folder/456",
+                "https://docs.example.test/wiki/content/folder/456",
+            ),
+            (
+                "exact",
+                "/wiki/spaces/OtherAlias/pages/123/Another-title",
+                "confluence_content",
+                "page",
+                "https://docs.example.test/wiki/content/page/123",
+            ),
+            (
+                "subtree",
+                "/wiki/spaces/OtherAlias/pages/123",
+                "confluence_content",
+                "page",
+                "https://docs.example.test/wiki/content/page/123",
+            ),
+            (
+                "exact",
+                "/wiki/spaces/~Alex/blog/2026/01/02/789/Title",
+                "confluence_content",
+                "blog",
+                "https://docs.example.test/wiki/content/blog/789",
             ),
         ] {
             let response = location_request(&fixture, token, Method::POST,
@@ -538,7 +559,7 @@ async fn resource_locations_are_offline_management_previews_for_admins_and_audit
                 }
             );
             assert_eq!(body["result"]["locationKind"], kind);
-            assert_eq!(body["result"]["configuredSpaceKey"], "ENG");
+            assert!(body["result"].get("configuredSpaceKey").is_none());
             assert_eq!(body["result"]["verification"], "not_checked");
         }
     }
@@ -556,14 +577,20 @@ async fn resource_locations_are_offline_management_previews_for_admins_and_audit
     );
     assert_eq!(read_audit_records(audit_path), audit_before);
 
-    let created = location_request(&fixture, &fixture.auditor_token, Method::POST,
-        "/v1/admin/policy/resources", Some(json!({"resourceType":"confluence_content",
-            "selector":{"kind":"exact","value":"https://docs.example.test/wiki/spaces/ENG/pages/123"},
-            "allowedExecutionContexts":["internal"]}))).await;
+    let created = location_request(
+        &fixture,
+        &fixture.auditor_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(json!({"resourceType":"confluence_content",
+            "selector":{"kind":"exact","value":"https://docs.example.test/wiki/content/page/123"},
+            "allowedExecutionContexts":["internal"]})),
+    )
+    .await;
     assert_eq!(
         created.status(),
         StatusCode::FORBIDDEN,
-        "preview grants no resource-write authority"
+        "normalization grants no resource-write authority"
     );
 
     let discovery = location_request(
@@ -636,12 +663,12 @@ async fn resource_location_scope_is_checked_before_service_settings_and_agent_to
     assert_eq!(locations["services"].as_array().unwrap().len(), 1);
     let normalized = location_request(&fixture, &fixture.alice_user_token, Method::POST,
         "/v1/admin/policy/resource-locations/normalize", Some(json!({
-            "service":"confluence","url":"https://docs.example.test/wiki/spaces/ENG/pages/123","coverage":"exact","spaceKey":"Engineering"
+            "service":"confluence","url":"https://docs.example.test/wiki/spaces/BrowserAlias/pages/123","coverage":"exact"
         }))).await;
     assert_eq!(normalized.status(), StatusCode::OK);
     assert_eq!(
-        response_json(normalized).await["result"]["configuredSpaceKey"],
-        "Engineering"
+        response_json(normalized).await["result"]["selector"]["value"],
+        "https://docs.example.test/wiki/content/page/123"
     );
 
     let runtime = fixture._broker.runtime();
@@ -678,6 +705,44 @@ async fn resource_location_scope_is_checked_before_service_settings_and_agent_to
             "broker_token_class_denied"
         );
     }
+}
+
+#[tokio::test]
+async fn resource_location_normalization_rejects_removed_fields_without_echoing_values() {
+    let fixture = resource_location_fixture().await;
+    for value in [json!("private-space-marker"), Value::Null] {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resource-locations/normalize",
+            Some(json!({
+                "service":"confluence",
+                "url":"https://docs.example.test/wiki/spaces/ENG/pages/123/private-title-marker",
+                "coverage":"exact", "spaceKey":value
+            })),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await;
+        assert_eq!(body["reasonCode"], "input_invalid");
+        assert!(!body.to_string().contains("private-space-marker"));
+        assert!(!body.to_string().contains("private-title-marker"));
+        assert!(!body.to_string().contains("spaceKey"));
+    }
+    let runtime = fixture._broker.runtime();
+    assert!(
+        runtime
+            .managed_store()
+            .unwrap()
+            .resources()
+            .unwrap()
+            .is_empty()
+    );
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(!audit.contains("private-space-marker"));
+    assert!(!audit.contains("private-title-marker"));
+    assert!(!audit.contains("spaceKey"));
 }
 
 #[tokio::test]

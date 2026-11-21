@@ -2,7 +2,8 @@
 //!
 //! This compiler is deliberately separate from the caller CQL parser: trusted
 //! policy may require grouped negation, while caller grammar remains unchanged.
-//! CQL is an indexed prefilter. Fresh provider evidence still authorizes results.
+//! CQL is an indexed prefilter. Content-participating authority additionally uses
+//! fresh provider evidence to authorize results.
 use super::*;
 use crate::locations::{ContentLocationKind, parse_canonical_content_location};
 use agent_access_provider::{
@@ -109,10 +110,6 @@ fn write_selector(
             let projection = selector.projection().ok_or_else(authority_error)?;
             if projection.site_origin != location.site_origin
                 || projection.root_kind != location.kind.as_str()
-                || !projection.containers.iter().any(|container| {
-                    container.resource_type.as_str() == "confluence_space"
-                        && container.value == location.space_key
-                })
             {
                 return Err(authority_error());
             }
@@ -139,25 +136,21 @@ fn write_selector(
                 return write_false(out);
             }
             let id = location.id.as_deref().ok_or_else(authority_error)?;
-            out.push("(space = ")?;
-            out.push(&cql_string_literal(&location.space_key))?;
-            out.push(" AND ")?;
             if subtree {
                 if location.kind == ContentLocationKind::Page {
                     out.push("(id = ")?;
                     out.push(id)?;
                     out.push(" OR ancestor = ")?;
                     out.push(id)?;
-                    out.push(")")?;
+                    out.push(")")
                 } else {
                     out.push("ancestor = ")?;
-                    out.push(id)?;
+                    out.push(id)
                 }
             } else {
                 out.push("id = ")?;
-                out.push(id)?;
+                out.push(id)
             }
-            out.push(")")
         }
         _ => Err(authority_error()),
     }

@@ -12,8 +12,8 @@ import { indexResourceTypes } from "../src/lib/resource-types";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 
 const types = indexResourceTypes(RESOURCE_TYPES);
-const root = "https://example.atlassian.net/wiki/spaces/ENG/folder/20";
-const point = "https://example.atlassian.net/wiki/spaces/ENG/pages/30";
+const root = "https://example.atlassian.net/wiki/content/folder/20";
+const point = "https://example.atlassian.net/wiki/content/page/30";
 const complete: LocationAccess = {
   scope: "location", resourceTypes: ["confluence_space", "confluence_content"], domain: "page", enforcement: "request", containmentVerification: "at_invocation", projectionStatus: "complete",
   boundaries: [
@@ -34,8 +34,8 @@ describe("content location presentation", () => {
     const rows = mergeEffectiveAccess([{ ...complete, service: "confluence", action: "page.view", executionContext: "default" }]);
     expect(rows[0].coverage).toEqual(complete);
     const label = coverageLabels(types, complete)[0];
-    expect(label).toContain(`ENG except (${root} · root and descendants)`);
-    expect(label).toContain(`AND (${point} · this page only)`);
+    expect(label).toContain("ENG except (Folder 20 · example.atlassian.net · root and descendants)");
+    expect(label).toContain("AND (Page 30 · example.atlassian.net · this page only)");
     expect(label).toContain("does not apply when one of these boundaries covers the whole request");
     expect(label).toContain("per_user");
   });
@@ -91,17 +91,18 @@ describe("content location presentation", () => {
     const markup = renderToStaticMarkup(createElement(AccessCoverage, { coverage: rows[0].coverage }));
     expect(markup).toContain("Moves require runtime visibility of relevant excluded roots");
     expect(markup).toContain("This offline preview does not check whether those roots are current or readable");
-    expect(markup).toContain("can block moves throughout its space");
-    expect(markup).toContain("administrator can inspect the configured exclusion and correct or remove it");
+    expect(markup).toContain("can block moves throughout the site");
+    expect(markup).toContain("selected user legitimately lacks access");
+    expect(markup).toContain("administrator can inspect protected diagnostics");
     expect(renderToStaticMarkup(createElement(AccessCoverage, { coverage: rows[1].coverage }))).not.toContain("This offline preview");
   });
 
   test("distinguishes exact content from subtree coverage in selector and audit labels", () => {
     expect(selectorLabel(types, "confluence_content", { kind: "exact", value: point })).toContain("this page only");
     expect(selectorLabel(types, "confluence_content", { kind: "subtree", value: point })).toContain("root and descendants");
-    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: point.replace("/pages/", "/blog/") })).toContain("this blog post only");
-    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: "https://example.atlassian.net/wiki/spaces/blog/pages/1" })).toBe("https://example.atlassian.net/wiki/spaces/blog/pages/1 · this page only");
-    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: "https://example.atlassian.net/wiki/spaces/blog/blog/1" })).toBe("https://example.atlassian.net/wiki/spaces/blog/blog/1 · this blog post only");
+    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: point.replace("/page/", "/blog/") })).toContain("this blog post only");
+    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: "https://example.atlassian.net/wiki/content/page/1" })).toBe("Page 1 · example.atlassian.net · this page only");
+    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: "https://example.atlassian.net/wiki/content/blog/1" })).toBe("Blog post 1 · example.atlassian.net · this blog post only");
   });
 
   test("offers both space and content resources for containment services", () => {
@@ -124,7 +125,7 @@ describe("offline location editor", () => {
     ["https://example.atlassian.net/wiki/spaces/ENG/blog/54321/Release", "blog", "54321"],
     ["https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20/54321/Release", "blog", "54321"]
   ])("prefills presentation for %s without claiming validation", (url, kind, rootId) => {
-    expect(locationInputHints(url)).toEqual({ kind, rootId, spaceKey: "ENG" });
+    expect(locationInputHints(url)).toEqual({ siteOrigin: "https://example.atlassian.net", kind, rootId, ...(kind === "space" ? { spaceKey: "ENG" } : {}) });
   });
 
   test("requires an explicit page coverage choice and fixes the other location kinds", () => {
@@ -136,10 +137,10 @@ describe("offline location editor", () => {
     expect(locationCoverage("blog", "subtree")).toBe("exact");
   });
 
-  test("states the normalized space key and selected exact/subtree semantics", () => {
-    const preview: NormalizedResourceLocation = { resourceType: "confluence_content", selector: { kind: "exact", value: point }, locationKind: "page", configuredSpaceKey: "ENG", verification: "not_checked" };
+  test("states exact-space coverage and selected exact/subtree semantics", () => {
+    const preview: NormalizedResourceLocation = { resourceType: "confluence_content", selector: { kind: "exact", value: point }, locationKind: "page", verification: "not_checked" };
     expect(locationPreviewLabel(preview)).toBe("This page only");
     expect(locationPreviewLabel({ ...preview, selector: { kind: "subtree", value: point } })).toBe("This page and descendants");
-    expect(locationPreviewLabel({ ...preview, locationKind: "space" })).toBe("Entire ENG space");
+    expect(locationPreviewLabel({ ...preview, resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, locationKind: "space" })).toBe("Entire ENG space");
   });
 });

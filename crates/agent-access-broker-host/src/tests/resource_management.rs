@@ -1576,7 +1576,7 @@ async fn resource_catalog_mutation_owner_completes_audit_after_waiter_cancellati
 #[tokio::test]
 async fn content_resource_storage_is_strict_canonical_and_available_without_a_configured_service() {
     let fixture = managed_policy_admin_fixture().await;
-    let canonical = "https://dormant.example.test/wiki/spaces/~Alex/pages/123";
+    let canonical = "https://dormant.example.test/wiki/content/page/123";
     for (id, kind) in [("exact-page", "exact"), ("page-tree", "subtree")] {
         let response = catalog_request(
             &fixture.app,
@@ -1627,11 +1627,13 @@ async fn content_resource_storage_is_strict_canonical_and_available_without_a_co
     for selector in [
         json!({"kind":"all"}),
         json!({"kind":"namespace","value":canonical}),
-        json!({"kind":"exact","value":"https://dormant.example.test/wiki/spaces/~Alex/pages/123/Title"}),
-        json!({"kind":"exact","value":"https://DORMANT.example.test/wiki/spaces/~Alex/pages/123"}),
-        json!({"kind":"exact","value":"https://dormant.example.test/wiki/spaces/~Alex/pages/0123"}),
-        json!({"kind":"exact","value":"https://dormant.example.test/wiki/spaces/~Alex/folder/123"}),
-        json!({"kind":"subtree","value":"https://dormant.example.test/wiki/spaces/~Alex/blog/123"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/spaces/~Alex/pages/123"}),
+        json!({"kind":"subtree","value":"https://dormant.example.test/wiki/spaces/ENG/folder/456"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/content/page/123/Title"}),
+        json!({"kind":"exact","value":"https://DORMANT.example.test/wiki/content/page/123"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/content/page/0123"}),
+        json!({"kind":"exact","value":"https://dormant.example.test/wiki/content/folder/123"}),
+        json!({"kind":"subtree","value":"https://dormant.example.test/wiki/content/blog/123"}),
     ] {
         let response = catalog_request(
             &fixture.app,
@@ -1641,7 +1643,7 @@ async fn content_resource_storage_is_strict_canonical_and_available_without_a_co
             "content-resource-invalid",
             Some(json!({
                 "id":"invalid","resourceType":"confluence_content","selector":selector,
-                "allowedExecutionContexts":["default"]
+                "enabled":false,"allowedExecutionContexts":["default"]
             })),
         )
         .await;
@@ -1672,7 +1674,138 @@ async fn content_resource_storage_is_strict_canonical_and_available_without_a_co
 }
 
 #[tokio::test]
-async fn resource_location_browser_preview_requires_csrf_but_listing_does_not() {
+async fn space_resource_key_and_all_edits_keep_versions_without_a_configured_service() {
+    let fixture = managed_policy_admin_fixture().await;
+    let created = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        "space-key-create",
+        Some(json!({
+            "id":"space-key", "resourceType":"confluence_space", "displayName":"Private space",
+            "selector":{"kind":"exact","value":"~Alex"},
+            "enabled":false, "allowedExecutionContexts":["default"]
+        })),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    for (version, selector) in [
+        (1, json!({"kind":"exact","value":"Engineering"})),
+        (2, json!({"kind":"all"})),
+        (3, json!({"kind":"exact","value":"engineering"})),
+    ] {
+        let patched = catalog_request(
+            &fixture.app,
+            &fixture.admin_token,
+            Method::PATCH,
+            "/v1/admin/policy/resources/space-key",
+            "space-key-edit",
+            Some(json!({"expectedVersion":version,"selector":selector})),
+        )
+        .await;
+        assert_eq!(patched.status(), StatusCode::OK);
+        let record = response_json(patched).await["result"]["record"].clone();
+        assert_eq!(record["selector"], selector);
+        assert_eq!(record["version"], version + 1);
+        assert_eq!(record["displayName"], "Private space");
+        assert_eq!(record["enabled"], false);
+        assert_eq!(record["allowedExecutionContexts"], json!(["default"]));
+    }
+    let stale = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::PATCH,
+        "/v1/admin/policy/resources/space-key",
+        "space-key-stale",
+        Some(json!({"expectedVersion":1,"selector":{"kind":"all"}})),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let duplicate = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::PATCH,
+        "/v1/admin/policy/resources/space-key",
+        "space-key-duplicate",
+        Some(json!({"expectedVersion":4,"selector":{"kind":"exact","value":"ENG"}})),
+    )
+    .await;
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let resource = catalog_request(
+        &fixture.app,
+        &fixture.admin_token,
+        Method::GET,
+        "/v1/admin/policy/resources/space-key",
+        "space-key-after-conflict",
+        None,
+    )
+    .await;
+    let resource = response_json(resource).await;
+    assert_eq!(resource["result"]["version"], 4);
+    assert_eq!(resource["result"]["selector"]["value"], "engineering");
+}
+
+#[tokio::test]
+async fn legacy_content_rows_are_rejected_on_reload_and_startup_even_disabled_and_unused() {
+    let fixture = managed_policy_admin_fixture().await;
+    let runtime = fixture._broker.runtime();
+    let config = runtime.config().clone();
+    let store = runtime.managed_store().unwrap();
+    let connection = rusqlite::Connection::open(store.path()).unwrap();
+    let legacy = "https://dormant.example.test/wiki/spaces/ENG/pages/123";
+    connection.execute(
+        "INSERT INTO resources VALUES ('legacy-content','confluence_content','exact',?1,NULL,'[\"default\"]',0,1,'2026-01-01','test','2026-01-01','test')",
+        [legacy],
+    ).unwrap();
+    let generation = fixture._broker.state().current().generation;
+    for enabled in [false, true] {
+        connection
+            .execute(
+                "UPDATE resources SET enabled = ?1 WHERE resource_id = 'legacy-content'",
+                [enabled],
+            )
+            .unwrap();
+        let outcome = fixture._broker.running().reload().await.unwrap();
+        assert!(!outcome.is_success(), "{outcome:?}");
+        assert_eq!(outcome.reason_code(), Some("config_admission_failed"));
+        assert!(
+            outcome.message().unwrap().contains("legacy-content"),
+            "{outcome:?}"
+        );
+        assert_eq!(fixture._broker.state().current().generation, generation);
+        let value: String = connection
+            .query_row(
+                "SELECT selector_value FROM resources WHERE resource_id = 'legacy-content'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, legacy, "rejected interim rows must not be rewritten");
+    }
+    connection
+        .execute(
+            "UPDATE resources SET enabled = 0 WHERE resource_id = 'legacy-content'",
+            [],
+        )
+        .unwrap();
+    drop((runtime, connection));
+    let ManagedPolicyAdminFixture {
+        _broker: broker,
+        app,
+        ..
+    } = fixture;
+    drop(app);
+    broker.stop().await;
+    let error = match TestBroker::try_start_with(TestBroker::config_builder(&config)).await {
+        Ok(_) => panic!("legacy disabled content resource was admitted at startup"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(error.contains("legacy-content"), "{error}");
+}
+
+#[tokio::test]
+async fn resource_location_browser_normalization_requires_csrf_but_listing_does_not() {
     let fixture = resource_attribute_fixture(false).await;
     let login = fixture
         .app

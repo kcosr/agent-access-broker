@@ -543,8 +543,11 @@ an explicit `Scalar` variant. Imported, command, gateway and private-attribute
 scopes cannot opt into native containment.
 
 `ResourceTypeDescriptor::with_selector_projection` supplies pure authored
-coordinates for validated selectors. Core consumes `TypedResourceSelector`
-without parsing provider URLs. `with_location_normalizer` and a service's
+`ResourceSelectorProjection` values containing site origin and root kind. It does
+not assert the root's current containers. Core consumes `TypedResourceSelector`
+without parsing provider URLs; the scope contract declares container dimensions.
+Exact-container/content intersections can be Conditional offline. Retain all
+operands when proving grant, token and requested-container conjunctions. `with_location_normalizer` and a service's
 `LocationEntryCapability` enable management-only URL entry. The normalizer takes
 the configured canonical site from the service's `UpstreamAuthority`, has no
 network or credential capability, and reports `verification: "not_checked"`.
@@ -555,8 +558,16 @@ The host requests `ContainerOnly` or `CompleteLineage` evidence through
 Return `ScopeResolution::containment(ContainmentEvidence)` with trusted point,
 child-placement or current/proposed-subtree obligations. Evidence has no caller
 JSON deserializer. Validation checks canonical identity, domain, site, kinds,
-containers, complete ancestry, cycles and budgets. Ancestors remain evidence,
-not additional operation targets. Missing required evidence is a contract error.
+containers, complete ancestry, cycles and budgets. Each `ContainmentAncestor`
+contains its identity and observed containers, which must agree with the target's
+complete container set. Repeated identities across an operation cannot contradict
+those facts. Ancestors remain evidence, not additional targets or grants. Missing
+required evidence is a contract error. ContainerOnly has no invented ancestry.
+A related root may use ContainerOnly only when observed containers prove it
+disjoint from every current/proposed subtree-impact region; other related roots
+need complete lineage. Keep at most 64 potentially overlapping roots, a raw
+256-entry defensive cap and 256 unique operation nodes including all classified
+roots and ordinary operation locations. Final comparison retains those witnesses.
 `ScopeResolution::scopes()` is checked and cannot flatten containment to scalars.
 
 `Provider::validate_scope_locator` is a synchronous local hook before credentials
@@ -570,9 +581,12 @@ Core owns grant candidacy, precedence, token intersection and authority digests.
 `check_same_location` for the final fence. `ContainmentCollection` carries the
 winning-boundary union, independent token boundary, evidence level and digest;
 `matches_candidate` is checked and treats unknown evidence as an error. Providers
-must not rerank grants or select a lower credential during filtering. Confluence
-also compiles complete authority upstream to prevent caller filters from probing
-unrelated content. Keep private graph facts for kinds/edges omitted from public
+must not rerank grants or select a lower credential during filtering.
+`uses_only_scalar_container_selectors()` inspects every winning grant and token
+inclusion/exclusion against the declared container types. Confluence uses it with
+ContainerOnly to retain its indexed scalar-space path; any content selector
+requires fresh initial/final candidate evidence. Confluence also compiles complete
+authority upstream to prevent caller filters from probing unrelated content. Keep private graph facts for kinds/edges omitted from public
 selectable ancestry and compare those at the final check.
 
 ### Scope resolution

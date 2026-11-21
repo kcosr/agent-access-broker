@@ -11,40 +11,68 @@ content-format configuration. Upstream permissions remain an additional limit.
 | --- | --- | --- |
 | `confluence_space` | `exact` space key | Content in that space, including new content |
 | `confluence_space` | `all` | All spaces accessible to the selected credential |
-| `confluence_content` | `exact` page URL | That page and separately granted owner-bound comment/attachment operations |
-| `confluence_content` | `exact` blog URL | That blog and separately granted owner-bound operations |
-| `confluence_content` | `subtree` page URL | That page and its current descendants |
-| `confluence_content` | `subtree` folder URL | Pages currently below that folder |
+| `confluence_content` | `exact` page identity | That page and separately granted owner-bound comment/attachment operations |
+| `confluence_content` | `exact` blog identity | That blog and separately granted owner-bound operations |
+| `confluence_content` | `subtree` page identity | That page and its current descendants |
+| `confluence_content` | `subtree` folder identity | Pages currently below that folder |
 
-Content selectors use these canonical forms:
+Content selectors use these canonical identity values:
 
 ```text
-https://example.atlassian.net/wiki/spaces/ENG/pages/12345
-https://example.atlassian.net/wiki/spaces/ENG/folder/67890
-https://example.atlassian.net/wiki/spaces/ENG/blog/24680
+https://example.atlassian.net/wiki/content/page/12345
+https://example.atlassian.net/wiki/content/folder/67890
+https://example.atlassian.net/wiki/content/blog/24680
 ```
 
-They pin the site, case-sensitive space key, root kind and immutable content ID.
+They bind the site, root kind and immutable content ID. Coverage is the separate
+exact/subtree selector kind. A page rename or an external cross-space move does
+not change that identity. A subtree follows its root and covers its current
+descendants; a descendant moved outside loses that subtree's coverage. Changing
+the configured tenant never rebinds an existing content resource to another site.
 Content resources do not support `all`, `namespace`, exact folders or blog
-subtrees. Page/folder selectors cannot cover blogs. Moving a root within its
-configured space preserves its identity; a different site or space key requires
-an explicit resource edit. Renaming a page does not change its identity.
+subtrees. Page/folder selectors cannot cover blogs.
 
-The Resources editor offers URL entry for configured services. Select the
-service and coverage, paste the URL, and inspect the normalized selector before
-saving. Normalization removes only supported title/date decorations. It rejects
-query strings, fragments, credentials, ports, IP hosts, encoded delimiters and
-unsupported paths. An optional canonical space-key override is an administrator
-assertion, checked against current upstream facts when the resource is used.
-Personal-space keys retain their leading `~` and exact case.
+These identity values are not browser links or action URL inputs. To use a
+discovered page or blog, pass its ID to the action's `pageId` or `blogId` field;
+creation uses the documented typed parent input. For example, the first identity
+above addresses `page.view` with `{"pageId":"12345"}`. Inspect the selected
+action's schema and documentation for its locator. An identity value supplied as
+`url`, `parentUrl` or `targetUrl` fails with `locator_invalid`. Ordinary browser
+action URLs still require their space key or alias to match the current content
+location. After an external move, use the ID or a current browser URL; a stale
+browser URL can fail even though its saved content grant still applies.
+
+In the Resources editor, paste a page, folder or blog browser URL. The configured
+service and resource kind are inferred. A page immediately offers **This page
+only** or **This page and descendants**; choose explicitly. Folder and blog
+coverage is fixed. **Save** normalizes the current entry and creates or updates
+the resource; no separate preview is needed. A failed normalization keeps the
+draft and saves nothing. Name, execution contexts and enabled state remain ordinary
+resource fields. Existing content resources can keep their identity while editing
+those fields, and a saved page can switch exact/subtree coverage without a URL.
+**Change location** starts a new URL entry.
+
+For content URL normalization, the browser space segment, title and date do not
+enter identity. The space segment must still have the supported key-or-alias
+syntax. Unsupported paths, queries, fragments, credentials, ports, IP hosts,
+encoded delimiters and dot segments are rejected. There is no editable
+content-space or identity override. Normalization accepts browser URLs; direct
+API/TOML resource writes require the strict canonical identity shown above.
+
+Whole-space resources retain **By space key**, **From space URL** and **All
+spaces** entry. By key uses the actual case-sensitive key, including the leading
+`~` for personal spaces. Space URLs show the exact key that will be saved; a
+browser alias is not necessarily that key. Use By space key when the URL contains
+an alias. The editor does not resolve aliases upstream. Switching from URL to key
+starts empty, and switching all to exact requires an explicit key or URL. An
+exact space URL never implies all spaces.
 
 Normalization and saving are offline. They require no administrator Atlassian
 connection, do not verify existence or permissions, and do not acquire or refresh
-credentials. The response explicitly reports `verification: "not_checked"`.
-An API or TOML write must already contain the strict canonical value; it does
-not silently normalize a title, trailing slash or alternate URL. The global
-catalog can retain a valid entry for an unconfigured site, but that entry cannot
-match a different site's service.
+credentials. The response reports `verification: "not_checked"`. Missing service
+capability prevents new/replacement URL entry but does not prevent metadata-only
+edits or the standalone space-key path. The global catalog can retain a valid
+content entry for an unconfigured site; it cannot match another site's service.
 
 Administrators and policy readers can use:
 
@@ -58,11 +86,11 @@ agent-access admin policy resources normalize-location \
 
 The management routes are `GET /v1/admin/policy/resource-locations` and
 `POST /v1/admin/policy/resource-locations/normalize`. The POST body contains
-`service`, `url`, `coverage` (`space`, `exact` or `subtree`) and optional
-`spaceKey`. Both routes require a management credential and policy-read access
-to the selected service. Auditors can preview but cannot save. An administrator's
-agent token cannot call these routes. Browser normalization requires the ordinary
-CSRF protection. Preview grants no resource-write permission.
+`service`, `url` and `coverage` (`space`, `exact` or `subtree`). Both require a
+management credential and policy-read access to the selected service. Auditors
+can normalize but cannot save. An administrator's agent token cannot call these
+routes. Browser normalization requires ordinary CSRF protection; normalization
+grants no resource-write permission.
 
 Save the returned selector through the usual resource API or CLI:
 
@@ -70,12 +98,14 @@ Save the returned selector through the usual resource API or CLI:
 agent-access admin policy resources create \
   --id runbooks --resource-type confluence_content \
   --selector-kind subtree \
-  --selector-value https://example.atlassian.net/wiki/spaces/ENG/folder/67890 \
+  --selector-value https://example.atlassian.net/wiki/content/folder/67890 \
   --execution-context default --display-name Runbooks
 ```
 
 Exact and subtree selectors of the same page are distinct resources. Different
-titles or display names do not make duplicate canonical selectors distinct.
+browser space segments, titles or display names do not make the same canonical
+identity and coverage distinct. Creation and patch validate the returned selector
+independently and retain normal duplicate and version-conflict handling.
 
 ## Overlap, exclusions and precedence
 
@@ -90,6 +120,13 @@ covering the complete operation, then prefer direct-user grants to group grants
 and higher priority to lower priority. Equally ranked matching grants with
 different credential modes deny as ambiguous. An unusable winning credential
 does not permit a lower-grant fallback.
+
+An exact space and a content root have a conditional overlap until current
+location is known. Same-subject, same-priority grants using different credential
+modes may therefore publish, then deny an overlapping request with ambiguous
+credential mode precedence. Proven mixed-mode overlaps, such as identical roots
+or exact/subtree on the same root, are rejected at publication. Use consistent
+modes or explicit priorities to resolve an intended overlap.
 
 | Grants | Result |
 | --- | --- |
@@ -126,15 +163,23 @@ subtree at its current and proposed locations, plus the destination placement an
 ordering anchor. It retains its page-only, same-space target contract. An exact
 page does not prove subtree authority. Relevant exclusions need current readable
 root evidence; a permission-filtered child list cannot prove an excluded
-descendant absent. Missing, stale or unreadable evidence prevents the move.
+descendant absent. Missing, stale or unreadable evidence prevents the move. Content grants do not
+need a separate space or ancestor grant. Source, destination and anchor must still
+be in the same current space; following an externally moved root does not enable
+a cross-space `page.move`.
 
 For an unresolved move-exclusion relation, protected audit records
-`confluence_move_relation_unresolved`, a bounded category such as
-`not_visible_or_absent`, and configured resource/group IDs. A missing response
-does not distinguish deletion from lack of visibility. Authorized policy readers
-can inspect those entries and explicitly correct or remove them. Management
-previews warn that runtime root visibility is required; offline previews do not
-check whether a root still exists or is readable.
+`confluence_move_relation_unresolved`, a bounded category and the configured
+resource/group IDs for the specific required root that failed. A
+`root_budget_exhausted` category distinguishes unfinished bounded proof work;
+operation-wide exhaustion may have no individual root. The audit never substitutes
+unrelated root IDs. A missing response does not distinguish deletion from lack of
+visibility. An excluded root can legitimately be unreadable to a per-user
+credential and can block affected moves anywhere on the site because its current
+space is unknown. Check visibility or deliberately adjust the policy; removing
+an exclusion changes access. Offline previews cannot verify a root's existence
+or readability. Foreign-space disjointness itself requires current bounded
+observations, retained through the final execution-credential check.
 
 Draft handles preserve identity and placement facts; they grant no lasting
 permission. Every handle action checks current grants, current parent/location
@@ -153,24 +198,55 @@ not fall back to a lower band. This can differ from individual point reads.
 
 Before dispatch, Broker compiles every selected inclusion and exclusion plus
 the independent token restriction into CQL, then adds the caller's filter and
-requested spaces as further constraints. A content selector includes its pinned
-space as well as its ID or ancestor predicate. The caller CQL grammar is
-unchanged. Too-large or unrepresentable authority fails with `scope_unresolved`;
-no constraint is dropped or broadened.
+requested spaces as further constraints. Exact content uses its ID; page subtree
+uses self-or-ancestor, and folder subtree uses ancestor for page search. These
+content predicates carry no inferred space. Space resources and explicit space
+filters keep their own predicates. Too-large or unrepresentable authority fails
+with `scope_unresolved`; no constraint is dropped or broadened.
 
-The upstream index is only a prefilter. Returned candidates still pass current
-identity, status, space and required hierarchy checks. Denied candidates are
-removed before metadata, presentation, object IDs and counts are released.
-Unknown evidence fails the request. Counts describe released rows, not upstream
-totals or skipped rows. A bounded scan may return an empty page with continuation;
-continue until exhaustion. Confidential tokens bind current authority and query,
-retain their original expiry, and do not grant access independently.
+A collection whose complete winning grant and token boundaries contain only
+scalar space selectors retains the indexed-row path: one search request per page,
+without per-candidate metadata reads. Its space/lifecycle observation is indexed
+and can lag upstream changes. It checks requested-space admission, constrains CQL,
+and checks canonical indexed-row authority; upstream CQL may resolve a browser
+alias. Any content selector, including an exclusion or
+token restriction, requires fresh candidate metadata. Container-only proof reads
+the content and its actual space; hierarchy-dependent proof also walks current
+ancestry. Broker checks current authority and requested spaces, rejects stale
+indexed space, and repeats the required proof before release. Stable identity
+never excuses a location change during the admitted request.
+
+A valid observed boundary mismatch or changed final placement filters that row.
+A failed initial or final proof, including not found/not visible, wrong kind or
+lifecycle, hidden ancestry, malformed metadata, budget or credential failure,
+fails the whole response without partial rows or a token. A stale deleted or
+restricted indexed item can therefore prevent a content-constrained search until
+the index or visibility changes. No weaker query or credential is tried.
+
+Fresh proof costs at least two metadata reads per candidate per pass, with
+separate initial and final passes. Each candidate/pass has its own space lookup;
+reads are sequential and count toward request, byte and deadline limits. Plan
+service/client timeouts and upstream rate capacity accordingly. Proof reservation
+may return fewer rows than `maxResults`; a budget too small to complete one
+candidate fails instead of returning a zero-progress cursor.
+
+A scan that stops before starting a later candidate can return already checked
+rows and a continuation, including an empty page after actual scanning progress.
+Counts describe released rows, not upstream totals or skipped rows. Confidential
+search tokens bind stable authority and query, retain their original expiry, and
+reauthorize each resumed call. A changed mid-page result commitment requires a
+restart. Root movement alone does not rewrite the policy identity or guarantee
+complete results while the index converges. Owner-bound comment/attachment
+cursors and draft handles retain operational placement bindings; movement can
+invalidate an old token while a fresh request remains authorized.
 
 Ordinary resource-access discovery remains offline. Location entries use
 `scope: "location"`, `resourceTypes`, `domain`,
 `containmentVerification: "at_invocation"`, and safe positive coverage with
 `restricted` and `conditional` flags. They withhold excluded and competing
-private roots. Authorized management and token previews retain full conditions.
+private roots. An exact space does not establish arbitrary content-root membership
+offline. A caller-known positive root can remain visible as a conditional
+intersection; current location is proved at invocation. Authorized management and token previews retain full conditions.
 `projectionStatus: "too_complex"` means the coverage preview is unavailable;
 it must not be interpreted as unrestricted or empty access. Explicit selections
 remain intact, and final issuance evaluates policy independently.
@@ -185,7 +261,9 @@ unsupported shapes and exhausted limits fail closed. Service-mode initial lookup
 can use its read-only lookup account; execution checks use the selected execution
 credential without fallback. Per-user-only policy needs no shared credential.
 
-The provider checks location again before writes or releasing protected results.
+Point operations check location again before writes or releasing protected results.
+Searches involving content selectors check each retained candidate again; scalar-only
+space searches keep the indexed-space contract described above.
 Complete-lineage checks detect ancestor movement even without a page-version
 change. Container-only checks tolerate same-space placement changes. These are
 observations around a request, not an atomic lock with Confluence: a change after
@@ -204,8 +282,9 @@ replaying the query with fewer constraints.
 Back up the managed database and keys before migration
 `038_confluence_content_resources`. It adds stored subtree selectors while
 preserving existing resources, memberships and encrypted attributes. Upgrade
-Broker, CLI and portal together. A rollback needs the matching pre-upgrade
-database and binaries. Provider SDK consumers must adopt the explicit scalar or
+Broker, CLI and portal together, and restart searches without an old continuation
+token after upgrading. A rollback needs the matching pre-upgrade database and
+binaries. Provider SDK consumers must adopt the explicit scalar or
 containment scope contracts; subtree selectors cannot be converted to scalar
 search authority.
 

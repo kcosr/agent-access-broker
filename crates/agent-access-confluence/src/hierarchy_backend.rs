@@ -184,6 +184,12 @@ impl ConfluenceMetadataBudget {
         Ok(())
     }
 
+    /// Only an affirmed local budget refusal sets this bit. Upstream errors or
+    /// an unavailable mutex do not become fabricated budget-exhaustion claims.
+    pub(crate) fn exhausted(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.exhausted)
+    }
+
     pub fn usage(&self) -> Result<(u32, u64), ConfluenceBackendError> {
         let state = self
             .state

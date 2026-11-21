@@ -45,11 +45,11 @@ fn space(key: &str) -> TypedResourceSelector {
 }
 fn content(kind: ConfluenceSearchContentKind, id: &str, subtree: bool) -> TypedResourceSelector {
     let segment = if kind == ConfluenceSearchContentKind::Page {
-        "pages"
+        "page"
     } else {
         "blog"
     };
-    let value = format!("{SITE}/wiki/spaces/ENG/{segment}/{id}");
+    let value = format!("{SITE}/wiki/content/{segment}/{id}");
     let selector = if subtree {
         ResourceSelector::Subtree { value }
     } else {
@@ -175,6 +175,8 @@ struct Backend {
     requests: Mutex<Vec<ConfluenceSearchRequest>>,
     nodes: Mutex<BTreeMap<String, VecDeque<ConfluenceNode>>>,
     reads: Mutex<Vec<String>>,
+    failures: Mutex<BTreeMap<String, VecDeque<Option<ConfluenceBackendError>>>>,
+    space_keys: Mutex<BTreeMap<String, VecDeque<String>>>,
 }
 impl Backend {
     fn new(pages: Vec<ConfluenceSearchPage>) -> Arc<Self> {
@@ -205,7 +207,16 @@ impl Backend {
     ) -> Result<(), ConfluenceBackendError> {
         budget.charge_request()?;
         budget.charge_bytes(64)?;
-        self.reads.lock().unwrap().push(label);
+        self.reads.lock().unwrap().push(label.clone());
+        if let Some(Some(error)) = self
+            .failures
+            .lock()
+            .unwrap()
+            .get_mut(&label)
+            .and_then(VecDeque::pop_front)
+        {
+            return Err(error);
+        }
         Ok(())
     }
 }
@@ -251,13 +262,12 @@ impl ConfluenceBackend for Backend {
         kind: ConfluenceNodeKind,
         id: &str,
         status: ConfluenceContentStatus,
-        require_parent: bool,
+        _require_parent: bool,
         _: &AtlassianCredential,
         budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
         assert_eq!(kind, ConfluenceNodeKind::Page);
         assert_eq!(status, ConfluenceContentStatus::Current);
-        assert!(require_parent);
         self.metadata(format!("node:{id}"), budget)?;
         let mut nodes = self.nodes.lock().unwrap();
         let sequence = nodes.get_mut(id).expect("unexpected location request");
@@ -268,6 +278,29 @@ impl ConfluenceBackend for Backend {
         };
         Ok(response(value))
     }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        assert_eq!(status, ConfluenceContentStatus::Current);
+        self.metadata(format!("blog:{id}"), budget)?;
+        let mut nodes = self.nodes.lock().unwrap();
+        let sequence = nodes.get_mut(id).expect("unexpected blog location request");
+        let value = if sequence.len() > 1 {
+            sequence.pop_front().unwrap()
+        } else {
+            sequence.front().unwrap().clone()
+        };
+        Ok(response(ConfluenceBlogLocation {
+            id: value.id,
+            space_id: value.space_id,
+            status: value.status,
+            version: value.version.unwrap_or(0),
+        }))
+    }
     async fn space_location_metadata(
         &self,
         id: &str,
@@ -275,13 +308,28 @@ impl ConfluenceBackend for Backend {
         budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         self.metadata(format!("space:{id}"), budget)?;
+        let key = self
+            .space_keys
+            .lock()
+            .unwrap()
+            .get_mut(id)
+            .map(|sequence| {
+                if sequence.len() > 1 {
+                    sequence.pop_front().unwrap()
+                } else {
+                    sequence.front().unwrap().clone()
+                }
+            })
+            .unwrap_or_else(|| {
+                if id == "1" {
+                    "ENG".into()
+                } else {
+                    "OPS".into()
+                }
+            });
         Ok(response(ConfluenceSpace {
             id: id.into(),
-            key: if id == "1" {
-                "ENG".into()
-            } else {
-                "OPS".into()
-            },
+            key,
             web_url: None,
             alias: None,
             status: Some("current".into()),
@@ -364,43 +412,21 @@ fn assert_invalid(error: ProviderError) {
 }
 
 #[tokio::test]
-async fn space_and_exact_content_fast_paths_use_one_query_and_no_metadata() {
+async fn scalar_only_authority_uses_one_query_and_no_metadata() {
     for kind in [
         ConfluenceSearchContentKind::Page,
         ConfluenceSearchContentKind::BlogPost,
     ] {
-        for exact in [false, true] {
-            let backend = Backend::new(vec![results(vec![page("101", "ENG")], None)]);
-            let provider = provider(backend.clone(), config());
-            let authority = if exact {
-                authority(
-                    kind,
-                    vec![content(kind, "101", false)],
-                    vec![],
-                    ContainmentEvidenceLevel::ContainerOnly,
-                    'a',
-                )
-            } else {
-                space_authority(kind)
-            };
-            let result = provider
-                .invoke_content_search(invocation(kind, authority, inputs()), kind)
-                .await
-                .unwrap();
-            assert_eq!(result.result[field(kind)].as_array().unwrap().len(), 1);
-            assert_eq!(result.result["scanStatus"], "exhausted");
-            assert_eq!(
-                result
-                    .audit
-                    .as_ref()
-                    .unwrap()
-                    .pointer("/locationProof/finalCheck")
-                    .unwrap(),
-                "matched"
-            );
-            assert_eq!(backend.requests.lock().unwrap().len(), 1);
-            assert!(backend.reads.lock().unwrap().is_empty());
-        }
+        let backend = Backend::new(vec![results(vec![page("101", "ENG")], None)]);
+        let provider = provider(backend.clone(), config());
+        let result = provider
+            .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+            .await
+            .unwrap();
+        assert_eq!(result.result[field(kind)].as_array().unwrap().len(), 1);
+        assert_eq!(result.result["scanStatus"], "exhausted");
+        assert_eq!(backend.requests.lock().unwrap().len(), 1);
+        assert!(backend.reads.lock().unwrap().is_empty());
     }
 }
 
@@ -578,13 +604,20 @@ async fn continuation_rejects_caller_context_mode_method_query_and_provider_chan
 #[tokio::test]
 async fn mid_page_resume_refetches_original_page_and_commits_to_its_identity_order() {
     let kind = ConfluenceSearchContentKind::Page;
-    for changed in [false, true] {
+    for change in ["unchanged", "order", "space", "status", "version", "next"] {
         let rows = vec![page("101", "ENG"), page("102", "ENG")];
         let mut second = rows.clone();
-        if changed {
-            second.swap(0, 1);
+        match change {
+            "order" => second.swap(0, 1),
+            "space" => second[0].space = "OPS".into(),
+            "status" => second[0].status = Some("archived".into()),
+            "version" => second[0].version += 1,
+            _ => {}
         }
-        let backend = Backend::new(vec![results(rows, None), results(second, None)]);
+        let backend = Backend::new(vec![
+            results(rows, None),
+            results(second, (change == "next").then_some("changed-next")),
+        ]);
         backend.rooted("101");
         backend.rooted("102");
         let mut config = config();
@@ -602,7 +635,7 @@ async fn mid_page_resume_refetches_original_page_and_commits_to_its_identity_ord
                 kind,
             )
             .await;
-        if changed {
+        if change != "unchanged" {
             assert_invalid(next.unwrap_err());
         } else {
             let next = next.unwrap();
@@ -1200,3 +1233,5 @@ async fn final_proof_failure_records_unresolved_without_releasing_candidates() {
         "unresolved"
     );
 }
+
+mod refinement;
