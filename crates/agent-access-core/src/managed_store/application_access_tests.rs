@@ -1255,8 +1255,10 @@ fn migration_037_adds_application_access_and_preserves_existing_tokens() {
     let path = temp.path().join("store.sqlite");
     let old = store_at(&path, Some(MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION));
     principal(&old, "alice", "user");
+    // The historical schema has no resource rows. Supply its empty catalog
+    // explicitly so this fixture does not invoke the current resource reader.
     let issued = old
-        .issue_broker_token(
+        .issue_broker_token_with_catalog(
             &hasher(),
             BrokerTokenIssueRequest {
                 principal_id: "alice".into(),
@@ -1266,6 +1268,7 @@ fn migration_037_adds_application_access_and_preserves_existing_tokens() {
                 expires_at: None,
                 created_by: "admin".into(),
             },
+            Some(&ManagedResourceCatalog::default()),
         )
         .unwrap();
     drop(old);

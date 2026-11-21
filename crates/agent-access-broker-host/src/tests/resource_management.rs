@@ -1757,7 +1757,7 @@ async fn legacy_content_rows_are_rejected_on_reload_and_startup_even_disabled_an
     let connection = rusqlite::Connection::open(store.path()).unwrap();
     let legacy = "https://dormant.example.test/wiki/spaces/ENG/pages/123";
     connection.execute(
-        "INSERT INTO resources VALUES ('legacy-content','confluence_content','exact',?1,NULL,'[\"default\"]',0,1,'2026-01-01','test','2026-01-01','test')",
+        "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('legacy-content','confluence_content','exact',?1,NULL,'[\"default\"]',0,1,'2026-01-01','test','2026-01-01','test')",
         [legacy],
     ).unwrap();
     let generation = fixture._broker.state().current().generation;

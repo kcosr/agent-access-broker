@@ -726,7 +726,7 @@ impl BrokerRuntime {
         snapshot: &PolicySnapshot,
         identity: &IdentityContext,
         services: &[AgentTokenServiceOption],
-    ) -> (Vec<ResourceDefinition>, Vec<ResourceGroupOption>) {
+    ) -> (Vec<AgentTokenResourceOption>, Vec<ResourceGroupOption>) {
         // Authored references remain selectable even when their current boundary is empty.
         // This permits deliberate preparation without exposing unrelated catalog entries.
         let mut authored_resources = BTreeSet::new();
@@ -840,7 +840,14 @@ impl BrokerRuntime {
                         })
                 })
             })
-            .cloned()
+            .map(|resource| AgentTokenResourceOption {
+                id: resource.id.clone(),
+                display_name: resource.display_name.clone(),
+                resource_type: resource.resource_type.clone(),
+                selector: resource.selector.clone(),
+                allowed_execution_contexts: resource.allowed_execution_contexts.clone(),
+                enabled: resource.enabled,
+            })
             .collect::<Vec<_>>();
         let groups = snapshot
             .resource_catalog

@@ -72,6 +72,7 @@ the current link and `null` clears it. The CLI accepts `--browser-url` on create
 or update and `--clear-browser-url` on update. This metadata is supported for
 Confluence content resources, not whole-space resources. Audit records identify
 `browserUrl` as a changed field without recording its URL or title.
+Agent resource discovery and token options omit saved browser links.
 
 For content URL normalization, the browser space segment, title and date do not
 enter identity. Folder URLs accept an optional title segment, such as

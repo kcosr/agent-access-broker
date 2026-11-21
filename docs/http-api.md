@@ -1068,6 +1068,12 @@ classifies upstream effects and never grants access. `displayName`,
 they do not depend on the caller's execution context or grants. This
 effective-policy projection also backs the portal's **Your Access** page.
 
+Resources in token options contain `id`, optional `displayName`, `resourceType`,
+`selector`, `allowedExecutionContexts`, and `enabled`. Authored group exclusions
+can remain selectable even when disabled. These references omit administrative
+`browserUrl` metadata, including URL title and space paths. Personal and
+administrative token options use the same restricted resource projection.
+
 The response also contains `mcp`, where an issued token connects MCP clients:
 `{"url": "https://broker.example.com/mcp"}` with the configured
 [`mcp.public_url`](configuration.md#mcp) when the HTTP MCP endpoint is enabled

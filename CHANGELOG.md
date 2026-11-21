@@ -213,7 +213,7 @@ All notable changes to this project are documented in this file.
   retain the browser URL as optional navigation metadata, shown in the portal
   and correctable offline without changing the target. HTTP `browserUrl`, TOML
   `browser_url` and CLI `--browser-url` preserve it; URLs stay out of audit
-  snapshots. Standalone space-key
+  snapshots, agent discovery and token options. Standalone space-key
   and all-spaces editing remain available. Bounded location checks apply across
   reads, writes, creation, moves, drafts, comments,
   attachments and content-constrained search. Such searches add current metadata

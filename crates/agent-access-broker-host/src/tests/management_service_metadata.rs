@@ -882,6 +882,111 @@ async fn resource_browser_urls_persist_as_versioned_navigation_metadata() {
 }
 
 #[tokio::test]
+async fn token_options_omit_browser_urls_for_included_and_disabled_excluded_resources() {
+    let fixture = resource_location_fixture().await;
+    let resources = [
+        (
+            "included-content",
+            "Engineering documentation",
+            "https://docs.example.test/wiki/content/page/123",
+            "https://docs.example.test/wiki/spaces/ENG/pages/123/Private-included-title",
+            true,
+        ),
+        (
+            "excluded-content",
+            "Restricted documentation",
+            "https://docs.example.test/wiki/content/folder/456",
+            "https://docs.example.test/wiki/spaces/ENG/folder/456/Private-excluded-title",
+            false,
+        ),
+    ];
+    for (id, name, value, browser_url, enabled) in resources {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::POST,
+            "/v1/admin/policy/resources",
+            Some(json!({
+                "id":id,"displayName":name,"resourceType":"confluence_content",
+                "selector":{"kind":"subtree","value":value},"browserUrl":browser_url,
+                "enabled":enabled,"allowedExecutionContexts":["internal"]
+            })),
+        )
+        .await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["result"]["record"]["browserUrl"], browser_url);
+    }
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/v1/admin/groups",
+            Some(json!({"groupId":"documentation-readers"})),
+        ),
+        (
+            Method::PUT,
+            "/v1/admin/groups/documentation-readers/members/alice",
+            None,
+        ),
+        (
+            Method::POST,
+            "/v1/admin/policy/resource-groups",
+            Some(json!({
+                "id":"documentation","name":"Documentation access",
+                "includedResourceIds":["included-content"],
+                "excludedResourceIds":["excluded-content"]
+            })),
+        ),
+        (
+            Method::POST,
+            "/v1/admin/policy/grants",
+            Some(json!({
+                "subjects":["group:documentation-readers"],"executionContexts":["internal"],
+                "service":"confluence","actions":["page.view"],"credentialMode":"per_user",
+                "resources":{"resourceIds":[],"resourceGroupIds":["documentation"]}
+            })),
+        ),
+    ] {
+        let response = location_request(&fixture, &fixture.admin_token, method, path, body).await;
+        let status = response.status();
+        let body = response_json(response).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+    }
+
+    let options = management_result(
+        &fixture.app,
+        &fixture.alice_user_token,
+        "/v1/tokens/options",
+    )
+    .await;
+    assert_eq!(options["resources"].as_array().unwrap().len(), 2);
+    for (id, name, value, browser_url, enabled) in resources {
+        let option = entry(&options["resources"], "id", id);
+        assert_eq!(option["displayName"], name);
+        assert_eq!(option["resourceType"], "confluence_content");
+        assert_eq!(option["selector"], json!({"kind":"subtree","value":value}));
+        assert_eq!(option["allowedExecutionContexts"], json!(["internal"]));
+        assert_eq!(option["enabled"], enabled);
+        assert!(option.get("browserUrl").is_none());
+
+        let record = management_result(
+            &fixture.app,
+            &fixture.admin_token,
+            &format!("/v1/admin/policy/resources/{id}"),
+        )
+        .await;
+        assert_eq!(record["browserUrl"], browser_url);
+    }
+    let group = entry(&options["resourceGroups"], "id", "documentation");
+    assert_eq!(group["name"], "Documentation access");
+    let serialized = options.to_string();
+    assert!(!serialized.contains("browserUrl"));
+    assert!(!serialized.contains("Private-included-title"));
+    assert!(!serialized.contains("Private-excluded-title"));
+}
+
+#[tokio::test]
 async fn resource_browser_url_validation_rejects_retargeting_and_does_not_echo_values() {
     let fixture = resource_location_fixture().await;
     let selector =

@@ -2453,9 +2453,8 @@ mod tests {
         let external = ExecutionContext::new("external").unwrap();
         AgentTokenOptions {
             policy_generation: 1,
-            resources: vec![agent_access_core::ResourceDefinition {
+            resources: vec![agent_access_core::AgentTokenResourceOption {
                 id: "eng".to_string(),
-                browser_url: None,
                 display_name: None,
                 resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
                 selector: agent_access_provider::ResourceSelector::Exact {

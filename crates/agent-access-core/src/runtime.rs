@@ -368,13 +368,27 @@ pub struct GovernedIdentityFailureContext {
 #[serde(rename_all = "camelCase")]
 pub struct AgentTokenOptions {
     pub policy_generation: u64,
-    pub resources: Vec<ResourceDefinition>,
+    pub resources: Vec<AgentTokenResourceOption>,
     pub resource_groups: Vec<ResourceGroupOption>,
     pub execution_contexts: Vec<ExecutionContext>,
     pub services: Vec<AgentTokenServiceOption>,
     /// Where an issued token connects MCP clients; see
     /// [`crate::agent_token_mcp_url`]. Not policy-derived.
     pub mcp: Option<AgentTokenMcpEndpoint>,
+}
+
+/// Resource fields needed to select token restrictions. Administrative navigation
+/// metadata is deliberately absent, including for authored exclusion references.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentTokenResourceOption {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub resource_type: ResourceType,
+    pub selector: ResourceSelector,
+    pub allowed_execution_contexts: Vec<String>,
+    pub enabled: bool,
 }
 
 /// The HTTP MCP endpoint that accepts an issued token as `Authorization: Bearer`.

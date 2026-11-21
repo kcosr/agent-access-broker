@@ -60,6 +60,8 @@ actions and exposes typed wrappers for supported services.
   selector. Never use it for authorization, silently retarget it, or include the
   original URL/title in audit snapshots. Keep URL edits separate from target
   replacement and preserve omission/null semantics on resource PATCH.
+  Token choices use `AgentTokenResourceOption`, not full resource definitions,
+  so authored exclusions never disclose administrative browser URLs or titles.
   Resource types may opt out with `supportsExclusions: false`: validate every
   excluded group membership at catalog validation and publication, including
   unused groups. Never silently drop an unsupported exclusion. Imported-type

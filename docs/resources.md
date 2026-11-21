@@ -21,6 +21,9 @@ saves it with content URL entry and lets administrators add, correct or clear
 it in the editor. An old title or space path can be retained after a move;
 access follows the immutable identity. See
 [saved browser links](confluence-content-access.md#resources-and-url-entry).
+Saved browser links are administrative navigation metadata. Agent resource
+discovery and personal or administrative token options omit them; token choices
+retain the configured display name, selector and eligibility fields.
 
 Resource types are registered, not hard-coded in policy. Each registered type
 defines its canonical target grammar, the selector forms it supports, and the
