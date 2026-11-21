@@ -238,6 +238,68 @@ impl LocalOutputFailure {
     }
 }
 
+/// A complete response confirmed execution, but its declared content is unusable.
+/// Never retain the rejected payload or invent a file destination.
+#[derive(Debug)]
+pub(crate) struct ResponseContentFailure {
+    pub(crate) details: Value,
+}
+
+impl ResponseContentFailure {
+    pub(crate) fn new(envelope: &Value, sensitive_outputs: &[String]) -> Self {
+        let mut fields = operation_fields(envelope, sensitive_outputs);
+        fields.insert("reasonCode".into(), json!("response_content_invalid"));
+        fields.insert("retrySafe".into(), json!(false));
+        fields.insert("message".into(), json!("The operation completed, but its response content is invalid. Do not repeat the operation."));
+        Self {
+            details: Value::Object(fields),
+        }
+    }
+}
+
+impl std::fmt::Display for ResponseContentFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.details)
+    }
+}
+impl std::error::Error for ResponseContentFailure {}
+
+/// An allow decision can still carry a compact provider outcome instead of the
+/// action's ordinary result. Recognize only bounded receipt fields, so a marker
+/// beside malformed body content cannot suppress selected-content validation.
+pub(crate) fn is_compact_mutation_receipt(envelope: &Value) -> bool {
+    if !envelope
+        .get("reasonCode")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| !reason.is_empty() && reason.len() <= 128)
+    {
+        return false;
+    }
+    let Some(result) = envelope.get("result").and_then(Value::as_object) else {
+        return false;
+    };
+    let retry_safe = match result.get("mutationStatus").and_then(Value::as_str) {
+        Some("not_applied") => true,
+        Some("unknown" | "applied" | "applied_verified" | "applied_unverified") => false,
+        _ => return false,
+    };
+    result.get("retrySafe").and_then(Value::as_bool) == Some(retry_safe)
+        && result.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "mutationStatus" | "retrySafe" | "verificationStage" | "safeLocators"
+            )
+        })
+        && result
+            .get("verificationStage")
+            .is_none_or(|stage| stage.as_str().is_some_and(|value| value.len() <= 128))
+        && result.get("safeLocators").is_none_or(|locators| {
+            locators.is_object()
+                && bounded_locator(locators, 0)
+                && serde_json::to_vec(locators).is_ok_and(|bytes| bytes.len() <= 4096)
+        })
+}
+
 /// Headers alone cannot establish that a streaming read completed. Only a
 /// recognized explicit mutation outcome can survive an incomplete download.
 pub(crate) fn has_mutation_outcome(envelope: &Value) -> bool {
@@ -419,7 +481,10 @@ fn identifiers(envelope: &Value) -> Map<String, Value> {
         "action",
         "reasonCode",
     ] {
-        if let Some(value) = envelope.get(key).filter(|value| value.is_string()) {
+        if let Some(value) = envelope
+            .get(key)
+            .filter(|value| value.as_str().is_some_and(|text| text.len() <= 512))
+        {
             fields.insert(key.to_owned(), value.clone());
         }
     }

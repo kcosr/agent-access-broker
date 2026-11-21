@@ -765,7 +765,7 @@ async fn exercise_basic_import(swagger: bool) {
         directory.path(),
         "form-send.json",
         json!({
-            "version":"agent-access.send.v1","kind":"invoke","service":"readers",
+            "version":"agent-access.send.v2","kind":"invoke","service":"readers",
             "action":"item.search","inputs":form_inputs()
         }),
     );

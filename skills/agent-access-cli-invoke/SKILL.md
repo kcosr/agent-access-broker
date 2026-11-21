@@ -40,7 +40,7 @@ Service/action discovery omits gateways, including Git. Native clients use their
 preconfigured gateway address; `resource-access describe --service SERVICE`
 can inspect authorized access to an already known gateway service ID.
 
-Action detail and the caller-filtered `agent-access.catalog.v2` catalog contain
+Action detail and the caller-filtered `agent-access.catalog.v3` catalog contain
 the inner `inputSchema`, extended `documentation`, I/O and response capabilities.
 Read documentation for query syntax, field relationships, content formats,
 continuation, companion permissions and write outcomes. `mcpTool` describes a
@@ -72,20 +72,26 @@ a supported typed upload or `agent-access send` when the action needs files.
 When the action supplies Broker attribution, submit the intended content without
 adding an attribution footer yourself.
 
-Response options are CLI flags, never provider input properties:
+`--output-content-format markdown|text|adf|storage` selects the exact returned
+format for declared rich-text fields. Use an advertised value; unsupported exact
+selections fail before provider execution. Each present body becomes
+`{format,value}` at its existing field, and ordinary output remains the full
+Broker JSON envelope. Provider write-format and upstream body selectors stay
+separate and use the action's documented values.
 
-- `--read-content-format native|markdown|text` requests an advertised embedded
-  representation while retaining native content.
-- `--output-format json|markdown` selects the normal successful representation;
-  whole-result Markdown is extracted from the Broker envelope for CLI output.
-- Provider write-content format fields stay in the input object. Do not combine
-  whole-result Markdown with an explicit non-native embedded format.
-
-Non-default formats and explicit `--output` require fresh caller-catalog
-validation. Unsupported explicit options fail locally with exit 3; required
-discovery failure prevents dispatch. Ambient defaults are omitted where not
-advertised. Defaults come from flags, then CLI config, environment, and finally
-`native`/`json`; use explicit flags when representation matters.
+Every invocation checks a fresh `agent-access.catalog.v3` before dispatch.
+Discovery failure or a version mismatch prevents execution. An absent catalog
+action may still be invoked by ordinary JSON stdout paths without an exact
+selector, leaving access to the Broker; those paths cannot validate undiscovered
+body fields. Exact selectors and I/O-dependent paths require the action metadata.
+The client passes its optional `defaults.preferred_output_content_format`
+(or `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT`) as a soft preference;
+config takes precedence over environment. The Broker selects the request
+preference, service preference, then Markdown. If the chosen preference is
+unsupported, it selects the action's declared native format without trying
+lower preference tiers. No-body actions ignore preferences. Use the explicit
+flag when the returned representation must be exact. Action detail shows the
+client-effective default; `spec catalog` shows the canonical service default.
 
 Imported actions use their accepted schema. OpenAPI parameters can be nested
 under `path`, `query`, `headers` and `body`; URL-encoded operations take the
@@ -188,3 +194,11 @@ A local timeout does not establish dispatch status. Use only complete correlated
 Broker proofs; for example, a pre-admission cancellation receipt requires
 `executionState: "not_dispatched"` and `retrySafe: true`. A status/reason alone
 or a new rejected attempt cannot resolve an earlier uncertain write.
+
+A presentation-error receipt with `mutationStatus: "applied"` and
+`retrySafe: false` means the
+write completed but its response could not be produced. A client
+`response_content_invalid` receipt means received selected-body data was unusable;
+preserve any reported completion and do not replay the operation to recover its
+response. Read-only calls may be made again explicitly with a supported native
+format when conversion exceeded an output limit; native source limits still apply.

@@ -47,7 +47,7 @@ Read that command's `--help` for exact flags and alternatives. Use canonical
 `invoke` or schema-guided `send` for actions without a typed wrapper.
 
 Compact service/action lists contain sorted name arrays and omit schemas;
-empty arrays are valid. Detail and the caller-filtered `agent-access.catalog.v2`
+empty arrays are valid. Detail and the caller-filtered `agent-access.catalog.v3`
 catalog include the inner `inputSchema`, response capabilities and optional
 extended `documentation`. Read that documentation for query syntax, content
 formats, continuation, companion permissions and operation outcomes. Field
@@ -70,22 +70,26 @@ wrapper creates the `inputs` envelope; do not pass HTTP or send-envelope fields
 as provider flags. Submit only the intended content; configured attribution is
 added by the Broker.
 
-Three kinds of format options remain distinct:
+`--output-content-format markdown|text|adf|storage` selects the exact returned
+format for declared rich-text fields. Use an advertised value; unsupported exact
+selections fail before provider execution. Each present body becomes
+`{format,value}` at its existing field, and ordinary output remains the full
+Broker JSON envelope. Provider write-format and upstream body selectors stay
+separate and use the action's documented values.
 
-- Provider write-format selectors describe supplied content and use that
-  action's documented values.
-- `--read-content-format native|markdown|text` requests an advertised embedded
-  representation while retaining the native body.
-- `--output-format json|markdown` selects supported whole-result presentation.
-  Do not combine whole-result Markdown with an explicit non-native embedded
-  format. A provider's native body-format selector is a separate input.
-
-Flags override CLI config, then environment, then built-in `native`/`json`
-defaults. Ambient formats apply only where advertised. Non-default formats are
-validated against the fresh caller catalog; unsupported explicit options fail
-locally, while unsupported ambient defaults are omitted. A failed required
-catalog fetch prevents invocation. Capability discovery and command help, not a
-Broker version or write-format support, determine valid read/output options.
+Every invocation checks a fresh `agent-access.catalog.v3` before dispatch.
+Discovery failure or a version mismatch prevents execution. An absent catalog
+action may still be invoked by ordinary JSON stdout paths without an exact
+selector, leaving access to the Broker; those paths cannot validate undiscovered
+body fields. Exact selectors and I/O-dependent paths require the action metadata.
+The client passes its optional `defaults.preferred_output_content_format`
+(or `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT`) as a soft preference;
+config takes precedence over environment. The Broker selects the request
+preference, service preference, then Markdown. If the chosen preference is
+unsupported, it selects the action's declared native format without trying
+lower preference tiers. No-body actions ignore preferences. Use the explicit
+flag when the returned representation must be exact. Action detail shows the
+client-effective default; `spec catalog` shows the canonical service default.
 
 ## Resources and continuation
 
@@ -130,7 +134,7 @@ Consult command help for their behavior and keep both receipts and files private
 when the action marks them sensitive.
 
 `--output PATH` saves a supported JSON or multipart action's normal successful
-representation: a Broker JSON envelope or extracted whole-result Markdown.
+Broker JSON envelope, including selected rich-text values.
 It also works for discovery, specs and `broker status`; specs use
 `--output-format json`. Omit the path or use `--output -` for normal stdout.
 Downloads require `--output`; files receive verified raw bytes, and `-` emits
@@ -192,3 +196,11 @@ does not establish dispatch status. Use only complete correlated Broker proofs;
 for example, a pre-admission cancellation receipt requires
 `executionState: "not_dispatched"` and `retrySafe: true`. A status/reason alone
 or a new rejected attempt cannot resolve an earlier uncertain write.
+
+A presentation-error receipt with `mutationStatus: "applied"` and
+`retrySafe: false` means the
+write completed but its response could not be produced. A client
+`response_content_invalid` receipt means received selected-body data was unusable;
+preserve any reported completion and do not replay the operation to recover its
+response. Read-only calls may be made again explicitly with a supported native
+format when conversion exceeded an output limit; native source limits still apply.

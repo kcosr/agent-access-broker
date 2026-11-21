@@ -339,14 +339,7 @@ fn comment_bodies_consume_the_shared_issue_rich_content_budget() {
     );
     // A description already consumed the same budget before comment projection.
     let mut budget = RenderBudget::with_limits(5, 1_000_000);
-    render_adf_bounded_with_budget(
-        &adf_text("issue description"),
-        ReadContentFormat::Native,
-        1024,
-        1024,
-        &mut budget,
-    )
-    .unwrap();
+    validate_adf_bounded_with_budget(&adf_text("issue description"), 1024, &mut budget).unwrap();
     assert!(
         comment_pages::project(
             &page(1, 0, Some(1)),

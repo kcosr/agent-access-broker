@@ -5,7 +5,7 @@
 //! actions (the upload token-only), an explicitly declared live collection
 //! filtered by native search authority, an optional companion read with a
 //! host-issued authorization proof, a presenter with required and optional
-//! embedded bodies and a whole-result Markdown renderer, and (when `endpoints`
+//! embedded bodies with concrete output selection, and (when `endpoints`
 //! is enabled) a resource type whose entries keep a private attribute that a
 //! single-attempt action consumes. Its writes
 //! report a request the SDK proved unsent with a mutation receipt. Broker
@@ -13,8 +13,8 @@
 //! backends; that it needs nothing outside this crate and the registration
 //! list is the point.
 use agent_access_provider::presentation::{
-    ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, ReadContentFormat,
-    RenderBudget, RenderContext, RenderError, RenderedBody,
+    ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, OutputContentFormat,
+    RenderBudget, RenderError, SelectedContent,
 };
 use agent_access_provider::{
     ActionDescriptor, AdmittedRequest, BackendConfig, BackendRegistration, BodyAdmission,
@@ -349,77 +349,80 @@ pub fn conformance_descriptor(config: &ConformanceConfig) -> ServiceDescriptor {
     }
 }
 
+const BODY_FORMATS: &[OutputContentFormat] =
+    &[OutputContentFormat::Markdown, OutputContentFormat::Text];
 const ITEM_PRESENTATION: ActionPresentation = ActionPresentation::new(
     &[
-        EmbeddedBody::new(&[BodyPathSegment::Field("item")], &PlainBody),
-        EmbeddedBody::new(&[BodyPathSegment::OptionalField("note")], &PlainBody),
+        EmbeddedBody::new(&[BodyPathSegment::Field("item")], "body", &PlainBody),
+        EmbeddedBody::new(
+            &[BodyPathSegment::OptionalField("note")],
+            "body",
+            &PlainBody,
+        ),
     ],
-    Some(&render_item),
+    BODY_FORMATS,
+    OutputContentFormat::Text,
 );
-
 const NOTE_PRESENTATION: ActionPresentation = ActionPresentation::new(
     &[EmbeddedBody::new(
         &[BodyPathSegment::Field("note")],
+        "body",
         &PlainBody,
     )],
-    None,
+    BODY_FORMATS,
+    OutputContentFormat::Text,
 );
 
-/// An item's `body` is plain text: Markdown escapes it, text keeps it.
+/// An item's body is plain text: Markdown escapes it, text keeps it.
 struct PlainBody;
-
 impl EmbeddedBodyCodec for PlainBody {
-    fn render(
+    fn supported_formats(&self) -> &'static [OutputContentFormat] {
+        BODY_FORMATS
+    }
+    fn select(
         &self,
-        owner: &Map<String, Value>,
-        format: ReadContentFormat,
+        source: &Value,
+        format: OutputContentFormat,
         max_body_bytes: u64,
         budget: &mut RenderBudget,
-    ) -> Result<Option<RenderedBody>, RenderError> {
-        let Some(body) = owner.get("body") else {
-            return Ok(None);
-        };
-        let body = body.as_str().ok_or(RenderError)?;
+    ) -> Result<Option<SelectedContent>, RenderError> {
+        let body = source.as_str().ok_or(RenderError)?;
         if body.len() as u64 > max_body_bytes {
             return Err(RenderError);
         }
         budget.charge_node().map_err(|_| RenderError)?;
         budget.charge_work(body.len()).map_err(|_| RenderError)?;
-        let value = match format {
-            ReadContentFormat::Native => return Ok(None),
-            ReadContentFormat::Text => body.to_owned(),
-            ReadContentFormat::Markdown => {
-                let mut out = agent_access_provider::presentation::MarkdownWriter::new(
-                    max_body_bytes.saturating_mul(2),
-                );
-                out.push_escaped(body)?;
-                out.finish()
+        let selected = match format {
+            OutputContentFormat::Text => SelectedContent::text(body),
+            OutputContentFormat::Markdown => {
+                let mut text = String::new();
+                let mut characters = body.chars().peekable();
+                while let Some(character) = characters.next() {
+                    let character = match character {
+                        '\r' => {
+                            if characters.peek() == Some(&'\n') {
+                                characters.next();
+                            }
+                            '\n'
+                        }
+                        '\n' | '\t' => character,
+                        value if value.is_control() => ' ',
+                        value => value,
+                    };
+                    if matches!(character, '\\' | '`' | '*' | '_' | '[' | ']' | '<' | '>') {
+                        text.push('\\');
+                    }
+                    text.push(character);
+                    if text.len() as u64 > max_body_bytes.saturating_mul(2) {
+                        return Err(RenderError);
+                    }
+                }
+                SelectedContent::markdown(text)
             }
+            _ => return Err(RenderError),
         };
-        Ok(Some(RenderedBody::new(format, value)))
+        Ok(Some(selected))
     }
-}
-
-fn render_item(result: &Value, context: &mut RenderContext) -> Result<(), RenderError> {
-    let item = result.get("item").ok_or(RenderError)?;
-    let field = |name: &str| item.get(name).and_then(Value::as_str).ok_or(RenderError);
-    context.out.push("# ")?;
-    context.out.push_heading_text(field("title")?)?;
-    context.out.push("\n\nItem: ")?;
-    context.out.push_code(field("path")?)?;
-    context.out.push("\n\n")?;
-    context.out.push_escaped(field("body")?)?;
-    context.out.push("\n")?;
-    if let Some(note) = result.get("note") {
-        let body = note
-            .get("body")
-            .and_then(Value::as_str)
-            .ok_or(RenderError)?;
-        context.out.push("\n## Note\n\n")?;
-        context.out.push_escaped(body)?;
-        context.out.push("\n")?;
-    }
-    Ok(())
 }
 
 struct ConformanceProvider {
@@ -1663,8 +1666,11 @@ mod tests {
             .as_ref()
             .unwrap()
             .embedded_bodies();
-        assert_eq!(bodies[1].owner_pointer(), "/note");
-        assert_eq!(bodies[1].owner_optional_prefixes(), ["/note"]);
+        assert_eq!(bodies[1].body_field().owner_path, "/result/note");
+        assert_eq!(
+            bodies[1].body_field().optional_owner_prefixes,
+            ["/result/note"]
+        );
         for name in [
             "item.download",
             "item.upload",
@@ -1675,8 +1681,16 @@ mod tests {
             assert!(!action(name).reports_universal_reach);
             assert!(action(name).companion_read_actions.is_empty());
         }
-        let view = response_capabilities(action("item.view").presentation.as_ref());
-        assert!(view.supports_markdown_response() && view.supports_read_content());
+        let view = response_capabilities(action("item.view").presentation.as_ref(), None);
+        assert!(view.supports_output_content());
+        assert_eq!(
+            view.default_output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+        assert_eq!(
+            view.native_output_content_format,
+            Some(OutputContentFormat::Text)
+        );
         assert!(matches!(
             action("item.download").io,
             ActionIo::RawDownload { .. }

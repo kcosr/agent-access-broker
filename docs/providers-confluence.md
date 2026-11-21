@@ -65,6 +65,7 @@ allowed_upstream_hosts = [
 ]
 
 [providers.confluence.content]
+preferred_output_format = "markdown"
 page_formats = ["storage", "atlas_doc_format"]
 blog_formats = ["storage"]
 comment_formats = ["storage"]
@@ -322,8 +323,8 @@ Typed CLI examples:
 
 ```bash
 agent-access --url http://127.0.0.1:8787 confluence page view 123456789
-agent-access --url http://127.0.0.1:8787 confluence page view 123456789 --read-content-format markdown
-agent-access --url http://127.0.0.1:8787 confluence page view 123456789 --output-format markdown
+agent-access --url http://127.0.0.1:8787 confluence page view 123456789 --output-content-format markdown
+agent-access --url http://127.0.0.1:8787 confluence page view 123456789 --output-content-format adf
 agent-access --url http://127.0.0.1:8787 confluence page view --page-url 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456789'
 agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title 'Deploy Runbook' --content-file page.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title 'Child Runbook' --parent-kind page --parent-id 123456789 --content-file child.storage.html --content-format storage
@@ -341,8 +342,7 @@ Generic invoke uses canonical action names and compact JSON inputs:
 
 ```bash
 agent-access invoke confluence.page.view --input-json '{"pageId":"123456789"}'
-agent-access invoke confluence.page.view --input-json '{"pageId":"123456789"}' --read-content-format markdown
-agent-access invoke confluence.search --input-json '{"query":{"type":"text","value":"runbook"},"spaces":["ENG"],"maxResults":10}' --output-format markdown
+agent-access invoke confluence.page.view --input-json '{"pageId":"123456789"}' --output-content-format markdown
 agent-access invoke confluence.page.view --input-json '{"url":"https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456789"}'
 agent-access invoke confluence.search --input-json '{"query":{"type":"text","value":"runbook"},"spaces":["ENG"],"maxResults":10}'
 agent-access invoke confluence.page.update --input-file confluence-page-update.json
@@ -364,7 +364,7 @@ JSON `send` request files use the same service/action/input vocabulary:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "confluence",
   "action": "page.update",
@@ -390,12 +390,12 @@ curl -fsS \
   "$BROKER_URL/v1/invoke/confluence/page.view"
 ```
 
-To preserve the native page body and add an embedded companion, add top-level
-`"readContentFormat":"markdown"` (or `"text"`) beside `inputs`. To render the
-complete existing result, add top-level `"responseFormat":"markdown"`
-instead. These fields are response protocol controls, not Confluence inputs.
-Do not combine whole-result Markdown with an explicit non-native embedded
-format.
+To select Markdown for returned bodies, add top-level
+`"outputContentFormat":"markdown"` beside `inputs`. Supported exact choices
+are advertised by each action. To prefer a format with the action's native
+fallback when unsupported, use `"preferredOutputContentFormat":"markdown"`.
+An exact selector takes precedence. These are response protocol controls,
+separate from Confluence provider inputs. Responses remain JSON.
 
 For multipart uploads, use `agent-access send` to construct upload metadata.
 For raw attachment downloads, use `agent-access invoke --output`, a typed download
@@ -497,7 +497,6 @@ discovery or existing content searches.
 ```bash
 agent-access confluence space list --max-results 50
 agent-access confluence space list --max-results 50 --page-token '<token>'
-agent-access confluence space list --output-format markdown
 ```
 
 Inputs are only `maxResults` (default 50, bounded by `listing.max_results`, at
@@ -799,10 +798,11 @@ Caps:
 | `ORDER BY` terms | 5 |
 | Text query | 512 bytes |
 
-The typed CLI lowers to the same JSON contract:
+With an [authenticated CLI identity](cli.md#config-env-and-default-precedence),
+the typed CLI lowers to the same JSON contract:
 
 ```bash
-agent-access --url http://127.0.0.1:8787 --no-token \
+agent-access --url http://127.0.0.1:8787 \
   confluence page search --space ENG --cql 'title ~ "runbook"'
 ```
 
@@ -962,40 +962,76 @@ or gateway site rejects a continuation with `input_invalid` and a draft handle
 with `invalid_draft_handle`. Draft handles and list tokens signed with the
 stable key keep working across restarts while their binding is unchanged.
 
-## Normalized read content and whole-result Markdown
+## Output content formats
 
-Confluence read presentation uses common invoke-envelope fields and never adds
-format controls to Confluence provider inputs. `readContentFormat` accepts
-`native`, `markdown`, or `text`; omission is `native`. A non-native request
-preserves the existing storage or ADF body and adds
-`renderedBody = { format, value }` beside the owning entity's `body`, never
-inside the representation map.
+Ordinary Confluence responses remain JSON, including typed CLI output. Each
+returned rich body has one tagged value: `{ "format": "markdown", "value": "..." }`.
+The surrounding identifiers, versions, URLs, status, counts and pagination
+metadata retain their structured fields.
 
-Exactly these 26 actions advertise embedded read formats:
+The invoke-envelope `outputContentFormat` selects an exact `markdown`, `text`,
+`adf`, or `storage` representation from the action's supported choices. It is
+separate from write `inputs.contentFormat` and source-read `inputs.bodyFormat`.
+An unsupported exact selection returns `response_format_unsupported` before
+provider scope lookup or execution. The selector cannot request additional
+content or change permissions.
 
-| Result family | Actions and companion placement |
-| --- | --- |
-| Current content view | `page.view`, `blog.view`; `result.renderedBody` beside root `body` |
-| Draft view | `page.draft.view`, `blog.draft.view`; `result.renderedBody` beside root `body` |
-| Comment collections | `{page,blog}.{footer_comment,inline_comment}.list` and `.reply.list`; each body-bearing `comments[]` item gets its own companion |
-| Comment view | `{page,blog}.{footer_comment,inline_comment}.view`; companion inside returned `comment` |
-| Footer-comment add | `page.footer_comment.add`, `blog.footer_comment.add`; companion inside returned `comment` |
-| Comment update | `{page,blog}.{footer_comment,inline_comment}.update`; companion inside returned `comment` |
-| Reply add | `{page,blog}.{footer_comment,inline_comment}.reply.add`; companion inside returned `comment` |
+These 26 actions carry rich bodies when their configured sources are enabled:
 
-Page, draft, and comment bodies normally have the native shape
-`body.<format>.{representation,value}`. `atlas_doc_format.value` is a serialized
-JSON string: the Broker checks source bytes before parsing it as ADF. The
-current `blog.view` result is the exception and exposes bare
-`body.storage` text. Missing or null content and an empty representation map do
-not gain a companion; a present empty native body does.
+| Result family | Actions | Tagged field |
+| --- | --- | --- |
+| Current views | `page.view`, `blog.view` | `result.body` |
+| Draft views | `page.draft.view`, `blog.draft.view` | `result.body` |
+| Comment collections | `{page,blog}.{footer_comment,inline_comment}.list` and `.reply.list` | Each `result.comments[].body` |
+| Comment views | `{page,blog}.{footer_comment,inline_comment}.view` | `result.comment.body` |
+| Footer-comment creation | `{page,blog}.footer_comment.add` | `result.comment.body` |
+| Comment updates | `{page,blog}.{footer_comment,inline_comment}.update` | `result.comment.body` |
+| Reply creation | `{page,blog}.{footer_comment,inline_comment}.reply.add` | `result.comment.body` |
 
-When a current page result contains both configured representations, selection
-is deterministic: present `atlas_doc_format` first, otherwise present
-`storage`. Malformed selected ADF returns the fixed sanitized
-`upstream_protocol_failed`/502 response instead of falling back to storage.
-Draft and comment reads normalize the representation already selected by their
-native `inputs.bodyFormat`; formatting makes no second provider call.
+Page views support Markdown and text plus their configured native sources:
+`adf` for `page_formats = ["atlas_doc_format"]`, `storage` for `["storage"]`,
+and both for a list containing both sources. With no page source configured,
+page views return metadata without `body` or an output-format capability.
+Blog and draft views support Markdown, text and storage. Blog storage reads
+remain available with `blog_formats=[]`; that setting gates writes. Page draft
+reads are independent of current-page source configuration.
+
+Comments support Markdown, text and storage when `comment_formats` enables
+storage. Empty comment source configuration preserves metadata reads without
+`body`, and removes content-writing actions from discovery. Draft reads and
+configured comment reads fail if the requested source is missing upstream;
+optional page/blog bodies are omitted when no source is returned. A present
+empty valid source produces a present tagged body. For a selected native page
+format, an absent source produces no `body` even if another source is present.
+This applies to exact selection and to preferences resolved to a native format.
+
+### Preferences and discovery
+
+Omitting an exact selector prefers Markdown. Set the service preference with
+`[providers.confluence.content].preferred_output_format`. A request's
+`preferredOutputContentFormat` or MCP connection preference takes precedence
+over the service setting. CLI clients use the separate
+`[defaults].preferred_output_content_format` key. If the first applicable
+preference is unsupported, page views fall back to configured ADF first,
+otherwise storage; other body actions fall back to storage. The Broker does
+not try lower-priority preferences. Actions without body support ignore soft
+preferences. Invalid format names and explicit null controls fail.
+
+Discover `outputContentFormats`, `nativeOutputContentFormat`,
+`defaultOutputContentFormat` and `bodyFields` from the caller-filtered action.
+Body metadata marks page and comment read fields optional because a configuration
+reload can disable those sources. That optionality does not weaken upstream
+validation when a required source is configured.
+
+### Validation and conversion
+
+For Markdown or text, a page uses returned ADF first, otherwise storage. Every
+fetched configured source is validated before an unselected representation is
+discarded. Malformed ADF fails instead of selecting storage. ADF output is a
+JSON object, including when Confluence supplied a serialized JSON string; source
+bytes are bounded before parsing. Storage output is a string containing the
+native XML. Markdown and text are readable derivatives, not edit-round-trip
+representations.
 
 Storage conversion is deterministic and offline. A bounded fragment parser
 preserves namespaced `ac:` and `ri:` elements and handles standard text,
@@ -1004,50 +1040,25 @@ containers, readable Confluence references, and code/noformat macros. Scripts,
 styles, frames, objects, embeds, templates, forms, inputs, active HTML/widget/
 include macros, macro parameters, and opaque internal identifiers are
 suppressed. Valid unknown containers keep safe textual descendants; valid
-unknown leaves use a fixed placeholder. The Broker never calls Atlassian's
-asynchronous content conversion endpoint.
+unknown leaves use a fixed placeholder. Conversion makes no additional provider
+call and does not follow links or pagination. It runs after current content
+location has been rechecked against the admitted grants.
 
-`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly
-these 27 non-streaming retrievals advertise whole-result Markdown:
+All declared returned sources and selected bodies are bounded by
+`providers.confluence.content.max_body_bytes`. Source parsing, depth, work,
+aggregate bodies, final serialized JSON and transport limits also apply.
+Malformed content or overflow produces the fixed sanitized
+`upstream_protocol_failed`/502 response. A read whose Markdown conversion
+exceeds its limit may be invoked manually with exact `adf` or `storage` when
+supported; native selection still validates and bounds the source. No automatic
+retry or partial fallback occurs. Native/selected bodies and pagination tokens
+stay out of audit, tracing, logs, errors, object identifiers and metric labels.
 
-- `space.list`;
-- `page.view`, `search`, `verify`, `blog.view`, `blog.search`, and
-  `blog.verify`;
-- `page.draft.view`, `page.draft.verify`, `blog.draft.view`, and
-  `blog.draft.verify`;
-- `attachment.list`, `blog.attachment.list`,
-  `page.draft.attachment.list`, and `blog.draft.attachment.list`; and
-- every `{page,blog}.{footer_comment,inline_comment}.{list,view,reply.list}`.
-
-The renderer uses only the already-produced result, includes every meaningful
-present field in stable semantic sections, and preserves identifiers, URLs,
-timestamps, versions, counts, order, booleans, and pagination tokens. Page and
-blog searches and all attachment lists stay body-free. Comment and reply lists
-convert only the bodies already returned; they do not fetch more content or
-follow pagination. Verification mismatches format the attached result while
-retaining `allow_with_result`, HTTP 409, and CLI exit 2.
-
-HTTP and `send` keep the normal JSON envelope with
-`result = { "format": "markdown", "value": "..." }`. Typed commands and
-generic `invoke --output-format markdown` print only the Markdown value on an
-allowed result. JSON is the typed CLI default, including attachment lists and
-draft-attachment lists. Raw attachment downloads and all mutation
-confirmations remain ineligible for whole-result Markdown.
-
-All declared returned Confluence bodies are structurally validated and bounded
-by `providers.confluence.content.max_body_bytes`, including omitted or explicit
-`native` mode. Source parsing, depth/events/work, per-body rendering, aggregate
-collection rendering, whole-document output, and the final serialized result
-are additionally bounded. Malformed content or any overflow returns only the
-fixed sanitized `upstream_protocol_failed`/502 response, never partial or
-native fallback output. Native/rendered bodies and pagination tokens are not
-recorded in audit, tracing, logs, errors, object identifiers, or metric labels.
-
-Write `inputs.contentFormat`, native-read `inputs.bodyFormat`, embedded
-`readContentFormat`, and whole-result `responseFormat` are four distinct
-controls. Discover support from the selected caller-filtered action's
-`readContentFormats` and `responseFormats`, not from provider configuration or
-a Broker version.
+If a completed body-returning comment mutation cannot produce its selected
+response, the error retains a compact `mutationStatus: "applied"`,
+`retrySafe: false` receipt and says the operation must not be repeated. Earlier
+uncertain-write receipts retain their own status. A response formatting failure
+does not undo the upstream operation.
 
 ## Normalized rich-content write contract
 
@@ -1100,10 +1111,9 @@ arbitrary native Confluence storage. Broker-generated storage is
 strictly validated against the converter's constrained subset. Native
 `atlas_doc_format` remains structurally validated.
 
-Write inputs use `content` and `contentFormat`. Read bodies and
-read-side representation selectors use the provider-native name
-`bodyFormat`; that is separate from write `contentFormat`, embedded
-`readContentFormat`, and whole-result `responseFormat`.
+Write inputs use `content` and `contentFormat`. Source-read selectors use the
+provider-native name `bodyFormat`; that is separate from write `contentFormat`
+and the invoke-envelope `outputContentFormat`.
 
 Typed commands require exactly one of `--content STRING` and `--content-file
 PATH`, plus `--content-format`. `atlas_doc_format` files are parsed as JSON;
@@ -1340,8 +1350,8 @@ between body and header next links fail closed.
 List results return `{ comments, count, hasMore, nextPageToken }`, where each
 comment includes `commentId`, `kind`, `containerType`, `pageId` or `blogId`,
 `space`, `status`, optional `resolutionStatus`, optional author/version/timeline
-metadata, optional `parentCommentId`, and a Confluence body map such as
-`body.storage.value` and `body.storage.representation`. View and write results
+metadata, optional `parentCommentId`, and a selected `{format,value}` body when
+content is enabled. Metadata-only comments omit `body`. View and write results
 wrap the same comment object as `{ comment }`. The broker rejects attachment,
 custom-content, wrong-container, missing-container, non-current, cyclic-parent,
 or over-depth comment responses instead of returning partial results.

@@ -1143,6 +1143,7 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         custom_fields,
     } = jira;
     let JiraContentConfig {
+        preferred_output_format,
         comment_formats,
         max_body_bytes,
     } = content;
@@ -1172,6 +1173,10 @@ fn jira_value(jira: &JiraProviderConfig) -> Value {
         .put(
             "content",
             Fields::default()
+                .opt(
+                    "preferred_output_format",
+                    preferred_output_format.map(|format| format.as_str()),
+                )
                 .put("comment_formats", strings(comment_formats))
                 .int("max_body_bytes", *max_body_bytes)
                 .value(),
@@ -1245,6 +1250,7 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         content_search,
     } = confluence;
     let ConfluenceContentConfig {
+        preferred_output_format,
         page_formats,
         blog_formats,
         comment_formats,
@@ -1273,6 +1279,10 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         .put(
             "content",
             Fields::default()
+                .opt(
+                    "preferred_output_format",
+                    preferred_output_format.map(|format| format.as_str()),
+                )
                 .put("page_formats", strings(page_formats))
                 .put("blog_formats", strings(blog_formats))
                 .put("comment_formats", strings(comment_formats))
@@ -1382,6 +1392,7 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
         allow_disable_ssl_verification,
     } = webhooks;
     let GitlabContentConfig {
+        preferred_output_format,
         max_body_bytes,
         max_commit_actions,
         max_file_bytes,
@@ -1426,6 +1437,10 @@ fn gitlab_value(gitlab: &GitlabProviderConfig) -> Value {
         .put(
             "content",
             Fields::default()
+                .opt(
+                    "preferred_output_format",
+                    preferred_output_format.map(|format| format.as_str()),
+                )
                 .int("max_body_bytes", *max_body_bytes)
                 .int("max_commit_actions", *max_commit_actions)
                 .int("max_file_bytes", *max_file_bytes)

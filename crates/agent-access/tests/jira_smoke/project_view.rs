@@ -341,14 +341,7 @@ async fn jira_project_view_discovers_then_searches_across_cli_http_and_mcp() {
             before_identity + 1
         );
         let markdown = cli(&base)
-            .args([
-                "jira",
-                "project",
-                "view",
-                "PROJ",
-                "--output-format",
-                "markdown",
-            ])
+            .args(["jira", "project", "view", "PROJ"])
             .output()
             .unwrap();
         assert_success("project Markdown", &markdown);
@@ -368,7 +361,7 @@ async fn jira_project_view_discovers_then_searches_across_cli_http_and_mcp() {
             ],
         );
         assert_eq!(invoked["result"], *result);
-        let request = json!({"version":"agent-access.send.v1", "kind":"invoke", "service":"jira", "action":"project.view", "inputs":inputs});
+        let request = json!({"version":"agent-access.send.v2", "kind":"invoke", "service":"jira", "action":"project.view", "inputs":inputs});
         let sent = run(&base, &["send", "--request-json", &request.to_string()]);
         assert_eq!(sent["result"], *result);
         let client = reqwest::Client::new();

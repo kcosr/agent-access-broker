@@ -13,6 +13,7 @@ use agent_access_core::{
     AttestedIdentityProof, BrokerTokenClass, ExecutionContext, IdentityContext, IdentityFailure,
     IngressAdmission, InvocationControl, mcp::McpView,
 };
+use agent_access_provider::presentation::OutputContentFormat;
 use axum::{
     Extension,
     body::Body,
@@ -119,6 +120,7 @@ struct EndpointState {
 #[derive(Clone)]
 struct Admitted {
     view: McpView,
+    preferred_output_content_format: Option<OutputContentFormat>,
     snapshot: Arc<RuntimeSnapshot>,
     http_span: tracing::Span,
     cancellation: Arc<ExplicitCancellation>,
@@ -388,10 +390,8 @@ fn security_headers(
             ));
         }
     }
-    if uri.query().is_some()
-        || headers.contains_key("content-encoding")
-        || headers.contains_key("last-event-id")
-    {
+    query_preference(uri.query()).map_err(|()| invalid_preference())?;
+    if headers.contains_key("content-encoding") || headers.contains_key("last-event-id") {
         return Err(failure(
             StatusCode::BAD_REQUEST,
             "Unsupported MCP request encoding or replay",
@@ -443,6 +443,38 @@ fn security_headers(
     Ok(Some(token.to_owned()))
 }
 
+// Match the literal query, without percent/form decoding. There is one optional
+// control, so aliases, duplicate keys, extra fields and empty values are errors.
+fn query_preference(query: Option<&str>) -> Result<Option<OutputContentFormat>, ()> {
+    match query {
+        None => Ok(None),
+        Some("preferredOutputContentFormat=markdown") => Ok(Some(OutputContentFormat::Markdown)),
+        Some("preferredOutputContentFormat=text") => Ok(Some(OutputContentFormat::Text)),
+        Some("preferredOutputContentFormat=adf") => Ok(Some(OutputContentFormat::Adf)),
+        Some("preferredOutputContentFormat=storage") => Ok(Some(OutputContentFormat::Storage)),
+        Some(_) => Err(()),
+    }
+}
+
+fn invalid_preference() -> Response {
+    failure(
+        StatusCode::BAD_REQUEST,
+        "Invalid MCP output content preference",
+    )
+}
+
+fn request_preference(request: &Request<Body>) -> Result<Option<OutputContentFormat>, ()> {
+    let original = request
+        .extensions()
+        .get::<OriginalUri>()
+        .map(|uri| &uri.0)
+        .unwrap_or_else(|| request.uri());
+    if original.query() != request.uri().query() {
+        return Err(());
+    }
+    query_preference(original.query())
+}
+
 // Parse the original, undecoded path. Axum's path parameters are intentionally
 // not used: percent encodings must never create aliases for a service connection.
 fn request_view(request: &Request<Body>) -> Option<McpView> {
@@ -451,10 +483,7 @@ fn request_view(request: &Request<Body>) -> Option<McpView> {
         .get::<OriginalUri>()
         .map(|uri| &uri.0)
         .unwrap_or_else(|| request.uri());
-    if original.query().is_some()
-        || request.uri().query().is_some()
-        || original.path() != request.uri().path()
-    {
+    if original.path() != request.uri().path() {
         return None;
     }
     if original.path() == "/mcp" {
@@ -497,6 +526,20 @@ pub(crate) async fn handle(
             .await;
         }
         return failure(StatusCode::BAD_REQUEST, "Invalid MCP endpoint path");
+    };
+    let preferred_output_content_format = match request_preference(&request) {
+        Ok(preference) => preference,
+        Err(()) if ingress.is_username() => {
+            return crate::router::admission_failure_response(
+                &state,
+                snapshot,
+                request.headers(),
+                Some(remote),
+                IdentityFailure::AssertionInvalid,
+            )
+            .await;
+        }
+        Err(()) => return invalid_preference(),
     };
     if request.headers().contains_key("trailer") {
         return if ingress.is_username() {
@@ -952,6 +995,7 @@ pub(crate) async fn handle(
     );
     let mut admitted = Admitted {
         view,
+        preferred_output_content_format,
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),

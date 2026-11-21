@@ -3995,7 +3995,12 @@ async fn cli_enforces_resource_group_exclusions_without_requiring_upstream_regis
                 .args([
                     "--url",
                     &base_url,
-                    "--no-token",
+                    "--token-value",
+                    "cli-fixture-token",
+                    "--identity-header",
+                    "X-Agent-Access-Identity-Token",
+                    "--identity-scheme",
+                    "raw",
                     "invoke",
                     "fake.echo",
                     "--input-json",
@@ -4022,6 +4027,46 @@ async fn cli_enforces_resource_group_exclusions_without_requiring_upstream_regis
         }
         stop(broker).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anonymous_cli_requires_catalog_identity_while_direct_http_remains_usable() {
+    let broker = start_fake_broker(FakeAccess::Anonymous).await;
+    let base_url = broker.public_url();
+    let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+        .args([
+            "--url",
+            &base_url,
+            "--no-token",
+            "invoke",
+            "fake.echo",
+            "--input-json",
+            r#"{"project":"TEST","message":"anonymous cli"}"#,
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    let denied: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(denied["decision"], "deny");
+    assert_eq!(denied["reasonCode"], "identity_required");
+    assert_eq!(denied["service"], "broker");
+    assert_eq!(denied["action"], "identity.authenticate");
+    assert!(denied.get("result").is_none());
+
+    let response = reqwest::Client::new()
+        .post(format!("{base_url}/v1/invoke/fake/echo"))
+        .header("X-Agent-Access-Request-Id", "anonymous-http")
+        .json(&serde_json::json!({
+            "inputs": {"project": "TEST", "message": "anonymous http"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let allowed: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(allowed["decision"], "allow");
+    assert_eq!(allowed["result"]["message"], "anonymous http");
+    stop(broker).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4179,7 +4224,12 @@ async fn cli_invokes_fake_provider_against_stubbed_broker() {
         .args([
             "--url",
             &base_url,
-            "--no-token",
+            "--token-value",
+            "cli-fixture-token",
+            "--identity-header",
+            "X-Agent-Access-Identity-Token",
+            "--identity-scheme",
+            "raw",
             "invoke",
             "fake.echo",
             "--input-json",
@@ -4223,8 +4273,8 @@ fn cli_broker_status_gets_exact_endpoint_and_prints_response() {
             "source": unavailable
         }],
         "inventoryFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        "catalogVersion": "agent-access.catalog.v2",
-        "sendSchemaVersion": "agent-access.send.v1"
+        "catalogVersion": "agent-access.catalog.v3",
+        "sendSchemaVersion": "agent-access.send.v2"
     });
     let response = expected.clone();
     let server = std::thread::spawn(move || {
@@ -4571,7 +4621,7 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     );
     let spec_catalog_json: serde_json::Value =
         serde_json::from_slice(&spec_catalog.stdout).unwrap();
-    assert_eq!(spec_catalog_json["version"], "agent-access.catalog.v2");
+    assert_eq!(spec_catalog_json["version"], "agent-access.catalog.v3");
     assert_eq!(spec_catalog_json["executionContext"], "internal");
     assert_eq!(spec_catalog_json["services"][0]["service"], "fake");
 
@@ -4650,7 +4700,7 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     let send_invoke_path = directory.join("send-invoke.json");
     std::fs::write(
         &send_invoke_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"fake","action":"echo","inputs":{"project":"TEST","message":"from send"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"fake","action":"echo","inputs":{"project":"TEST","message":"from send"}}"#,
     )
     .unwrap();
     let send_invoke = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -4681,7 +4731,7 @@ async fn cli_invokes_required_static_identity_against_stubbed_broker() {
     let send_http_path = directory.join("send-http.json");
     std::fs::write(
         &send_http_path,
-        r#"{"version":"agent-access.send.v1","kind":"http","method":"GET","route":"/v1/services/{service}","pathParams":{"service":"fake"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"http","method":"GET","route":"/v1/services/{service}","pathParams":{"service":"fake"}}"#,
     )
     .unwrap();
     let send_http = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -4760,7 +4810,7 @@ fn cli_send_stream_download_uses_runtime_catalog_and_writes_metadata() {
     std::fs::write(
         &request_path,
         serde_json::to_string(&serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "invoke",
             "service": "jira",
             "action": "attachment.download",
@@ -4847,7 +4897,7 @@ fn cli_send_upload_uses_runtime_catalog_multipart_plan() {
     std::fs::write(
         &request_path,
         serde_json::to_string(&serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "invoke",
             "service": "confluence",
             "action": "attachment.add",
@@ -4905,7 +4955,7 @@ fn cli_uses_additional_ca_cert_for_https_normal_and_streaming_clients() {
             "~/broker-ca.pem".to_string(),
         ],
     );
-    let server = spawn_https_stub(TLS_MATCH_CERT_PEM, TLS_MATCH_KEY_PEM, 2);
+    let server = spawn_https_stub(TLS_MATCH_CERT_PEM, TLS_MATCH_KEY_PEM, 3);
     rewrite_cli_config_url(&config_path, &server.base_url);
 
     let validate = Command::new(env!("CARGO_BIN_EXE_agent-access"))
@@ -4970,10 +5020,13 @@ fn cli_uses_additional_ca_cert_for_https_normal_and_streaming_clients() {
 
     let first = server.recv_request();
     let second = server.recv_request();
+    let third = server.recv_request();
     assert_eq!(first.method, "GET");
     assert_eq!(first.path, "/v1/services");
-    assert_eq!(second.method, "POST");
-    assert_eq!(second.path, "/v1/invoke/jira/attachment.download");
+    assert_eq!(second.method, "GET");
+    assert_eq!(second.path, "/v1/spec/catalog");
+    assert_eq!(third.method, "POST");
+    assert_eq!(third.path, "/v1/invoke/jira/attachment.download");
 }
 
 #[test]
@@ -5015,7 +5068,7 @@ fn cli_verify_off_allows_wrong_san_and_skips_invalid_ca_files() {
     let invalid_ca = temp.path().join("invalid-ca.pem");
     std::fs::write(&invalid_ca, "not a PEM bundle").unwrap();
     let config_path = temp.path().join("agent-access.toml");
-    let server = spawn_https_stub(TLS_MISMATCH_CERT_PEM, TLS_MISMATCH_KEY_PEM, 2);
+    let server = spawn_https_stub(TLS_MISMATCH_CERT_PEM, TLS_MISMATCH_KEY_PEM, 3);
     write_cli_tls_config(
         &config_path,
         &server.base_url,
@@ -5081,8 +5134,10 @@ fn cli_verify_off_allows_wrong_san_and_skips_invalid_ca_files() {
 
     let first = server.recv_request();
     let second = server.recv_request();
+    let third = server.recv_request();
     assert_eq!(first.path, "/v1/services");
-    assert_eq!(second.path, "/v1/invoke/jira/attachment.download");
+    assert_eq!(second.path, "/v1/spec/catalog");
+    assert_eq!(third.path, "/v1/invoke/jira/attachment.download");
 }
 
 #[test]
@@ -5316,12 +5371,12 @@ fn catalog_base(
         }
     }
     serde_json::json!({
-        "version": "agent-access.catalog.v2",
+        "version": "agent-access.catalog.v3",
         "identity": {},
         "services": services,
         "routes": routes,
         "send": {
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "catalogRequired": true
         }
     })
@@ -5458,6 +5513,7 @@ fn spawn_https_stub(cert_pem: &str, key_pem: &str, expected_requests: usize) -> 
 
 fn write_https_stub_response(stream: &mut impl Write, request: &StubHttpRequest) {
     match request.path.as_str() {
+        "/v1/spec/catalog" => write_json_response(stream, 200, download_catalog_json()),
         "/v1/services" => {
             write_json_response(
                 stream,
@@ -5713,7 +5769,8 @@ fn group_record_response(group_id: &str) -> serde_json::Value {
 /// Who may call the fake broker, and on which policy.
 #[derive(Clone, Copy, Debug)]
 enum FakeAccess {
-    /// Anonymous callers echo on project TEST with the service credential.
+    /// Anonymous callers and the authenticated CLI fixture echo on project TEST
+    /// with the service credential.
     Anonymous,
     /// As [`Self::Anonymous`], but the grant selects an all-projects resource
     /// directly and through two groups, one of which excludes the disabled
@@ -5766,8 +5823,18 @@ upload_spool_dir = {spool}
         FakeAccess::Anonymous => format!(
             r#"
 [identity]
-mode = "anonymous"
+mode = "optional"
 authority = "toml"
+
+[[identity.sources]]
+name = "cli"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "cli-fixture"
+token_refs = [{cli_token}]
 
 [policy]
 authority = "toml"
@@ -5780,19 +5847,30 @@ selector = {{ kind = "exact", value = "TEST" }}
 allowed_execution_contexts = ["default"]
 
 [[policy.grants]]
-subjects = ["group:anonymous"]
+subjects = ["group:anonymous", "user:cli-fixture"]
 service = "fake"
 actions = ["echo"]
 resources = {{ resource_ids = ["project-test"] }}
 credential_mode = "service"
-"#
+"#,
+            cli_token = secret_ref(directory, "cli-token", "cli-fixture-token"),
         ),
         FakeAccess::GroupExclusions { separate_grant } => {
             let mut section = format!(
                 r#"
 [identity]
-mode = "anonymous"
+mode = "optional"
 authority = "toml"
+
+[[identity.sources]]
+name = "cli"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "cli-fixture"
+token_refs = [{cli_token}]
 
 [policy]
 authority = "toml"
@@ -5825,18 +5903,19 @@ included_resource_ids = ["all-projects"]
 excluded_resource_ids = []
 
 [[policy.grants]]
-subjects = ["group:anonymous"]
+subjects = ["group:anonymous", "user:cli-fixture"]
 service = "fake"
 actions = ["echo"]
 resources = {{ resource_ids = ["all-projects"], resource_group_ids = ["acceptable-projects", "overlapping-projects"] }}
 credential_mode = "service"
-"#
+"#,
+                cli_token = secret_ref(directory, "cli-token", "cli-fixture-token"),
             );
             if separate_grant {
                 section.push_str(
                     r#"
 [[policy.grants]]
-subjects = ["group:anonymous"]
+subjects = ["group:anonymous", "user:cli-fixture"]
 service = "fake"
 actions = ["echo"]
 resources = { resource_ids = ["all-projects"] }

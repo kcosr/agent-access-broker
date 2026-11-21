@@ -240,38 +240,40 @@ fn cli_tls_config_defaults_to_verified_default_roots() {
     .unwrap();
     assert!(config.service.tls.verify_certificates);
     assert!(config.service.tls.additional_ca_cert_files.is_empty());
-    assert_eq!(
-        config.defaults.read_content_format,
-        ReadContentFormat::Native
-    );
-    assert_eq!(config.defaults.output_format, ResponseFormat::Json);
+    assert_eq!(config.defaults.preferred_output_content_format, None);
 }
 
 #[test]
-fn cli_defaults_parse_response_formats_and_reject_unknown_values() {
-    let config: CliConfig = toml::from_str(
-        r#"
-            [defaults]
-            read_content_format = "markdown"
-            output_format = "markdown"
-            "#,
-    )
-    .unwrap();
-    assert_eq!(
-        config.defaults.read_content_format,
-        ReadContentFormat::Markdown
-    );
-    assert_eq!(config.defaults.output_format, ResponseFormat::Markdown);
-
-    assert!(
-        toml::from_str::<CliConfig>(
-            r#"
-                [defaults]
-                read_content_format = "plain_text"
-                "#
-        )
-        .is_err()
-    );
+fn cli_defaults_parse_content_preferences_and_reject_retired_values() {
+    for format in ["markdown", "text", "adf", "storage"] {
+        let config: CliConfig = toml::from_str(&format!(
+            "[defaults]\npreferred_output_content_format = {format:?}"
+        ))
+        .unwrap();
+        assert_eq!(
+            config
+                .defaults
+                .preferred_output_content_format
+                .unwrap()
+                .as_str(),
+            format
+        );
+    }
+    for format in ["native", "plain_text", "json", "html"] {
+        assert!(
+            toml::from_str::<CliConfig>(&format!(
+                "[defaults]\npreferred_output_content_format = {format:?}"
+            ))
+            .is_err()
+        );
+    }
+    for retired in ["read_content_format", "output_format"] {
+        let error = toml::from_str::<CliConfig>(&format!("[defaults]\n{retired} = \"markdown\""))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(retired));
+        assert!(error.contains("preferred_output_content_format"));
+    }
 }
 
 #[test]

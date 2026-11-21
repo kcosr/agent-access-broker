@@ -1,17 +1,18 @@
 use crate::ExecutionContext;
+use agent_access_provider::presentation::{BodyField, OutputContentFormat};
 use agent_access_provider::{
     ActionDescriptor, ActionIo, MultipartUploadSpec, RESULT_METADATA_HEADER, ServiceDescriptor,
     ServiceSurface, is_action_name, is_service_name,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 mod imports;
 mod schema_refs;
 pub(crate) use schema_refs::relocate_local_schema_refs;
 
-pub const API_CATALOG_VERSION: &str = "agent-access.catalog.v2";
-pub const SEND_SCHEMA_VERSION: &str = "agent-access.send.v1";
+pub const API_CATALOG_VERSION: &str = "agent-access.catalog.v3";
+pub const SEND_SCHEMA_VERSION: &str = "agent-access.send.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -91,18 +92,14 @@ pub struct ApiActionSpec {
     pub response_kind: ResponseKind,
     pub exit_policy: ExitPolicy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub read_content_formats: Vec<String>,
+    pub output_content_formats: Vec<OutputContentFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_output_content_format: Option<OutputContentFormat>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_output_content_format: Option<OutputContentFormat>,
+    /// Exact locations and presence rules for the action's selected rich bodies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub response_formats: Vec<String>,
-    /// JSON pointers into the response envelope to the objects that carry a
-    /// `renderedBody` companion under a non-native `readContentFormat`; a `*`
-    /// segment matches every element of an array.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rendered_body_owners: Vec<String>,
-    /// Prefixes of `rendered_body_owners` ending at optional object fields.
-    /// Only an absent property at these prefixes may be skipped.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub optional_rendered_body_owner_prefixes: Vec<String>,
+    pub body_fields: Vec<BodyField>,
 }
 
 fn required_nullable_name<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -291,7 +288,14 @@ pub fn api_service_spec(
     let actions = descriptor
         .actions
         .iter()
-        .filter_map(|action| api_action_spec(&descriptor.service, action))
+        .filter_map(|action| {
+            let mut spec = api_action_spec(&descriptor.service, action)?;
+            crate::mcp::apply_action_output_content_preference(
+                &mut spec,
+                descriptor.preferred_output_content_format,
+            );
+            Some(spec)
+        })
         .collect::<Vec<_>>();
     Some(ApiServiceSpec {
         availability: None,
@@ -319,42 +323,14 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         _ => return None,
     };
     let sensitive_input_pointers = sensitive_input_pointers_from_schema(&action.input_schema);
-    let response_capabilities =
-        agent_access_provider::presentation::response_capabilities(action.presentation.as_ref());
-    let mut rendered_body_owners = Vec::new();
-    let mut optional_rendered_body_owner_prefixes = Vec::new();
-    let mut body_paths = Vec::new();
-    for body in action
+    let response_capabilities = agent_access_provider::presentation::response_capabilities(
+        action.presentation.as_ref(),
+        None,
+    );
+    let body_fields = action
         .presentation
-        .iter()
-        .flat_map(|presentation| presentation.embedded_bodies())
-    {
-        let pointer = format!("/result{}", body.owner_pointer());
-        let optional_prefixes = body
-            .owner_optional_prefixes()
-            .into_iter()
-            .map(|prefix| format!("/result{prefix}"))
-            .collect::<Vec<_>>();
-        for prefix in &optional_prefixes {
-            if !optional_rendered_body_owner_prefixes.contains(prefix) {
-                optional_rendered_body_owner_prefixes.push(prefix.clone());
-            }
-        }
-        body_paths.push((pointer.clone(), optional_prefixes));
-        if !rendered_body_owners.contains(&pointer) {
-            rendered_body_owners.push(pointer);
-        }
-    }
-    // A shared prefix is optional only if every path through it declares it so.
-    optional_rendered_body_owner_prefixes.retain(|prefix| {
-        body_paths.iter().all(|(pointer, optional)| {
-            !(pointer == prefix
-                || pointer
-                    .strip_prefix(prefix.as_str())
-                    .is_some_and(|suffix| suffix.starts_with('/')))
-                || optional.contains(prefix)
-        })
-    });
+        .as_ref()
+        .map_or_else(Vec::new, |presentation| presentation.body_fields());
     Some(ApiActionSpec {
         scoped_mcp_name: action
             .raw_scoped_mcp_name()
@@ -376,20 +352,13 @@ fn api_action_spec(service: &str, action: &ActionDescriptor) -> Option<ApiAction
         io,
         response_kind,
         exit_policy,
-        read_content_formats: response_capabilities
-            .read_content_formats
+        output_content_formats: response_capabilities
+            .output_content_formats
             .unwrap_or_default()
-            .iter()
-            .map(|format| (*format).to_string())
-            .collect(),
-        response_formats: response_capabilities
-            .response_formats
-            .unwrap_or_default()
-            .iter()
-            .map(|format| (*format).to_string())
-            .collect(),
-        rendered_body_owners,
-        optional_rendered_body_owner_prefixes,
+            .to_vec(),
+        native_output_content_format: response_capabilities.native_output_content_format,
+        default_output_content_format: response_capabilities.default_output_content_format,
+        body_fields,
     })
 }
 
@@ -768,14 +737,7 @@ fn action_request_body_content(action: &ApiActionSpec) -> Value {
 fn invoke_request_schema(action: &ApiActionSpec) -> Value {
     let mut properties =
         serde_json::Map::from_iter([("inputs".to_string(), action.input_schema.clone())]);
-    properties.insert(
-        "readContentFormat".to_string(),
-        invoke_format_schema(&action.read_content_formats, "native"),
-    );
-    properties.insert(
-        "responseFormat".to_string(),
-        invoke_format_schema(&action.response_formats, "json"),
-    );
+    add_invoke_content_properties(&mut properties, action);
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -783,11 +745,24 @@ fn invoke_request_schema(action: &ApiActionSpec) -> Value {
     })
 }
 
-fn invoke_format_schema(advertised: &[String], default: &str) -> Value {
-    if advertised.is_empty() {
-        json!({ "enum": [default] })
-    } else {
-        json!({ "enum": advertised })
+fn add_invoke_content_properties(properties: &mut Map<String, Value>, action: &ApiActionSpec) {
+    properties.insert(
+        "preferredOutputContentFormat".to_string(),
+        json!({
+            "type": "string",
+            "enum": ["markdown", "text", "adf", "storage"],
+            "description": "Preferred output body format when outputContentFormat is omitted. An unsupported preference selects the action's native format; ignored by actions without rich bodies."
+        }),
+    );
+    if !action.output_content_formats.is_empty() {
+        properties.insert(
+            "outputContentFormat".to_string(),
+            json!({
+                "type": "string",
+                "enum": action.output_content_formats,
+                "description": "Exact format of every returned rich body. Unsupported selections fail before execution. When omitted, the client preference, service preference, or Markdown is selected, with native fallback when unsupported."
+            }),
+        );
     }
 }
 
@@ -864,8 +839,8 @@ pub fn generic_send_schema() -> Value {
                     "files": { "type": "array", "items": { "$ref": "#/definitions/fileDescriptor" } },
                     "secretSources": { "$ref": "#/definitions/secretSources" },
                     "responseMode": { "enum": ["json", "stream"], "default": "json" },
-                    "readContentFormat": { "enum": ["native", "markdown", "text"] },
-                    "responseFormat": { "enum": ["json", "markdown"] },
+                    "outputContentFormat": { "type": "string", "enum": ["markdown", "text", "adf", "storage"] },
+                    "preferredOutputContentFormat": { "type": "string", "enum": ["markdown", "text", "adf", "storage"] },
                     "output": { "$ref": "#/definitions/output" },
                     "metadataOutput": { "$ref": "#/definitions/metadataOutput" }
                 }
@@ -4047,14 +4022,7 @@ fn invoke_send_variant(service: &str, action: &ApiActionSpec) -> Value {
     if let ActionIo::MultipartUpload { plan } = &action.io {
         properties.insert("files".to_string(), multipart_upload_files_schema(plan));
     }
-    properties.insert(
-        "readContentFormat".to_string(),
-        invoke_format_schema(&action.read_content_formats, "native"),
-    );
-    properties.insert(
-        "responseFormat".to_string(),
-        invoke_format_schema(&action.response_formats, "json"),
-    );
+    add_invoke_content_properties(&mut properties, action);
     let mut schema = json!({
         "type": "object",
         "additionalProperties": false,

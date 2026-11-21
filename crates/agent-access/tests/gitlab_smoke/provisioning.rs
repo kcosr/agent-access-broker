@@ -265,7 +265,7 @@ async fn provisioning_project_token_cli_http_send_lifecycle_and_private_delivery
         ISSUED
     );
     let send_path = fixture.dir.path().join("request.json");
-    std::fs::write(&send_path, json!({"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.access_token.create","inputs":{"project":"sip/service","name":"reviewer","scopes":["api"],"accessLevel":30,"expiresAt":expiry()}}).to_string()).unwrap();
+    std::fs::write(&send_path, json!({"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"project.access_token.create","inputs":{"project":"sip/service","name":"reviewer","scopes":["api"],"accessLevel":30,"expiresAt":expiry()}}).to_string()).unwrap();
     let send = gitlab_cli(&fixture.base_url)
         .args(["send", "--request-file", send_path.to_str().unwrap()])
         .output()

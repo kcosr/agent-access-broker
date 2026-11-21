@@ -244,8 +244,12 @@ pub(crate) async fn action_describe(
     {
         bail!("unsupported broker catalog version");
     }
-    let catalog: ApiCatalog = serde_json::from_value(catalog_value.clone())
+    let mut catalog: ApiCatalog = crate::parse_runtime_catalog(catalog_value.clone())
         .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
+    agent_access_core::mcp::apply_output_content_preference(
+        &mut catalog,
+        settings.preferred_output_content_format,
+    );
     let entry = catalog.services.iter().find(|candidate| candidate.service == service && candidate.surface == "invoke")
         .and_then(|service| service.actions.iter().find(|candidate| candidate.action == action))
         .ok_or_else(|| InputError("action detail is unavailable in the caller-visible catalog; request service capabilities or refresh discovery".into()))?;
@@ -264,6 +268,7 @@ pub(crate) async fn action_describe(
         .and_then(|actions| actions.iter().find(|value| value["action"] == action))
         .cloned()
         .context("invalid broker catalog action")?;
+    agent_access_core::mcp::merge_action_content_detail(&mut detail, entry);
     // A helper can perform several broker reads. Rebuild from this fresh
     // catalog so the selected name and schema share one snapshot.
     let registry = agent_access_core::mcp::ToolRegistry::build(
@@ -302,8 +307,7 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".into(),
             identity_scheme: "raw".into(),
             allow_insecure_broker_http: false,
-            read_content_format: Default::default(),
-            output_format: Default::default(),
+            preferred_output_content_format: None,
         }
     }
     fn service(surface: &str) -> Value {
@@ -321,7 +325,7 @@ mod tests {
         action["responseKind"] = json!("response_envelope");
         action["exitPolicy"] = json!("invoke_decision");
         action["sensitiveOutputPointers"] = json!(["/result/token"]);
-        action["responseFormats"] = json!(["json"]);
+        action["outputContentFormats"] = json!([]);
         let mut catalog =
             serde_json::to_value(agent_access_core::empty_catalog(json!({}))).unwrap();
         catalog["services"] = json!([{"scopedMcpReady":true,"service":raw["service"],"displayName":"GitLab","surface":"invoke","availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":["repository"],"actions":[action]}]);
@@ -374,6 +378,47 @@ mod tests {
         for request in server.received_requests().await.unwrap() {
             assert!(request.url.query().is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn describe_reports_connection_preference_without_changing_canonical_capabilities() {
+        use agent_access_provider::presentation::{BodyField, OutputContentFormat};
+        let server = MockServer::start().await;
+        let raw = service("invoke");
+        let mut canonical = catalog(&raw);
+        let action = &mut canonical["services"][0]["actions"][0];
+        action["outputContentFormats"] = json!(["markdown", "text"]);
+        action["nativeOutputContentFormat"] = json!("markdown");
+        action["defaultOutputContentFormat"] = json!("text");
+        action["bodyFields"] = json!([BodyField::new("/result", "description").nullable()]);
+        mount(&server, "/v1/services/gitlab", 200, raw).await;
+        mount(&server, "/v1/spec/catalog", 200, canonical.clone()).await;
+        for (preference, expected) in [
+            (None, "text"),
+            (Some(OutputContentFormat::Storage), "markdown"),
+            (Some(OutputContentFormat::Text), "text"),
+        ] {
+            let mut connection = settings(&server);
+            connection.preferred_output_content_format = preference;
+            let detail = action_describe(
+                &connection,
+                &agent_access_core::mcp::McpView::Aggregate,
+                "gitlab",
+                "repo.fetch",
+            )
+            .await
+            .unwrap();
+            assert_eq!(detail["defaultOutputContentFormat"], expected);
+            assert_eq!(detail["nativeOutputContentFormat"], "markdown");
+            assert_eq!(detail["outputContentFormats"], json!(["markdown", "text"]));
+            let exact = &detail["mcpTool"]["inputSchema"]["properties"]["outputContentFormat"];
+            assert!(exact.get("default").is_none());
+            assert!(exact["description"].as_str().unwrap().contains(expected));
+        }
+        assert_eq!(
+            canonical["services"][0]["actions"][0]["defaultOutputContentFormat"],
+            "text"
+        );
     }
 
     #[tokio::test]

@@ -100,7 +100,9 @@ use crate::{
 };
 use crate::{ConfigError, HostConfigError, load_secret_ref_value};
 use agent_access_provider::host::{ContractViolation, HookContext, with_provider_context};
-use agent_access_provider::presentation::ActionPresentation;
+use agent_access_provider::presentation::{
+    OutputContentFormat, ResolvedPresentation, ResponseOptions,
+};
 use agent_access_provider::*;
 use agent_access_provider::{
     ActionDescriptor, CredentialDescriptor, Decision, LookupRequirement, ReasonCode,
@@ -733,10 +735,18 @@ pub struct CapabilityBundle {
 pub struct InvokeRequest {
     #[serde(default = "empty_json_object")]
     pub inputs: Value,
-    #[serde(default)]
-    pub read_content_format: agent_access_provider::presentation::ReadContentFormat,
-    #[serde(default)]
-    pub response_format: agent_access_provider::presentation::ResponseFormat,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_content_format"
+    )]
+    pub output_content_format: Option<OutputContentFormat>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_content_format"
+    )]
+    pub preferred_output_content_format: Option<OutputContentFormat>,
     #[serde(skip)]
     pub body_parts: Vec<BrokerBodyPart>,
 }
@@ -745,18 +755,25 @@ impl InvokeRequest {
     pub fn new(inputs: Value) -> Self {
         Self {
             inputs,
-            read_content_format: agent_access_provider::presentation::ReadContentFormat::Native,
-            response_format: agent_access_provider::presentation::ResponseFormat::Json,
+            output_content_format: None,
+            preferred_output_content_format: None,
             body_parts: Vec::new(),
         }
     }
 
-    fn response_options(&self) -> agent_access_provider::presentation::ResponseOptions {
-        agent_access_provider::presentation::ResponseOptions::new(
-            self.read_content_format,
-            self.response_format,
+    fn response_options(&self) -> ResponseOptions {
+        ResponseOptions::new(
+            self.output_content_format,
+            self.preferred_output_content_format,
         )
     }
+}
+
+fn present_content_format<'de, D>(deserializer: D) -> Result<Option<OutputContentFormat>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    OutputContentFormat::deserialize(deserializer).map(Some)
 }
 
 fn empty_json_object() -> Value {
@@ -1625,21 +1642,26 @@ fn preserve_result_metadata_on_error(
 }
 
 fn present_provider_outcome(
-    presentation: Option<&ActionPresentation>,
-    options: agent_access_provider::presentation::ResponseOptions,
+    presentation: &ResolvedPresentation,
     max_body_bytes: u64,
     max_result_bytes: u64,
     outcome: Result<ProviderResult, ProviderError>,
 ) -> Result<ProviderResult, ProviderError> {
     match outcome {
         Ok(mut provider_result) => {
-            if let Err(error) = agent_access_provider::presentation::present_result(
+            let recovery_receipt = provider_result.presentation_recovery_receipt.take();
+            if let Err(mut error) = agent_access_provider::presentation::present_result(
                 presentation,
                 &mut provider_result.result,
-                options,
                 max_body_bytes,
                 max_result_bytes,
             ) {
+                if let Some(receipt) = recovery_receipt {
+                    if receipt.status() == agent_access_provider::MutationStatus::Applied {
+                        error.message = "The mutation completed, but its response could not be produced. Do not repeat the operation.".to_owned();
+                    }
+                    error = error.with_mutation_receipt(receipt);
+                }
                 return Err(preserve_result_metadata_on_error(
                     error,
                     provider_result.audit,
@@ -1651,7 +1673,14 @@ fn present_provider_outcome(
             Ok(provider_result)
         }
         Err(mut provider_error)
-            if provider_error.decision() == Decision::Allow && provider_error.result.is_some() =>
+            if provider_error.decision() == Decision::Allow
+                && provider_error.result.is_some()
+                // A compact outcome receipt is not a successful body payload,
+                // even when its provider outcome uses the allow decision.
+                && !provider_error
+                    .result
+                    .as_deref()
+                    .is_some_and(|result| result.get("mutationStatus").is_some()) =>
         {
             let mut result = *provider_error
                 .result
@@ -1660,7 +1689,6 @@ fn present_provider_outcome(
             if let Err(error) = agent_access_provider::presentation::present_result(
                 presentation,
                 &mut result,
-                options,
                 max_body_bytes,
                 max_result_bytes,
             ) {
@@ -2021,7 +2049,8 @@ pub struct PreparedInvocation {
     /// are consumed separately after admission.
     body_parts: Vec<BrokerBodyPart>,
     state: Option<ProviderState>,
-    response_options: agent_access_provider::presentation::ResponseOptions,
+    presentation: ResolvedPresentation,
+    presentation_body_limit: u64,
     body_part_specs: Vec<BrokerBodyPartSpec>,
     finalize_context: FinalizeContext,
 }
@@ -5027,38 +5056,43 @@ impl BrokerRuntime {
         // Every later outcome records the declared inputs' supplied values.
         let audit_inputs = capture_audit_inputs(&action_descriptor.audit_inputs, &request.inputs);
         let upstream_resource_ownership = action_descriptor.upstream_resource_ownership;
-        if response_options != agent_access_provider::presentation::ResponseOptions::default()
-            && let Err(error) = agent_access_provider::presentation::validate_response_options(
-                action_descriptor.presentation.as_ref(),
-                response_options,
-            )
-        {
-            return Err(Box::new(owned::PreparationFailure::new(
-                FinalizeContext {
-                    admission: admission_audit,
-                    search_authorization: None,
-                    location_authorization: None,
-                    command: None,
-                    agent_request_id,
-                    broker_request_id,
-                    policy_generation,
-                    identity,
-                    service,
-                    action,
-                    upstream_resource_ownership: None,
-                    resource_scopes: ResourceScopes::new(),
-                    credential_mode: None,
-                    matched_grant: None,
-                    source,
-                    execution_context: Some(execution_context.clone()),
-                    redact_error_resource_scopes: false,
-                    personal_lookup_connection: None,
-                    audit_inputs: audit_inputs.clone(),
-                    started,
-                },
-                Err(error),
-            )));
-        }
+        let presentation = match agent_access_provider::presentation::resolve_response_options(
+            action_descriptor.presentation,
+            service_descriptor
+                .as_ref()
+                .and_then(|service| service.preferred_output_content_format),
+            response_options,
+        ) {
+            Ok(presentation) => presentation,
+            Err(error) => {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    FinalizeContext {
+                        admission: admission_audit,
+                        search_authorization: None,
+                        location_authorization: None,
+                        command: None,
+                        agent_request_id,
+                        broker_request_id,
+                        policy_generation,
+                        identity,
+                        service,
+                        action,
+                        upstream_resource_ownership: None,
+                        resource_scopes: ResourceScopes::new(),
+                        credential_mode: None,
+                        matched_grant: None,
+                        source,
+                        execution_context: Some(execution_context.clone()),
+                        redact_error_resource_scopes: false,
+                        personal_lookup_connection: None,
+                        audit_inputs: audit_inputs.clone(),
+                        started,
+                    },
+                    Err(error),
+                )));
+            }
+        };
+        let presentation_body_limit = self.presentation_body_limit(&service);
 
         let lookup_scopes_before_policy = action_descriptor.lookup.before_policy();
         let containment_scope = self.action_containment_scope(&service, &action);
@@ -5874,7 +5908,8 @@ impl BrokerRuntime {
             request: admitted,
             body_parts: request.body_parts,
             state: provider_state,
-            response_options,
+            presentation,
+            presentation_body_limit,
             body_part_specs: Vec::new(),
             finalize_context: FinalizeContext {
                 admission: admission_audit,
@@ -5987,7 +6022,8 @@ impl BrokerRuntime {
             request,
             body_parts: _,
             state,
-            response_options,
+            presentation,
+            presentation_body_limit,
             body_part_specs: _,
             finalize_context,
         } = prepared;
@@ -6128,21 +6164,13 @@ impl BrokerRuntime {
             result
         } else {
             present_provider_outcome(
-                self.action_presentation(&service, &action).as_ref(),
-                response_options,
-                self.presentation_body_limit(&service),
+                &presentation,
+                presentation_body_limit,
                 self.config.limits.max_upstream_response_bytes,
                 result,
             )
         };
         (finalize_context, result)
-    }
-
-    fn action_presentation(&self, service: &str, action: &str) -> Option<ActionPresentation> {
-        self.services
-            .get(service)
-            .and_then(|descriptor| descriptor.action(action))
-            .and_then(|action| action.presentation)
     }
 
     /// The domain reasons `service`'s native backend registered; none for an
@@ -10907,3 +10935,7 @@ pub fn fake_service_credential(token_ref: impl Into<String>) -> CredentialConfig
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime/presentation_tests.rs"]
+mod presentation_tests;

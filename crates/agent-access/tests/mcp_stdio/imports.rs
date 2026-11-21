@@ -635,7 +635,7 @@ async fn exercise_import(openapi: bool) {
     let send = write_request(
         directory.path(),
         "send.json",
-        json!({"version":"agent-access.send.v1","kind":"invoke","service":"imported","action":"item.update","inputs":inputs(json!({"message":"write"})),"output":{"type":"file","path":output}}),
+        json!({"version":"agent-access.send.v2","kind":"invoke","service":"imported","action":"item.update","inputs":inputs(json!({"message":"write"})),"output":{"type":"file","path":output}}),
     );
     let receipt = run(&agent_config, &["send", "--request-file", &send]);
     assert!(!receipt.to_string().contains(PAYLOAD));
@@ -661,7 +661,7 @@ async fn exercise_import(openapi: bool) {
         let request = write_request(
             directory.path(),
             "invalid-send.json",
-            json!({"version":"agent-access.send.v1","kind":"invoke","service":"imported","action":"item.update","inputs":inputs}),
+            json!({"version":"agent-access.send.v2","kind":"invoke","service":"imported","action":"item.update","inputs":inputs}),
         );
         let denied = command(&agent_config)
             .args(["send", "--request-file", &request])

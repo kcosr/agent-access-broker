@@ -24,7 +24,11 @@ pub(super) fn with_guidance(
         .expect("documentation for each native action");
     let mut fields = Map::new();
     for (key, value) in additions {
-        let value = if EXAMPLE_KEYS.contains(&key.as_str()) {
+        let value = if key == "presentation" && action.presentation.is_none() {
+            // Page and comment reads stay available when their content sources
+            // are disabled, but then have no exact output selector.
+            json!("The configured action returns structured JSON metadata without a rich body.")
+        } else if EXAMPLE_KEYS.contains(&key.as_str()) {
             let examples = value
                 .as_array()
                 .expect("documentation example array")

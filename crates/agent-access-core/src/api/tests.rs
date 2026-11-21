@@ -1,25 +1,32 @@
 use super::*;
 
-#[test]
-fn optional_rendered_body_prefixes_follow_declarations_and_required_paths_win() {
-    use agent_access_provider::presentation::{
-        ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, ReadContentFormat,
-        RenderBudget, RenderError, RenderedBody,
-    };
+use agent_access_provider::presentation::{
+    ActionPresentation, BodyPathSegment, EmbeddedBody, EmbeddedBodyCodec, OutputContentFormat,
+    RenderBudget, RenderError, SelectedContent,
+};
 
-    struct EmptyBody;
-    impl EmbeddedBodyCodec for EmptyBody {
-        fn render(
-            &self,
-            _: &serde_json::Map<String, Value>,
-            _: ReadContentFormat,
-            _: u64,
-            _: &mut RenderBudget,
-        ) -> Result<Option<RenderedBody>, RenderError> {
-            Ok(None)
-        }
+struct ApiTestBody;
+impl EmbeddedBodyCodec for ApiTestBody {
+    fn supported_formats(&self) -> &'static [OutputContentFormat] {
+        &[
+            OutputContentFormat::Markdown,
+            OutputContentFormat::Text,
+            OutputContentFormat::Adf,
+        ]
     }
+    fn select(
+        &self,
+        _: &Value,
+        _: OutputContentFormat,
+        _: u64,
+        _: &mut RenderBudget,
+    ) -> Result<Option<SelectedContent>, RenderError> {
+        Ok(None)
+    }
+}
 
+#[test]
+fn selected_body_metadata_retains_exact_paths_presence_and_predicates() {
     const BODIES: &[EmbeddedBody] = &[
         EmbeddedBody::new(
             &[
@@ -27,68 +34,75 @@ fn optional_rendered_body_prefixes_follow_declarations_and_required_paths_win() 
                 BodyPathSegment::Field("items"),
                 BodyPathSegment::Each,
             ],
-            &EmptyBody,
-        ),
+            "body",
+            &ApiTestBody,
+        )
+        .optional()
+        .nullable(),
         EmbeddedBody::new(
             &[
-                BodyPathSegment::OptionalField("page"),
-                BodyPathSegment::Field("extras"),
+                BodyPathSegment::Field("customFields"),
                 BodyPathSegment::Each,
             ],
-            &EmptyBody,
-        ),
+            "value",
+            &ApiTestBody,
+        )
+        .nullable()
+        .owner_equals(&[("status", "supported"), ("type", "adf")]),
         EmbeddedBody::new(
             &[
                 BodyPathSegment::Field("pageRequired"),
                 BodyPathSegment::Each,
-                BodyPathSegment::OptionalField("a/b~c"),
+                BodyPathSegment::OptionalNullableField("a/b~c"),
             ],
-            &EmptyBody,
+            "content",
+            &ApiTestBody,
         ),
     ];
     let descriptor = ActionDescriptor::new("view", "View bodies", json!({"type":"object"}))
-        .presentation(Some(ActionPresentation::new(BODIES, None)));
+        .presentation(Some(ActionPresentation::new(
+            BODIES,
+            &[
+                OutputContentFormat::Markdown,
+                OutputContentFormat::Text,
+                OutputContentFormat::Adf,
+            ],
+            OutputContentFormat::Adf,
+        )));
     let action = api_action_spec("example", &descriptor).unwrap();
-    assert_eq!(
-        action.rendered_body_owners,
-        [
-            "/result/page/items/*",
-            "/result/page/extras/*",
-            "/result/pageRequired/*/a~1b~0c"
-        ]
-    );
     let wire = serde_json::to_value(&action).unwrap();
     assert_eq!(
-        wire["optionalRenderedBodyOwnerPrefixes"],
-        json!(["/result/page", "/result/pageRequired/*/a~1b~0c"])
+        wire["bodyFields"],
+        json!([
+            {"ownerPath":"/result/page/items/*","optionalOwnerPrefixes":["/result/page"],"nullableOwnerPrefixes":[],"field":"body","optional":true,"nullable":true},
+            {"ownerPath":"/result/customFields/*","optionalOwnerPrefixes":[],"nullableOwnerPrefixes":[],"field":"value","optional":false,"nullable":true,"ownerEquals":{"status":"supported","type":"adf"}},
+            {"ownerPath":"/result/pageRequired/*/a~1b~0c","optionalOwnerPrefixes":["/result/pageRequired/*/a~1b~0c"],"nullableOwnerPrefixes":["/result/pageRequired/*/a~1b~0c"],"field":"content","optional":false,"nullable":false}
+        ])
     );
+    assert_eq!(
+        wire["outputContentFormats"],
+        json!(["markdown", "text", "adf"])
+    );
+    assert_eq!(wire["nativeOutputContentFormat"], "adf");
+    assert_eq!(wire["defaultOutputContentFormat"], "markdown");
     assert_eq!(
         serde_json::from_value::<ApiActionSpec>(wire).unwrap(),
         action
     );
+    crate::mcp::validate_catalog_action("example", &action).unwrap();
 
-    const OVERLAPPING_BODIES: &[EmbeddedBody] = &[
-        EmbeddedBody::new(
-            &[
-                BodyPathSegment::OptionalField("page"),
-                BodyPathSegment::Each,
-            ],
-            &EmptyBody,
-        ),
-        EmbeddedBody::new(
-            &[BodyPathSegment::Field("page"), BodyPathSegment::Each],
-            &EmptyBody,
-        ),
-    ];
-    let required = descriptor.presentation(Some(ActionPresentation::new(OVERLAPPING_BODIES, None)));
-    let required = api_action_spec("example", &required).unwrap();
-    assert_eq!(required.rendered_body_owners, ["/result/page/*"]);
-    assert!(required.optional_rendered_body_owner_prefixes.is_empty());
-    assert!(
-        serde_json::to_value(required)
-            .unwrap()
-            .get("optionalRenderedBodyOwnerPrefixes")
-            .is_none()
+    let service = ServiceDescriptor::new("example", "Example")
+        .with_actions(vec![descriptor])
+        .with_preferred_output_content_format(OutputContentFormat::Text);
+    let spec = api_service_spec(&service, true).unwrap();
+    assert_eq!(
+        spec.actions[0].default_output_content_format,
+        Some(OutputContentFormat::Text)
+    );
+    let unsupported = service.with_preferred_output_content_format(OutputContentFormat::Storage);
+    assert_eq!(
+        api_service_spec(&unsupported, true).unwrap().actions[0].default_output_content_format,
+        Some(OutputContentFormat::Adf)
     );
 }
 
@@ -882,7 +896,7 @@ fn service_projection_recursively_marks_explicit_sensitive_inputs() {
 }
 
 #[test]
-fn generated_send_schema_uses_required_version() {
+fn generated_send_schema_uses_required_version_and_concrete_formats() {
     let schema = generic_send_schema();
     let variants = schema["oneOf"].as_array().unwrap();
     assert!(
@@ -890,181 +904,153 @@ fn generated_send_schema_uses_required_version() {
             .iter()
             .all(|variant| variant["properties"]["version"]["const"] == SEND_SCHEMA_VERSION)
     );
-    let invoke = variants
-        .iter()
-        .find(|variant| variant["properties"]["kind"]["const"] == "invoke")
-        .unwrap();
-    assert_eq!(
-        invoke["properties"]["readContentFormat"]["enum"],
-        json!(["native", "markdown", "text"])
-    );
-    assert_eq!(
-        invoke["properties"]["responseFormat"]["enum"],
-        json!(["json", "markdown"])
-    );
+    assert_eq!(SEND_SCHEMA_VERSION, "agent-access.send.v2");
+    for field in ["outputContentFormat", "preferredOutputContentFormat"] {
+        assert_eq!(
+            variants[0]["properties"][field]["enum"],
+            json!(["markdown", "text", "adf", "storage"])
+        );
+        assert!(
+            variants[1]["properties"].get(field).is_none(),
+            "HTTP send routes have no invoke presentation controls"
+        );
+    }
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let base =
+        json!({"version":SEND_SCHEMA_VERSION,"kind":"invoke","service":"example","action":"view"});
+    assert!(validator.is_valid(&base));
+    for field in ["outputContentFormat", "preferredOutputContentFormat"] {
+        for invalid in [Value::Null, json!("native"), json!("json"), json!(17)] {
+            let mut request = base.clone();
+            request[field] = invalid;
+            assert!(!validator.is_valid(&request), "{request}");
+        }
+    }
+    for retired in ["readContentFormat", "responseFormat"] {
+        let mut request = base.clone();
+        request[retired] = json!("markdown");
+        assert!(!validator.is_valid(&request));
+    }
 }
 
 #[test]
-fn invoke_formats_project_into_openapi_and_send_schema() {
-    let action = ApiActionSpec {
-        listing_of: None,
-        companion_read_actions: Vec::new(),
-        scoped_mcp_name: None,
-        documentation: None,
-        read_only: false,
-        action: "issue.view".to_string(),
-        description: "View issue".to_string(),
-        required_scope_types: vec!["project".to_string()],
-        credential_modes: vec!["service".to_string()],
-        lookup_required: false,
-        upstream_resource_ownership: None,
-        input_schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": { "issue": { "type": "string" } }
-        }),
-        sensitive_input_pointers: Vec::new(),
-        sensitive_output_pointers: Vec::new(),
-        io: ActionIo::Json,
-        response_kind: ResponseKind::ResponseEnvelope,
-        exit_policy: ExitPolicy::InvokeDecision,
-        read_content_formats: vec![
-            "native".to_string(),
-            "markdown".to_string(),
-            "text".to_string(),
-        ],
-        response_formats: vec!["json".to_string(), "markdown".to_string()],
-        rendered_body_owners: Vec::new(),
-        optional_rendered_body_owner_prefixes: Vec::new(),
-    };
+fn invoke_content_formats_project_into_openapi_and_send_without_exact_defaults() {
+    const BODIES: &[EmbeddedBody] =
+        &[EmbeddedBody::new(&[], "description", &ApiTestBody).nullable()];
+    let action = ActionDescriptor::new("issue.view", "View issue", json!({"type":"object"}))
+        .presentation(Some(ActionPresentation::new(
+            BODIES,
+            &[
+                OutputContentFormat::Markdown,
+                OutputContentFormat::Text,
+                OutputContentFormat::Adf,
+            ],
+            OutputContentFormat::Adf,
+        )));
+    let service = ServiceDescriptor::new("jira", "Jira").with_actions(vec![action]);
     let mut catalog = empty_catalog(json!({}));
-    catalog.services.push(ApiServiceSpec {
-        availability: None,
-        scoped_mcp_ready: true,
-        service: "jira".to_string(),
-        display_name: "Jira".to_string(),
-        surface: "invoke".to_string(),
-        scope_types: vec!["project".to_string()],
-        resource_scopes: BTreeMap::new(),
-        actions: vec![action],
-    });
-
+    catalog
+        .services
+        .push(api_service_spec(&service, true).unwrap());
     let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
     let request = &openapi["paths"]["/v1/invoke/jira/issue.view"]["post"]["requestBody"]["content"]
         ["application/json"]["schema"];
-    assert_eq!(
-        request["properties"]["readContentFormat"]["enum"],
-        json!(["native", "markdown", "text"])
-    );
-    assert_eq!(
-        request["properties"]["responseFormat"]["enum"],
-        json!(["json", "markdown"])
-    );
-    assert_eq!(request["additionalProperties"], false);
-
     let send = send_schema_from_catalog(&catalog);
     let variant = &send["oneOf"][0];
-    assert_eq!(
-        variant["properties"]["readContentFormat"]["enum"],
-        json!(["native", "markdown", "text"])
+    for schema in [request, variant] {
+        assert_eq!(
+            schema["properties"]["outputContentFormat"]["enum"],
+            json!(["markdown", "text", "adf"])
+        );
+        assert_eq!(
+            schema["properties"]["preferredOutputContentFormat"]["enum"],
+            json!(["markdown", "text", "adf", "storage"])
+        );
+        for field in ["outputContentFormat", "preferredOutputContentFormat"] {
+            assert_eq!(schema["properties"][field]["type"], "string");
+            assert!(schema["properties"][field].get("default").is_none());
+        }
+        assert!(schema["properties"].get("readContentFormat").is_none());
+        assert!(schema["properties"].get("responseFormat").is_none());
+        assert_eq!(schema["additionalProperties"], false);
+    }
+    let validator = jsonschema::validator_for(request).unwrap();
+    assert!(
+        validator.is_valid(&json!({"inputs":{},"preferredOutputContentFormat":"storage"})),
+        "unsupported preferences are valid"
     );
-    assert_eq!(
-        variant["properties"]["responseFormat"]["enum"],
-        json!(["json", "markdown"])
+    assert!(
+        !validator.is_valid(&json!({"inputs":{},"outputContentFormat":"storage"})),
+        "unsupported exact selections are invalid"
     );
+    assert!(!validator.is_valid(&json!({"inputs":{},"preferredOutputContentFormat":null})));
 }
 
 #[test]
-fn non_advertising_actions_accept_only_explicit_default_response_formats() {
-    let base = ApiActionSpec {
-        listing_of: None,
-        companion_read_actions: Vec::new(),
-        scoped_mcp_name: None,
-        documentation: None,
-        read_only: false,
-        action: "issue.delete".to_string(),
-        description: "Delete issue".to_string(),
-        required_scope_types: vec!["project".to_string()],
-        credential_modes: vec!["service".to_string()],
-        lookup_required: false,
-        upstream_resource_ownership: None,
-        input_schema: json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": { "issue": { "type": "string" } }
-        }),
-        sensitive_input_pointers: Vec::new(),
-        sensitive_output_pointers: Vec::new(),
-        io: ActionIo::Json,
-        response_kind: ResponseKind::ResponseEnvelope,
-        exit_policy: ExitPolicy::InvokeDecision,
-        read_content_formats: Vec::new(),
-        response_formats: Vec::new(),
-        rendered_body_owners: Vec::new(),
-        optional_rendered_body_owner_prefixes: Vec::new(),
-    };
-    let mut upload = base.clone();
-    upload.action = "attachment.add".to_string();
+fn body_free_json_upload_and_download_actions_accept_preferences_but_not_exact_selections() {
+    let base = ActionDescriptor::new("issue.delete", "Delete issue", json!({"type":"object"}));
+    let mut json_action = api_action_spec("jira", &base).unwrap();
+    json_action.io = ActionIo::Json;
+    let mut upload = json_action.clone();
+    upload.action = "attachment.add".into();
     upload.io = descriptor_io("jira", "attachment.add");
-    let mut download = base.clone();
-    download.action = "attachment.download".to_string();
+    let mut download = json_action.clone();
+    download.action = "attachment.download".into();
     download.io = descriptor_io("jira", "attachment.download");
     download.response_kind = ResponseKind::RawStream;
     download.exit_policy = ExitPolicy::RawStream;
-
     let mut catalog = empty_catalog(json!({}));
-    catalog.services.push(ApiServiceSpec {
-        availability: None,
-        scoped_mcp_ready: true,
-        service: "jira".to_string(),
-        display_name: "Jira".to_string(),
-        surface: "invoke".to_string(),
-        scope_types: vec!["project".to_string()],
-        resource_scopes: BTreeMap::new(),
-        actions: vec![base, upload, download],
-    });
-
-    let serialized = serde_json::to_value(&catalog).unwrap();
-    for action in serialized["services"][0]["actions"].as_array().unwrap() {
-        assert!(action.get("readContentFormats").is_none());
-        assert!(action.get("responseFormats").is_none());
+    let mut service = api_service_spec(
+        &ServiceDescriptor::new("jira", "Jira").with_actions(vec![base]),
+        true,
+    )
+    .unwrap();
+    service.actions = vec![json_action, upload, download];
+    catalog.services.push(service);
+    for action in &catalog.services[0].actions {
+        let wire = serde_json::to_value(action).unwrap();
+        for field in [
+            "outputContentFormats",
+            "nativeOutputContentFormat",
+            "defaultOutputContentFormat",
+            "bodyFields",
+        ] {
+            assert!(wire.get(field).is_none());
+        }
     }
-
     let openapi = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
-    let json_request = &openapi["paths"]["/v1/invoke/jira/issue.delete"]["post"]["requestBody"]["content"]
-        ["application/json"]["schema"];
-    assert_default_invoke_formats(json_request);
-
-    let upload_request = &openapi["paths"]["/v1/invoke/jira/attachment.add"]["post"]["requestBody"]
-        ["content"]["multipart/form-data"]["schema"]["properties"]["request"];
-    assert_eq!(upload_request["contentMediaType"], "application/json");
-    assert_default_invoke_formats(&upload_request["contentSchema"]);
-
-    let stream_request = &openapi["paths"]["/v1/invoke/jira/attachment.download"]["post"]["requestBody"]
-        ["content"]["application/json"]["schema"];
-    assert_default_invoke_formats(stream_request);
-
+    for (action, media, extra) in [
+        ("issue.delete", "application/json", ""),
+        (
+            "attachment.add",
+            "multipart/form-data",
+            "/properties/request/contentSchema",
+        ),
+        ("attachment.download", "application/json", ""),
+    ] {
+        let schema = &openapi["paths"][format!("/v1/invoke/jira/{action}")]["post"]["requestBody"]
+            ["content"][media]["schema"];
+        assert_preference_only_invoke_schema(schema.pointer(extra).unwrap());
+    }
     let send = send_schema_from_catalog(&catalog);
-    for action in ["issue.delete", "attachment.add", "attachment.download"] {
-        let variant = send["oneOf"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|variant| variant["properties"]["action"]["const"] == action)
-            .unwrap();
-        assert_default_invoke_formats(variant);
+    for variant in send["oneOf"].as_array().unwrap() {
+        assert_preference_only_invoke_schema(variant);
     }
 }
 
-fn assert_default_invoke_formats(schema: &Value) {
+fn assert_preference_only_invoke_schema(schema: &Value) {
+    assert!(schema["properties"].get("outputContentFormat").is_none());
     assert_eq!(
-        schema["properties"]["readContentFormat"]["enum"],
-        json!(["native"])
+        schema["properties"]["preferredOutputContentFormat"]["enum"],
+        json!(["markdown", "text", "adf", "storage"])
     );
-    assert_eq!(
-        schema["properties"]["responseFormat"]["enum"],
-        json!(["json"])
+    assert!(
+        schema["properties"]["preferredOutputContentFormat"]
+            .get("default")
+            .is_none()
     );
+    assert!(schema["properties"].get("readContentFormat").is_none());
+    assert!(schema["properties"].get("responseFormat").is_none());
 }
 
 #[test]
@@ -1087,10 +1073,10 @@ fn generated_invoke_send_schema_exposes_secret_sources_only_for_sensitive_action
         io: ActionIo::Json,
         response_kind: ResponseKind::ResponseEnvelope,
         exit_policy: ExitPolicy::InvokeDecision,
-        read_content_formats: Vec::new(),
-        response_formats: Vec::new(),
-        rendered_body_owners: Vec::new(),
-        optional_rendered_body_owner_prefixes: Vec::new(),
+        output_content_formats: Vec::new(),
+        native_output_content_format: None,
+        default_output_content_format: None,
+        body_fields: Vec::new(),
     };
     let mut sensitive_action = action.clone();
     sensitive_action.action = "secret.echo".to_string();
@@ -1198,10 +1184,10 @@ fn generated_specs_describe_multipart_uploads() {
             io: descriptor_io("confluence", "attachment.add"),
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
-            read_content_formats: Vec::new(),
-            response_formats: Vec::new(),
-            rendered_body_owners: Vec::new(),
-            optional_rendered_body_owner_prefixes: Vec::new(),
+            output_content_formats: Vec::new(),
+            native_output_content_format: None,
+            default_output_content_format: None,
+            body_fields: Vec::new(),
         }],
     });
 
@@ -1298,10 +1284,10 @@ fn generated_upload_send_schema_uses_catalog_plan_constraints() {
             },
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
-            read_content_formats: Vec::new(),
-            response_formats: Vec::new(),
-            rendered_body_owners: Vec::new(),
-            optional_rendered_body_owner_prefixes: Vec::new(),
+            output_content_formats: Vec::new(),
+            native_output_content_format: None,
+            default_output_content_format: None,
+            body_fields: Vec::new(),
         }],
     });
 
@@ -1367,10 +1353,10 @@ fn generated_upload_send_schema_removes_nested_generated_metadata_inputs() {
             },
             response_kind: ResponseKind::ResponseEnvelope,
             exit_policy: ExitPolicy::InvokeDecision,
-            read_content_formats: Vec::new(),
-            response_formats: Vec::new(),
-            rendered_body_owners: Vec::new(),
-            optional_rendered_body_owner_prefixes: Vec::new(),
+            output_content_formats: Vec::new(),
+            native_output_content_format: None,
+            default_output_content_format: None,
+            body_fields: Vec::new(),
         }],
     });
 
@@ -3333,7 +3319,7 @@ fn catalog_v2_names_are_required_nullable_and_never_repair_imported_sources() {
         assert!(serde_json::from_value::<ApiActionSpec>(wire).is_err());
     }
     let mut catalog = empty_catalog(json!({}));
-    assert_eq!(catalog.version, "agent-access.catalog.v2");
+    assert_eq!(catalog.version, "agent-access.catalog.v3");
     catalog.services.push(ApiServiceSpec {
         availability: None,
         scoped_mcp_ready: false,

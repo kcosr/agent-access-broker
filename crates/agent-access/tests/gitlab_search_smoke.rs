@@ -187,28 +187,11 @@ async fn assert_project_collections_and_categories(credentials: Credentials) {
         assert_eq!(fixture.requests().await.len() - before, 2);
     }
 
-    let listing_markdown = fixture.cli(&[
-        "gitlab",
-        "project",
-        "list",
-        "--max-results",
-        "4",
-        "--output-format",
-        "markdown",
-    ]);
-    assert!(listing_markdown.status.success());
-    let listing_markdown = String::from_utf8(listing_markdown.stdout).unwrap();
-    for marker in [
-        "GitLab projects",
-        "Scan status",
-        "more",
-        "Continuation",
-        FIRST_PROJECT,
-        SECOND_PROJECT,
-    ] {
-        assert!(listing_markdown.contains(marker), "missing {marker}");
-    }
-    assert_private(&listing_markdown);
+    let listing = successful_cli(fixture.cli(&["gitlab", "project", "list", "--max-results", "4"]));
+    assert_projects(&listing["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+    assert_eq!(listing["result"]["scanStatus"], "more");
+    assert!(listing["result"]["nextPageToken"].is_string());
+    assert!(listing["result"].get("format").is_none());
 
     for (command, _) in CATEGORIES {
         let response = successful_cli(fixture.cli(&[
@@ -227,7 +210,7 @@ async fn assert_project_collections_and_categories(credentials: Credentials) {
         assert_eq!(response["result"]["scanStatus"], "exhausted");
         assert!(response["result"].get("nextPageToken").is_none());
     }
-    let rendered = fixture.cli(&[
+    let code = successful_cli(fixture.cli(&[
         "gitlab",
         "search",
         "code",
@@ -235,14 +218,9 @@ async fn assert_project_collections_and_categories(credentials: Credentials) {
         QUERY,
         "--max-results",
         "4",
-        "--output-format",
-        "markdown",
-    ]);
-    assert!(rendered.status.success());
-    let rendered = String::from_utf8(rendered.stdout).unwrap();
-    assert_private(&rendered);
-    assert!(rendered.contains(FIRST_PROJECT));
-    assert!(rendered.contains(SECOND_PROJECT));
+    ]));
+    assert_projects(&code["result"], &[FIRST_PROJECT, SECOND_PROJECT]);
+    assert!(code["result"].get("format").is_none());
 
     let initialize = fixture.mcp_request(None,json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
             "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"gitlab-search-smoke","version":"1"}
@@ -435,12 +413,12 @@ async fn confidential_empty_pages_resume_without_losing_hits_and_reject_stale_au
         "empty-page-query",
         "--max-results",
         "4",
-        "--output-format",
-        "markdown",
     ]);
     assert!(markdown.status.success());
     let markdown = String::from_utf8(markdown.stdout).unwrap();
-    assert!(markdown.contains("No matching authorized items in this page; continue the search."));
+    let parsed: Value = serde_json::from_str(&markdown).unwrap();
+    assert_eq!(parsed["result"]["scanStatus"], "scan_budget");
+    assert!(parsed["result"]["nextPageToken"].is_string());
     assert_private(&markdown);
 
     let (status, second) = fixture

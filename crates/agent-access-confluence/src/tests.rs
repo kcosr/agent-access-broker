@@ -13,6 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 mod documentation;
 mod download_media_policy;
 mod execution_matrix;
+mod output_content;
 mod personal_spaces;
 mod plain_inputs;
 mod review_locations;
@@ -6574,6 +6575,7 @@ struct CommentStubConfluenceBackend {
     blogs: BTreeMap<String, ConfluenceBlog>,
     comments: BTreeMap<String, ConfluenceComment>,
     comments_by_token: BTreeMap<String, BTreeMap<String, ConfluenceComment>>,
+    written_comments: std::sync::Mutex<BTreeMap<String, ConfluenceComment>>,
     credential_observations: std::sync::Mutex<Vec<CredentialObservation>>,
     create_requests: std::sync::Mutex<Vec<ConfluenceCommentCreateRequest>>,
     update_requests: std::sync::Mutex<Vec<ConfluenceCommentUpdateRequest>>,
@@ -6650,6 +6652,7 @@ impl CommentStubConfluenceBackend {
                 ),
             ]),
             comments_by_token: BTreeMap::new(),
+            written_comments: std::sync::Mutex::new(BTreeMap::new()),
             credential_observations: std::sync::Mutex::new(Vec::new()),
             create_requests: std::sync::Mutex::new(Vec::new()),
             update_requests: std::sync::Mutex::new(Vec::new()),
@@ -6770,6 +6773,21 @@ struct VerifyForbiddenBackend {
 
 #[async_trait]
 impl ConfluenceBackend for CommentStubConfluenceBackend {
+    async fn space_by_id(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        let blog = self
+            .blogs
+            .values()
+            .find(|blog| blog.space_id == id)
+            .ok_or(ConfluenceBackendError::NotFound)?;
+        let mut space = fixture_space(&blog.space);
+        space.id = id.into();
+        ok(space)
+    }
+
     async fn hierarchy_node(
         &self,
         kind: ConfluenceNodeKind,
@@ -7024,9 +7042,16 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
             return Err(ConfluenceBackendError::RateLimited(None));
         }
         let comment = self
-            .comments_for_credential(credential)
+            .written_comments
+            .lock()
+            .unwrap()
             .get(comment_id)
             .cloned()
+            .or_else(|| {
+                self.comments_for_credential(credential)
+                    .get(comment_id)
+                    .cloned()
+            })
             .ok_or(ConfluenceBackendError::NotFound)?;
         if comment.kind != kind {
             return Err(ConfluenceBackendError::NotFound);
@@ -7128,21 +7153,26 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
         );
         self.create_requests.lock().unwrap().push(request.clone());
         let id = format!("{}", 9000 + self.create_requests.lock().unwrap().len());
+        let comment = ConfluenceComment {
+            id,
+            kind: request.kind,
+            page_id: request.page_id,
+            blog_id: request.blog_id,
+            parent_comment_id: request.parent_comment_id,
+            status: Some("current".to_string()),
+            resolution_status: None,
+            version: Some(1),
+            author: None,
+            created_at: None,
+            updated_at: None,
+            bodies: BTreeMap::from([(request.body.representation, request.body.value)]),
+        };
+        self.written_comments
+            .lock()
+            .unwrap()
+            .insert(comment.id.clone(), comment.clone());
         Ok(ConfluenceBackendResponse {
-            value: ConfluenceComment {
-                id,
-                kind: request.kind,
-                page_id: request.page_id,
-                blog_id: request.blog_id,
-                parent_comment_id: request.parent_comment_id,
-                status: Some("current".to_string()),
-                resolution_status: None,
-                version: Some(1),
-                author: None,
-                created_at: None,
-                updated_at: None,
-                bodies: BTreeMap::from([(request.body.representation, request.body.value)]),
-            },
+            value: comment,
             status: 200,
             duration_ms: 6,
         })
@@ -7167,6 +7197,10 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
         self.update_requests.lock().unwrap().push(request.clone());
         comment.version = Some(request.base_version + 1);
         comment.bodies = BTreeMap::from([(request.body.representation, request.body.value)]);
+        self.written_comments
+            .lock()
+            .unwrap()
+            .insert(comment.id.clone(), comment.clone());
         Ok(ConfluenceBackendResponse {
             value: comment,
             status: 200,
@@ -9708,6 +9742,7 @@ pub(crate) fn confluence_config() -> ConfluenceProviderConfig {
         allowed_upstream_hosts: vec!["https://example.atlassian.net/wiki/rest/api/**".to_string()],
         attachments: Default::default(),
         content: crate::ConfluenceContentConfig {
+            preferred_output_format: None,
             page_formats: vec!["storage".to_string(), "atlas_doc_format".to_string()],
             blog_formats: vec!["storage".to_string()],
             comment_formats: vec!["storage".to_string()],

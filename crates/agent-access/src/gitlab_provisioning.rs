@@ -278,6 +278,7 @@ async fn run_provisioning(
         }
         return crate::run_invoke_parts(ctx, "gitlab", action, inputs).await;
     }
+    let options = resolve_generic_invoke_options(ctx, "gitlab", action, None).await?;
     // Reserve the destination before a non-repeatable issuance, rejecting existing files and symlinks.
     let mut output = delivery
         .and_then(|d| d.token_output.as_ref())
@@ -292,8 +293,16 @@ async fn run_provisioning(
         })
         .transpose()?;
     let (status, mut value) =
-        send_invoke_parts_with_options(ctx, "gitlab", action, inputs, ResponseOptions::default())
-            .await?;
+        send_invoke_parts_with_options(ctx, "gitlab", action, inputs, options.options).await?;
+    if let Some(spec) = &options.action_spec {
+        validate_invoke_result(
+            status,
+            &value,
+            options.options.output_content_format,
+            &spec.body_fields,
+            &spec.sensitive_output_pointers,
+        )?;
+    }
     if let Some(file) = output.as_mut() {
         // Remove the secret before any printing, including failure responses.
         let token = value
@@ -352,5 +361,5 @@ async fn run_provisioning(
             );
         }
     }
-    print_invoke_value_and_exit(status, value, ResponseFormat::Json);
+    print_invoke_value_and_exit(status, value);
 }

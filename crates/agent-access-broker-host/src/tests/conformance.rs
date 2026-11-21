@@ -1,7 +1,7 @@
 //! Backend-contract acceptance: the test-only conformance backend
 //! (`agent-access-conformance`) is registered beside the linked backends and
 //! served by every broker surface: configuration, validation, discovery,
-//! runtime specs, invocation (JSON, Markdown, raw download, multipart
+//! runtime specs, invocation (JSON with selected bodies, raw download, multipart
 //! upload), MCP, private resource attributes under managed policy, and the
 //! portal's resource, grant, and attribute helpers. Nothing outside its crate
 //! and the registration list knows about it.
@@ -223,7 +223,7 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
                     "item.view",
                     json!({
                         "inputs": {"item": "shelf-one/item-one", "includeNote": true},
-                        "readContentFormat": "text"
+                        "outputContentFormat": "text"
                     }),
                     None,
                 )
@@ -237,7 +237,7 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
                 json!({"item": ["shelf-one/item-one"]})
             );
             assert_eq!(
-                included["result"]["note"]["renderedBody"],
+                included["result"]["note"]["body"],
                 json!({"format": "text", "value": "Note *body*"})
             );
             // Only the requested item and its note were fetched; proving the
@@ -253,7 +253,7 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
             fixture
                 .invoke(
                     "item.view",
-                    json!({"inputs": {"item": "shelf-one/item-one"}, "readContentFormat": "text"}),
+                    json!({"inputs": {"item": "shelf-one/item-one"}, "outputContentFormat": "text"}),
                     None,
                 )
                 .await,
@@ -266,7 +266,7 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
         );
         assert!(plain["result"].get("note").is_none());
         assert_eq!(
-            plain["result"]["item"]["renderedBody"],
+            plain["result"]["item"]["body"],
             json!({"format": "text", "value": "Primary *body*"})
         );
 
@@ -275,7 +275,7 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
                 fixture
                     .invoke(
                         "item.note.view",
-                        json!({"inputs": {"item": "shelf-one/item-one"}, "readContentFormat": "text"}),
+                        json!({"inputs": {"item": "shelf-one/item-one"}, "outputContentFormat": "text"}),
                         None,
                     )
                     .await,
@@ -288,8 +288,7 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
                     .invoke(
                         "item.view",
                         json!({
-                            "inputs": {"item": "shelf-one/item-one", "includeNote": true},
-                            "responseFormat": "markdown"
+                            "inputs": {"item": "shelf-one/item-one", "includeNote": true}
                         }),
                         None,
                     )
@@ -297,11 +296,13 @@ async fn conformance_companion_reads_use_real_admission_without_changing_plain_r
             )
             .await;
             assert_eq!(markdown["decision"], "allow", "{markdown}");
-            assert!(
-                markdown["result"]["value"]
-                    .as_str()
-                    .unwrap()
-                    .contains("## Note\n\nNote \\*body\\*")
+            assert_eq!(
+                markdown["result"]["note"]["body"],
+                json!({"format": "markdown", "value": "Note \\*body\\*"})
+            );
+            assert_eq!(
+                markdown["result"]["item"]["body"],
+                json!({"format": "markdown", "value": "Primary \\*body\\*"})
             );
         }
         assert_eq!(
@@ -518,6 +519,7 @@ async fn conformance_actions_reach_every_discovery_surface() {
         "conformance_item"
     );
     let catalog = fixture.get("/v1/spec/catalog").await;
+    assert_eq!(catalog["version"], "agent-access.catalog.v3");
     for (id, supports_exclusions) in [("conformance_item", true), ("conformance_endpoint", false)] {
         let resource_type = catalog["resourceTypes"]
             .as_array()
@@ -548,25 +550,35 @@ async fn conformance_actions_reach_every_discovery_surface() {
     };
     let view = action("item.view");
     assert_eq!(view["io"]["type"], "json");
-    assert_eq!(view["responseFormats"], json!(["json", "markdown"]));
+    assert_eq!(view["outputContentFormats"], json!(["markdown", "text"]));
+    assert_eq!(view["nativeOutputContentFormat"], "text");
+    assert_eq!(view["defaultOutputContentFormat"], "markdown");
     assert_eq!(view["companionReadActions"], json!(["item.note.view"]));
     assert_eq!(
-        view["renderedBodyOwners"],
-        json!(["/result/item", "/result/note"])
+        view["bodyFields"],
+        json!([
+            {
+                "ownerPath": "/result/item", "field": "body", "optional": false,
+                "nullable": false, "optionalOwnerPrefixes": [], "nullableOwnerPrefixes": []
+            },
+            {
+                "ownerPath": "/result/note", "field": "body", "optional": false,
+                "nullable": false, "optionalOwnerPrefixes": ["/result/note"],
+                "nullableOwnerPrefixes": []
+            }
+        ])
     );
     assert_eq!(
-        view["optionalRenderedBodyOwnerPrefixes"],
-        json!(["/result/note"])
+        action("item.note.view")["bodyFields"],
+        json!([{
+            "ownerPath": "/result/note", "field": "body", "optional": false,
+            "nullable": false, "optionalOwnerPrefixes": [], "nullableOwnerPrefixes": []
+        }])
     );
-    assert_eq!(
-        action("item.note.view")["renderedBodyOwners"],
-        json!(["/result/note"])
-    );
-    assert!(
-        action("item.note.view")
-            .get("optionalRenderedBodyOwnerPrefixes")
-            .is_none()
-    );
+    assert!(view.get("responseFormats").is_none());
+    assert!(view.get("readContentFormats").is_none());
+    assert!(view.get("renderedBodyOwners").is_none());
+    assert!(view.get("optionalRenderedBodyOwnerPrefixes").is_none());
     assert_eq!(action("item.download")["io"]["type"], "raw_download");
     assert_eq!(action("item.upload")["io"]["type"], "multipart_upload");
     assert_eq!(action("item.upload")["io"]["plan"]["maxFiles"], 1);
@@ -594,12 +606,23 @@ async fn conformance_actions_reach_every_discovery_surface() {
         json!(["item"])
     );
     assert_eq!(
-        view_request["properties"]["responseFormat"]["enum"],
-        json!(["json", "markdown"])
+        view_request["properties"]["outputContentFormat"]["enum"],
+        json!(["markdown", "text"])
     );
     assert_eq!(
-        view_request["properties"]["readContentFormat"]["enum"],
-        json!(["native", "markdown", "text"])
+        view_request["properties"]["preferredOutputContentFormat"]["enum"],
+        json!(["markdown", "text", "adf", "storage"])
+    );
+    assert!(
+        view_request["properties"]["outputContentFormat"]
+            .get("default")
+            .is_none()
+    );
+    assert!(view_request["properties"].get("responseFormat").is_none());
+    assert!(
+        view_request["properties"]
+            .get("readContentFormat")
+            .is_none()
     );
     assert!(
         view["responses"]["200"]["content"]
@@ -607,6 +630,16 @@ async fn conformance_actions_reach_every_discovery_surface() {
             .is_some()
     );
     let download = operation("item.download");
+    let download_request = &download["requestBody"]["content"]["application/json"]["schema"];
+    assert!(
+        download_request["properties"]
+            .get("outputContentFormat")
+            .is_none()
+    );
+    assert_eq!(
+        download_request["properties"]["preferredOutputContentFormat"]["enum"],
+        json!(["markdown", "text", "adf", "storage"])
+    );
     let raw = &download["responses"]["200"];
     assert_eq!(
         raw["content"]["application/octet-stream"]["schema"],
@@ -657,7 +690,7 @@ async fn conformance_actions_reach_every_discovery_surface() {
     let send = jsonschema::validator_for(&send_schema).unwrap();
     let request = |action: &str, extra: Value| {
         let mut request = json!({
-            "version": "agent-access.send.v1", "kind": "invoke",
+            "version": "agent-access.send.v2", "kind": "invoke",
             "service": "conformance", "action": action,
             "inputs": {"item": "shelf-one/item-one"}
         });
@@ -674,11 +707,31 @@ async fn conformance_actions_reach_every_discovery_surface() {
         (false, request("item.list", json!({}))),
         (
             true,
+            request("item.view", json!({"outputContentFormat": "markdown"})),
+        ),
+        (
+            false,
+            request("item.view", json!({"outputContentFormat": "adf"})),
+        ),
+        (
+            true,
+            request("item.view", json!({"preferredOutputContentFormat": "adf"})),
+        ),
+        (
+            false,
+            request("item.view", json!({"preferredOutputContentFormat": null})),
+        ),
+        (
+            false,
             request("item.view", json!({"responseFormat": "markdown"})),
         ),
         (
             false,
-            request("item.view", json!({"responseFormat": "html"})),
+            request("item.view", json!({"readContentFormat": "text"})),
+        ),
+        (
+            false,
+            request("item.view", json!({"version": "agent-access.send.v1"})),
         ),
         (true, request("item.download", stream.clone())),
         (false, request("item.download", json!({}))),
@@ -686,7 +739,14 @@ async fn conformance_actions_reach_every_discovery_surface() {
             false,
             request(
                 "item.download",
-                json!({"responseMode": "stream", "output": {"type": "stdout"}, "responseFormat": "markdown"}),
+                json!({"responseMode": "stream", "output": {"type": "stdout"}, "outputContentFormat": "markdown"}),
+            ),
+        ),
+        (
+            true,
+            request(
+                "item.download",
+                json!({"responseMode": "stream", "output": {"type": "stdout"}, "preferredOutputContentFormat": "storage"}),
             ),
         ),
         (true, request("item.upload", upload_file.clone())),
@@ -780,7 +840,7 @@ async fn conformance_live_listing_uses_only_its_own_authority_and_filters_before
 }
 
 #[tokio::test]
-async fn conformance_actions_move_json_markdown_downloads_and_uploads() {
+async fn conformance_actions_move_selected_json_bodies_downloads_and_uploads() {
     let fixture = conformance().await;
     fixture
         .item("shelf-one/item-one", "Item One", "Body *text*")
@@ -796,31 +856,91 @@ async fn conformance_actions_move_json_markdown_downloads_and_uploads() {
     let body = response_json(view).await;
     assert_eq!(body["decision"], "allow", "{body}");
     assert_eq!(body["result"]["item"]["title"], "Item One");
+    assert_eq!(
+        body["result"]["item"]["body"],
+        json!({"format": "markdown", "value": "Body \\*text\\*"})
+    );
+    assert!(body["result"]["item"].get("renderedBody").is_none());
     let text = response_json(
         fixture
             .invoke(
                 "item.view",
-                json!({"inputs": {"item": "shelf-one/item-one"}, "readContentFormat": "text"}),
+                json!({"inputs": {"item": "shelf-one/item-one"}, "outputContentFormat": "text"}),
                 None,
             )
             .await,
     )
     .await;
     assert_eq!(
-        text["result"]["item"]["renderedBody"],
+        text["result"]["item"]["body"],
         json!({"format": "text", "value": "Body *text*"})
     );
     let markdown = fixture
         .invoke(
             "item.view",
-            json!({"inputs": {"item": "shelf-one/item-one"}, "responseFormat": "markdown"}),
+            json!({
+                "inputs": {"item": "shelf-one/item-one"},
+                "outputContentFormat": "markdown", "preferredOutputContentFormat": "text"
+            }),
             None,
         )
         .await;
     let markdown = response_json(markdown).await;
+    assert_eq!(markdown["result"]["item"], body["result"]["item"]);
+    let native = response_json(
+        fixture
+            .invoke(
+                "item.view",
+                json!({
+                    "inputs": {"item": "shelf-one/item-one"},
+                    "preferredOutputContentFormat": "storage"
+                }),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(native["result"]["item"], text["result"]["item"]);
+
+    // Exact unsupported selections and obsolete selectors fail before provider I/O.
+    let requests_before = fixture.server.received_requests().await.unwrap().len();
+    for (selectors, status) in [
+        (
+            json!({"outputContentFormat": "adf"}),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            json!({"outputContentFormat": "native"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"outputContentFormat": null}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"outputContentFormat": "text", "preferredOutputContentFormat": null}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"responseFormat": "markdown"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"readContentFormat": "text"}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let mut request = json!({"inputs": {"item": "shelf-one/item-one"}});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(selectors.as_object().unwrap().clone());
+        let response = fixture.invoke("item.view", request, None).await;
+        assert_eq!(response.status(), status, "{selectors}");
+    }
     assert_eq!(
-        markdown["result"],
-        json!({"format": "markdown", "value": "# Item One\n\nItem: `shelf-one/item-one`\n\nBody \\*text\\*\n"})
+        fixture.server.received_requests().await.unwrap().len(),
+        requests_before
     );
 
     Mock::given(method("GET"))
@@ -835,7 +955,7 @@ async fn conformance_actions_move_json_markdown_downloads_and_uploads() {
     let download = fixture
         .invoke(
             "item.download",
-            json!({"inputs": {"item": "shelf-one/item-one"}}),
+            json!({"inputs": {"item": "shelf-one/item-one"}, "preferredOutputContentFormat": "storage"}),
             Some(RAW_RESULT_MIME),
         )
         .await;
@@ -867,7 +987,7 @@ async fn conformance_actions_move_json_markdown_downloads_and_uploads() {
         .mount(&fixture.server)
         .await;
     let boundary = "conformance-boundary";
-    let request = json!({"inputs": {"item": "shelf-one/item-one", "attachments": [{
+    let request = json!({"preferredOutputContentFormat": "adf", "inputs": {"item": "shelf-one/item-one", "attachments": [{
         "field": "file", "filename": "notes.txt", "contentType": "text/plain",
         "size": content.len(), "sha256": sha256
     }]}});
@@ -1070,14 +1190,28 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
     let session = fixture.initialize().await;
     let listing = fixture.rpc(&session, 2, "tools/list", json!({})).await;
     let tool = agent_access_core::mcp::tool_name("conformance", "item.view");
-    assert!(
-        listing["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["name"] == tool.as_str()),
-        "{listing}"
+    let listed = listing["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == tool.as_str())
+        .unwrap_or_else(|| panic!("missing conformance view tool: {listing}"));
+    assert_eq!(
+        listed["inputSchema"]["properties"]["outputContentFormat"]["enum"],
+        json!(["markdown", "text"])
     );
+    assert!(
+        listed["inputSchema"]["properties"]["outputContentFormat"]
+            .get("default")
+            .is_none()
+    );
+    for omitted in [
+        "responseFormat",
+        "readContentFormat",
+        "preferredOutputContentFormat",
+    ] {
+        assert!(listed["inputSchema"]["properties"].get(omitted).is_none());
+    }
     let resources = fixture
         .call(
             &session,
@@ -1218,6 +1352,22 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
     assert_eq!(
         mcp::structured(&called)["result"]["item"]["title"],
         "Item One"
+    );
+    assert_eq!(
+        mcp::structured(&called)["result"]["item"]["body"],
+        json!({"format": "markdown", "value": "text"})
+    );
+    let called_text = fixture
+        .call(
+            &session,
+            5,
+            &tool,
+            json!({"inputs": {"item": "shelf-one/item-one"}, "outputContentFormat": "text"}),
+        )
+        .await;
+    assert_eq!(
+        mcp::structured(&called_text)["result"]["item"]["body"],
+        json!({"format": "text", "value": "text"})
     );
 
     let types = fixture

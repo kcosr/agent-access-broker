@@ -450,7 +450,7 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
             actions
                 .into_iter()
                 .map(|action| {
-                    let presentation = present::presentation(&action.action);
+                    let presentation = present::presentation(&action.action, &config.content);
                     documentation::with_guidance(
                         action.presentation(presentation),
                         &config.tenant_host,
@@ -466,6 +466,10 @@ pub fn confluence_descriptor(config: &ConfluenceProviderConfig) -> ServiceDescri
                 .delegated(CONFLUENCE_OAUTH_CONNECTION),
         )
         .with_presentation_body_limit(config.content.max_body_bytes);
+    let descriptor = match config.content.preferred_output_format {
+        Some(format) => descriptor.with_preferred_output_content_format(format),
+        None => descriptor,
+    };
     match config.site().upstream_authority() {
         Some(authority) => descriptor.with_upstream_authority(authority),
         None => descriptor,
@@ -2440,6 +2444,7 @@ impl ConfluenceProvider {
             merge_confluence_content_write_audit(&mut audit, &content_audit);
             merge_attribution_audit(&mut audit, attribution);
             Ok(ProviderResult::new(result)
+                .with_presentation_recovery_receipt(MutationReceipt::applied())
                 .with_audit(audit)
                 .with_upstream(Some(response.status), Some(response.duration_ms))
                 .with_object_ids(comment_object_ids(&response.value, &container)))
@@ -2578,6 +2583,7 @@ impl ConfluenceProvider {
         audit["previousVersion"] = json!(inputs.base_version);
         audit["version"] = json!(next_version);
         Ok(ProviderResult::new(result)
+            .with_presentation_recovery_receipt(MutationReceipt::applied())
             .with_audit(audit)
             .with_upstream(
                 Some(response.status),
@@ -2904,6 +2910,7 @@ impl ConfluenceProvider {
         merge_confluence_content_write_audit(&mut audit, &content_audit);
         merge_attribution_audit(&mut audit, attribution);
         Ok(ProviderResult::new(result)
+            .with_presentation_recovery_receipt(MutationReceipt::applied())
             .with_audit(audit)
             .with_upstream(
                 Some(response.status),
@@ -9652,7 +9659,7 @@ fn page_view_result(
         }
     }
     let (web_url, space_url) = page_browser_urls(page, config, fallbacks)?;
-    Ok(json!({
+    let mut result = json!({
         "id": page.id,
         "title": page.title,
         "space": page.space,
@@ -9663,8 +9670,11 @@ fn page_view_result(
         "updatedAt": page.updated_at,
         "createdBy": page.created_by,
         "updatedBy": page.updated_by,
-        "body": body,
-    }))
+    });
+    if !body.is_empty() {
+        result["body"] = Value::Object(body);
+    }
+    Ok(result)
 }
 
 fn enforce_page_body_sizes(
@@ -11814,8 +11824,10 @@ fn comment_result(
         "createdAt": comment.created_at,
         "updatedAt": comment.updated_at,
         "parentCommentId": comment.parent_comment_id,
-        "body": body,
     });
+    if !body.is_empty() {
+        value["body"] = Value::Object(body);
+    }
     match container {
         ConfluenceResolvedCommentContainer::Page(page) => {
             value["pageId"] = json!(page.id);

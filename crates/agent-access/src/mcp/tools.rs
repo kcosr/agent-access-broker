@@ -30,7 +30,7 @@ pub(super) async fn list_tools(
     let catalog = fetch_catalog(settings).await?;
     Ok(ToolListing {
         tools: project_catalog(&catalog, view)?,
-        binding: json!({"view":view,"identity":catalog.identity,"executionContext":catalog.execution_context}),
+        binding: json!({"view":view,"identity":catalog.identity,"executionContext":catalog.execution_context,"preferredOutputContentFormat":settings.preferred_output_content_format}),
     })
 }
 
@@ -68,8 +68,8 @@ struct Arguments {
     output_path: Option<PathBuf>,
     #[serde(default)]
     secret_sources: Vec<crate::SecretSourceBinding>,
-    read_content_format: Option<agent_access_provider::presentation::ReadContentFormat>,
-    response_format: Option<agent_access_provider::presentation::ResponseFormat>,
+    #[serde(default, deserialize_with = "crate::optional_content_format")]
+    output_content_format: Option<agent_access_provider::presentation::OutputContentFormat>,
 }
 
 #[derive(Debug)]
@@ -270,23 +270,20 @@ pub(super) async fn call_tool(
     };
     let is_error = status >= 400 || value.get("decision").and_then(Value::as_str) != Some("allow");
     let file_receipt = args.output_path.is_some() && !is_error;
-    if file_receipt && action.supports_json_file_output() {
-        crate::validate_embedded_invoke_result(
+    if !is_error && action.supports_json_file_output() {
+        crate::validate_invoke_result(
+            status,
             &value,
-            options.read_content_format,
-            &action.rendered_body_owners,
-            &action.optional_rendered_body_owner_prefixes,
-        )
-        .map_err(|_| anyhow::anyhow!("broker response has an invalid rendered body"))?;
-        if options.response_format == agent_access_provider::presentation::ResponseFormat::Markdown
-        {
-            crate::markdown_result_value(&value)
-                .map_err(|_| anyhow::anyhow!("broker response has an invalid Markdown result"))?;
+            options.output_content_format,
+            &action.body_fields,
+            &action.sensitive_output_pointers,
+        )?;
+        if file_receipt {
+            value = reserved
+                .take()
+                .expect("file output was reserved")
+                .save_json(&value)?;
         }
-        value = reserved
-            .take()
-            .expect("file output was reserved")
-            .save_json(&value)?;
     }
     let mut result = envelope_result(status, value, is_error)?;
     if !file_receipt && !action.sensitive_output_pointers.is_empty() {
@@ -320,8 +317,8 @@ pub(super) fn save_json_response(path: &Path, value: &Value) -> Result<Value> {
 fn invoke_request(inputs: Value, options: ResponseOptions) -> InvokeRequest {
     InvokeRequest {
         inputs,
-        read_content_format: options.read_content_format,
-        response_format: options.response_format,
+        output_content_format: options.output_content_format,
+        preferred_output_content_format: options.preferred_output_content_format,
         body_parts: vec![],
     }
 }
@@ -331,67 +328,19 @@ fn response_options(
     args: &Arguments,
     action: &ApiActionSpec,
 ) -> Result<ResponseOptions> {
-    let explicit_read = args.read_content_format.map(|format| match format {
-        agent_access_provider::presentation::ReadContentFormat::Native => {
-            crate::ReadContentFormatArg::Native
-        }
-        agent_access_provider::presentation::ReadContentFormat::Markdown => {
-            crate::ReadContentFormatArg::Markdown
-        }
-        agent_access_provider::presentation::ReadContentFormat::Text => {
-            crate::ReadContentFormatArg::Text
-        }
-    });
-    let explicit_output = args
-        .response_format
-        .map(|format| match format {
-            agent_access_provider::presentation::ResponseFormat::Json => {
-                Ok(crate::OutputFormatArg::Json)
-            }
-            agent_access_provider::presentation::ResponseFormat::Markdown => {
-                Ok(crate::OutputFormatArg::Markdown)
-            }
-            _ => Err(anyhow::anyhow!(
-                "this client does not support the responseFormat"
-            )),
-        })
-        .transpose()?;
-    let options = crate::resolve_generic_response_options_from_action(
+    crate::resolve_response_options(
         settings,
+        args.output_content_format,
         Some(action),
-        explicit_read,
-        explicit_output,
         &action.action,
     )
     .map_err(|error| {
-        // Share CLI precedence and conflict rules, but describe the MCP
-        // arguments the caller can actually supply instead of CLI flags.
-        anyhow::Error::msg(
+        anyhow::anyhow!(
             error
                 .to_string()
-                .replace("--read-content-format", "readContentFormat")
-                .replace("--output-format", "responseFormat")
-                .replace("read-content format", "readContentFormat")
-                .replace("read-content default", "readContentFormat default"),
+                .replace("--output-content-format", "outputContentFormat")
         )
-    })?;
-    if options.read_content_format != agent_access_provider::presentation::ReadContentFormat::Native
-        && !action
-            .read_content_formats
-            .iter()
-            .any(|format| format == options.read_content_format.as_str())
-    {
-        bail!("readContentFormat is unsupported for this action");
-    }
-    if options.response_format != agent_access_provider::presentation::ResponseFormat::Json
-        && !action
-            .response_formats
-            .iter()
-            .any(|format| format == options.response_format.as_str())
-    {
-        bail!("responseFormat is unsupported for this action");
-    }
-    Ok(options)
+    })
 }
 
 fn resolve_inputs(args: &Arguments, action: &ApiActionSpec) -> Result<Value> {
@@ -606,7 +555,13 @@ async fn fetch_catalog(settings: &crate::ResolvedCliSettings) -> Result<ApiCatal
     {
         bail!("unsupported broker catalog version");
     }
-    serde_json::from_value(value).map_err(|_| anyhow::anyhow!("invalid broker catalog"))
+    let mut catalog = crate::parse_runtime_catalog(value)
+        .map_err(|_| anyhow::anyhow!("invalid broker catalog"))?;
+    agent_access_core::mcp::apply_output_content_preference(
+        &mut catalog,
+        settings.preferred_output_content_format,
+    );
+    Ok(catalog)
 }
 
 async fn decode_invocation_json(response: reqwest::Response) -> Result<(u16, Value)> {
@@ -708,8 +663,7 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".into(),
             identity_scheme: "raw".into(),
             allow_insecure_broker_http: false,
-            read_content_format: Default::default(),
-            output_format: Default::default(),
+            preferred_output_content_format: None,
         }
     }
     fn args(value: Value) -> Arguments {
@@ -972,49 +926,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn presentation_options_preserve_cli_default_and_conflict_rules() {
+    async fn presentation_options_keep_soft_preferences_and_exact_selection_distinct() {
+        use agent_access_provider::presentation::OutputContentFormat::*;
         let server = MockServer::start().await;
         let mut settings = settings(&server);
-        settings.read_content_format = agent_access_provider::presentation::ReadContentFormat::Text;
+        settings.preferred_output_content_format = Some(Storage);
         let mut action = action();
-        action.read_content_formats = vec!["native".into(), "markdown".into(), "text".into()];
-        action.response_formats = vec!["json".into(), "markdown".into()];
+        action.output_content_formats = vec![Markdown, Text, Adf];
         let selected = response_options(
             &settings,
-            &args(json!({"inputs":{}, "responseFormat":"markdown"})),
+            &args(json!({"inputs":{},"outputContentFormat":"adf"})),
             &action,
         )
         .unwrap();
-        assert_eq!(
-            selected.read_content_format,
-            agent_access_provider::presentation::ReadContentFormat::Native
-        );
-        assert_eq!(
-            selected.response_format,
-            agent_access_provider::presentation::ResponseFormat::Markdown
-        );
-        let explicit_error = response_options(
+        assert_eq!(selected.output_content_format, Some(Adf));
+        assert_eq!(selected.preferred_output_content_format, Some(Storage));
+        let omitted = response_options(&settings, &args(json!({"inputs":{}})), &action).unwrap();
+        assert_eq!(omitted.output_content_format, None);
+        assert_eq!(omitted.preferred_output_content_format, Some(Storage));
+        let error = response_options(
             &settings,
-            &args(json!({"inputs":{}, "responseFormat":"markdown", "readContentFormat":"text"})),
+            &args(json!({"inputs":{},"outputContentFormat":"storage"})),
             &action,
         )
         .unwrap_err()
         .to_string();
-        assert!(explicit_error.contains("responseFormat"));
-        assert!(explicit_error.contains("readContentFormat"));
-        assert!(!explicit_error.contains("--"), "{explicit_error}");
-        settings.output_format = agent_access_provider::presentation::ResponseFormat::Markdown;
-        let ambient_error = response_options(&settings, &args(json!({"inputs":{}})), &action)
-            .unwrap_err()
-            .to_string();
-        assert!(ambient_error.contains("responseFormat markdown"));
-        assert!(ambient_error.contains("readContentFormat default"));
-        assert!(!ambient_error.contains("--"), "{ambient_error}");
-        action.read_content_formats.clear();
-        action.response_formats.clear();
+        assert!(error.contains("outputContentFormat"));
+        assert!(!error.contains("--"));
+        action.output_content_formats.clear();
         assert_eq!(
-            response_options(&settings, &args(json!({"inputs":{}})), &action).unwrap(),
-            ResponseOptions::default()
+            response_options(&settings, &args(json!({"inputs":{}})), &action)
+                .unwrap()
+                .preferred_output_content_format,
+            Some(Storage)
         );
     }
 
@@ -1705,7 +1649,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/invoke/jira-team/issue.view"))
             .and(header("X-Agent-Access-Identity-Token", "broker-secret"))
-            .and(body_json(json!({"inputs":{"issue":"ABC-1"},"readContentFormat":"native","responseFormat":"json"})))
+            .and(body_json(json!({"inputs":{"issue":"ABC-1"}})))
             .respond_with(ResponseTemplate::new(403).set_body_json(body.clone()))
             .expect(1)
             .mount(&server)
@@ -1960,16 +1904,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn markdown_file_output_keeps_json_envelope_and_rejects_invalid_wrapper() {
+    async fn selected_content_file_output_keeps_json_envelope_and_rejects_invalid_body() {
         for formatted in [
             json!({"format":"markdown","value":"# Issue\nDetails\n"}),
             json!({"format":"markdown","value":42}),
         ] {
             let server = MockServer::start().await;
             let mut action = action();
-            action.response_formats = vec!["json".into(), "markdown".into()];
+            action.output_content_formats =
+                vec![agent_access_provider::presentation::OutputContentFormat::Markdown];
+            action.native_output_content_format =
+                Some(agent_access_provider::presentation::OutputContentFormat::Markdown);
+            action.default_output_content_format = action.native_output_content_format;
+            action.body_fields = vec![agent_access_provider::presentation::BodyField::new(
+                "/result",
+                "description",
+            )];
             serve_catalog(&server, action).await;
-            let body = allow(formatted.clone());
+            let body = allow(json!({"description":formatted.clone()}));
             Mock::given(method("POST"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(body.clone()))
                 .mount(&server)
@@ -1978,7 +1930,7 @@ mod tests {
             let destination = temp.path().join("formatted.json");
             std::fs::write(&destination, "original").unwrap();
             let result = call_tool(&settings(&server), &McpView::Aggregate, &tool_name("jira-team", "issue.view"),
-                json!({"inputs":{"issue":"ABC-1"},"responseFormat":"markdown","outputPath":destination}).as_object().unwrap().clone()).await;
+                json!({"inputs":{"issue":"ABC-1"},"outputContentFormat":"markdown","outputPath":destination}).as_object().unwrap().clone()).await;
             if formatted["value"].is_string() {
                 let result = serde_json::to_value(result.unwrap()).unwrap();
                 assert_eq!(
@@ -2555,5 +2507,47 @@ mod tests {
                 .get("contentType")
                 .is_none()
         );
+    }
+    #[tokio::test]
+    async fn inline_content_accepts_new_native_representation_and_omission_after_discovery() {
+        use agent_access_provider::presentation::{BodyField, OutputContentFormat};
+        for result in [
+            json!({"description":{"format":"adf","value":{"type":"doc","version":1,"content":[]}}}),
+            json!({"title":"body disabled"}),
+        ] {
+            let server = MockServer::start().await;
+            let mut selected = action();
+            selected.output_content_formats =
+                vec![OutputContentFormat::Markdown, OutputContentFormat::Text];
+            selected.native_output_content_format = Some(OutputContentFormat::Markdown);
+            selected.default_output_content_format = Some(OutputContentFormat::Markdown);
+            selected.body_fields = vec![BodyField::new("/result", "description").optional()];
+            serve_catalog(&server, selected).await;
+            Mock::given(method("POST"))
+                .and(body_json(
+                    json!({"inputs":{"issue":"ABC-1"},"preferredOutputContentFormat":"adf"}),
+                ))
+                .respond_with(ResponseTemplate::new(200).set_body_json(allow(result.clone())))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut settings = settings(&server);
+            settings.preferred_output_content_format = Some(OutputContentFormat::Adf);
+            let response = call_tool(
+                &settings,
+                &McpView::Aggregate,
+                &tool_name("jira-team", "issue.view"),
+                json!({"inputs":{"issue":"ABC-1"}})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+            .await
+            .unwrap();
+            let response = serde_json::to_value(response).unwrap();
+            assert_eq!(response["isError"], false);
+            assert_eq!(response["structuredContent"]["result"], result);
+            server.verify().await;
+        }
     }
 }

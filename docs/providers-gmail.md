@@ -221,7 +221,7 @@ an automatic replay.
 
 ```bash
 agent-access invoke gmail.thread.archive --input-json '{"id":"THREAD_ID"}'
-agent-access send --request-json '{"version":"agent-access.send.v1","kind":"invoke","service":"gmail","action":"message.search","inputs":{"query":"in:trash","includeSpamTrash":true,"maxResults":10}}'
+agent-access send --request-json '{"version":"agent-access.send.v2","kind":"invoke","service":"gmail","action":"message.search","inputs":{"query":"in:trash","includeSpamTrash":true,"maxResults":10}}'
 ```
 
 Direct HTTP uses `POST /v1/invoke/gmail/thread.restore` with

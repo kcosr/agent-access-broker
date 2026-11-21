@@ -43,42 +43,49 @@ pub(super) fn governed(operation: OperationContext) -> GovernedOperationContext 
 }
 
 #[test]
-fn invoke_request_defaults_formats_and_rejects_unknown_top_level_fields() {
-    let request: InvokeRequest = serde_json::from_value(json!({
-        "inputs": { "issue": "PROJ-1" }
-    }))
-    .unwrap();
+fn invoke_request_distinguishes_omission_and_rejects_null_or_retired_controls() {
+    let request: InvokeRequest =
+        serde_json::from_value(json!({"inputs":{"issue":"PROJ-1"}})).unwrap();
+    assert_eq!(request.output_content_format, None);
+    assert_eq!(request.preferred_output_content_format, None);
     assert_eq!(
-        request.read_content_format,
-        agent_access_provider::presentation::ReadContentFormat::Native
+        serde_json::to_value(request).unwrap(),
+        json!({"inputs":{"issue":"PROJ-1"}})
     );
-    assert_eq!(
-        request.response_format,
-        agent_access_provider::presentation::ResponseFormat::Json
-    );
-
     let explicit: InvokeRequest = serde_json::from_value(json!({
-        "inputs": {},
-        "readContentFormat": "text",
-        "responseFormat": "markdown"
+        "inputs":{}, "outputContentFormat":"text", "preferredOutputContentFormat":"adf"
     }))
     .unwrap();
     assert_eq!(
-        explicit.read_content_format,
-        agent_access_provider::presentation::ReadContentFormat::Text
+        explicit.output_content_format,
+        Some(OutputContentFormat::Text)
     );
     assert_eq!(
-        explicit.response_format,
-        agent_access_provider::presentation::ResponseFormat::Markdown
+        explicit.preferred_output_content_format,
+        Some(OutputContentFormat::Adf)
     );
-
-    assert!(
-        serde_json::from_value::<InvokeRequest>(json!({
-            "inputs": {},
-            "outputFormat": "markdown"
-        }))
-        .is_err()
-    );
+    for field in ["outputContentFormat", "preferredOutputContentFormat"] {
+        for invalid in [
+            Value::Null,
+            json!("native"),
+            json!("json"),
+            json!(4),
+            json!([]),
+        ] {
+            let mut value = json!({"inputs":{},"outputContentFormat":"markdown"});
+            value[field] = invalid;
+            assert!(
+                serde_json::from_value::<InvokeRequest>(value.clone()).is_err(),
+                "{value}"
+            );
+        }
+    }
+    for retired in ["readContentFormat", "responseFormat", "outputFormat"] {
+        assert!(
+            serde_json::from_value::<InvokeRequest>(json!({"inputs":{},retired:"markdown"}))
+                .is_err()
+        );
+    }
 }
 
 #[tokio::test]
@@ -99,7 +106,7 @@ async fn response_options_follow_provider_action_resolution_without_provider_exe
             }),
             InvokeRequest {
                 inputs: json!({"project": "TEST", "message": "hello"}),
-                response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
+                output_content_format: Some(OutputContentFormat::Markdown),
                 ..InvokeRequest::new(json!({}))
             },
         )
@@ -165,7 +172,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
+                    output_content_format: Some(OutputContentFormat::Markdown),
                     ..InvokeRequest::new(json!({}))
                 },
             )
@@ -203,7 +210,7 @@ async fn invocation_identity_admission_precedes_action_and_response_option_resol
                 }),
                 InvokeRequest {
                     inputs: json!({"project": "TEST", "message": "hello"}),
-                    response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
+                    output_content_format: Some(OutputContentFormat::Markdown),
                     ..InvokeRequest::new(json!({}))
                 },
             )

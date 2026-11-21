@@ -193,7 +193,7 @@ async fn job_list_service_personal_cli_send_http_and_mcp_filter_current_inventor
         assert_eq!(second["result"]["scanStatus"], "exhausted");
         let inputs =
             json!({"controller":"team-ci","folder":"payments","maxResults":3,"pageToken":token});
-        let send = json!({"version":"agent-access.send.v1","kind":"invoke","service":"cloudbees_ci","action":"job.list","inputs":inputs});
+        let send = json!({"version":"agent-access.send.v2","kind":"invoke","service":"cloudbees_ci","action":"job.list","inputs":inputs});
         let sent = checked(
             authenticated(&base)
                 .args(["send", "--request-json", &send.to_string()])

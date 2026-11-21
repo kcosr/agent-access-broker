@@ -219,7 +219,7 @@ pub fn send(
     let path = broker.directory().join("search-request.json");
     std::fs::write(
         &path,
-        json!({"version":"agent-access.send.v1","kind":"invoke",
+        json!({"version":"agent-access.send.v2","kind":"invoke",
         "service":service,"action":action,"inputs":inputs})
         .to_string(),
     )

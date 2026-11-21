@@ -58,8 +58,8 @@ function releaseStatus() {
       { crate: "agent-access-jira", version: expected.version, roles: [{ role: "native", id: "jira" }], source: { ...source } },
     ],
     inventoryFingerprint: `sha256:${"0".repeat(64)}`,
-    catalogVersion: "agent-access.catalog.v2",
-    sendSchemaVersion: "agent-access.send.v1",
+    catalogVersion: "agent-access.catalog.v3",
+    sendSchemaVersion: "agent-access.send.v2",
   };
 }
 

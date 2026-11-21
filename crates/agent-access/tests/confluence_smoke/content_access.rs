@@ -290,7 +290,7 @@ async fn content_folder_creation_preserves_typed_parent_across_cli_invoke_send_a
     let send_path = broker.directory().join("folder-create.send.json");
     std::fs::write(
         &send_path,
-        json!({"version":"agent-access.send.v1","kind":"invoke",
+        json!({"version":"agent-access.send.v2","kind":"invoke",
         "service":"confluence","action":"page.create","inputs":inputs})
         .to_string(),
     )

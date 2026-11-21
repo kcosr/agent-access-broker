@@ -480,7 +480,7 @@ async fn confluence_plain_inputs_project_through_stdio_http_send_and_openapi() {
         "blog.view",
         "blog.attachment.list",
     ] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "confluence", "action": action});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "confluence", "action": action});
         assert!(send_validator.is_valid(&request));
         request["inputs"] = json!({});
         assert!(send_validator.is_valid(&request));
@@ -488,7 +488,7 @@ async fn confluence_plain_inputs_project_through_stdio_http_send_and_openapi() {
         assert!(!send_validator.is_valid(&request));
     }
     for action in ["page.create", "page.move"] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "confluence", "action": action});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "confluence", "action": action});
         assert!(!send_validator.is_valid(&request));
         request["inputs"] = json!({});
         assert!(!send_validator.is_valid(&request));

@@ -6,6 +6,23 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Rich bodies now use one `{format, value}` representation, with Markdown
+  preferred by default on HTTP, CLI and both MCP transports.** This changes
+  responses even for callers that send no format selector. Ordinary results
+  remain JSON; update consumers of native body fields and `renderedBody`.
+  Replace `readContentFormat`/`--read-content-format` with the strict
+  `outputContentFormat`/`--output-content-format`; remove `responseFormat`,
+  invocation `--output-format` and retired client settings. Upgrade the Broker,
+  CLI/stdio and SDK consumers together for `agent-access.catalog.v3`,
+  `agent-access.send.v2`, typed `bodyFields` and the new selected-content codec
+  contracts. CLI invocation now requires an authenticated discovery identity,
+  including against Brokers that permit anonymous direct HTTP invocation.
+  Refresh MCP discovery and saved request files. Binary transfers
+  and `spec --output-format json` retain their behavior. See the
+  [upgrade instructions](docs/operator-guide.md#upgrade-and-rollback) and
+  [response formats](docs/http-api.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
+
 - **Confluence content grants add migrations `038_confluence_content_resources`
   and `039_resource_browser_urls`.**
   Back up first and upgrade Broker, CLI and portal together; rollback needs the
@@ -131,10 +148,9 @@ All notable changes to this project are documented in this file.
   constructing `AdmittedRequestParts` must supply `companion_reads_authorized`.
   Set it to `false` unless the host proves every declared direct companion read
   for the admitted resources in the selected credential mode. `ApiActionSpec`
-  literals also require `companion_read_actions` and
-  `optional_rendered_body_owner_prefixes`; use empty vectors when the respective
-  declarations are absent. Upgrade the CLI with the Broker for embedded formatted
-  issue reads: older clients cannot interpret optional body-owner prefixes.
+  literals also require `companion_read_actions`; use an empty vector when the
+  declaration is absent. Upgrade the CLI with the Broker for optional included
+  comment bodies; their declared presence is now expressed by `bodyFields`.
   See [the provider SDK](docs/provider-sdk.md#companion-reads) and
   [presentation metadata](docs/http-api.md).
   ([#84](https://github.com/kcosr/agent-access-broker/pull/84))
@@ -204,6 +220,14 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Output-content preferences** can be set per native service, client or MCP
+  connection. The first applicable preference selects a supported concrete
+  format or the action's declared native format; an explicit per-call selector
+  is strict. HTTP MCP accepts `preferredOutputContentFormat` on each request,
+  and stdio accepts `--preferred-output-content-format`. See
+  [configuration](docs/configuration.md) and [MCP](docs/mcp.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
 
 - **Confluence grants and token restrictions cover exact pages/blogs and page or
   folder subtrees.** Content identities bind site, kind and ID and follow external
@@ -618,6 +642,14 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53))
 
 ### Fixed
+
+- **Completed mutations retain their outcome when response formatting fails.**
+  Body-bearing native writes provide a nonserialized recovery receipt; failed
+  selection or result-size enforcement returns `mutationStatus: "applied"` and
+  `retrySafe: false`. Invalid successful content received by CLI or stdio
+  produces a bounded `response_content_invalid` receipt without returning the
+  rejected body or replaying the operation. See [output handling](docs/cli.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
 
 - A browser session that expires while a portal page is open now shows the
   sign-in choices again, instead of "No browser sign-in method is enabled" until

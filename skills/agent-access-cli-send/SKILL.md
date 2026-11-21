@@ -45,7 +45,7 @@ plus extended `documentation`. Read it for query syntax, field relationships,
 content formats, paging, companion permissions and write outcomes. Follow field
 descriptions even when plain schemas do not enforce an alternative or pairing.
 
-`send` fetches the `agent-access.catalog.v2` catalog before dispatch and fails
+`send` fetches the `agent-access.catalog.v3` catalog before dispatch and fails
 closed if the action/route is absent or discovery fails. Offline send schema is
 generic construction guidance, not authority. Use current specs from the same
 ingress; context, credentials and policy can change visibility. Service
@@ -59,7 +59,7 @@ The invoke shape separates canonical IDs, provider inputs and protocol options:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "SERVICE",
   "action": "ACTION",
@@ -75,18 +75,21 @@ Never include upstream authentication or pre-encoded body text.
 When the action supplies Broker attribution, submit the intended content without
 adding an attribution footer yourself.
 
-Advertised `readContentFormat` and `responseFormat` are siblings of `inputs`.
-Embedded `native|markdown|text` and whole-result `json|markdown` capabilities
-are separate from provider write-content formats. Do not combine whole-result
-Markdown with an explicit non-native embedded format. `send` uses only explicit
-request settings, never ambient CLI format defaults. Formatted results retain
-`responseMode: "json"` and a Broker envelope with
-`result: {"format":"markdown","value":"..."}`; `stream` is for raw downloads.
+Optional `outputContentFormat` and `preferredOutputContentFormat` are siblings
+of `inputs` and accept `markdown`, `text`, `adf`, or `storage`. An exact selector
+must be supported by the selected action. A request preference overrides the
+client's ambient preference, which otherwise comes from client configuration
+or environment. The Broker resolves that preference before the service preference
+and built-in Markdown; an unsupported chosen preference selects the action's
+native format without trying lower tiers. No-body actions ignore preferences.
+These settings are separate from provider write-content formats. Ordinary
+results retain `responseMode: "json"` and the full Broker envelope, with one
+`{format,value}` per declared body; `stream` is for raw downloads.
 
 HTTP-kind requests use a catalog route template, not a provider action:
 
 ```json
-{"version":"agent-access.send.v1","kind":"http","method":"GET","route":"/v1/me"}
+{"version":"agent-access.send.v2","kind":"http","method":"GET","route":"/v1/me"}
 ```
 
 Use declared `pathParams`, `query` and `body` fields from the schema; the CLI
@@ -136,7 +139,7 @@ has URL syntax. Provided action `inputs` remain usable as supplied.
 - JSON and multipart responses may add
   `"output":{"type":"file","path":"./result.json"}` or
   `"output":{"type":"stdout"}`. JSON saves retain the full Broker envelope,
-  including nested Markdown. Raw downloads require `responseMode: "stream"`
+  including selected rich-text values. Raw downloads require `responseMode: "stream"`
   and an output sink; no local path or encoding selector belongs in `inputs`.
 - Optional `metadataOutput` is `{"type":"stderr"}` or
   `{"type":"file","path":"./receipt.json"}` and requires `output`; file
@@ -197,3 +200,11 @@ Local timeout/cancellation does not establish dispatch status. Use only complete
 correlated Broker proofs; for example, a pre-admission cancellation receipt
 requires `executionState: "not_dispatched"` and `retrySafe: true`. A status/reason
 alone or a new rejected attempt cannot resolve an earlier uncertain write.
+
+A presentation-error receipt with `mutationStatus: "applied"` and
+`retrySafe: false` means the
+write completed but its response could not be produced. A client
+`response_content_invalid` receipt means received selected-body data was unusable;
+preserve any reported completion and do not replay the operation to recover its
+response. Read-only calls may be made again explicitly with a supported native
+format when conversion exceeded an output limit; native source limits still apply.

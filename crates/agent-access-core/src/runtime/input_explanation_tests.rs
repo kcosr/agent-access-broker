@@ -38,10 +38,10 @@ fn unknown_identifier_property_is_named_with_the_allowed_properties() {
     assert_eq!(
         message(
             list_schema(),
-            json!({"issue": "DEMO-1", "readContentFormat": "markdown"})
+            json!({"issue": "DEMO-1", "outputContentFormat": "markdown"})
         ),
         format!(
-            "demo.item.list inputs are invalid: inputs.readContentFormat is not allowed; {LIST_ALLOWED}"
+            "demo.item.list inputs are invalid: inputs.outputContentFormat is not allowed; {LIST_ALLOWED}"
         )
     );
     assert_eq!(

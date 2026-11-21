@@ -6,7 +6,7 @@
 //! of keeping parallel per-service tables.
 
 use crate::attribution::AttributionCapability;
-use crate::presentation::ActionPresentation;
+use crate::presentation::{ActionPresentation, OutputContentFormat};
 use crate::{
     ActionCapabilities, ResourceScopeCapabilities, ServiceCapabilities, UpstreamAuthority,
     UpstreamResourceOwnership,
@@ -44,6 +44,8 @@ pub struct ServiceDescriptor {
     pub credentials: CredentialDescriptor,
     /// Largest embedded upstream body the broker renders for this service.
     pub presentation_body_limit: Option<u64>,
+    /// Soft service preference for declared rich-content output fields.
+    pub preferred_output_content_format: Option<OutputContentFormat>,
     /// The upstream instance this service's credentials act on, from its
     /// configuration. A credential connection's consumers must agree on it,
     /// and an OAuth dialect checks it against a registration; a service that
@@ -114,8 +116,8 @@ pub struct ActionDescriptor {
     pub requires_stable_signing_key: bool,
     /// Validate a local signed scope locator before lookup material is acquired.
     pub requires_scope_locator_validation: bool,
-    /// Read-content normalization and whole-result Markdown the action
-    /// supports; `None` means JSON results only.
+    /// Declared rich-content fields and their concrete output formats;
+    /// `None` means the result has no selected body fields.
     pub presentation: Option<ActionPresentation>,
 }
 
@@ -601,6 +603,7 @@ impl ServiceDescriptor {
             actions: Vec::new(),
             credentials: CredentialDescriptor::default(),
             presentation_body_limit: None,
+            preferred_output_content_format: None,
             upstream_authority: None,
             location_entry: None,
         }
@@ -638,6 +641,12 @@ impl ServiceDescriptor {
     /// Largest embedded upstream body the broker renders for this service.
     pub fn with_presentation_body_limit(mut self, bytes: u64) -> Self {
         self.presentation_body_limit = Some(bytes);
+        self
+    }
+
+    /// Selects a soft preference without changing an action's supported formats.
+    pub fn with_preferred_output_content_format(mut self, format: OutputContentFormat) -> Self {
+        self.preferred_output_content_format = Some(format);
         self
     }
 
@@ -968,6 +977,15 @@ impl ServiceDescriptor {
                     "{service}.{name} resolves its resource scope by lookup but declares no resource scope"
                 ));
             }
+            if action
+                .presentation
+                .as_ref()
+                .is_some_and(|presentation| presentation.validate().is_err())
+            {
+                errors.push(format!(
+                    "{service}.{name} declares an invalid response presentation"
+                ));
+            }
             if action.presentation.is_some() && matches!(action.io, ActionIo::RawDownload { .. }) {
                 errors.push(format!(
                     "{service}.{name} streams its result and cannot declare a response presentation"
@@ -1267,6 +1285,7 @@ mod tests {
             actions,
             credentials: CredentialDescriptor::without_execution_credential(),
             presentation_body_limit: None,
+            preferred_output_content_format: None,
             upstream_authority: None,
             location_entry: None,
         }
@@ -1687,13 +1706,18 @@ mod tests {
         let mut unscoped_lookup = action("item.view").lookup(LookupRequirement::ScopeResolution);
         unscoped_lookup.resource_scope = None;
         let presented_download = action("item.download").raw_download().presentation(Some(
-            crate::presentation::ActionPresentation::new(&[], None),
+            crate::presentation::ActionPresentation::new(
+                &[],
+                &[OutputContentFormat::Text],
+                OutputContentFormat::Text,
+            ),
         ));
         let malformed_pointer = action("item.token").sensitive_output("/result/~2");
         assert_eq!(
             errors(vec![unscoped_lookup, presented_download, malformed_pointer,]),
             [
                 "example.item.view resolves its resource scope by lookup but declares no resource scope",
+                "example.item.download declares an invalid response presentation",
                 "example.item.download streams its result and cannot declare a response presentation",
                 "example.item.token sensitive output /result/~2 is not a JSON pointer",
             ]

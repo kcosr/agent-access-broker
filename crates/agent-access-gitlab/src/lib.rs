@@ -23,6 +23,7 @@ use validation::*;
 
 use agent_access_content::append_gitlab_markdown_attribution;
 use agent_access_content::{ContentWriteError, plain_text_to_gitlab_markdown_bounded};
+use agent_access_provider::presentation::OutputContentFormat;
 #[allow(unused_imports)]
 use agent_access_provider::*;
 use async_trait::async_trait;
@@ -997,7 +998,7 @@ impl GitlabProvider {
             inputs.description.as_deref(),
         );
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_issue_update(
@@ -1057,7 +1058,7 @@ impl GitlabProvider {
             inputs.description.as_deref(),
         );
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_issue_note_list(
@@ -1184,7 +1185,7 @@ impl GitlabProvider {
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_issue_note_view(
@@ -1284,7 +1285,7 @@ impl GitlabProvider {
             ],
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_issue_note_delete(
@@ -1519,7 +1520,7 @@ impl GitlabProvider {
             inputs.description.as_deref(),
         );
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_update(
@@ -1590,7 +1591,7 @@ impl GitlabProvider {
             inputs.description.as_deref(),
         );
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_note_list(
@@ -1717,7 +1718,7 @@ impl GitlabProvider {
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_note_view(
@@ -1817,7 +1818,7 @@ impl GitlabProvider {
             ],
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_note_delete(
@@ -2087,7 +2088,7 @@ impl GitlabProvider {
         fields.push(("discussionId", json!(discussion_id)));
         fields.push(("noteId", json!(note_id)));
         add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_discussion_note_add(
@@ -2213,7 +2214,7 @@ impl GitlabProvider {
                 ("noteId", json!(note_id)),
             ],
         );
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_draft_note_list(
@@ -2459,7 +2460,7 @@ impl GitlabProvider {
         }
         add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_draft_note_update(
@@ -2602,7 +2603,7 @@ impl GitlabProvider {
         fields.push(("draftNoteId", json!(inputs.draft_note_id)));
         add_gitlab_review_mutation_audit(&mut result, inputs.iid, actor_id, fields);
         add_gitlab_review_context(&mut result, review_context)?;
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_draft_note_delete(
@@ -4404,7 +4405,7 @@ impl GitlabProvider {
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
         add_gitlab_attribution_audit(&mut result, attribution);
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_discussion_note_update(
@@ -4482,7 +4483,7 @@ impl GitlabProvider {
             ],
         );
         add_gitlab_content_write_audit(&mut result, request.inputs(), Some(&inputs.body));
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_discussion_note_delete(
@@ -4605,7 +4606,7 @@ impl GitlabProvider {
                 ("resolved", json!(inputs.change.resolved())),
             ],
         );
-        Ok(result)
+        Ok(result.with_presentation_recovery_receipt(MutationReceipt::applied()))
     }
 
     async fn invoke_merge_request_merge(
@@ -7294,7 +7295,7 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
         provisioning::with_audit_inputs(action, descriptor)
     }));
     actions.extend(search::descriptors(config));
-    let descriptor = ServiceDescriptor::new("gitlab", "GitLab")
+    let mut descriptor = ServiceDescriptor::new("gitlab", "GitLab")
         .with_resource_scopes(BTreeMap::from([(
             "repository".to_string(),
             ResourceScopeCapabilities::new(
@@ -7323,6 +7324,9 @@ pub fn gitlab_descriptor(config: &GitlabProviderConfig) -> ServiceDescriptor {
                 ),
         )
         .with_presentation_body_limit(config.content.max_body_bytes);
+    if let Some(format) = config.content.preferred_output_format {
+        descriptor = descriptor.with_preferred_output_content_format(format);
+    }
     match gitlab_upstream_authority(&config.api_base_url) {
         Some(authority) => descriptor.with_upstream_authority(authority),
         None => descriptor,

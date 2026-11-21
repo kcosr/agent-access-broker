@@ -1,10 +1,10 @@
 # CLI reference (`agent-access`)
 
-Runtime catalogs use `agent-access.catalog.v2`. Every service includes
+Runtime catalogs use `agent-access.catalog.v3`. Every service includes
 `scopedMcpReady`; every action includes `scopedMcpName` as an exact name or null.
 These fields describe service-specific MCP projection only; canonical action IDs,
 grants, invoke routes, and send envelopes are independent of that projection.
-Catalog-dependent clients must support `agent-access.catalog.v2`. Missing required
+Catalog-dependent clients must support `agent-access.catalog.v3`. Missing required
 metadata is a contract error. Upgrade the CLI and Broker together: resource-access
 discovery requires the current route and response contract and has no compatibility
 aliases.
@@ -13,6 +13,16 @@ aliases.
 token, and transport settings, then calls the broker's HTTP API. The CLI never
 receives upstream credentials: it sends an identity token, and the broker
 resolves and holds all upstream secret material on its side.
+
+Every provider invocation fetches the current runtime catalog before dispatch,
+including ordinary stdout output and actions without rich-text bodies. The
+catalog requires an authenticated caller. Configure a Broker identity token or
+authenticated ingress using the [client identity settings](#config-env-and-default-precedence).
+An anonymous catalog request returns HTTP 401 (CLI exit 6) without invoking the
+action, even when the Broker's `optional` or `anonymous` identity mode permits
+anonymous direct HTTP invocation. Use the [HTTP API](http-api.md) for anonymous
+development calls. `--no-token` supports provider invocation only when the
+configured ingress supplies an authenticated identity.
 
 `mcp serve` runs a local stdio MCP adapter using this client's broker settings.
 Add `--service monitoring` to expose only that canonical service ID, using raw
@@ -26,16 +36,16 @@ Running the HTTP broker service is the job of the separate
 `agent-access-broker` binary. See [local MCP](mcp.md) for client configuration,
 individual action tools, and local file inputs and transfers.
 
-Output is pretty-printed JSON by default, with these exceptions noted below:
-`config validate` and `auth token ...` print plain status lines, `auth
-git-credential ...` speaks Git's credential-helper protocol, eligible provider
-reads can print Broker-produced Markdown, and successful stream downloads to
-explicit stdout write raw bytes. `mcp serve` reserves stdout exclusively for MCP protocol messages.
+Provider invocation output is pretty-printed JSON. Local `config validate` and
+`auth token ...` commands print plain status lines; `auth git-credential ...`
+speaks Git's credential-helper protocol. Successful stream downloads to explicit
+stdout write raw bytes. `mcp serve` reserves stdout exclusively for MCP messages.
 
 ## Save action results to a file
 
-`--output PATH` chooses the local destination; `--output-format` chooses the
-representation where supported. Provider JSON and multipart-upload actions,
+`--output PATH` chooses the local destination; `--output-content-format` chooses
+the representation of declared rich-text fields inside the JSON result. Provider
+JSON and multipart-upload actions,
 including writes, plus runtime `spec` commands, service/resource/action discovery,
 and `broker status` accept a destination. Omitting it, or using `--output -`,
 preserves normal stdout output. Management commands, authentication, and other
@@ -45,20 +55,21 @@ invocation preserves the declared sensitive-output handling.
 
 ```bash
 agent-access jira issue view PROJ-123 --output issue.json
-agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --output-format markdown --output issue.md
+agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123"}' --output-content-format markdown --output issue.json
 agent-access invoke jira.attachment.download --input-json '{"issue":"PROJ-123","attachmentId":"10055"}' --output report.pdf
 agent-access spec catalog --output-format json --output catalog.json
 agent-access services list --output services.json
 ```
 
 Typed JSON actions and `invoke` save the same successful representation they
-would print: a JSON envelope or extracted Markdown. Generic `invoke --output`
+would print: the complete JSON envelope with selected rich-text values. Generic
+`invoke --output`
 also saves every catalog-declared raw download, including native and imported
 command downloads. It fetches the current caller catalog once for planning,
 selects the action's declared I/O, reserves the destination, and negotiates raw
 bytes with the Broker. Missing actions or failed discovery prevent invocation.
-Explicit unsupported Markdown/content conversion options fail locally; ambient
-format defaults do not alter raw bytes.
+Explicit unsupported content-format options fail locally; soft preferences do
+not alter raw bytes.
 
 Downloads require `--output`; relative paths are allowed. `--output -` verifies
 the complete download in a temporary file before emitting only raw bytes on
@@ -67,8 +78,8 @@ ordinary JSON request and the Broker rejects a download before execution.
 A stale catalog never causes fallback execution or automatic retry: refresh
 discovery before making a separate invocation.
 
-For JSON responses, `send` saves the full broker envelope, including when Markdown is nested in
-`result`. Generic file output changes neither the selected action nor its bounds,
+For JSON responses, `send` saves the full broker envelope, including selected
+rich-text values. Generic file output changes neither the selected action nor its bounds,
 pagination, or resource/action authorization. For example, saving `build.log.read`
 saves one bounded JSON chunk; `build.log.download` still retrieves the full
 available console stream and requires an explicit destination.
@@ -96,8 +107,7 @@ client output handling; no filesystem path is added to the broker request.
 Provider response file output supports JSON, multipart-upload and raw-download
 actions from the fresh catalog. `readOnly` classifies upstream effects and does not gate file
 output. It also limits a [read-only identity path](managed-identity.md#read-only-paths)
-to actions classified as reads. Discovery failure prevents dispatch when catalog
-validation is required.
+to actions classified as reads. A catalog discovery failure prevents dispatch.
 
 If a JSON or multipart-upload operation succeeds but saving its response fails,
 the client reports `operationStatus: "succeeded"` and `output.status: "failed"`,
@@ -239,8 +249,8 @@ compiled module package with its `roles`, an `inventoryFingerprint`, and
     {"crate": "agent-access-jira", "version": "0.1.0", "roles": [{"role": "native", "id": "jira"}], "source": {"revision": "3c14665eb32caf14e21373a762da328ea78b79a2", "provenance": "evidence"}}
   ],
   "inventoryFingerprint": "sha256:6f1c9d0e2b7a4c58e93d1f60a2b4c7e8d9f0a1b2c3d4e5f60718293a4b5c6d7e",
-  "catalogVersion": "agent-access.catalog.v2",
-  "sendSchemaVersion": "agent-access.send.v1"
+  "catalogVersion": "agent-access.catalog.v3",
+  "sendSchemaVersion": "agent-access.send.v2"
 }
 ```
 
@@ -464,20 +474,18 @@ caller sees without changing the installed CLI binary.
 ### `invoke` (generic)
 
 - `invoke <service.action> [--input-json <JSON> | --input-file <PATH> | --input-stdin]
-  [--read-content-format native|markdown|text] [--output-format json|markdown] [--output PATH]`
+  [--output-content-format markdown|text|adf|storage] [--output PATH]`
   — `POST /v1/invoke/{service}/{action}`. The positional argument is split at
   the first `.` into service and action. Omitted input defaults to `{}`.
-  The compact input is the provider action input object; the CLI
-  wraps it as the broker `InvokeRequest`. The response flags are common
-  top-level fields, not members of the provider input object. When an output
-  destination is explicit or either effective format is non-default, generic invoke first fetches the
-  caller-filtered catalog. An explicitly requested option fails locally with
-  exit 3 if the action is absent or does not advertise it. An ambient config or
-  environment default is instead omitted in either case, and invoke proceeds
-  with protocol defaults. If required discovery itself fails, no invoke request
-  is made.
-  With `native` plus `json` and no explicit output destination it retains the
-  current single-request path.
+  The input is the provider action object; the CLI supplies the invoke envelope.
+  Every invocation fetches one fresh caller catalog for version, action, format
+  and I/O validation. An unsupported catalog or discovery failure prevents
+  execution. For ordinary JSON stdout, a missing action may still be invoked
+  without an exact selector, leaving access to the Broker and skipping unavailable
+  body-field validation. Exact selectors and I/O-dependent paths require action
+  metadata. Unsupported explicit formats fail locally with exit 3.
+  Soft client preferences remain unresolved until the Broker admits the request;
+  no stale-catalog fallback or automatic replay is performed.
 
 ### `send` (JSON envelope)
 
@@ -492,7 +500,7 @@ Provider invoke envelope:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "issue.create",
@@ -504,17 +512,18 @@ Provider invoke envelope:
 }
 ```
 
-Invoke-kind request files may add top-level `readContentFormat` or
-`responseFormat` when the selected action advertises them. `send` never injects
-the CLI config or environment defaults and never overwrites an explicit value.
-`responseMode` remains `json`; formatted Markdown remains under
-`result = { "format": "markdown", "value": "..." }` in the Broker envelope.
+Invoke-kind request files may add top-level `outputContentFormat` and
+`preferredOutputContentFormat`. An explicit request preference overrides the
+client's ambient preference; an exact selector overrides either preference.
+Both fields are validated even when the exact selector takes precedence.
+`responseMode` remains `json`, and each declared body contains one tagged value
+inside the normal Broker envelope.
 
 HTTP route envelope:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "http",
   "method": "GET",
   "route": "/v1/admin/policy/grants",
@@ -556,7 +565,7 @@ multipart-upload actions also accept `output` while retaining
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "issue.view",
@@ -1117,62 +1126,60 @@ actions, locators, note/discussion terminology, typed examples, generic
 
 ## Read and output formats
 
-JSON is the default for provider commands. Jira comment-list,
-comment-property-list, and attachment-list commands and Confluence current/draft
-attachment-list commands print the standard JSON envelope by default.
-Eligible retrievals use `--output-format markdown`.
+Ordinary provider commands always print the Broker JSON envelope. Declared
+rich-text fields contain exactly `{format,value}` at their existing paths, such
+as Jira `description`, Confluence `body`, or a GitLab note's `body`. The `adf`
+value is a JSON document object; `markdown`, `text` and `storage` values are
+strings. Surrounding metadata stays structured. Missing and permitted null
+bodies stay missing or null; body-free summaries do not gain content.
 
-Typed commands expose `--read-content-format native|markdown|text` exactly on
-actions whose result can contain a declared rich body. Non-native modes preserve
-the native field and add `renderedBody` beside its owning result entity. They
-expose `--output-format json|markdown` only on eligible non-streaming retrievals.
-Whole-result Markdown prints only `result.value` on an `allow` result; Jira or
-Confluence verification mismatches returned as `allow_with_result` also print
-the Markdown value and retain exit 2. Denials and errors remain JSON. Direct HTTP and `send`
-always preserve the JSON envelope.
+Use `--output-content-format markdown|text|adf|storage` for an exact supported
+format. Jira body actions support Markdown, text and ADF; GitLab body actions
+support Markdown and text. Confluence supports Markdown, text and its configured
+native sources. Typed commands offer this flag only for actions that can return
+declared body fields, including fields enabled by provider configuration. Inspect
+`outputContentFormats` and `bodyFields` in action detail for the current supported
+formats. Generic `invoke` and JSON `send` reject an exact selector on an action
+without body support.
 
-Jira workflow commands use `jira issue transition list` and `jira issue transition apply`
-with JSON results. See [workflow transitions](providers-jira.md#issue-workflow-transitions)
-for discovery, required destination IDs and optional status guards.
+Without an exact selector, the Broker uses the client preference, service
+preference, then Markdown. An unsupported chosen preference uses the action's
+native format without trying lower preference tiers. This fallback concerns
+capability only: absent or malformed source data and conversion/size failures
+never trigger another format. Markdown can exceed an output cap even when the
+native source fits. For a read, make a separate explicit native-format request
+if appropriate; never replay a write to recover a response.
 
-For Jira, embedded read formats are supported by `issue view`, `issue create`,
-`issue update`, `issue comment list`, `issue comment view`, `issue comment add`,
-`issue comment reply`, and `issue comment update`. Whole-result output is supported by `project list`, `project view`, `issue-type list`, `issue view`,
-`issue search`, `issue comment list`, `issue comment view`, `issue comment
-property list`, `issue comment property get`, `issue attachment list`, and
-`issue verify`. Other Jira typed commands reject these flags during argument
-parsing with exit 2. A malformed promised Markdown wrapper is a malformed Broker
-response and exits 5. For embedded formats, catalog
-`optionalRenderedBodyOwnerPrefixes` allows an absent declared branch such as
-`commentPage`; malformed present fields or missing required descendants still
-fail response validation.
+Jira issue views and body-enabled comment lists format only comments already
+included under their ordinary companion permissions and pagination. Confluence
+searches and attachment lists remain body-free. An empty configured page/comment
+source list removes the body field; blog and draft reads retain their documented
+storage support. For Markdown/text conversion, Confluence chooses available ADF
+before storage and validates all fetched configured sources.
 
-For Confluence, embedded read formats are supported by current page/blog view,
-page/blog draft view, every page/blog footer/inline comment list/view/reply-list
-read, page/blog footer-comment add, every page/blog footer/inline comment
-update, and every page/blog footer/inline reply add. Whole-result output is
-supported by space list, current page/blog view/search/verify, page/blog draft view/verify,
-current and draft attachment lists, and every page/blog footer/inline comment
-list/view/reply-list read. Search and attachment output remains body-free;
-comment and reply lists format only the bodies already returned.
+Where a Confluence command exposes `--body-format storage`, it chooses the
+upstream representation independently of `--output-content-format`. Write-side
+`--content-format` continues to describe supplied content. No output preference
+changes either input contract or causes an extra provider request.
 
-Where a Confluence read command exposes `--body-format`, the only supported
-value is `storage`; it selects that action's upstream native representation.
-Current `page view` does not expose `--body-format`: its returned
-`atlas_doc_format` representation, when present, is enabled by the Broker's
-`[providers.confluence.content].page_formats` configuration rather than a
-caller flag. `--read-content-format` preserves the native body and adds a
-companion, while `--output-format` selects whole-result presentation. If a
-current page result contains both representations, normalization selects
-present ADF before storage and does not fall back when selected ADF is
-malformed. `renderedBody` is beside the entity's `body`, never inside the
-native representation map.
+The client validates only declared `bodyFields`, including optional/null paths
+and custom-field predicates. Exact requests require the returned tag to match.
+Preference-selected output accepts any known concrete tag with the matching value
+type, because source capabilities may change after discovery. An invalid received
+successful body yields a payload-free `response_content_invalid` receipt on
+stderr and exit 5, retaining known completion with `retrySafe: false`; this also
+applies when saving to a file. Do not repeat the operation.
 
-- `attachment download --output -`, `gitlab file raw --output -`, and
-  `gitlab job trace --output -` stream the raw bytes to stdout (through an
-  integrity-checked temp file), print no metadata on success, and never expose
-  the presentation flags. Any other `--output` writes the file and prints the
-  metadata JSON with an `output` file receipt.
+A server presentation-error receipt with `mutationStatus: "applied"` and
+`retrySafe: false` means a write
+completed but its selected response could not be produced. It preserves the
+original presentation failure reason code. This differs from an upstream uncertain
+or unverified write; inspect the receipt before taking further action.
+
+`attachment download --output -`, `gitlab file raw --output -`, and
+`gitlab job trace --output -` emit verified raw bytes without a JSON success
+receipt. File destinations preserve their existing binary and receipt behavior.
+Runtime spec export continues to use `--output-format json`.
 
 ## `credentials put` field model
 
@@ -1246,11 +1253,10 @@ validation.
   treats storage, Markdown, and plain text as literal UTF-8. All twenty require
   content. File reads use the same 512 MiB CLI safety ceiling; the lower Broker
   and provider caps remain authoritative.
-- Confluence read commands and read response bodies may use provider-native
-  `bodyFormat`; that is distinct from write `contentFormat`.
-- `--content-format` describes write input only. `--read-content-format`
-  controls the shipped, action-scoped embedded read companion, while
-  `--output-format markdown` controls the independent whole-result presentation.
+- Confluence read commands may use provider-native `bodyFormat` inputs;
+  those are distinct from write `contentFormat` and output content selection.
+- `--content-format` describes write input only. `--output-content-format`
+  selects the representation of declared returned bodies within JSON.
 - The sixteen GitLab issue/MR description, note, discussion, draft, and summary
   mutations use
   the same source rules with required explicit `--content-format
@@ -1262,7 +1268,7 @@ validation.
   blocks are rejected before a write to prevent hidden side effects or body
   stripping; fenced examples remain literal content. See the provider contract
   for the exact allow/reject grammar.
-- No rich-content format is inferred from a filename, configuration,
+- No write-content format is inferred from a filename, configuration,
   environment variable, or default for any provider. Inspect the exact
   caller-filtered action catalog's `contentFormat.enum` to detect support.
 
@@ -1303,23 +1309,25 @@ explicitly configured default still occupies the config tier.
 | Insecure HTTP override | `--allow-insecure-broker-http` | (none) | `AGENT_ACCESS_ALLOW_INSECURE_BROKER_HTTP` (case-insensitive `true`) | off |
 | HTTPS certificate verification | (none) | `service.tls.verify_certificates` | (none) | `true` |
 | Additional HTTPS CA files | (none) | `service.tls.additional_ca_cert_files` | (none) | `[]` |
-| Embedded read content | per-command `--read-content-format` | `defaults.read_content_format` | `AGENT_ACCESS_READ_CONTENT_FORMAT` | `native` |
-| Complete result | per-command `--output-format` | `defaults.output_format` | `AGENT_ACCESS_OUTPUT_FORMAT` | `json` |
+| Output content preference | stdio `--preferred-output-content-format` | `defaults.preferred_output_content_format` | `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT` | absent; Broker uses service preference, then Markdown |
 
-Format config and environment values are validated even when a command cannot
-use them. A valid non-default ambient value is included only when that action
-advertises the capability. When a non-default format is in effect, typed
-commands and generic invoke both read the action's advertised formats from the
-caller-filtered runtime catalog; at the defaults they send no catalog request.
-An ambient value is omitted when the catalog omits the selected action; the
-same condition for an explicit flag is a local input error. The CLI checks
-returned `renderedBody` companions only at the action's catalog
-`renderedBodyOwners`: each owner must be present and an object, and a companion
-must carry the requested format and a string value. A catalog that advertises
-`readContentFormats` without owners is a malformed Broker response and exits 5
-before the request is sent.
-An explicit `--output-format markdown` suppresses an ambient non-native
-`read_content_format` because the two representations are mutually exclusive.
+The optional client preference accepts `markdown`, `text`, `adf`, or `storage`.
+Config overrides environment. The stdio process flag overrides both and otherwise
+stdio reloads client settings per call. Typed/generic `--output-content-format`
+is a strict per-invocation selector, not another preference tier. A JSON send
+request's `preferredOutputContentFormat` overrides the ambient client preference.
+The client passes preferences to the Broker for authoritative selection and
+native fallback; body-free actions ignore valid preferences.
+
+Every invocation, including default-format, multipart and download calls, checks
+one fresh caller catalog. `actions describe` shows the client-effective default;
+raw `spec catalog` remains the canonical service-default document.
+
+Invalid output settings fail locally. Operational commands reject retired
+format settings at startup with exit 3 on stderr, before network or protocol
+output. Clap help/version are config-independent. A later invalid stdio config
+reload returns a normal tool error without dispatch and leaves the process running.
+See [upgrade requirements](operator-guide.md#output-content-contract-upgrade).
 
 The token is disabled when `--no-token` is set, OR the config file exists and
 `identity.disabled` is true, OR `AGENT_ACCESS_NO_TOKEN` equals `true`
@@ -1568,7 +1576,9 @@ still needs current identity, configuration and authorization.
 
 ## Recipes
 
-These assume a broker reachable at `http://127.0.0.1:8787`.
+These assume a broker reachable at `http://127.0.0.1:8787`. Invocation and runtime
+spec examples require a configured identity token or authenticated ingress with
+caller catalog access. See [identity settings](#config-env-and-default-precedence).
 
 ### Validate the CLI config locally
 
@@ -1578,6 +1588,8 @@ agent-access --config agent-access.sample.toml config validate
 
 ### Discover services and actions
 
+These basic service queries may be anonymous when the Broker permits it:
+
 ```bash
 agent-access --url http://127.0.0.1:8787 --no-token services list
 agent-access --url http://127.0.0.1:8787 --no-token services describe jira
@@ -1586,10 +1598,10 @@ agent-access --url http://127.0.0.1:8787 --no-token services describe jira
 ### Generic invoke
 
 ```bash
-agent-access --url http://127.0.0.1:8787 --no-token \
+agent-access --url http://127.0.0.1:8787 \
   invoke fake.echo --input-json '{"project":"TEST","message":"hello"}'
 
-agent-access --url http://127.0.0.1:8787 --no-token \
+agent-access --url http://127.0.0.1:8787 \
   invoke fake.echo --input-file ./input.json
 ```
 
@@ -1613,7 +1625,7 @@ Use `jira project list` for live projects allowed by the action’s effective
 grants. Optional `--max-results` defaults to the configured limit (50; at most
 100). Pass `--page-token` from `nextPageToken` with the same page size until
 `scanStatus` is `exhausted`, including after empty `scan_budget` pages.
-`--output-format markdown` renders the collection and its pagination state.
+JSON output contains the collection and its pagination state.
 See [live project listing](providers-jira.md#live-project-listing).
 
 Use `jira project view PROJ` to discover project details and searchable fields
@@ -1626,14 +1638,14 @@ before the 100-item cap. See [project details and searchable fields](providers-j
 
 ```bash
 agent-access jira project list
-agent-access jira project view PROJ --output-format markdown
+agent-access jira project view PROJ
 agent-access jira issue search --project PROJ --jql 'cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"'
 ```
 
 Use `jira issue-type list --project PROJ` before creation to discover names,
 descriptions, decimal-string IDs, and subtask markers. Optional `--start-at`
 and `--max-results` request one page (defaults `0` and `50`; maximum `100`).
-Use `--output-format markdown` for a readable list. Follow `nextStartAt` until
+The JSON result contains the returned list. Follow `nextStartAt` until
 `isLast` is true. The selected Jira execution credential needs Create issues
 permission; broker grants still authorize reads and writes separately.
 See [project issue types](providers-jira.md#project-issue-types).
@@ -1642,8 +1654,8 @@ See [project issue types](providers-jira.md#project-issue-types).
 agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --include-comments
 agent-access --url http://127.0.0.1:8787 jira issue comment list --issue PROJ-123 --include-bodies
-agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --read-content-format markdown
-agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --output-format markdown
+agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --output-content-format markdown
+agent-access --url http://127.0.0.1:8787 jira issue view PROJ-123 --output-content-format adf
 agent-access --url http://127.0.0.1:8787 jira issue view --issue-url https://example.atlassian.net/browse/PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout'
 agent-access --url http://127.0.0.1:8787 jira issue create --project PROJ --issue-type-id 10001 --summary 'Document deployment rollout' --content-file description.md --content-format markdown
@@ -1655,7 +1667,6 @@ agent-access --url http://127.0.0.1:8787 jira issue child create --project PROJ 
 agent-access --url http://127.0.0.1:8787 jira issue parent set PROJ-124 --parent PROJ-123
 agent-access --url http://127.0.0.1:8787 jira issue dependency add --blocking PROJ-123 --blocked PROJ-124
 agent-access --url http://127.0.0.1:8787 jira issue search --text 'deployment checklist' --max-results 10
-agent-access --url http://127.0.0.1:8787 jira issue search --text 'deployment checklist' --max-results 10 --output-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue comment add --issue PROJ-123 --content-file comment.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 jira issue comment reply 10042 --issue PROJ-123 --content 'Acknowledged.' --content-format plain_text
 agent-access --url http://127.0.0.1:8787 jira issue attach PROJ-123 ./design.md --content-type text/markdown
@@ -1695,17 +1706,16 @@ authorization behavior.
 ### Confluence (typed)
 
 `agent-access confluence space list [--max-results N] [--page-token TOKEN]`
-returns one live grant-filtered page; `--output-format markdown` is supported.
+returns one live grant-filtered page as JSON.
 Continue `more` and `scan_budget` results even when empty. See
 [space listing](providers-confluence.md#live-space-listing).
 
 ```bash
 agent-access --url http://127.0.0.1:8787 confluence page view 123456
-agent-access --url http://127.0.0.1:8787 confluence page view 123456 --read-content-format markdown
-agent-access --url http://127.0.0.1:8787 confluence page view 123456 --output-format markdown
+agent-access --url http://127.0.0.1:8787 confluence page view 123456 --output-content-format markdown
+agent-access --url http://127.0.0.1:8787 confluence page view 123456 --output-content-format storage
 agent-access --url http://127.0.0.1:8787 confluence page view --page-url 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456'
 agent-access --url http://127.0.0.1:8787 confluence page search --text 'runbook' --max-results 10
-agent-access --url http://127.0.0.1:8787 confluence page search --text 'runbook' --max-results 10 --output-format markdown
 agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title "Deploy Runbook" --content-file page.md --content-format markdown
 agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title "Child Runbook" --parent-kind page --parent-id 123456 --content-file child.storage.html --content-format storage
 agent-access --url http://127.0.0.1:8787 confluence page update 123456 --base-version 7 --content-file page.adf.json --content-format atlas_doc_format
@@ -1713,7 +1723,7 @@ agent-access --url http://127.0.0.1:8787 confluence page move 234567 --position 
 agent-access --url http://127.0.0.1:8787 confluence page move 234567 --position after --target 345678
 agent-access --url http://127.0.0.1:8787 confluence page attach 123456 ./diagram.png --content-type image/png
 agent-access --url http://127.0.0.1:8787 confluence page footer-comment add 123456 --content "Deployment complete." --content-format plain_text
-agent-access --url http://127.0.0.1:8787 confluence page footer-comment list 123456 --read-content-format text
+agent-access --url http://127.0.0.1:8787 confluence page footer-comment list 123456 --output-content-format text
 agent-access --url http://127.0.0.1:8787 confluence blog view 222222
 agent-access --url http://127.0.0.1:8787 confluence blog create --space ENG --title "Release Notes" --content-file release.md --content-format markdown
 ```
@@ -1761,13 +1771,12 @@ returns `result.upload` with attachment paths and Markdown; see the
 
 ```bash
 agent-access --url http://127.0.0.1:8787 gitlab project view team/project
-agent-access --url http://127.0.0.1:8787 gitlab project view team/project --output-format markdown
 agent-access --url http://127.0.0.1:8787 gitlab project view --project-url 'https://gitlab.example.com/team/project'
 agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123
-agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --read-content-format markdown
-agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --output-format markdown
+agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --output-content-format markdown
+agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --output-content-format text
 agent-access --url http://127.0.0.1:8787 gitlab issue search team/project --state opened --label bug --search 'deploy' --max-results 10
-agent-access --url http://127.0.0.1:8787 gitlab issue search team/project --state opened --search 'deploy' --max-results 10 --output-format markdown
+agent-access --url http://127.0.0.1:8787 gitlab issue search team/project --state opened --search 'deploy' --max-results 10
 agent-access --url http://127.0.0.1:8787 gitlab issue search team/project --state opened --label bug --search 'deploy' --max-results 10 --page-token "$NEXT_PAGE_TOKEN"
 agent-access --url http://127.0.0.1:8787 gitlab issue create team/project --title "Fix deploy docs" --content-file issue.md --content-format markdown --label docs --assignee-id 101
 agent-access --url http://127.0.0.1:8787 gitlab issue comment team/project 123 --content-file comment.md --content-format markdown
@@ -1776,8 +1785,8 @@ agent-access --url http://127.0.0.1:8787 gitlab issue view-comment team/project 
 agent-access --url http://127.0.0.1:8787 gitlab merge-request view team/project 45
 agent-access --url http://127.0.0.1:8787 gitlab merge-request list-comments team/project 45 --projection summary
 agent-access --url http://127.0.0.1:8787 gitlab merge-request view-comment team/project 45 NOTE_ID
-agent-access --url http://127.0.0.1:8787 gitlab merge-request list-discussions team/project 45 --max-results 20 --projection summary --output-format markdown
-agent-access --url http://127.0.0.1:8787 gitlab merge-request view-discussion team/project 45 DISCUSSION_ID --output-format markdown
+agent-access --url http://127.0.0.1:8787 gitlab merge-request list-discussions team/project 45 --max-results 20 --projection summary
+agent-access --url http://127.0.0.1:8787 gitlab merge-request view-discussion team/project 45 DISCUSSION_ID
 agent-access --url http://127.0.0.1:8787 gitlab merge-request list-reviewers team/project 45
 agent-access --url http://127.0.0.1:8787 gitlab merge-request list-commits team/project 45 --max-results 20
 agent-access --url http://127.0.0.1:8787 gitlab merge-request list-pipelines team/project 45
@@ -1808,7 +1817,6 @@ agent-access --url http://127.0.0.1:8787 gitlab merge-request apply-suggestion t
 agent-access --url http://127.0.0.1:8787 gitlab merge-request apply-suggestions team/project 45 --suggestions-file suggestions.json --expected-head-sha "$HEAD_SHA"
 agent-access --url http://127.0.0.1:8787 gitlab branch list team/project --search main
 agent-access --url http://127.0.0.1:8787 gitlab file view team/project --path README.md --ref main
-agent-access --url http://127.0.0.1:8787 gitlab file view team/project --path README.md --ref main --output-format markdown
 agent-access --url http://127.0.0.1:8787 gitlab commit list team/project --ref-name main --first-parent true --max-results 10
 agent-access --url http://127.0.0.1:8787 gitlab pipeline list team/project --ref work/docs --status success --max-results 10
 agent-access --url http://127.0.0.1:8787 gitlab job list team/project --pipeline-id 12345 --scope failed --max-results 10
@@ -1853,8 +1861,8 @@ with basic defaults this includes code, commits, wiki, and comments. `--regex`
 exists only on code and requires Zoekt. Native syntax, index coverage, and
 ranking depend on the engine. No fallback engine or project crawling is used.
 
-All eight commands support `--max-results`, `--page-token`,
-`--output-format json|markdown`, and local `--output` options. Repeat the original
+All eight commands support `--max-results`, `--page-token`, and local `--output`
+options, with JSON results. Repeat the original
 query, filters, project, engine, regex choice, and page size when resuming.
 `scanStatus=more` and `scan_budget` carry continuations without promising another
 authorized match. An empty resumable page means “No matching authorized items in
@@ -1877,11 +1885,10 @@ the four projected collection commands also reuse `--projection`.
 Issue/MR `list-comments`, MR `list-discussions`, and `list-draft-notes` accept
 `--projection full|summary` and default to `full`; results echo the selected
 projection. Summary retains identifiers, actor/state, timestamps, and full
-normalized positions while omitting bodies, rendered bodies, suggestions, and
+normalized positions while omitting bodies, suggestions, and
 redundant target metadata. Discussion summaries include `noteCount` and every
 nested note in order; draft summaries retain reply `discussionId` and
-positioned `position`. Summary `--read-content-format` is a no-op. Summary
-whole-result Markdown remains body- and suggestion-free.
+positioned `position`. Output format selection does not add a body to a summary.
 
 Pagination tokens bind projection, so repeat it with `--page-token`; a full
 token cannot continue a summary request. Draft tokens also bind the proven
@@ -1993,23 +2000,13 @@ and streams only the current diff. Its metadata records the preflight head, but
 GitLab cannot pin that stream to a SHA; use `view-diff-version` for a historical
 snapshot.
 
-GitLab read presentation uses the same provider-neutral controls as Jira and
-Confluence. Embedded `--read-content-format markdown` preserves each native
-issue/MR description or note/discussion body and adds `renderedBody` beside its
-owner; because Markdown is GitLab-native, the embedded Markdown value is
-byte-for-byte identical. `text` derives bounded readable text and suppresses
-active raw HTML. Eligible result families include issue and merge-request
-descriptions, notes, discussion notes, and draft notes.
-
-`--output-format markdown` instead prints one semantic Markdown document for
-the exact existing result. Eligible retrieval families include project, issue,
-merge-request, note/discussion/draft, reviewer, current/historical structured diff,
-branch, protected-branch, file, commit, pipeline, and job reads. Templates retain
-meaningful present fields, collection order, pagination, file-view base64, and
-literal commit messages; they do not dump arbitrary JSON, fetch related data,
-decode file content, or follow pagination. Raw file/job-trace downloads and all
-mutation results do not expose whole-result Markdown; raw MR diff is likewise a
-stream and does not expose it.
+GitLab output content uses the same provider-neutral selector as Jira and
+Confluence. `--output-content-format markdown` puts each declared description or
+note/discussion body in a tagged object and preserves its native Markdown bytes.
+`text` derives bounded readable text and suppresses active raw HTML. Surrounding
+metadata stays JSON. Eligible fields include issue/MR descriptions, notes,
+discussion notes and draft notes; no conversion is inferred for project metadata,
+file content, commit messages, raw diffs or job traces.
 
 Review mutations are not automatically retried. If GitLab may have applied a
 write but its final state cannot be proven, the broker returns HTTP 409 with
@@ -2028,10 +2025,8 @@ review-submit summary; it does not apply to draft update. Audit records never
 contain review bodies, summaries, patches, native
 line codes, or continuation tokens.
 
-These read controls are independent from write `--content-format`. Do not
-combine explicit non-native `--read-content-format` with whole-result Markdown.
-Use command help or catalog capability arrays rather than inferring support from
-an action name.
+These output controls are independent from write `--content-format`. Use command
+help or catalog capabilities rather than inferring support from an action name.
 
 #### GitLab project webhooks
 

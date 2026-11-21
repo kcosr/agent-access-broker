@@ -271,9 +271,8 @@ scopes, group selectors, project arrays, branch/ref choices, or query parameters
 All eight actions accept `maxResults` from 1 through
 `providers.gitlab.search.max_results` (at most 100) and optional `pageToken`
 (at most 512 ASCII bytes). The configured cap is the default page size. Typed
-flags are `--max-results` and `--page-token`; all commands support `--output-format
-json|markdown` and the existing local output options. Their previews are fixed
-projections, without `readContentFormat`. All eight input schemas reject unknown
+flags are `--max-results` and `--page-token`; all commands retain the local output
+options. Search previews are fixed JSON projections without rich-body selectors. All eight input schemas reject unknown
 fields.
 
 These actions use the same catalog, generic invoke, send, OpenAPI, and MCP
@@ -284,7 +283,7 @@ agent-access invoke gitlab.search.code --input-json '{"search":"verify_token","p
 ```
 
 ```json
-{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"release","maxResults":20}}
+{"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"release","maxResults":20}}
 ```
 
 For MCP, call the discovered action tool with `{"inputs":{"search":"release"}}`.
@@ -434,7 +433,7 @@ the local file:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "gitlab",
   "action": "project.upload",
@@ -498,10 +497,8 @@ Typed CLI examples:
 
 ```bash
 agent-access --url http://127.0.0.1:8787 gitlab project view team/project
-agent-access --url http://127.0.0.1:8787 gitlab project view team/project --output-format markdown
 agent-access --url http://127.0.0.1:8787 gitlab project view --project-url 'https://gitlab.example.com/team/project'
-agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --read-content-format markdown
-agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --output-format markdown
+agent-access --url http://127.0.0.1:8787 gitlab issue view team/project 123 --output-content-format markdown
 agent-access --url http://127.0.0.1:8787 gitlab issue create team/project --title 'Fix deploy docs' --content-file issue.md --content-format markdown --label docs
 agent-access --url http://127.0.0.1:8787 gitlab issue comment team/project 123 --content 'Looks good.' --content-format plain_text
 agent-access --url http://127.0.0.1:8787 gitlab merge-request view team/project 45
@@ -521,8 +518,8 @@ Generic invoke uses canonical action names and compact JSON inputs:
 ```bash
 agent-access invoke gitlab.project.view --input-json '{"project":"team/project"}'
 agent-access invoke gitlab.issue.view --input-json '{"project":"team/project","iid":123}'
-agent-access invoke gitlab.issue.view --input-json '{"project":"team/project","iid":123}' --read-content-format text
-agent-access invoke gitlab.issue.search --input-json '{"project":"team/project","state":"opened","maxResults":10}' --output-format markdown
+agent-access invoke gitlab.issue.view --input-json '{"project":"team/project","iid":123}' --output-content-format text
+agent-access invoke gitlab.issue.search --input-json '{"project":"team/project","state":"opened","maxResults":10}' --output-content-format markdown
 agent-access invoke gitlab.issue.view --input-json '{"url":"https://gitlab.example.com/team/project/-/issues/123"}'
 agent-access invoke gitlab.issue.search --input-json '{"project":"team/project","state":"opened","search":"deploy","maxResults":10}'
 agent-access invoke gitlab.issue.note.add --input-json '{"project":"team/project","iid":123,"content":"Looks good.","contentFormat":"plain_text","confidential":false}'
@@ -537,7 +534,7 @@ JSON `send` request files use the same service/action/input vocabulary:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "gitlab",
   "action": "issue.view",
@@ -545,13 +542,13 @@ JSON `send` request files use the same service/action/input vocabulary:
     "project": "team/project",
     "iid": 123
   },
-  "responseFormat": "markdown"
+  "outputContentFormat": "markdown"
 }
 ```
 
 `send` keeps the standard JSON response envelope. Extract
-`result.format = "markdown"` and `result.value`; CLI config and environment
-presentation defaults are never injected into a request file.
+`result.issue.description.format = "markdown"` and its `value`. This example's
+exact `outputContentFormat` takes precedence over any output preference.
 
 Direct HTTP uses the same action path and wraps inputs under `inputs`. The
 example assumes `$AAB_CURL_AUTH` points to a curl config containing the broker
@@ -562,14 +559,13 @@ curl -fsS \
   --config "$AAB_CURL_AUTH" \
   -H "X-Agent-Access-Request-Id: gitlab-issue-view-1" \
   -H "Content-Type: application/json" \
-  -d '{"inputs":{"project":"team/project","iid":123},"readContentFormat":"markdown"}' \
+  -d '{"inputs":{"project":"team/project","iid":123},"outputContentFormat":"markdown"}' \
   "$BROKER_URL/v1/invoke/gitlab/issue.view"
 ```
 
-To request the whole result through HTTP, send
-`"responseFormat":"markdown"` beside `inputs`. HTTP remains
-`application/json`; the Markdown is returned in
-`result = {"format":"markdown","value":"..."}`.
+HTTP remains `application/json`; the selected Markdown is returned at
+`result.issue.description = {"format":"markdown","value":"..."}` with the
+issue metadata beside it.
 
 For raw file, MR-diff and job-trace downloads, use `agent-access invoke --output`,
 a typed download command, or `agent-access send` with an output sink. `send` also
@@ -1000,7 +996,7 @@ echo the selected projection in the result:
 `full` preserves the complete normalized objects and existing rich-content
 behavior. `summary` keeps stable IDs, actor/state fields, timestamps, commit
 association, and the complete normalized `position` when present, but omits
-`body`, `renderedBody`, all suggestions, `resolvedBy`, and redundant target
+`body`, all suggestions, `resolvedBy`, and redundant target
 metadata. Absent optional summary fields are omitted rather than serialized as
 null. A discussion summary preserves discussion and nested-note order, includes
 `noteCount`, and summarizes every nested note without truncating the thread. A
@@ -1010,10 +1006,9 @@ positioned drafts.
 Projection is output-only: authorization, target/owner validation, body caps,
 and normalized-position validation run first, and the Broker fetches the same
 upstream page. It reduces Broker response and agent-context size, not upstream
-GitLab bandwidth. With `summary`, `readContentFormat` is a no-op because no
-body owner remains. Whole-result Markdown is still supported and contains
-projection, locators, state, timestamps, positions, and pagination without
-body or suggestion content.
+GitLab bandwidth. With `summary`, the output content selector has no bodies
+to select. JSON retains projection, locators, state, timestamps, positions, and
+pagination without body or suggestion content.
 
 Continuation tokens bind projection in addition to the existing action,
 locator, pagination, sort, execution context, principal, credential-mode,
@@ -1465,16 +1460,14 @@ Returned notes, including notes nested in discussions, expose GitLab's immutable
 numeric `authorUserId` alongside `authorUsername` when GitLab supplies the
 author identity.
 
-## Normalized read content and whole-result Markdown
+## Output content formats
 
-GitLab read presentation uses the common top-level invoke controls, never
-GitLab `inputs`. `readContentFormat` accepts `native`, `markdown`, or `text`;
-omission is `native`. A non-native request preserves the native `description`
-or `body` and adds `renderedBody = { format, value }` beside its owning issue,
-merge request, note, or nested discussion note. Missing and null bodies remain
-absent; a present empty string produces a present empty companion.
-
-GitLab action results declare rich content for these families:
+GitLab results stay structured JSON. The common top-level `outputContentFormat`
+selects `markdown` or `text` for every declared rich body, replacing that field
+with `{ "format": "markdown", "value": "..." }` or the corresponding text
+representation. Metadata retains its structure. Missing and null bodies retain
+their absence or null value; a present empty string becomes an empty selected
+body. These 28 actions declare rich content:
 
 | Result family | Actions and content owner |
 | --- | --- |
@@ -1486,79 +1479,47 @@ GitLab action results declare rich content for these families:
 | Discussion note | `merge_request.discussion.note.add`, `merge_request.discussion.note.update`; returned note `body` |
 | Draft notes | `merge_request.draft_note.list`, `merge_request.draft_note.view`, `merge_request.draft_note.add`, `merge_request.draft_note.update`; each returned draft note `body` |
 
-`merge_request.merge` returns no declared description. Delete acknowledgements,
-repository-file content, commit messages, and job traces are not guessed as
-rich content. Embedded Markdown is the exact GitLab-native string, byte for
-byte. Embedded `text` uses a bounded CommonMark/GitLab-aware traversal that
-keeps readable structure while suppressing active raw HTML. It never follows
-links, resolves references, or fetches related resources.
+`merge_request.merge` returns no declared description. Repository-file content,
+commit messages, diffs, snippets, and job traces retain their own ordinary text
+or raw-download contracts. `summary` projections omit bodies. Selected Markdown
+is the exact GitLab-native string, byte for byte. Selected text uses a bounded
+CommonMark/GitLab-aware traversal that keeps readable structure while suppressing
+active raw HTML. Selection never changes endpoints, queries, page membership,
+or continuation tokens, and never fetches related resources.
 
-`responseFormat` accepts `json` or `markdown`; omission is `json`.
-Non-streaming retrieval actions advertise whole-result Markdown for these
-families:
+Without an exact selection, the Broker uses `preferredOutputContentFormat`
+from the request or connection, then `providers.gitlab.content.preferred_output_format`,
+then Markdown. An unsupported preference selects native Markdown without trying
+lower-priority preferences. Exact unsupported formats fail before provider work.
+Write `inputs.contentFormat` remains independent. The CLI flag is
+`--output-content-format`; its configured preference is
+`[defaults].preferred_output_content_format`. `send` inherits the ambient client
+preference unless its envelope includes `preferredOutputContentFormat`; an exact
+`outputContentFormat` takes precedence over either preference.
+Inspect `outputContentFormats`, `nativeOutputContentFormat`,
+`defaultOutputContentFormat`, and `bodyFields` in the caller-filtered catalog.
 
-- `project.view`, `project.list`, `project.search`, and all six `search.*` actions;
-- `issue.view`, `issue.search`, and `issue.note.list/view`;
-- `merge_request.view`, `merge_request.search`,
-  `merge_request.note.list/view`, `merge_request.discussion.list/view`, reviewer,
-  MR commit, MR pipeline, current structured diff, diff-version reads, and
-  `merge_request.draft_note.list/view`, plus approval summary, approval state,
-  and approval-rule list/view reads;
-- `branch.list`, `branch.view`, `protected_branch.list`,
-  `protected_branch.view`, and `protected_branch.verify`;
-- `file.view`, `commit.list`, and `commit.view`; and
-- `pipeline.list`, `pipeline.view`, `job.list`, and `job.view`.
+Every declared body is validated and bounded by
+`providers.gitlab.content.max_body_bytes`, including native Markdown. Parsing
+depth, event count, and shared work budgets bound text conversion. Selected
+bodies and the final serialized JSON must also fit
+`limits.max_upstream_response_bytes`. Oversized, malformed, or over-complex
+content fails atomically as sanitized `upstream_protocol_failed`/502; failed
+selection never falls back or truncates content.
 
-Each renderer is a typed semantic template, not a recursive JSON-to-bullet
-dump. It includes every meaningful present result field in stable order and
-preserves exact identifiers, SHAs, timestamps, booleans, URLs, collection
-order, counts, and opaque continuation tokens. Issue and merge-request searches
-and note/discussion lists render only descriptions or bodies already contained
-in their normal result. `file.view` renders its content status and any requested
-text in a collision-safe literal fenced block, and commit messages are
-literal preformatted text rather than outer-document Markdown. GitLab bodies
-are parsed and safely re-emitted for whole-result composition so an unclosed
-fence, list, raw HTML block, or extension cannot consume later broker metadata.
-
-Formatting never changes the GitLab endpoint, query parameters, selected
-fields, page membership, or continuation-token contract and performs zero
-additional provider requests. Mutations do not advertise whole-result
-Markdown. `file.raw.download`, `job.trace.download`, and
-`merge_request.diff.raw.download` advertise neither read feature and retain the
-raw stream contract.
-
-Typed and generic CLI commands use `--read-content-format` and
-`--output-format`; successful whole-result Markdown prints only the Markdown
-value. Direct HTTP and `send` keep the standard JSON envelope. Client defaults
-are `[defaults].read_content_format` and `[defaults].output_format`, with
-environment overrides `AGENT_ACCESS_READ_CONTENT_FORMAT` and
-`AGENT_ACCESS_OUTPUT_FORMAT`; resolution is command flag, then client config,
-then environment, then `native`/`json`. A valid ambient non-default is omitted
-for an action that does not advertise it. `send` never injects ambient values.
-An explicit non-native embedded format cannot be combined with whole-result
-Markdown. Always inspect `readContentFormats` and `responseFormats` in the
-caller-filtered catalog instead of inferring capability from a Broker version
-or GitLab write support.
-
-Every declared returned body is structurally checked and bounded by
-`providers.gitlab.content.max_body_bytes`, including omitted or explicit
-`native`. Parsing depth, event count, work, per-body rendered output, and
-aggregate rendered-work caps are fixed defensive constants. Aggregate rendered
-bytes, whole-document bytes, and the final serialized result are bounded by the
-configurable `limits.max_upstream_response_bytes`. All limits apply without
-truncation.
-Malformed or oversized upstream content, complexity exhaustion, or rendered
-output overflow fails atomically as sanitized
-`upstream_protocol_failed`/502—there is no native or partial fallback. Native
-bodies, rendered bodies, whole-result Markdown, file contents, arbitrary literal
-values, and pagination tokens are excluded from audit records, tracing, logs,
-errors, metric labels, and object identifiers.
+All sixteen body-returning issue, merge-request, note, draft-note, and discussion
+mutations preserve `mutationStatus: "applied"` and `retrySafe: false` if an
+already completed operation later fails presentation. The payload-free receipt
+says the mutation completed but its response could not be produced. Do not
+repeat the write. Read results never claim mutation completion. Native and
+selected bodies, file contents, arbitrary literal values, and pagination tokens
+remain excluded from audit and diagnostics.
 
 ## Merge, repository, and CI action contracts
 
 `project.view` returns project metadata, including optional `description`,
 `lastActivityAt`, and `starCount` when GitLab supplies them. These fields are
-also included in whole-result Markdown. Description is subject to
+retained in structured JSON. Description is subject to
 `providers.gitlab.content.max_body_bytes`; oversized descriptions fail with
 `upstream_protocol_failed` rather than being truncated.
 
@@ -1648,7 +1609,7 @@ value is not a guaranteed raw-byte checksum.
 
 HTTP MCP supports these inline reads, including explicitly raised budgets. Its
 actual serialized response limit still applies to both text and structured
-result copies, including JSON escaping. CLI, stdio MCP, and whole-result Markdown
+result copies, including JSON escaping. CLI and stdio MCP
 also retain their response limits. A file fitting `maxContentBytes` does not
 override a delivery or presentation limit.
 

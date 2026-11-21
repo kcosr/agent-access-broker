@@ -116,8 +116,8 @@ async fn broker_fixture() -> MockServer {
     Mock::given(method("GET"))
         .and(path("/v1/spec/catalog"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "version":"agent-access.catalog.v2", "identity":{}, "routes":[],
-            "send":{"version":"agent-access.send.v1","catalogRequired":true},
+            "version":"agent-access.catalog.v3", "identity":{}, "routes":[],
+            "send":{"version":"agent-access.send.v2","catalogRequired":true},
             "services":[{
                 "service":"fake", "displayName":"Cancellation fixture", "surface":"invoke", "scopedMcpReady":true,
                 "scopeTypes":[], "actions":[{

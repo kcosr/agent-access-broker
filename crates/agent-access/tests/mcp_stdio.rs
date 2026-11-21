@@ -8,6 +8,8 @@ mod imported_oauth;
 mod imports;
 #[path = "mcp_stdio/names.rs"]
 mod names;
+#[path = "mcp_stdio/output_content.rs"]
+mod output_content;
 #[path = "mcp_stdio/rate_wait.rs"]
 mod rate_wait;
 
@@ -977,8 +979,8 @@ async fn mutation_output_failure_is_structured_and_does_not_repeat_the_operation
     let server = MockServer::start().await;
     // A deterministic broker response isolates a completed mutation from local output failure.
     let catalog = json!({
-        "version":"agent-access.catalog.v2","identity":{},"routes":[],
-        "send":{"version":"agent-access.send.v1","catalogRequired":true},
+        "version":"agent-access.catalog.v3","identity":{},"routes":[],
+        "send":{"version":"agent-access.send.v2","catalogRequired":true},
         "services":[{"service":"jira","displayName":"Jira","surface":"invoke", "scopedMcpReady":true,"availability":{"state":"available","requirements":[],"message":"Locally available"},"scopeTypes":[],"actions":[{
             "action":"issue.update", "scopedMcpName":"issue.update","readOnly":false,"description":"Update an issue","requiredScopeTypes":[],"credentialModes":[],
             "inputSchema":{"type":"object"},"io":{"type":"json"},"responseKind":"response_envelope","exitPolicy":"invoke_decision",

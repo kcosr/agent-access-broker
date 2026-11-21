@@ -296,90 +296,99 @@ async fn invoke(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn page_read_formats_prefer_adf_preserve_native_and_do_not_refetch() {
-    const STORAGE: &str = "<p>storage fallback sentinel</p>";
-    const ADF_TEXT: &str = "atlas preferred sentinel";
+async fn page_output_formats_replace_sources_and_do_not_refetch() {
+    const STORAGE: &str = "<p>storage source sentinel</p>";
+    const ADF_TEXT: &str = "atlas source sentinel";
     let adf = serde_json::json!({
-        "type": "doc",
-        "version": 1,
-        "content": [{
-            "type": "paragraph",
-            "content": [{"type": "text", "text": ADF_TEXT}]
-        }]
-    })
-    .to_string();
+        "type":"doc","version":1,"content":[
+            {"type":"paragraph","content":[{"type":"text","text":ADF_TEXT}]}
+        ]
+    });
     let backend = Arc::new(NormalizedReadBackend {
         page: normalized_page(BTreeMap::from([
-            ("storage".to_string(), STORAGE.to_string()),
-            ("atlas_doc_format".to_string(), adf.clone()),
+            ("storage".into(), STORAGE.into()),
+            ("atlas_doc_format".into(), adf.to_string()),
         ])),
         comments: BTreeMap::new(),
         calls: Mutex::new(Vec::new()),
     });
     let broker = start_broker(CONFLUENCE_ACTIONS, backend.clone()).await;
     let base_url = broker.public_url();
-
-    let (native_status, native) = invoke(
-        &base_url,
-        "page.view",
-        "confluence-native-page",
-        serde_json::json!({"inputs":{"pageId":"123456"}}),
-    )
-    .await;
-    assert_eq!(native_status, reqwest::StatusCode::OK, "{native}");
-    assert_eq!(native["result"]["body"]["storage"]["value"], STORAGE);
-    assert_eq!(native["result"]["body"]["atlas_doc_format"]["value"], adf);
-    assert!(native["result"].get("renderedBody").is_none());
-    let native_calls = backend.take_calls();
-    assert_eq!(
-        native_calls,
-        vec![
-            "page_metadata",
-            "space_location_metadata",
-            "page",
-            "page_metadata",
-            "space_location_metadata"
-        ]
-    );
-
-    let (embedded_status, embedded) = invoke(
-        &base_url,
-        "page.view",
-        "confluence-embedded-page",
-        serde_json::json!({
-            "inputs":{"pageId":"123456"},
-            "readContentFormat":"markdown"
-        }),
-    )
-    .await;
-    assert_eq!(embedded_status, reqwest::StatusCode::OK, "{embedded}");
-    assert_eq!(
-        embedded["result"]["renderedBody"],
-        serde_json::json!({"format":"markdown", "value":ADF_TEXT})
-    );
-    assert_eq!(embedded["result"]["body"]["storage"]["value"], STORAGE);
-    assert_eq!(backend.take_calls(), native_calls);
-
-    let (markdown_status, markdown) = invoke(
-        &base_url,
-        "page.view",
-        "confluence-markdown-page",
-        serde_json::json!({
-            "inputs":{"pageId":"123456"},
-            "responseFormat":"markdown"
-        }),
-    )
-    .await;
-    assert_eq!(markdown_status, reqwest::StatusCode::OK, "{markdown}");
-    let value = markdown["result"]["value"].as_str().unwrap();
-    assert_eq!(markdown["result"]["format"], "markdown");
-    assert!(value.contains("Normalized read page"));
-    assert!(value.contains(ADF_TEXT));
-    assert!(!value.contains(STORAGE));
-    assert!(!value.contains("atlas_doc_format"));
-    assert!(!value.contains("\"type\":\"doc\""));
-    assert_eq!(backend.take_calls(), native_calls);
-
+    let expected_calls = vec![
+        "page_metadata",
+        "space_location_metadata",
+        "page",
+        "page_metadata",
+        "space_location_metadata",
+    ];
+    for (name, control, expected) in [
+        (
+            "default",
+            serde_json::json!({}),
+            serde_json::json!({"format":"markdown","value":ADF_TEXT}),
+        ),
+        (
+            "markdown",
+            serde_json::json!({"outputContentFormat":"markdown"}),
+            serde_json::json!({"format":"markdown","value":ADF_TEXT}),
+        ),
+        (
+            "text",
+            serde_json::json!({"outputContentFormat":"text"}),
+            serde_json::json!({"format":"text","value":ADF_TEXT}),
+        ),
+        (
+            "adf",
+            serde_json::json!({"outputContentFormat":"adf"}),
+            serde_json::json!({"format":"adf","value":adf}),
+        ),
+        (
+            "storage",
+            serde_json::json!({"outputContentFormat":"storage"}),
+            serde_json::json!({"format":"storage","value":STORAGE}),
+        ),
+        (
+            "preferred",
+            serde_json::json!({"preferredOutputContentFormat":"adf"}),
+            serde_json::json!({"format":"adf","value":adf}),
+        ),
+    ] {
+        let mut request = control;
+        request["inputs"] = serde_json::json!({"pageId":"123456"});
+        let (status, response) = invoke(
+            &base_url,
+            "page.view",
+            &format!("confluence-{name}"),
+            request,
+        )
+        .await;
+        assert_eq!(status, reqwest::StatusCode::OK, "{response}");
+        assert_eq!(response["result"]["body"], expected, "{name}");
+        assert_eq!(response["result"]["title"], "Normalized read page");
+        assert_eq!(response["result"]["version"], 7);
+        assert!(response["result"].get("renderedBody").is_none());
+        assert_eq!(backend.take_calls(), expected_calls, "{name}");
+    }
+    for exact in [None, Some("adf")] {
+        let mut command = confluence_cli();
+        command.args(["--url", &base_url, "confluence", "page", "view", "123456"]);
+        if let Some(format) = exact {
+            command.args(["--output-content-format", format]);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            response["result"]["body"]["format"],
+            exact.unwrap_or("markdown")
+        );
+        assert_eq!(backend.take_calls(), expected_calls);
+    }
     stop(broker).await;
 }
 
@@ -403,7 +412,7 @@ async fn malformed_preferred_adf_fails_without_storage_fallback() {
         "confluence-malformed-adf",
         serde_json::json!({
             "inputs":{"pageId":"123456"},
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
@@ -454,14 +463,11 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         &base_url,
         "page.footer_comment.list",
         "confluence-native-comment-list",
-        serde_json::json!({"inputs":list_inputs.clone()}),
+        serde_json::json!({"inputs":list_inputs.clone(),"outputContentFormat":"storage"}),
     )
     .await;
     assert_eq!(native_status, reqwest::StatusCode::OK, "{native}");
-    assert_eq!(
-        native["result"]["comments"][0]["body"]["storage"]["value"],
-        ROOT_BODY
-    );
+    assert_eq!(native["result"]["comments"][0]["body"]["value"], ROOT_BODY);
     assert!(
         native["result"]["comments"][0]
             .get("renderedBody")
@@ -475,31 +481,29 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         "confluence-embedded-comment-list",
         serde_json::json!({
             "inputs":list_inputs.clone(),
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(embedded_status, reqwest::StatusCode::OK, "{embedded}");
     assert_eq!(
-        embedded["result"]["comments"][0]["renderedBody"],
+        embedded["result"]["comments"][0]["body"],
         serde_json::json!({"format":"markdown", "value":"root comment **sentinel**"})
     );
     assert_eq!(backend.take_calls(), native_list_calls);
 
-    let (whole_status, whole) = invoke(
+    let (default_status, default_output) = invoke(
         &base_url,
         "page.footer_comment.list",
-        "confluence-markdown-comment-list",
-        serde_json::json!({
-            "inputs":list_inputs,
-            "responseFormat":"markdown"
-        }),
+        "confluence-default-comment-list",
+        serde_json::json!({"inputs":list_inputs}),
     )
     .await;
-    assert_eq!(whole_status, reqwest::StatusCode::OK, "{whole}");
-    let whole_value = whole["result"]["value"].as_str().unwrap();
-    assert!(whole_value.contains("root comment **sentinel**"));
-    assert!(!whole_value.contains(ROOT_BODY));
+    assert_eq!(default_status, reqwest::StatusCode::OK, "{default_output}");
+    assert_eq!(
+        default_output["result"]["comments"][0]["body"],
+        serde_json::json!({"format":"markdown","value":"root comment **sentinel**"})
+    );
     assert_eq!(backend.take_calls(), native_list_calls);
 
     let view_inputs = serde_json::json!({"commentId":"5001", "bodyFormat":"storage"});
@@ -507,7 +511,7 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         &base_url,
         "page.footer_comment.view",
         "confluence-native-comment-view",
-        serde_json::json!({"inputs":view_inputs.clone()}),
+        serde_json::json!({"inputs":view_inputs.clone(),"outputContentFormat":"storage"}),
     )
     .await;
     assert_eq!(native_view_status, reqwest::StatusCode::OK, "{native_view}");
@@ -519,13 +523,13 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         "confluence-embedded-comment-view",
         serde_json::json!({
             "inputs":view_inputs,
-            "readContentFormat":"text"
+            "outputContentFormat":"text"
         }),
     )
     .await;
     assert_eq!(view_status, reqwest::StatusCode::OK, "{view}");
     assert_eq!(
-        view["result"]["comment"]["renderedBody"],
+        view["result"]["comment"]["body"],
         serde_json::json!({"format":"text", "value":"root comment sentinel"})
     );
     assert_eq!(backend.take_calls(), native_view_calls);
@@ -536,7 +540,7 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         &base_url,
         "page.footer_comment.reply.list",
         "confluence-native-reply-list",
-        serde_json::json!({"inputs":reply_inputs.clone()}),
+        serde_json::json!({"inputs":reply_inputs.clone(),"outputContentFormat":"storage"}),
     )
     .await;
     assert_eq!(
@@ -552,13 +556,13 @@ async fn comment_owner_and_collection_paths_render_without_extra_provider_calls(
         "confluence-embedded-reply-list",
         serde_json::json!({
             "inputs":reply_inputs,
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(reply_status, reqwest::StatusCode::OK, "{replies}");
     assert_eq!(
-        replies["result"]["comments"][0]["renderedBody"],
+        replies["result"]["comments"][0]["body"],
         serde_json::json!({"format":"markdown", "value":"reply comment sentinel"})
     );
     assert_eq!(backend.take_calls(), native_reply_calls);

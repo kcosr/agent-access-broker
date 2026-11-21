@@ -68,7 +68,7 @@ These traits are intentionally implementable:
 | `Provider` | Each provider instance: scope resolution, body admission, credential verification and invocation. |
 | `BackendConfig` | Each provider's parsed `[providers.<kind>]` table. |
 | `OAuthDialect` | An OAuth companion for one family of authorization servers. |
-| `EmbeddedBodyCodec`, `WholeResultRenderer` | Optional presentation of rich bodies and whole results. |
+| `EmbeddedBodyCodec` | Bounded selection of one concrete representation for a declared rich-content field. |
 | `host::UpstreamClientFactory`, `StableSigningKey`, `DelegatedLease` | The host, and deterministic doubles in provider tests. |
 
 Supported types are built through constructors and builders, never struct
@@ -322,17 +322,66 @@ must not apply one variant's restrictions to values another variant accepts.
 These are authoring conventions; descriptor validation continues to accept
 valid schemas using combinators.
 
-Embedded presentation paths use `presentation::BodyPathSegment::Field` for a
-required object field and `Each` for array elements. `OptionalField` skips a
-path only when that property is absent from an object, as with an unrequested
-Jira `commentPage`. A present value must satisfy the remaining path and body
-validation; null or malformed intermediate values still fail. Required `Field`
-segments retain their strict behavior. `EmbeddedBody::owner_optional_prefixes()`
-returns escaped pointer prefixes ending at optional fields, relative to the
-provider result. The catalog adds `/result` and exposes these as
-`optionalRenderedBodyOwnerPrefixes`, omitting an empty list. A shared prefix is
-optional only if every declared body path through it permits absence; ordinary
-`renderedBodyOwners` pointers are unchanged.
+Rich-content actions declare `presentation::ActionPresentation::new(bodies,
+formats, native)` with a nonempty list of `EmbeddedBody` declarations, supported
+`OutputContentFormat` values and a native value in that same set. The concrete
+formats are Markdown, text, ADF and Confluence storage. The enum is
+non-exhaustive; downstream matches must reject unknown variants. An action
+without configured body support has no presentation. Ordinary results remain
+JSON, with one `{format,value}` at each declared body field. ADF values are JSON
+objects; the other values are strings.
+
+Build each field with `EmbeddedBody::new(owner_path, field, codec)` and opt into
+terminal absence or null with `.optional()` and `.nullable()`. `field` is a
+literal property name. `BodyPathSegment::Field` requires an object property;
+`Each` traverses an array. `OptionalField` permits absence, `NullableField`
+permits null, and `OptionalNullableField` permits either. Other present shapes
+fail. `.owner_equals(&[(key, value), ...])` restricts a body to owners matching
+all of up to four direct string predicates, such as supported ADF custom fields.
+An optional declaration describes conditional body omission; the native provider
+still validates sources required by the specific invocation.
+
+A codec's `supported_formats()` must include every format its action advertises.
+`select(source, format, max_body_bytes, budget)` validates the native terminal
+value and returns `Some(SelectedContent)` or `None` for an absent optional source.
+It must validate every fetched source even when selecting only one, retain
+source and parser limits, and never fall back after malformed content or budget
+exhaustion. `SelectedContent::markdown`, `text`, `adf` and `storage` enforce
+format/value type pairing. Its fields are private; `adf` takes a JSON map.
+Use the content helper crate's separate `validate_*_bounded_with_budget` functions
+for preflight, and `select_*_bounded_with_budget` for final selection. Preflight
+never needs to allocate or clone selected native content.
+
+Set a soft service preference with
+`ServiceDescriptor::with_preferred_output_content_format(format)`.
+`ResponseOptions` carries optional exact `output_content_format` and soft
+`preferred_output_content_format` controls; present null and invalid values are
+rejected. The host calls `resolve_response_options` once before provider work.
+An exact choice must be supported. Otherwise the first available request,
+service or built-in Markdown preference wins; an unsupported preference selects
+the declared native format, without trying lower preference tiers. Body-free
+actions ignore preferences and reject exact choices. `ResolvedPresentation`
+privately retains the chosen format and matching descriptor for `present_result`.
+
+Catalog `bodyFields` metadata comes from `ActionPresentation::body_fields()`.
+It uses envelope-rooted owner pointers, explicit optional and nullable prefixes,
+a literal terminal field, terminal optional/null flags, and optional owner
+predicates. `validate_body_fields` bounds and checks this metadata;
+`validate_selected_content` checks a full successful envelope only at those
+locations. Exact selectors require the same returned tag. Soft preferences
+accept any recognized concrete tag with its correct value type, since capability
+may change between discovery and execution. No cached supported-format set is
+assumed. Compact errors and file/mutation receipts use their separate contracts.
+
+A provider-confirmed successful body-bearing mutation attaches
+`.with_presentation_recovery_receipt(MutationReceipt::applied())` to its
+`ProviderResult`. The receipt is nonserialized internal metadata. The host
+retains it independently before presentation and can return
+`mutationStatus: "applied", retrySafe: false` if selection or the final result
+size check fails, preserving the original reason code and upstream/audit facts.
+The fixed error message distinguishes completed mutation from unusable output.
+Read-only outcomes never receive a recovery receipt. Do not derive success from
+`read_only = false`, a generic `Ok`, or unvalidated upstream body fields.
 
 `listing_of(ResourceType)` declares ordinary live enumeration of canonical items
 of that type without a required query, such as a project collection. Query
@@ -2140,7 +2189,7 @@ point: a namespace-capable resource type with an action-input projection and
 configured roots, typed configuration, a managed credential profile, JSON,
 raw-download and multipart-upload actions (the upload token-only), a declared
 companion read guarded by `companion_reads_authorized()`, required and optional
-(`OptionalField`) embedded bodies, whole-result presentation, and an endpoint
+(`OptionalField`) embedded bodies with concrete output selection, and an endpoint
 type whose private key a single-attempt action consumes. It depends only on
 the SDK. Its unit tests show how to drive each
 shape with `TestHost`, `InvocationBuilder` and a mock upstream, and the host's

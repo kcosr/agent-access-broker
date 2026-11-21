@@ -1402,6 +1402,7 @@ upload_media_types = ["text/plain", "application/json", "image/png", "text/html"
 download_media_types = { allow = ["*/*"], deny = [] } # default; independent of uploads
 
 [providers.jira.content]
+# preferred_output_format = "markdown"  # optional; markdown | text | adf | storage
 comment_formats = ["adf"]   # native formats only; [] disables comment writes
 max_body_bytes = 1048576    # 1 MiB; default
 
@@ -1603,6 +1604,7 @@ upload_media_types = ["text/plain", "application/json", "image/png", "text/html"
 download_media_types = { allow = ["*/*"], deny = [] } # default; all attachment download variants
 
 [providers.confluence.content]
+# preferred_output_format = "markdown"  # optional; markdown | text | adf | storage
 page_formats = ["atlas_doc_format", "storage"]   # supported formats
 blog_formats = ["storage"]                       # supported blog formats
 comment_formats = ["storage"]                    # supported comment body formats
@@ -1641,8 +1643,9 @@ max_scan_bytes = 16777216            # default
   allowlist containing only `atlas_doc_format` and/or `storage`. Current page
   create/update advertise their enabled native formats and advertise
   `markdown`/`plain_text` only when `storage` is enabled. Returned current page
-  bodies expose the configured representations; normalized reads select present
-  ADF first, otherwise present storage. It defaults to empty.
+  bodies use one selected representation; Markdown/text selection uses present
+  ADF first, otherwise present storage. An empty list omits the current page
+  body and its output-body capability. The list defaults to empty.
 - `[providers.confluence.content].blog_formats` and `comment_formats` are native
   allowlists containing only `storage`. Current blog writes, blog drafts, and
   comment writes advertise `storage`, `markdown`, and `plain_text` when storage
@@ -1658,8 +1661,8 @@ max_scan_bytes = 16777216            # default
 - `max_body_bytes` defaults to 2 MiB and must be non-zero. On writes it
   independently bounds the source and complete serialized native body after
   conversion and attribution; overflow returns `body_size_denied`/413. On
-  reads it bounds every declared returned storage or ADF body in native,
-  embedded, and whole-result modes; malformed or oversized upstream content
+  reads it bounds every declared storage or ADF source and selected output body;
+  malformed or oversized upstream content
   returns sanitized `upstream_protocol_failed`/502. Conversion never truncates
   or falls back to native content. Unsupported write formats return
   `body_format_unsupported`/415.
@@ -1697,6 +1700,34 @@ and `max_scan_bytes` (16 MiB). All limits are positive. Attempts include the
 invocation's shared OAuth replay; consumed bodies share the byte budget.
 Per-response and result caps still apply. See [space listing](providers-confluence.md#live-space-listing).
 
+### Output content preferences
+
+`[providers.jira.content]`, `[providers.confluence.content]`, and
+`[providers.gitlab.content]` each accept optional `preferred_output_format`.
+The client-side key has a different scope and spelling:
+`[defaults].preferred_output_content_format`. Every preference accepts
+`markdown`, `text`, `adf`, or `storage`; the service may be unable to produce a
+particular value on some or all actions, which is handled as native fallback.
+
+Resolution uses an exact invocation `outputContentFormat` first. Otherwise it
+selects the first present request/connection preference, service preference, then
+Markdown. If that preference is unsupported, the action's declared native format
+wins; lower preference tiers are not tried. An unsupported exact format fails
+before provider lookup. No-body actions ignore soft preferences. Preferences,
+configured body capabilities and native defaults are published together on reload.
+
+Jira's native format is ADF, GitLab's is Markdown, and Confluence uses configured
+ADF for current pages when available or storage for its storage-backed actions.
+Confluence `blog_formats=[]` gates writes without removing the existing storage
+read support for blogs/drafts. Missing optional source bodies remain absent and
+malformed/over-limit content never causes output-format fallback. These settings
+do not affect explicit write `contentFormat` or upstream `bodyFormat` inputs.
+
+HTTP MCP supplies a connection preference using the literal query parameter
+`preferredOutputContentFormat` on `/mcp` or `/mcp/<service>`. It is evaluated per
+HTTP request. `mcp.public_url` remains query-free; configure the preference on the
+client's endpoint URL. See [MCP output formats](mcp.md#output-content-formats).
+
 ### `[providers.gitlab]`
 
 ```toml
@@ -1714,6 +1745,7 @@ max_total_bytes = 52428800   # 50 MiB; default aggregate cap
 media_types = []            # unrestricted; include text/html in any explicit allowlist
 
 [providers.gitlab.content]
+# preferred_output_format = "markdown"  # optional; markdown | text | adf | storage
 max_body_bytes = 1048576      # 1 MiB; default
 max_commit_actions = 25       # default
 max_file_bytes = 10485760     # 10 MiB; default
@@ -1766,8 +1798,7 @@ allow_disable_ssl_verification = false
 - `[providers.gitlab.content].max_body_bytes` defaults to 1 MiB and independently
   bounds caller-supplied normalized rich-content source bytes, the complete
   native Markdown body after conversion and attribution, and every declared
-  issue/MR description or note/discussion body returned in native, embedded, or
-  whole-result read mode. It also bounds `project.view` descriptions, merge
+  issue/MR description or note/discussion source and selected output body. It also bounds `project.view` descriptions, merge
   messages, and commit messages under their existing contracts. It must not
   exceed `limits.max_http_body_bytes`.
   Oversized write input returns `body_size_denied`/413; malformed or oversized
@@ -1778,10 +1809,8 @@ allow_disable_ssl_verification = false
   is escaped into literal GitLab Markdown. There is no content-format config,
   environment override, filename inference, or client default. Callers supply
   the format explicitly and inspect the exact action catalog enum for support.
-- Read-response defaults are client-wide, not GitLab provider configuration.
-  Use `[defaults].read_content_format`/`output_format` or their environment
-  variables described below; only actions advertising the matching capability
-  receive a non-default ambient value.
+- `[providers.gitlab.content].preferred_output_format` is the optional service
+  preference described under [output content preferences](#output-content-preferences).
 - `[providers.gitlab.content].max_commit_actions` defaults to `25`, must be
   non-zero, and may not exceed `100`.
 - `[providers.gitlab.content].max_file_bytes` defaults to 10 MiB and bounds
@@ -1799,8 +1828,8 @@ allow_disable_ssl_verification = false
   This setting does not change file-write or diff limits. Metadata-only views
   remain available for files above every content-transfer cap. The ceiling must
   be non-zero, and six times the ceiling plus a 64 KiB metadata/envelope
-  allowance must fit `limits.max_upstream_response_bytes`. Actual JSON,
-  Markdown and MCP output limits also apply: HTTP MCP includes text and
+  allowance must fit `limits.max_upstream_response_bytes`. Actual JSON and
+  MCP serialization limits also apply: HTTP MCP includes text and
   structured result copies, and JSON escaping adds bytes. Raising the inline
   ceiling or lowering `mcp.max_response_bytes` can produce a delivery-limit
   error even when the file fits its byte budget. See
@@ -2636,9 +2665,12 @@ scheme = "raw"                             # default; raw | Bearer
 disabled = false                           # default
 
 [defaults]
-read_content_format = "native"             # native | markdown | text
-output_format = "json"                     # json | markdown
+# preferred_output_content_format = "markdown" # optional; markdown | text | adf | storage
 ```
+
+Provider invocation requires authenticated runtime catalog access. Configure a
+token source or authenticated ingress; anonymous direct HTTP permission does not
+enable CLI or local stdio provider calls. See the [CLI reference](cli.md).
 
 `validate_cli_config` enforces:
 
@@ -2671,18 +2703,25 @@ output_format = "json"                     # json | markdown
 - `identity.token_env`, if set, must be a valid environment variable name.
 - `identity.token_file`, if set, must be non-empty. `agent-access config
   validate` does not expand `~` or require the referenced file to exist.
-- `defaults.read_content_format` must be `native`, `markdown`, or `text`.
-- `defaults.output_format` must be `json` or `markdown`.
+- `defaults.preferred_output_content_format`, when present, must be `markdown`,
+  `text`, `adf`, or `storage`. It is a soft preference for declared output bodies.
 
-The corresponding environment variables are
-`AGENT_ACCESS_READ_CONTENT_FORMAT` and `AGENT_ACCESS_OUTPUT_FORMAT`. Resolution
-uses command flag, then client config, then environment, then the built-in
-`native`/`json` defaults. The CLI determines config-key presence from the parsed
-TOML document, so an explicitly present default still occupies the config tier.
-Invalid config or environment values fail locally.
-Valid non-default ambient values are omitted for commands whose actions do not
-advertise the capability. `send` is file-driven and never injects these ambient
-defaults.
+The environment equivalent is `AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT`.
+An explicitly present config value takes precedence over environment. Omission
+preserves the service preference and built-in Markdown fallback. A stdio process
+`--preferred-output-content-format` overrides the client preference; typed/generic
+`--output-content-format` is a strict exact selection. JSON send carries its own
+exact selector and optional preference; an explicit request preference takes
+precedence over the client's ambient value. The Broker resolves preferences
+against the admitted action, including native fallback for unsupported values.
+
+Invalid output settings fail locally before dispatch. Retired format settings
+are rejected by every operational CLI command at startup with exit 3 on stderr,
+before network/protocol output; help/version remain config-independent. Stdio
+validates at startup and
+reloads configuration per call; a later invalid setting produces a tool error
+without ending the process. See the [upgrade note](operator-guide.md#output-content-contract-upgrade)
+for replacing earlier presentation settings.
 
 `agent-access config validate` runs `validate_cli_config_file` locally with no
 broker call, using the same core config and closed-format contract as command

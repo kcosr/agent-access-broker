@@ -516,7 +516,7 @@ async fn teams_cli_and_mcp_use_managed_destinations_without_execution_credential
     assert!(!receipt.to_string().contains("SYNTHETIC_SIGNED_SECRET"));
     assert_eq!(f.calls.lock().unwrap().len(), 5);
     let send_file = f.broker.directory().join("send.json");
-    std::fs::write(&send_file, json!({"version":"agent-access.send.v1","kind":"invoke","service":"teams","action":"notification.send","inputs":input}).to_string()).unwrap();
+    std::fs::write(&send_file, json!({"version":"agent-access.send.v2","kind":"invoke","service":"teams","action":"notification.send","inputs":input}).to_string()).unwrap();
     success(run(
         &f.agent_config,
         &["send", "--request-file", send_file.to_str().unwrap()],

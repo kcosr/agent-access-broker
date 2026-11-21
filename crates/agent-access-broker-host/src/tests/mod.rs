@@ -757,8 +757,8 @@ async fn spec_catalog_requires_auth_and_sets_no_store_headers() {
     assert!(vary.contains("authorization"));
     assert!(vary.contains("cookie"));
     let body = response_json(allowed).await;
-    assert_eq!(body["version"], "agent-access.catalog.v2");
-    assert_eq!(body["send"]["version"], "agent-access.send.v1");
+    assert_eq!(body["version"], "agent-access.catalog.v3");
+    assert_eq!(body["send"]["version"], "agent-access.send.v2");
 }
 
 #[tokio::test]
@@ -13677,53 +13677,51 @@ async fn jira_read_response_options_are_closed_and_rejected_before_provider_acce
 
     for (request_id, action, body, status, reason) in [
         (
-            "jira-read-unknown-top-level",
+            "jira-retired-read-selector",
             "issue.view",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "readContentFormats": "markdown"
-            }),
+            json!({"inputs":{"issue":"PROJ-7"},"readContentFormat":"markdown"}),
             StatusCode::BAD_REQUEST,
             "input_invalid",
         ),
         (
-            "jira-read-invalid-enum",
+            "jira-retired-response-selector",
             "issue.view",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "readContentFormat": "html"
-            }),
+            json!({"inputs":{"issue":"PROJ-7"},"responseFormat":"markdown"}),
             StatusCode::BAD_REQUEST,
             "input_invalid",
         ),
         (
-            "jira-read-mutually-exclusive",
+            "jira-content-invalid-enum",
             "issue.view",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "readContentFormat": "markdown",
-                "responseFormat": "markdown"
-            }),
+            json!({"inputs":{"issue":"PROJ-7"},"outputContentFormat":"native"}),
             StatusCode::BAD_REQUEST,
             "input_invalid",
         ),
         (
-            "jira-read-whole-unsupported-on-mutation",
+            "jira-content-null-exact",
+            "issue.view",
+            json!({"inputs":{"issue":"PROJ-7"},"outputContentFormat":null}),
+            StatusCode::BAD_REQUEST,
+            "input_invalid",
+        ),
+        (
+            "jira-content-null-preference",
+            "issue.view",
+            json!({"inputs":{"issue":"PROJ-7"},"preferredOutputContentFormat":null}),
+            StatusCode::BAD_REQUEST,
+            "input_invalid",
+        ),
+        (
+            "jira-content-unsupported",
             "issue.update",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "responseFormat": "markdown"
-            }),
+            json!({"inputs":{"issue":"PROJ-7"},"outputContentFormat":"storage"}),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "response_format_unsupported",
         ),
         (
-            "jira-read-embedded-unsupported-on-body-free-read",
+            "jira-content-body-free",
             "verify",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "readContentFormat": "text"
-            }),
+            json!({"inputs":{"issue":"PROJ-7"},"outputContentFormat":"text"}),
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "response_format_unsupported",
         ),
@@ -13746,91 +13744,88 @@ async fn jira_read_formats_transform_success_and_allow_with_result_without_obser
     let audit_path = temp_path("jira-normalized-read.audit.jsonl");
     let fixture = jira_read_presentation_fixture(audit_path.to_str().unwrap()).await;
 
-    let embedded = captured
-        .run(jira_read_presentation_request(
-            fixture.app.clone(),
-            "jira-read-embedded-success",
-            "issue.view",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "readContentFormat": "markdown"
-            }),
-        ))
-        .await;
-    assert_eq!(embedded.status(), StatusCode::OK);
-    let embedded = response_json(embedded).await;
-    assert_eq!(embedded["decision"], "allow");
-    assert_eq!(
-        embedded["result"]["description"]["content"][0]["content"][0]["text"],
-        JIRA_READ_NATIVE_SENTINEL
-    );
-    assert_eq!(embedded["result"]["renderedBody"]["format"], "markdown");
-    assert_eq!(
-        embedded["result"]["renderedBody"]["value"],
-        JIRA_READ_NATIVE_SENTINEL
-    );
-
-    let whole = captured
-        .run(jira_read_presentation_request(
-            fixture.app.clone(),
-            "jira-read-whole-success",
-            "issue.view",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "responseFormat": "markdown"
-            }),
-        ))
-        .await;
-    assert_eq!(whole.status(), StatusCode::OK);
-    let whole = response_json(whole).await;
-    assert_eq!(whole["decision"], "allow");
-    assert_eq!(whole["result"]["format"], "markdown");
-    let markdown = whole["result"]["value"].as_str().unwrap();
-    assert!(markdown.starts_with("# `PROJ-7` — Normalized read fixture\n"));
-    assert!(markdown.contains("## Description\n\n"));
-    assert!(markdown.contains(JIRA_READ_NATIVE_SENTINEL));
-    assert!(!markdown.contains("\"type\":\"doc\""));
-    assert!(markdown.ends_with('\n'));
-
+    for (request_id, selector, expected_format) in [
+        ("jira-read-default-success", json!({}), "markdown"),
+        (
+            "jira-read-exact-success",
+            json!({"outputContentFormat":"text", "preferredOutputContentFormat":"adf"}),
+            "text",
+        ),
+        (
+            "jira-read-native-success",
+            json!({"outputContentFormat":"adf"}),
+            "adf",
+        ),
+        (
+            "jira-read-native-fallback",
+            json!({"preferredOutputContentFormat":"storage"}),
+            "adf",
+        ),
+    ] {
+        let mut request = selector;
+        request["inputs"] = json!({"issue":"PROJ-7"});
+        let response = captured
+            .run(jira_read_presentation_request(
+                fixture.app.clone(),
+                request_id,
+                "issue.view",
+                request,
+            ))
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = response_json(response).await;
+        assert_eq!(response["decision"], "allow");
+        assert_eq!(response["result"]["description"]["format"], expected_format);
+        if expected_format == "adf" {
+            assert_eq!(
+                response["result"]["description"]["value"]["content"][0]["content"][0]["text"],
+                JIRA_READ_NATIVE_SENTINEL
+            );
+        } else {
+            assert_eq!(
+                response["result"]["description"]["value"],
+                JIRA_READ_NATIVE_SENTINEL
+            );
+        }
+        assert_eq!(response["result"]["key"], "PROJ-7");
+        assert!(response["result"].get("renderedBody").is_none());
+    }
     let mismatch = captured
         .run(jira_read_presentation_request(
             fixture.app.clone(),
-            "jira-read-whole-mismatch",
+            "jira-read-body-free-mismatch",
             "verify",
-            json!({
-                "inputs": { "issue": "PROJ-7" },
-                "responseFormat": "markdown"
-            }),
+            json!({"inputs":{"issue":"PROJ-7"},"preferredOutputContentFormat":"adf"}),
         ))
         .await;
     assert_eq!(mismatch.status(), StatusCode::CONFLICT);
     let mismatch = response_json(mismatch).await;
     assert_eq!(mismatch["decision"], "allow");
     assert_eq!(mismatch["reasonCode"], "verification_mismatch");
-    assert_eq!(mismatch["result"]["format"], "markdown");
-    let markdown = mismatch["result"]["value"].as_str().unwrap();
-    assert!(markdown.starts_with("# Jira verification for `PROJ-7`\n"));
-    assert!(markdown.contains("- Status: mismatch\n"));
-    assert!(markdown.contains("comment: `43`"));
-
-    assert_eq!(fixture.scope_resolutions.load(Ordering::SeqCst), 3);
-    assert_eq!(fixture.invocations.load(Ordering::SeqCst), 3);
+    assert_eq!(mismatch["result"]["verification"]["status"], "mismatch");
+    assert!(mismatch["result"].get("format").is_none());
+    assert_eq!(fixture.scope_resolutions.load(Ordering::SeqCst), 5);
+    assert_eq!(fixture.invocations.load(Ordering::SeqCst), 5);
 
     let events = captured.take_events();
     // The capture observed each request, so the sentinel check covers them.
     for request_id in [
-        "jira-read-embedded-success",
-        "jira-read-whole-success",
-        "jira-read-whole-mismatch",
+        "jira-read-default-success",
+        "jira-read-exact-success",
+        "jira-read-native-success",
+        "jira-read-native-fallback",
+        "jira-read-body-free-mismatch",
     ] {
         event_by_name_and_agent(&events, "invoke_completed", request_id);
     }
     let events = serde_json::to_string(&events).unwrap();
     assert!(!events.contains(JIRA_READ_NATIVE_SENTINEL));
     for (request_id, action) in [
-        ("jira-read-embedded-success", "issue.view"),
-        ("jira-read-whole-success", "issue.view"),
-        ("jira-read-whole-mismatch", "verify"),
+        ("jira-read-default-success", "issue.view"),
+        ("jira-read-exact-success", "issue.view"),
+        ("jira-read-native-success", "issue.view"),
+        ("jira-read-native-fallback", "issue.view"),
+        ("jira-read-body-free-mismatch", "verify"),
     ] {
         require_audit_request(&audit_path, request_id, "jira", action);
     }
@@ -15488,6 +15483,181 @@ impl Provider for TestJiraReadPresentationProvider {
         .with_audit(safe_audit)
         .with_upstream(Some(200), Some(5))
         .with_object_ids(json!({ "issueId": "10007", "issueKey": "PROJ-7" })))
+    }
+}
+
+// Real native body descriptors run through common HTTP and HTTP MCP finalization.
+// The native-provider matrices independently exercise every actual write handler.
+struct NativeCompletedBodyProvider {
+    service: &'static str,
+    malformed: bool,
+    invocations: Arc<AtomicUsize>,
+}
+impl agent_access_provider::test_support::DescribedProvider for NativeCompletedBodyProvider {
+    fn descriptor(&self) -> ServiceDescriptor {
+        let scope = if self.service == "jira" {
+            "project"
+        } else {
+            "repository"
+        };
+        ServiceDescriptor::new(self.service, "Native completed body fixture")
+            .with_resource_scopes(fixture_scope_capabilities(scope))
+            .with_actions(vec![ActionDescriptor::new("issue.update", "Update a body", json!({"type":"object","properties":{"project":{"type":"string"}},"required":["project"],"additionalProperties":false}))
+                .scope(scope).credential_modes(["service"])
+                .presentation(backend_presentation(self.service, "issue.update"))])
+            .with_credentials(CredentialDescriptor::without_execution_credential())
+            .with_presentation_body_limit(4096)
+    }
+}
+#[async_trait::async_trait]
+impl Provider for NativeCompletedBodyProvider {
+    async fn resolve_scopes(
+        &self,
+        _request: ScopeRequest<'_>,
+    ) -> Result<ScopeResolution, ProviderError> {
+        let (scope, value) = if self.service == "jira" {
+            ("project", "PROJ")
+        } else {
+            ("repository", "sip/service")
+        };
+        Ok(ScopeResolution::resources(ResourceScopes::from([(
+            scope.into(),
+            vec![value.into()],
+        )])))
+    }
+    async fn invoke(&self, _request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
+        self.invocations.fetch_add(1, Ordering::SeqCst);
+        let body = if self.malformed {
+            json!(42)
+        } else if self.service == "jira" {
+            json!({"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":JIRA_READ_NATIVE_SENTINEL}]}]})
+        } else {
+            json!(JIRA_READ_NATIVE_SENTINEL)
+        };
+        Ok(ProviderResult::new(json!({"issue":{"id":"10007","description":body}, "privatePadding":if self.malformed { String::new() } else { JIRA_READ_NATIVE_SENTINEL.repeat(8192) }}))
+            .with_presentation_recovery_receipt(agent_access_provider::MutationReceipt::applied())
+            .with_upstream(Some(200), Some(7))
+            .with_object_ids(json!({"issueId":"10007"}))
+            .with_audit(json!({"provider":self.service,"operation":"issue.update"})))
+    }
+}
+
+#[tokio::test]
+async fn native_completed_body_failures_deliver_safe_receipts_over_http_and_http_mcp() {
+    for service in ["jira", "gitlab"] {
+        for malformed in [true, false] {
+            let invocations = Arc::new(AtomicUsize::new(0));
+            let provider = NativeCompletedBodyProvider {
+                service,
+                malformed,
+                invocations: invocations.clone(),
+            };
+            let fixture = mcp::Fixture::with_providers(|config| {
+                config.limits.max_upstream_response_bytes = 128 * 1024;
+                config.policy.grants[0].service = service.into();
+                config.policy.grants[0].actions = vec!["issue.update".into()];
+                let project = if service == "jira" { "PROJ" } else { "sip/service" };
+                let resource_type = if service == "jira" { "jira-project" } else { "repository" };
+                config.policy.grants[0].resources = selected_resources(&[(resource_type, &[project])]);
+                let mut credential = config.credentials.service["fake"].clone();
+                if service == "jira" {
+                    credential.kind = "basic_api_token".into();
+                    credential.username_ref = credential.token_ref.clone();
+                }
+                config.credentials.service.insert(service.into(), credential.clone());
+                credential.read_only = Some(true);
+                config.credentials.lookup.insert(service.into(), credential);
+                if service == "jira" {
+                    config.providers.insert(serde_json::from_value::<agent_access_jira::JiraProviderConfig>(json!({
+                        "tenant_host":"example.atlassian.net", "allowed_upstream_hosts":["https://example.atlassian.net/rest/api/3/**"]
+                    })).unwrap());
+                } else {
+                    config.providers.insert(serde_json::from_value::<agent_access_gitlab::GitlabProviderConfig>(json!({
+                        "api_base_url":"https://gitlab.example.com/api/v4", "web_base_url":"https://gitlab.example.com", "allowed_upstream_hosts":["https://gitlab.example.com/api/v4/**"], "content":{"max_inline_text_bytes":1024}
+                    })).unwrap());
+                }
+            }, vec![Arc::new(provider)]).await;
+            let response = fixture
+                .app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(format!("/v1/invoke/{service}/issue.update"))
+                        .extension(ConnectInfo(
+                            "127.0.0.1:43141".parse::<SocketAddr>().unwrap(),
+                        ))
+                        .header(REQUEST_ID_HEADER, "native-completed-body-http")
+                        .header(AUTHORIZATION, format!("Bearer {}", mcp::TOKEN_A))
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(Body::from(
+                            json!({"inputs":{"project":if service == "jira" {"PROJ"} else {"sip/service"}},"outputContentFormat":"markdown"})
+                                .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let http = response_json(response).await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_GATEWAY,
+                "{service} malformed={malformed}: {http}"
+            );
+            let session = fixture.initialize().await;
+            let rpc = fixture
+                .call(
+                    &session,
+                    42,
+                    &format!("{service}_issue_update"),
+                    json!({"inputs":{"project":if service == "jira" {"PROJ"} else {"sip/service"}},"outputContentFormat":"markdown"}),
+                )
+                .await;
+            assert_eq!(rpc["result"]["isError"], true, "{service}: {rpc}");
+            let mcp = &rpc["result"]["structuredContent"];
+            for receipt in [&http, mcp] {
+                assert_eq!(
+                    receipt["reasonCode"], "upstream_protocol_failed",
+                    "{service}: {receipt}"
+                );
+                assert_eq!(
+                    receipt["reason"],
+                    "The mutation completed, but its response could not be produced. Do not repeat the operation."
+                );
+                assert_eq!(receipt["error"]["message"], receipt["reason"]);
+                assert_eq!(
+                    receipt["result"],
+                    json!({"mutationStatus":"applied","retrySafe":false})
+                );
+                assert!(!receipt.to_string().contains(JIRA_READ_NATIVE_SENTINEL));
+            }
+            assert!(!rpc.to_string().contains(JIRA_READ_NATIVE_SENTINEL));
+            assert_eq!(invocations.load(Ordering::SeqCst), 2);
+            let records = read_audit_records(&fixture.audit_path);
+            assert_eq!(
+                records
+                    .iter()
+                    .filter(|record| record["action"] == "issue.update")
+                    .count(),
+                2
+            );
+            for record in records
+                .iter()
+                .filter(|record| record["action"] == "issue.update")
+            {
+                assert_eq!(record["upstreamStatus"], 200);
+                assert_eq!(record["objectIds"]["issueId"], "10007");
+                assert_eq!(record["providerAudit"]["provider"], service);
+                assert_eq!(record["reasonCode"], "upstream_protocol_failed");
+            }
+            let text_receipt: Value =
+                serde_json::from_str(rpc["result"]["content"][0]["text"].as_str().unwrap())
+                    .unwrap();
+            assert_eq!(&text_receipt, mcp);
+            let audit = std::fs::read_to_string(&fixture.audit_path).unwrap();
+            assert!(!audit.contains(JIRA_READ_NATIVE_SENTINEL));
+        }
     }
 }
 
@@ -18222,6 +18392,7 @@ fn confluence_capabilities_advertise_only_effective_content_write_formats() {
         ],
         attachments: agent_access_provider::AttachmentLimitsConfig::default(),
         content: agent_access_confluence::ConfluenceContentConfig {
+            preferred_output_format: None,
             page_formats: vec![],
             blog_formats: vec![],
             comment_formats: vec![],
@@ -18567,148 +18738,118 @@ fn assert_jira_read_response_capability_matrix(
         "issue.update",
         "issue.view",
     ];
-    const WHOLE: &[&str] = &[
-        "attachment.list",
-        "comment.list",
-        "comment.property.get",
-        "comment.property.list",
-        "comment.view",
-        "issue.view",
-        "issue_type.list",
-        "project.list",
-        "search",
-        "verify",
-    ];
+    assert_output_content_capability_matrix(
+        catalog,
+        openapi,
+        send_schema,
+        "jira",
+        EMBEDDED,
+        &["markdown", "text", "adf"],
+        "adf",
+    );
+    let body_fields = &catalog_action(catalog, "jira", "issue.view")["bodyFields"];
+    assert_eq!(
+        body_fields,
+        &json!([
+            {"ownerPath":"/result","field":"description","optional":true,"nullable":true,"optionalOwnerPrefixes":[],"nullableOwnerPrefixes":[]},
+            {"ownerPath":"/result/customFields/*","field":"value","optional":false,"nullable":true,"optionalOwnerPrefixes":[],"nullableOwnerPrefixes":[],"ownerEquals":{"status":"supported","type":"adf"}},
+            {"ownerPath":"/result/commentPage/comments/*","field":"body","optional":true,"nullable":true,"optionalOwnerPrefixes":["/result/commentPage"],"nullableOwnerPrefixes":[]}
+        ])
+    );
+}
 
-    let jira_actions = catalog["services"]
+fn assert_output_content_capability_matrix(
+    catalog: &Value,
+    openapi: &Value,
+    send_schema: &Value,
+    service: &str,
+    body_actions: &[&str],
+    formats: &[&str],
+    native: &str,
+) {
+    let actions = catalog["services"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|service| service["service"] == "jira")
-        .and_then(|service| service["actions"].as_array())
-        .expect("Jira catalog actions");
-    let embedded = jira_actions
+        .find(|entry| entry["service"] == service)
+        .unwrap()["actions"]
+        .as_array()
+        .unwrap();
+    let declared = actions
         .iter()
-        .filter(|action| action.get("readContentFormats").is_some())
+        .filter(|action| action.get("outputContentFormats").is_some())
         .map(|action| action["action"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
-    let whole = jira_actions
-        .iter()
-        .filter(|action| action.get("responseFormats").is_some())
-        .map(|action| action["action"].as_str().unwrap())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(embedded, EMBEDDED.iter().copied().collect());
-    assert_eq!(whole, WHOLE.iter().copied().collect());
-    let owners = jira_actions
-        .iter()
-        .filter_map(|action| {
-            Some((
-                action["action"].as_str()?,
-                action.get("renderedBodyOwners")?.clone(),
-            ))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
     assert_eq!(
-        owners,
-        std::collections::BTreeMap::from([
-            ("comment.add", json!(["/result/comment"])),
-            ("comment.list", json!(["/result/comments/*"])),
-            ("comment.reply", json!(["/result/comment"])),
-            ("comment.update", json!(["/result/comment"])),
-            ("comment.view", json!(["/result/comment"])),
-            ("issue.create", json!(["/result/issue"])),
-            ("issue.update", json!(["/result/issue"])),
-            (
-                "issue.view",
-                json!([
-                    "/result",
-                    "/result/customFields/*",
-                    "/result/commentPage/comments/*"
-                ])
-            ),
-        ])
+        declared,
+        body_actions.iter().copied().collect(),
+        "{service}"
     );
-    let optional_prefixes = jira_actions
-        .iter()
-        .filter_map(|action| {
-            Some((
-                action["action"].as_str()?,
-                action.get("optionalRenderedBodyOwnerPrefixes")?.clone(),
-            ))
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(
-        optional_prefixes,
-        std::collections::BTreeMap::from([("issue.view", json!(["/result/commentPage"]))])
-    );
-
-    for action in jira_actions {
-        let action_name = action["action"].as_str().unwrap();
-        let expected_read = EMBEDDED.contains(&action_name);
-        let expected_whole = WHOLE.contains(&action_name);
+    for action in actions {
+        let name = action["action"].as_str().unwrap();
+        let body_capable = body_actions.contains(&name);
         assert_optional_format_enum(
-            action.get("readContentFormats"),
-            expected_read,
-            json!(["native", "markdown", "text"]),
-            &format!("catalog jira.{action_name} readContentFormats"),
+            action.get("outputContentFormats"),
+            body_capable,
+            json!(formats),
+            &format!("{service}.{name}"),
         );
-        assert_optional_format_enum(
-            action.get("responseFormats"),
-            expected_whole,
-            json!(["json", "markdown"]),
-            &format!("catalog jira.{action_name} responseFormats"),
-        );
-
-        let request_content = &openapi["paths"][format!("/v1/invoke/jira/{action_name}")]["post"]["requestBody"]
-            ["content"];
-        let request_properties = if request_content.get("application/json").is_some() {
-            &request_content["application/json"]["schema"]["properties"]
+        if body_capable {
+            assert_eq!(action["nativeOutputContentFormat"], native);
+            assert_eq!(action["defaultOutputContentFormat"], "markdown");
+            assert!(!action["bodyFields"].as_array().unwrap().is_empty());
         } else {
-            &request_content["multipart/form-data"]["schema"]["properties"]["request"]["contentSchema"]
-                ["properties"]
+            for field in [
+                "nativeOutputContentFormat",
+                "defaultOutputContentFormat",
+                "bodyFields",
+            ] {
+                assert!(action.get(field).is_none(), "{service}.{name} {field}");
+            }
+        }
+        for field in [
+            "readContentFormats",
+            "responseFormats",
+            "renderedBodyOwners",
+            "optionalRenderedBodyOwnerPrefixes",
+        ] {
+            assert!(action.get(field).is_none());
+        }
+        let content = &openapi["paths"][format!("/v1/invoke/{service}/{name}")]["post"]["requestBody"]
+            ["content"];
+        let openapi_properties = if content.get("application/json").is_some() {
+            &content["application/json"]["schema"]["properties"]
+        } else {
+            &content["multipart/form-data"]["schema"]["properties"]["request"]["contentSchema"]["properties"]
         };
-        assert_eq!(
-            request_properties["readContentFormat"]["enum"],
-            if expected_read {
-                json!(["native", "markdown", "text"])
-            } else {
-                json!(["native"])
-            },
-            "OpenAPI jira.{action_name} readContentFormat"
-        );
-        assert_eq!(
-            request_properties["responseFormat"]["enum"],
-            if expected_whole {
-                json!(["json", "markdown"])
-            } else {
-                json!(["json"])
-            },
-            "OpenAPI jira.{action_name} responseFormat"
-        );
-        let send_properties = &send_action_variant(send_schema, "jira", action_name)["properties"];
-        assert_eq!(
-            send_properties["readContentFormat"]["enum"],
-            if expected_read {
-                json!(["native", "markdown", "text"])
-            } else {
-                json!(["native"])
-            },
-            "send schema jira.{action_name} readContentFormat"
-        );
-        assert_eq!(
-            send_properties["responseFormat"]["enum"],
-            if expected_whole {
-                json!(["json", "markdown"])
-            } else {
-                json!(["json"])
-            },
-            "send schema jira.{action_name} responseFormat"
-        );
-        assert_eq!(
-            send_action_variant(send_schema, "jira", action_name)["additionalProperties"],
-            false,
-            "send invoke envelope must be closed for jira.{action_name}"
-        );
+        let send = send_action_variant(send_schema, service, name);
+        for properties in [openapi_properties, &send["properties"]] {
+            assert_eq!(
+                properties["preferredOutputContentFormat"]["enum"],
+                json!(["markdown", "text", "adf", "storage"])
+            );
+            assert_eq!(properties["preferredOutputContentFormat"]["type"], "string");
+            assert!(
+                properties["preferredOutputContentFormat"]
+                    .get("default")
+                    .is_none()
+            );
+            assert_optional_format_enum(
+                properties
+                    .get("outputContentFormat")
+                    .map(|value| &value["enum"]),
+                body_capable,
+                json!(formats),
+                &format!("{service}.{name} exact"),
+            );
+            if body_capable {
+                assert!(properties["outputContentFormat"].get("default").is_none());
+            }
+            for field in ["readContentFormat", "responseFormat"] {
+                assert!(properties.get(field).is_none());
+            }
+        }
+        assert_eq!(send["additionalProperties"], false);
     }
 }
 
@@ -18747,71 +18888,23 @@ fn assert_gitlab_read_response_capability_matrix(
         "merge_request.update",
         "merge_request.view",
     ];
-    const WHOLE: &[&str] = &[
-        "branch.list",
-        "branch.view",
-        "commit.list",
-        "commit.view",
-        "file.view",
-        "issue.note.list",
-        "issue.note.view",
-        "issue.search",
-        "issue.view",
-        "job.list",
-        "job.view",
-        "merge_request.discussion.list",
-        "merge_request.discussion.view",
-        "merge_request.reviewer.list",
-        "merge_request.commit.list",
-        "merge_request.pipeline.list",
-        "merge_request.diff.list",
-        "merge_request.diff_version.list",
-        "merge_request.diff_version.view",
-        "merge_request.draft_note.list",
-        "merge_request.draft_note.view",
-        "merge_request.approval.view",
-        "merge_request.approval_state.view",
-        "merge_request.approval_rule.list",
-        "merge_request.approval_rule.view",
-        "merge_request.note.list",
-        "merge_request.note.view",
-        "merge_request.search",
-        "merge_request.view",
-        "pipeline.list",
-        "pipeline.view",
-        "project.list",
-        "project.search",
-        "project.view",
-        "protected_branch.list",
-        "protected_branch.verify",
-        "protected_branch.view",
-        "search.code",
-        "search.comments",
-        "search.commits",
-        "search.issues",
-        "search.merge_requests",
-        "search.wiki",
-    ];
-
+    assert_output_content_capability_matrix(
+        catalog,
+        openapi,
+        send_schema,
+        "gitlab",
+        EMBEDDED,
+        &["markdown", "text"],
+        "markdown",
+    );
     let actions = catalog["services"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|service| service["service"] == "gitlab")
-        .and_then(|service| service["actions"].as_array())
-        .expect("GitLab catalog actions");
-    let embedded = actions
-        .iter()
-        .filter(|action| action.get("readContentFormats").is_some())
-        .map(|action| action["action"].as_str().unwrap())
-        .collect::<BTreeSet<_>>();
-    let whole = actions
-        .iter()
-        .filter(|action| action.get("responseFormats").is_some())
-        .map(|action| action["action"].as_str().unwrap())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(embedded, EMBEDDED.iter().copied().collect());
-    assert_eq!(whole, WHOLE.iter().copied().collect());
+        .find(|entry| entry["service"] == "gitlab")
+        .unwrap()["actions"]
+        .as_array()
+        .unwrap();
 
     for action_name in [
         "issue.note.list",
@@ -18873,76 +18966,6 @@ fn assert_gitlab_read_response_capability_matrix(
             .any(|value| value == "responseMode")
     );
     assert!(raw_diff_required.iter().any(|value| value == "output"));
-
-    for action in actions {
-        let action_name = action["action"].as_str().unwrap();
-        let expected_read = EMBEDDED.contains(&action_name);
-        let expected_whole = WHOLE.contains(&action_name);
-        assert_optional_format_enum(
-            action.get("readContentFormats"),
-            expected_read,
-            json!(["native", "markdown", "text"]),
-            &format!("catalog gitlab.{action_name} readContentFormats"),
-        );
-        assert_optional_format_enum(
-            action.get("responseFormats"),
-            expected_whole,
-            json!(["json", "markdown"]),
-            &format!("catalog gitlab.{action_name} responseFormats"),
-        );
-
-        let request_content = &openapi["paths"][format!("/v1/invoke/gitlab/{action_name}")]["post"]
-            ["requestBody"]["content"];
-        let request_properties = if request_content.get("application/json").is_some() {
-            &request_content["application/json"]["schema"]["properties"]
-        } else {
-            &request_content["multipart/form-data"]["schema"]["properties"]["request"]["contentSchema"]
-                ["properties"]
-        };
-        assert_eq!(
-            request_properties["readContentFormat"]["enum"],
-            if expected_read {
-                json!(["native", "markdown", "text"])
-            } else {
-                json!(["native"])
-            },
-            "OpenAPI gitlab.{action_name} readContentFormat"
-        );
-        assert_eq!(
-            request_properties["responseFormat"]["enum"],
-            if expected_whole {
-                json!(["json", "markdown"])
-            } else {
-                json!(["json"])
-            },
-            "OpenAPI gitlab.{action_name} responseFormat"
-        );
-
-        let send_variant = send_action_variant(send_schema, "gitlab", action_name);
-        let send_properties = &send_variant["properties"];
-        assert_eq!(
-            send_properties["readContentFormat"]["enum"],
-            if expected_read {
-                json!(["native", "markdown", "text"])
-            } else {
-                json!(["native"])
-            },
-            "send schema gitlab.{action_name} readContentFormat"
-        );
-        assert_eq!(
-            send_properties["responseFormat"]["enum"],
-            if expected_whole {
-                json!(["json", "markdown"])
-            } else {
-                json!(["json"])
-            },
-            "send schema gitlab.{action_name} responseFormat"
-        );
-        assert_eq!(
-            send_variant["additionalProperties"], false,
-            "send invoke envelope must be closed for gitlab.{action_name}"
-        );
-    }
 
     for action_name in GITLAB_M1_REVIEW_READ_ACTIONS
         .iter()

@@ -38,8 +38,8 @@ use agent_access_atlassian::{
     AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_routes,
 };
 use agent_access_content::{ContentWriteError, markdown_to_adf_bounded, plain_text_to_adf_bounded};
-use agent_access_content::{append_adf_attribution, render_adf_bounded_with_budget};
-use agent_access_provider::presentation::{ReadContentFormat, RenderBudget};
+use agent_access_content::{append_adf_attribution, validate_adf_bounded_with_budget};
+use agent_access_provider::presentation::{OutputContentFormat, RenderBudget};
 #[allow(unused_imports)]
 use agent_access_provider::*;
 use async_trait::async_trait;
@@ -266,7 +266,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             "comments": "includeComments defaults to false. True adds commentPage: one default-size oldest-first page of full comments and replies, fetched through the dedicated comments endpoint. Requires comment.list and comment.view authority on the issue project in the same winning credential mode. Follow commentPage.nextStartAt with comment.list includeBodies=true. Comments share issue rich-content limits; no individual-comment fetches or automatic page draining occur.",
             "context": "Always includes nullable resolution, resolutionDate, dueDate, components, fixVersions, affectedVersions and statusCategory. Resolution, components and versions contain string id and nullable name; statusCategory contains a nonnegative integer id, string key and nullable name. Date strings retain Jira's representation. Missing and null values both become null, including fields hidden or not returned by Jira; null is not proof that a value is unset. Explicit empty collections remain [], and array order and duplicates are preserved. Only these allowlisted properties are disclosed; malformed supplied shapes fail the request. This context is exclusive to issue.view, not search or mutation readbacks.",
             "customFields": "Always includes an array of custom fields returned by Jira, ordered by numeric field ID. Each entry has id, nullable Jira display name, nullable normalized type, and status (supported, unsupported, or withheld). Supported values retain JSON types; unsupported implementations and malformed known values omit nonempty values. Explicit null and empty-array values are retained with their status. Only reviewed built-in text, URL, number, date, datetime, ADF, option, user and Labels field implementations are supported; arbitrary app and resource-reference values are not disclosed. Labels require Jira's built-in labels implementation with an array-of-string schema and preserve order and duplicates. Field values, names and type metadata share the authorized issue fetch, with no extra request.",
-            "customFieldContent": "ADF custom values use the same per-document content byte limit and shared rendering complexity limits as the description. readContentFormat adds renderedBody beside each supported non-null ADF value. Malformed custom ADF is withheld; any byte or complexity limit fails the whole request. Search and mutation readbacks do not return customFields.",
+            "customFieldContent": "ADF custom values use the same per-document content byte limit and shared rendering complexity limits as the description. outputContentFormat selects each supported non-null ADF value as {format,value}; the field type remains adf. Malformed custom ADF is withheld; any byte or complexity limit fails the whole request. Search and mutation readbacks do not return customFields.",
             "issueLinks": "Included only when effective issue.view authority in the selected credential mode covers every Jira project and Jira returns the requested field. Each entry contains key, type (link type name), direction (inward/outward), relationship (directional label), summary and issueType. Read the relationship as <viewed issue> <relationship> <key>, such as PROJ-1 blocks CM-42 or PROJ-1 is blocked by CM-42. Optional summary and issueType are null when unavailable. Order and multiplicity match Jira's embedded list; keys and linked content are not independently resolved. No extra Jira requests are made.",
             "hierarchy": "Parent and subtasks use the same effective universal same-mode authority as issueLinks. When eligible, parent is always present: null means Jira returned no parent to the execution credential, otherwise it contains key, nullable summary and nullable issueType. Subtasks is omitted if not returned; otherwise it is an ordered array of those reference objects, preserving duplicates and []. Only canonical fields.parent is used, including a direct epic parent when Jira supplies one. No Epic Link fallback, ancestry traversal, parent classification or linked-issue lookup occurs. A subtask's direct parent may be a story, and subtasks is not a complete epic-child or descendant search.",
             "omission": "Missing parent means hierarchy was withheld. A null parent is not independent proof that the issue has no parent. Missing subtasks or issueLinks means withheld or not returned; an explicit empty list only describes that returned field. Any gap in universal same-mode authority withholds all links, parent and subtasks. A listed reference does not guarantee a later issue.view succeeds, including when lookup and execution credentials differ."
@@ -459,7 +459,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
         .lookup(LookupRequirement::ScopeResolution)
         .companion_read("comment.view")
         .documentation(json!({
-            "bodies": "includeBodies defaults to false: metadata listing remains independently authorized. True includes complete validated ADF bodies, requires comment.view authority in the same winning credential mode, and supports readContentFormat. Reply entries carry parentCommentId; a page may not include the parent.",
+            "bodies": "includeBodies defaults to false: metadata listing remains independently authorized. True includes complete validated ADF bodies, requires comment.view authority in the same winning credential mode, and supports outputContentFormat selection. Reply entries carry parentCommentId; a page may not include the parent.",
             "pagination": "startAt defaults to 0 and orderBy to +created (oldest first). Body pages use the configured body_max_results default capped by max_results; metadata pages default to max_results. Follow nextStartAt using the same includeBodies, maxResults and orderBy. Each page is independently authorized against live Jira visibility; offsets are not a snapshot. isLast=true proves this page reaches the reported total; missing total yields total=null and isLast=null, even on an empty page. nextStartAt=null with isLast=null means completeness is unknown, not complete.",
             "limits": "A full page may return fewer whole comments to fit max_page_body_bytes, reporting limitedBy=body_bytes and an exact nextStartAt. Bodies are never shortened. Malformed or oversized fetched bodies fail the whole request. Native and rendered content share complexity limits."
         }))
@@ -793,7 +793,7 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
             )
         });
     }
-    let descriptor = ServiceDescriptor::new("jira", "Jira")
+    let mut descriptor = ServiceDescriptor::new("jira", "Jira")
         .with_resource_scopes(BTreeMap::from([(
             "project".to_string(),
             ResourceScopeCapabilities::new(
@@ -820,6 +820,9 @@ pub fn jira_descriptor(config: &JiraProviderConfig) -> ServiceDescriptor {
                 .delegated(JIRA_OAUTH_CONNECTION),
         )
         .with_presentation_body_limit(config.content.max_body_bytes);
+    if let Some(format) = config.content.preferred_output_format {
+        descriptor = descriptor.with_preferred_output_content_format(format);
+    }
     match config.site().upstream_authority() {
         Some(authority) => descriptor.with_upstream_authority(authority),
         None => descriptor,
@@ -1490,6 +1493,7 @@ impl JiraProvider {
                 merge_attribution_audit(&mut audit, attribution);
                 merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
                 Ok(ProviderResult::new(result)
+                    .with_presentation_recovery_receipt(MutationReceipt::applied())
                     .with_audit(audit)
                     .with_upstream(Some(upstream_status), Some(upstream_duration_ms))
                     .with_object_ids(issue_create_object_ids(Some(&created))))
@@ -1943,6 +1947,7 @@ impl JiraProvider {
                 merge_attribution_audit(&mut audit, attribution);
                 merge_content_write_audit(&mut audit, inputs.content_audit.as_ref());
                 Ok(ProviderResult::new(result)
+                    .with_presentation_recovery_receipt(MutationReceipt::applied())
                     .with_audit(audit)
                     .with_upstream(
                         Some(update_response.status),
@@ -2535,6 +2540,7 @@ impl JiraProvider {
             merge_attribution_audit(&mut audit, attribution);
             merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
             Ok(ProviderResult::new(result)
+                .with_presentation_recovery_receipt(MutationReceipt::applied())
                 .with_audit(audit)
                 .with_upstream(
                     Some(response.status),
@@ -2643,6 +2649,7 @@ impl JiraProvider {
             merge_attribution_audit(&mut audit, attribution);
             merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
             Ok(ProviderResult::new(result)
+                .with_presentation_recovery_receipt(MutationReceipt::applied())
                 .with_audit(audit)
                 .with_upstream(Some(response.status), Some(upstream_duration_ms))
                 .with_object_ids(json!({
@@ -2736,6 +2743,7 @@ impl JiraProvider {
             merge_attribution_audit(&mut audit, attribution);
             merge_content_write_audit(&mut audit, Some(&inputs.content_audit));
             Ok(ProviderResult::new(result)
+                .with_presentation_recovery_receipt(MutationReceipt::applied())
                 .with_audit(audit)
                 .with_upstream(Some(response.status), Some(upstream_duration_ms))
                 .with_object_ids(json!({

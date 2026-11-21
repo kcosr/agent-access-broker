@@ -90,7 +90,7 @@ async fn declared_inputs_persist_in_both_stores_and_are_searchable() {
             "unpresented",
             "echo",
             InvokeRequest {
-                response_format: agent_access_provider::presentation::ResponseFormat::Markdown,
+                output_content_format: Some(OutputContentFormat::Markdown),
                 ..echo("ZEPHYR", "hello")
             },
         )

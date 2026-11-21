@@ -8708,3 +8708,5 @@ async fn execution_follows_an_authorized_path_to_the_project_that_took_it_over()
         ]
     );
 }
+#[path = "tests/content_output.rs"]
+mod content_output;

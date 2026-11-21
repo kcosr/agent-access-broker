@@ -49,52 +49,32 @@ fn small_fields() -> Vec<Value> {
 }
 
 fn assert_small_result(result: &Value, format: Option<&str>) {
+    let format = format.unwrap_or("adf");
     let fields = result["customFields"].as_array().unwrap();
     assert_eq!(fields.len(), 9);
     let mut expected = small_fields();
-    if let Some(format) = format {
-        let body = if format == "markdown" {
-            r"CUSTOM\_ADF\_BODY"
-        } else {
-            "CUSTOM_ADF_BODY"
-        };
-        let description = if format == "markdown" {
-            r"ROOT\_DESCRIPTION"
-        } else {
-            "ROOT_DESCRIPTION"
-        };
-        expected[1]["renderedBody"] = json!({"format":format,"value":body});
-        assert_eq!(
-            result["renderedBody"],
-            json!({"format":format,"value":description})
-        );
+    let (body, description) = if format == "adf" {
+        (
+            jira_adf_text("CUSTOM_ADF_BODY"),
+            jira_adf_text("ROOT_DESCRIPTION"),
+        )
+    } else if format == "markdown" {
+        (json!(r"CUSTOM\_ADF\_BODY"), json!(r"ROOT\_DESCRIPTION"))
     } else {
-        assert!(result.get("renderedBody").is_none());
-    }
+        (json!("CUSTOM_ADF_BODY"), json!("ROOT_DESCRIPTION"))
+    };
+    expected[1]["value"] = json!({"format":format,"value":body});
+    assert_eq!(
+        result["description"],
+        json!({"format":format,"value":description})
+    );
     assert_eq!(fields, &expected);
-    assert!(fields[7].get("renderedBody").is_none());
-}
-
-fn assert_small_markdown(markdown: &str) {
-    for text in [
-        "## Custom fields",
-        "customfield_2",
-        "customfield_10",
-        "customfield_16",
-        "Business \\*impact\\*",
-        r"CUSTOM\_VALUE \[launch\]",
-        r"CUSTOM\_ADF\_BODY",
-        "Duplicate name",
-        "unsupported",
-        "withheld",
-        "- Label: `release-a`",
-        "- Label: `- break`",
-    ] {
-        assert!(
-            markdown.to_lowercase().contains(&text.to_lowercase()),
-            "missing {text} in {markdown}"
-        );
-    }
+    assert!(result.get("renderedBody").is_none());
+    assert!(
+        fields
+            .iter()
+            .all(|field| field.get("renderedBody").is_none())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -116,7 +96,14 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
             assert_success("custom field CLI", &output);
             output
         };
-        let native = run(&["jira", "issue", "view", "PROJ-1"]);
+        let native = run(&[
+            "jira",
+            "issue",
+            "view",
+            "PROJ-1",
+            "--output-content-format",
+            "adf",
+        ]);
         let native: Value = serde_json::from_slice(&native.stdout).unwrap();
         assert_small_result(&native["result"], None);
         super::issue_context::assert_context(
@@ -134,7 +121,7 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
             "jira.issue.view",
             "--input-json",
             r#"{"issue":"PROJ-1"}"#,
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ]);
         let normalized: Value = serde_json::from_slice(&normalized.stdout).unwrap();
@@ -150,11 +137,10 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
         );
 
         let request = temp_path("jira-custom-fields-send.json");
-        std::fs::write(&request, json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"},"responseFormat":"markdown"}).to_string()).unwrap();
+        std::fs::write(&request, json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"PROJ-1"},"outputContentFormat":"markdown"}).to_string()).unwrap();
         let markdown = run(&["send", "--request-file", request.to_str().unwrap()]);
         let markdown: Value = serde_json::from_slice(&markdown.stdout).unwrap();
-        assert_eq!(markdown["result"]["format"], "markdown");
-        assert_small_markdown(markdown["result"]["value"].as_str().unwrap());
+        assert_small_result(&markdown["result"], Some("markdown"));
         std::fs::remove_file(request).unwrap();
         assert_new_backend_operations(
             &backend,
@@ -164,8 +150,8 @@ async fn custom_fields_cross_typed_invoke_send_and_http_with_three_calls_and_cou
 
         let client = reqwest::Client::new();
         for (options, format) in [
-            (json!({}), None),
-            (json!({"readContentFormat":"markdown"}), Some("markdown")),
+            (json!({"outputContentFormat":"adf"}), None),
+            (json!({"outputContentFormat":"markdown"}), Some("markdown")),
         ] {
             let mut body = options;
             body["inputs"] = json!({"issue":"PROJ-1"});
@@ -323,19 +309,27 @@ fn assert_complete_large(result: &Value, normalized: bool) {
         .zip(expected["customFields"].as_array().unwrap())
     {
         assert_eq!(actual["id"], expected["id"]);
-        assert_eq!(actual["value"], expected["value"]);
-        if normalized && actual["type"] == "adf" {
+        if actual["type"] == "adf" {
+            assert_eq!(
+                actual["value"]["format"],
+                if normalized { "markdown" } else { "adf" }
+            );
+            if !normalized {
+                assert_eq!(actual["value"]["value"], expected["value"]);
+                continue;
+            }
             let number = actual["id"]
                 .as_str()
                 .unwrap()
                 .strip_prefix("customfield_")
                 .unwrap();
-            let body = actual["renderedBody"]["value"].as_str().unwrap();
+            let body = actual["value"]["value"].as_str().unwrap();
             for block in 0..128 {
                 assert!(body.contains(&format!(r"FIELD{number}\_BLOCK{block}\_START")));
                 assert!(body.contains(&format!(r"FIELD{number}\_BLOCK{block}\_END")));
             }
         } else {
+            assert_eq!(actual["value"], expected["value"]);
             assert!(actual.get("renderedBody").is_none());
         }
     }
@@ -351,14 +345,24 @@ async fn large_custom_fields_are_complete_in_cli_and_both_mcp_transports() {
     let base_url = broker.public_url();
     let mut cursor = 0;
     for (args, normalized) in [
-        (vec!["jira", "issue", "view", "PROJ-1"], false),
         (
             vec![
                 "jira",
                 "issue",
                 "view",
                 "PROJ-1",
-                "--read-content-format",
+                "--output-content-format",
+                "adf",
+            ],
+            false,
+        ),
+        (
+            vec![
+                "jira",
+                "issue",
+                "view",
+                "PROJ-1",
+                "--output-content-format",
                 "markdown",
             ],
             true,
@@ -380,22 +384,14 @@ async fn large_custom_fields_are_complete_in_cli_and_both_mcp_transports() {
             "issue",
             "view",
             "PROJ-1",
-            "--output-format",
+            "--output-content-format",
             "markdown",
         ])
         .output()
         .unwrap();
     assert_success("large custom field Markdown", &output);
-    let markdown = String::from_utf8(output.stdout).unwrap();
-    for field in 1..=256 {
-        assert!(markdown.contains(&format!("`customfield_{field}`")));
-        if field % 32 == 0 {
-            for block in 0..128 {
-                assert!(markdown.contains(&format!(r"FIELD{field}\_BLOCK{block}\_START")));
-                assert!(markdown.contains(&format!(r"FIELD{field}\_BLOCK{block}\_END")));
-            }
-        }
-    }
+    let markdown: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_complete_large(&markdown["result"], true);
     assert_new_backend_operations(
         &backend,
         &mut cursor,
@@ -408,9 +404,7 @@ async fn large_custom_fields_are_complete_in_cli_and_both_mcp_transports() {
     stdio.notify("notifications/initialized", json!({}));
     for normalized in [false, true] {
         let mut arguments = json!({"inputs":{"issue":"PROJ-1"}});
-        if normalized {
-            arguments["readContentFormat"] = json!("markdown");
-        }
+        arguments["outputContentFormat"] = json!(if normalized { "markdown" } else { "adf" });
         let response = stdio.request("tools/call", json!({"name":agent_access_core::mcp::tool_name("jira","issue.view"),"arguments":arguments})).await;
         assert_eq!(response["result"]["isError"], false);
         assert_complete_large(
@@ -534,7 +528,7 @@ pub(super) async fn http_mcp_call(
     session: &str,
     request_id: usize,
 ) -> Value {
-    let response = http_rpc(client, base_url, Some(session), json!({"jsonrpc":"2.0","id":request_id,"method":"tools/call","params":{"name":agent_access_core::mcp::tool_name("jira","issue.view"),"arguments":{"inputs":{"issue":"PROJ-1"}}}})).send().await.unwrap();
+    let response = http_rpc(client, base_url, Some(session), json!({"jsonrpc":"2.0","id":request_id,"method":"tools/call","params":{"name":agent_access_core::mcp::tool_name("jira","issue.view"),"arguments":{"inputs":{"issue":"PROJ-1"},"outputContentFormat":"adf"}}})).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let response = decode_http_rpc(response).await;
     assert_eq!(response["id"], request_id);

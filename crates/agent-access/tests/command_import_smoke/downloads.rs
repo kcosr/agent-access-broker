@@ -191,7 +191,7 @@ impl Downloads {
     }
 
     fn send_request(&self, output: &Path) -> Value {
-        json!({"version":"agent-access.send.v1", "kind":"invoke", "responseMode":"stream",
+        json!({"version":"agent-access.send.v2", "kind":"invoke", "responseMode":"stream",
             "service":"ticketing", "action":"report.download", "inputs":{"reportId":"monthly"},
             "output":{"type":"file", "path":output}})
     }
