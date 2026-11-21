@@ -230,6 +230,7 @@ All notable changes to this project are documented in this file.
   HTTP combines the option with `preferredOutputContentFormat` per request;
   response limits count only the content emitted. See
   [MCP text copies](docs/mcp.md#tool-result-text-copies).
+  ([#124](https://github.com/kcosr/agent-access-broker/pull/124))
 
 - **Output-content preferences** can be set per native service, client or MCP
   connection. The first applicable preference selects a supported concrete
