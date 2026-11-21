@@ -873,7 +873,9 @@ https://broker.example/mcp/jira?preferredOutputContentFormat=adf
 
 The optional value must be `markdown`, `text`, `adf`, or `storage`. Empty,
 duplicate, unknown, malformed and encoded-alias query parameters return HTTP 400
-before dispatch. `mcp.public_url` remains query-free. The preference belongs to
+before dispatch. Trusted-username ingress retains the audited
+`identity_assertion_invalid` admission envelope for malformed queries.
+`mcp.public_url` remains query-free. The preference belongs to
 each HTTP request and does not mutate session identity or view. Keep the same
 preference while continuing paginated discovery; a cross-preference cursor is
 rejected.

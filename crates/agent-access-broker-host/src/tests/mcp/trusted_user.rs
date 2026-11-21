@@ -312,6 +312,111 @@ async fn assert_assertion_denied(response: axum::response::Response) {
 }
 
 #[tokio::test]
+async fn trusted_user_content_preferences_preserve_valid_admission_and_audited_query_denials() {
+    let (fixture, _store, provider) = fixture(16).await;
+    let mut denied_ids = Vec::new();
+    let mut completed = 0;
+    for relayed in [false, true] {
+        for (path, format) in [
+            ("/mcp", if relayed { "adf" } else { "markdown" }),
+            ("/mcp/fake", if relayed { "storage" } else { "text" }),
+        ] {
+            let uri = format!("{path}?preferredOutputContentFormat={format}");
+            let tool_call = |id| {
+                let mut message = call(id);
+                if path != "/mcp" {
+                    message["params"]["name"] = json!("echo");
+                }
+                message
+            };
+            let mut initialize = user_request(relayed, None, init());
+            *initialize.uri_mut() = uri.parse().unwrap();
+            let response = fixture.send(initialize).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let session = response.headers()["mcp-session-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let _ = rpc_body(response).await;
+            let mut notification = user_request(
+                relayed,
+                Some(&session),
+                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            );
+            *notification.uri_mut() = uri.parse().unwrap();
+            assert_eq!(
+                fixture.send(notification).await.status(),
+                StatusCode::ACCEPTED
+            );
+            let mut valid = user_request(relayed, Some(&session), tool_call(10));
+            *valid.uri_mut() = uri.parse().unwrap();
+            let response = fixture.send(valid).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let response = rpc_body(response).await;
+            assert_eq!(structured(&response)["decision"], "allow", "{response}");
+            assert_eq!(structured(&response)["result"]["principal"], "alice");
+            completed += 1;
+            assert_eq!(provider.executions.load(Ordering::SeqCst), completed);
+
+            for query in [
+                "",
+                "preferredOutputContentFormat=",
+                "preferredOutputContentFormat=markdown&preferredOutputContentFormat=text",
+                "preferred%4futputContentFormat=text",
+                "preferredOutputContentFormat=%74ext",
+                "preferredOutputContentFormat=native",
+                "unknown=query-private-marker",
+            ] {
+                let id = format!("invalid-content-preference-{}", denied_ids.len());
+                let mut invalid = user_request(relayed, Some(&session), tool_call(11));
+                *invalid.uri_mut() = format!("{path}?{query}").parse().unwrap();
+                invalid.headers_mut().insert(
+                    agent_access_provider::REQUEST_ID_HEADER,
+                    HeaderValue::from_str(&id).unwrap(),
+                );
+                let response = fixture.send(invalid).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                assert!(!response.headers().contains_key("www-authenticate"));
+                let response = rpc_body(response).await;
+                assert_eq!(response["agentRequestId"], id);
+                assert_eq!(response["service"], "broker");
+                assert_eq!(response["action"], "identity.authenticate");
+                assert_eq!(response["decision"], "deny");
+                assert_eq!(response["reasonCode"], "identity_assertion_invalid");
+                assert!(response.get("result").is_none_or(Value::is_null));
+                assert!(!response.to_string().contains("query-private-marker"));
+                assert_eq!(provider.executions.load(Ordering::SeqCst), completed);
+                denied_ids.push(id);
+            }
+        }
+    }
+    let records = read_audit_records_without_reloads(&fixture.audit_path);
+    let denials: Vec<_> = records
+        .iter()
+        .filter(|record| record["reasonCode"] == "identity_assertion_invalid")
+        .collect();
+    assert_eq!(denials.len(), denied_ids.len());
+    for id in denied_ids {
+        let matching: Vec<_> = denials
+            .iter()
+            .filter(|record| record["agentRequestId"] == id)
+            .collect();
+        assert_eq!(matching.len(), 1, "{id}");
+        // The existing admission helper audits caller authentication before
+        // projecting the failure-specific action into the HTTP envelope.
+        assert_eq!(matching[0]["action"], "caller.authenticate");
+        assert_eq!(matching[0]["decision"], "deny");
+    }
+    for record in records {
+        let serialized = record.to_string();
+        for withheld in [DIRECT, RELAY, "query-private-marker"] {
+            assert!(!serialized.contains(withheld));
+        }
+    }
+}
+
+#[tokio::test]
 async fn trusted_user_read_and_write_dispatch_as_mapped_human_for_both_transports() {
     let (fixture, store, provider) = fixture(8).await;
     store.remove_identity_token("alice").unwrap();

@@ -1,5 +1,8 @@
 //! Client validation requires deliberately malformed Broker responses, so these
 //! tests use synthetic HTTP while running the actual stdio command.
+#[path = "../common/presentation_failure.rs"]
+mod presentation_failure;
+
 use super::McpProcess;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -176,5 +179,85 @@ async fn compact_allow_outcomes_keep_original_status_and_reason_without_success_
         );
         process.finish().await;
         broker.verify().await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_presentation_failure_receipt_survives_stdio_inline_and_file_output() {
+    for (file, existing) in [(false, false), (true, false), (true, true)] {
+        let broker = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/spec/catalog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(presentation_failure::catalog()))
+            .mount(&broker)
+            .await;
+        let receipt = presentation_failure::receipt();
+        Mock::given(method("POST"))
+            .and(path("/v1/invoke/jira/issue.update"))
+            .and(body_json(json!({
+                "inputs":presentation_failure::inputs(), "outputContentFormat":"markdown"
+            })))
+            .respond_with(ResponseTemplate::new(502).set_body_json(receipt.clone()))
+            .expect(1)
+            .mount(&broker)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("client.toml");
+        configure(&config, &broker, "");
+        let destination = directory.path().join("response.json");
+        if existing {
+            // The reservation is a sibling temporary file; only a successful
+            // response may replace this existing regular destination.
+            std::fs::write(&destination, "original destination").unwrap();
+        }
+        let mut process = McpProcess::start(&config);
+        process.initialize().await;
+        let mut arguments = json!({
+            "inputs":presentation_failure::inputs(), "outputContentFormat":"markdown"
+        });
+        if file {
+            arguments["outputPath"] = json!(destination);
+        }
+        let response = process
+            .request(
+                "tools/call",
+                json!({"name":"jira_issue_update","arguments":arguments}),
+            )
+            .await;
+        assert!(response.get("error").is_none(), "{response}");
+        let result = &response["result"];
+        assert_eq!(result["isError"], true, "{response}");
+        assert_eq!(result["structuredContent"], receipt);
+        assert_eq!(
+            serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(),
+            receipt
+        );
+        assert!(result["structuredContent"].get("output").is_none());
+        assert!(result["structuredContent"]["result"].get("issue").is_none());
+        assert!(!response.to_string().contains(destination.to_str().unwrap()));
+        if existing {
+            assert_eq!(
+                std::fs::read_to_string(&destination).unwrap(),
+                "original destination"
+            );
+        } else {
+            assert!(!destination.exists());
+        }
+        assert_eq!(
+            std::fs::read_dir(directory.path()).unwrap().count(),
+            1 + usize::from(existing)
+        );
+        process.finish().await;
+        broker.verify().await;
+        assert_eq!(
+            broker
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| request.method == "POST")
+                .count(),
+            1
+        );
     }
 }

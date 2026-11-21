@@ -529,6 +529,16 @@ pub(crate) async fn handle(
     };
     let preferred_output_content_format = match request_preference(&request) {
         Ok(preference) => preference,
+        Err(()) if ingress.is_username() => {
+            return crate::router::admission_failure_response(
+                &state,
+                snapshot,
+                request.headers(),
+                Some(remote),
+                IdentityFailure::AssertionInvalid,
+            )
+            .await;
+        }
         Err(()) => return invalid_preference(),
     };
     if request.headers().contains_key("trailer") {

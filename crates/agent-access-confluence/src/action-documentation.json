@@ -194,7 +194,7 @@
   "blog.draft.publish": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the source representation; outputContentFormat only selects returned rich content.",
+    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the source representation to publish; the response is structured JSON metadata without the body.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -470,7 +470,7 @@
   },
   "blog.search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; any change to the bound effective authority rejects continuation, while an unrelated policy publication does not. The token also binds execution context, principal, credential mode/method and the service route. scanStatus is more when upstream candidates remain, scan_budget when a bounded scan stopped before exhaustion, or exhausted when no continuation remains. An empty page with more or scan_budget can still continue. On a rejected continuation, repeat the search without the token.",
-    "results": "Searches current blog posts only and returns metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied. Whole-result formatting does not fetch bodies.",
+    "results": "Searches current blog posts only and returns structured JSON metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied.",
     "spaceKeys": "Omit spaces to search effective authorized access; explicit keys only narrow it and wildcard keys are unsupported. Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
     "inputExamples": [
       {
@@ -541,7 +541,7 @@
   },
   "blog.verify": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId with the current-content locator. Read verification.status to distinguish matched from mismatch. Whole-result Markdown preserves the verification outcome and does not fetch body content.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId with the current-content locator. Read verification.status to distinguish matched from mismatch. The structured JSON result preserves the verification outcome without body content.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -682,7 +682,7 @@
   "page.draft.publish": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the source representation; outputContentFormat only selects returned rich content.",
+    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the source representation to publish; the response is structured JSON metadata without the body.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -1029,7 +1029,7 @@
   },
   "search": {
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to this action with the same query, spaces and effective maxResults. Tokens expire 15 minutes after issuance and a Broker reload or restart invalidates them. Every page is authorized again; any change to the bound effective authority rejects continuation, while an unrelated policy publication does not. The token also binds execution context, principal, credential mode/method and the service route. scanStatus is more when upstream candidates remain, scan_budget when a bounded scan stopped before exhaustion, or exhausted when no continuation remains. An empty page with more or scan_budget can still continue. On a rejected continuation, repeat the search without the token.",
-    "results": "Searches current pages only and returns metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied. Whole-result formatting does not fetch bodies.",
+    "results": "Searches current pages only and returns structured JSON metadata without bodies. Text mode matches titles; use CQL text ~ for full text. Created/updated actor and time metadata are returned when supplied.",
     "spaceKeys": "Omit spaces to search effective authorized access; explicit keys only narrow it and wildcard keys are unsupported. Use exact space keys, including the tilde and case of personal keys such as ~alice. In CQL quote personal keys, for example space = \"~alice\". A personal-space grant does not imply ownership.",
     "inputExamples": [
       {
@@ -1081,7 +1081,7 @@
     "resourceIdentities": "Disclosed confluence_content selectors use stable https://<site>/wiki/content/{page|folder|blog}/<ID> identities. They are not browser URLs or search text. Search current authorized content normally; explicit spaces narrow current placement."
   },
   "space.list": {
-    "request": "Omitting maxResults uses the configured maximum advertised by this action (50 in the default configuration, at most 100). Whole-result Markdown is supported. Keep actual space keys, including personal-space tilde and case; a personal-space grant does not imply ownership.",
+    "request": "Omitting maxResults uses the configured maximum advertised by this action (50 in the default configuration, at most 100). Returns structured JSON space metadata without bodies. Keep actual space keys, including personal-space tilde and case; a personal-space grant does not imply ownership.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -1095,7 +1095,7 @@
   },
   "verify": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId with the current-content locator. Read verification.status to distinguish matched from mismatch. Whole-result Markdown preserves the verification outcome and does not fetch body content.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId with the current-content locator. Read verification.status to distinguish matched from mismatch. The structured JSON result preserves the verification outcome without body content.",
     "inputExamples": [
       {
         "label": "Canonical inputs",

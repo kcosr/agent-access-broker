@@ -198,6 +198,10 @@ result. The reserved combinations are:
 | `request.admit` | `rate_limited`, `concurrency_limited` | 429 | `error` | Yes |
 | `request.admit` | `identity_unavailable`, `audit_unavailable` | 503 | `error` | Yes |
 
+Malformed HTTP MCP output-content preference queries use the same audited
+`identity_assertion_invalid` admission envelope as invalid endpoint paths.
+Valid preferences preserve the admitted username and execution context.
+
 Username denials deliberately conceal whether the binding, human or pause gate
 caused rejection; a disabled binding is denied like an unknown name. Fingerprint
 failures, including a disabled identity token, retain their existing 401

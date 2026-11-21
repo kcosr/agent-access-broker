@@ -1,4 +1,7 @@
 //! Real CLI processes against synthetic HTTP responses exercise client contract boundaries.
+#[path = "common/presentation_failure.rs"]
+mod presentation_failure;
+
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -277,6 +280,107 @@ async fn compact_allow_outcomes_preserve_provider_status_instead_of_requiring_su
                 response
             );
             broker.verify().await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_presentation_failure_receipt_survives_every_cli_entrypoint_and_output_mode() {
+    for surface in ["typed", "invoke", "send"] {
+        for (file, existing) in [(false, false), (true, false), (true, true)] {
+            let broker = MockServer::start().await;
+            let directory = tempfile::tempdir().unwrap();
+            serve_catalog(&broker, presentation_failure::catalog()).await;
+            let receipt = presentation_failure::receipt();
+            Mock::given(method("POST"))
+                .and(path("/v1/invoke/jira/issue.update"))
+                .and(body_json(json!({
+                    "inputs":presentation_failure::inputs(),
+                    "outputContentFormat":"markdown"
+                })))
+                .respond_with(ResponseTemplate::new(502).set_body_json(receipt.clone()))
+                .expect(1)
+                .mount(&broker)
+                .await;
+            let destination = directory.path().join("response.json");
+            if existing {
+                // JSON output reserves a sibling temporary file before dispatch;
+                // an existing regular destination is replaced only on success.
+                std::fs::write(&destination, "original destination").unwrap();
+            }
+            let mut cmd = command(directory.path(), &broker);
+            match surface {
+                "typed" => {
+                    cmd.args([
+                        "jira",
+                        "issue",
+                        "update",
+                        "PROJ-1",
+                        "--summary",
+                        "Updated title",
+                        "--output-content-format",
+                        "markdown",
+                    ]);
+                }
+                "invoke" => {
+                    cmd.args([
+                        "invoke",
+                        "jira.issue.update",
+                        "--input-json",
+                        &presentation_failure::inputs().to_string(),
+                        "--output-content-format",
+                        "markdown",
+                    ]);
+                }
+                "send" => {
+                    let request = json!({
+                        "version":agent_access_core::SEND_SCHEMA_VERSION, "kind":"invoke",
+                        "service":"jira", "action":"issue.update",
+                        "inputs":presentation_failure::inputs(), "outputContentFormat":"markdown"
+                    });
+                    cmd.args(["send", "--request-json", &request.to_string()]);
+                }
+                _ => unreachable!(),
+            }
+            if file {
+                cmd.arg("--output").arg(&destination);
+            }
+            let output = cmd.output().unwrap();
+            assert_exit(&output, 4); // HTTP 502 retains the upstream-failure exit code.
+            assert!(output.stderr.is_empty(), "{surface}: {output:?}");
+            let printed: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                printed, receipt,
+                "{surface}, file={file}, existing={existing}"
+            );
+            assert!(printed.get("output").is_none());
+            assert!(printed["result"].get("issue").is_none());
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains(destination.to_str().unwrap())
+            );
+            if existing {
+                assert_eq!(
+                    std::fs::read_to_string(&destination).unwrap(),
+                    "original destination"
+                );
+            } else {
+                assert!(!destination.exists());
+            }
+            assert_eq!(
+                std::fs::read_dir(directory.path()).unwrap().count(),
+                1 + usize::from(existing)
+            );
+            broker.verify().await;
+            assert_eq!(
+                broker
+                    .received_requests()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|request| request.method == "POST")
+                    .count(),
+                1
+            );
         }
     }
 }
