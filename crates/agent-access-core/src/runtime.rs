@@ -74,6 +74,8 @@ pub use owned::InvocationControl;
 mod resource_access;
 mod resource_management;
 mod resource_types;
+#[cfg(test)]
+use crate::ResourceDefinition;
 use crate::fs_permissions;
 use crate::imports::*;
 use crate::microsoft_oidc::{MicrosoftOidcRuntimeConfig, MicrosoftOidcRuntimeConfigError};
@@ -91,7 +93,7 @@ use crate::{
     ManagedPolicySubjectCatalog, ManagedResourceCatalog, ManagedStore, ManagedStoreError,
     ManagedStoreOpenMode, NormalizedPolicyGrant, NormalizedPolicyGrantIssueField,
     NormalizedPolicyGrantValidationIssue, PolicyGrantConfig, PolicyReadScope,
-    PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog, ResourceDefinition,
+    PolicyValidationIssue, PolicyWriteScope, ResourceBoundary, ResourceCatalog,
     ResourceGroupDefinition, ResourceSelection, ResponseEnvelope, api_service_spec,
     credential_mode_available, gateway_upstream_authorization, is_safe_identifier,
     is_safe_principal, normalized_policy_grant_validation_issues, validate_broker_config,
