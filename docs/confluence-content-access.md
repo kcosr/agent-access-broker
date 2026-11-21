@@ -58,6 +58,8 @@ Confluence. The editor can add, correct or clear a saved link without replacing
 the resource. A replacement link must normalize to the same site, content kind
 and immutable ID; changing the target requires **Change location** instead.
 An existing resource without a saved browser URL has no link until one is added.
+The grant builder shows the resource name and coverage, with its saved browser
+URL on a separate line. Its resource filter also matches saved URLs.
 
 The link can become stale after a rename or move. Paste the current browser URL
 into the editor to correct it. Saving and correcting links are offline: they do
