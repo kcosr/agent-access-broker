@@ -2966,8 +2966,12 @@ the service does not use is rejected, as is an `action`/`resourceType` combinati
 whose action is not bound to that type. Service/action detail and
 unqualified action listing remain available.
 
-The original service capability endpoints retain their full response shapes;
-compact CLI/MCP service lists are projections of those canonical definitions.
+Service capability endpoints return the canonical definitions; compact CLI/MCP
+service lists are projections of those definitions. Each `resourceScopes` entry
+declares `matching: "scalar"` with `resourceType` and `selectors`, or
+`matching: "containment"` with `domain`, `selectorsByType`, `containerTypes`,
+`targetKinds`, `ancestorKinds` and `effects`. This describes a scope's matching
+contract, independently of the caller's granted coverage.
 
 
 Ordinary visible service entries report `surface: "invoke"`. Management

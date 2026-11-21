@@ -10,6 +10,18 @@ fn descriptor_projection(descriptor: &ServiceDescriptor) -> serde_json::Value {
         .as_object_mut()
         .unwrap()
         .remove("credentialVerificationSupported");
+    // Verify the SDK's explicit matching tag before comparing the historical
+    // descriptor shape: every Git scope still has scalar policy semantics.
+    for scope in capabilities["resourceScopes"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        assert_eq!(
+            scope.as_object_mut().unwrap().remove("matching"),
+            Some(json!("scalar"))
+        );
+    }
     let credentials = &descriptor.credentials;
     json!({"capabilities": capabilities,
         "credentials": {

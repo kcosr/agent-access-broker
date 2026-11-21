@@ -2624,7 +2624,7 @@ mod tests {
             json!({"notebook": "team-handbook", "note": "42"}),
         );
         let resolution = provider.resolve_scopes(fixture.request()).await.unwrap();
-        assert_eq!(resolution.scopes()["notebook"], ["team-handbook"]);
+        assert_eq!(resolution.scopes().unwrap()["notebook"], ["team-handbook"]);
         assert!(resolution.state().is_none());
     }
 

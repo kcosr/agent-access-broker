@@ -1168,10 +1168,15 @@ can be a page or folder in the requested space. With no parent, Broker resolves
 and authorizes the space homepage. Blog draft create does not
 accept page hierarchy inputs.
 `page.draft.stage` and `blog.draft.stage` create a draft against an existing
-current page/blog through the proven `get-draft=true` path: the broker confirms
+current page/blog through the `get-draft=true` path: the broker confirms
 the current content, checks `baseVersion`, checks that no visible draft already
 exists, and then sends a v2 draft update with `status = "draft"` and
 `version.number = 1`.
+The draft probe may report a raw 404 or return well-formed current content with
+the same ID, content type and space identity; both mean no visible competing
+draft. A matching draft is a conflict. Other lifecycle values, mismatched
+identities, malformed responses and exhausted proof budgets fail before writing.
+These checks are observations, not an atomic lock against another editor.
 
 Draft writes accept `storage`, `markdown`, and `plain_text` through the
 canonical pair. Normalized input becomes storage. Page drafts use their
@@ -1181,9 +1186,13 @@ hardcoded storage target; blog drafts require configured blog storage support.
 `page.draft.discard`, and `page.draft.verify` require the content ID and the
 matching signed draft handle; blog draft actions use the same shape with
 `blogId`. Draft update keeps the draft at version `1`. Publish re-reads the
-draft body/title/version, requires draft version `1`, sends `status = "current"`
-with `version.number = 1`, and verifies that new-draft attachments still exist
-on the published current content. Discard is supported only for new drafts; a
+draft body/title/version and requires draft version `1`. New drafts publish with
+`status = "current"` and `version.number = 1`. Staged drafts additionally require
+the current published version to match the handle's bound base version, then
+publish as that base version plus one. The accepted response must preserve the
+expected identity, placement and version; an inconsistent accepted response
+retains an applied-but-unverified receipt. New-draft attachments are verified on
+the published current content. Discard is supported only for new drafts; a
 staged draft discard fails closed until live behavior is proven. After a new
 draft discard, the broker verifies that the draft is gone and that current
 content was not created as a side effect.

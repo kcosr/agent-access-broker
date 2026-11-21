@@ -63,6 +63,7 @@ struct EvidenceBackend {
     hidden_for_credential: Mutex<Option<ExecutionCredential>>,
     hierarchy_credentials: Mutex<Vec<ExecutionCredential>>,
     space: Mutex<ConfluenceSpace>,
+    extra_spaces: Mutex<BTreeMap<String, ConfluenceSpace>>,
     page_reads: AtomicUsize,
     metadata_reads: AtomicUsize,
     move_during_metadata: bool,
@@ -112,6 +113,7 @@ impl EvidenceBackend {
             hidden_for_credential: Mutex::new(None),
             hierarchy_credentials: Mutex::new(Vec::new()),
             space: Mutex::new(space()),
+            extra_spaces: Mutex::new(BTreeMap::new()),
             page_reads: AtomicUsize::new(0),
             metadata_reads: AtomicUsize::new(0),
             move_during_metadata: false,
@@ -363,7 +365,13 @@ impl ConfluenceBackend for EvidenceBackend {
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         let s = self.space.lock().unwrap().clone();
         if s.id != id {
-            return Err(ConfluenceBackendError::NotFound);
+            return self
+                .extra_spaces
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .map_or(Err(ConfluenceBackendError::NotFound), ok);
         }
         ok(s)
     }
@@ -1630,15 +1638,27 @@ async fn page_update_version_range_is_rejected_before_lookup_and_declared_in_sch
 }
 
 #[tokio::test]
-async fn draft_stage_proceeds_only_after_a_raw_missing_draft() {
+async fn draft_stage_accepts_only_absent_or_matching_current_probe_responses() {
     for action in ["page.draft.stage", "blog.draft.stage"] {
         for mode in [
             "present",
             "missing",
+            "current",
             "malformed",
             "budget",
-            "wrong_lifecycle",
+            "archived",
+            "missing_status",
             "space_missing",
+            "current_wrong_id",
+            "draft_wrong_id",
+            "current_wrong_type",
+            "draft_wrong_type",
+            "current_wrong_space_id",
+            "draft_wrong_space_id",
+            "current_wrong_space_key",
+            "draft_wrong_space_key",
+            "forbidden",
+            "protocol",
         ] {
             if mode == "malformed" && action.starts_with("blog") {
                 continue;
@@ -1647,66 +1667,99 @@ async fn draft_stage_proceeds_only_after_a_raw_missing_draft() {
             let provider = backend.provider();
             let request =
                 admitted(&provider, action, ContainmentEvidenceLevel::ContainerOnly).await;
+            let kind = if action.starts_with("page") {
+                ConfluenceDraftContentType::Page
+            } else {
+                ConfluenceDraftContentType::Blog
+            };
+            let id = if kind == ConfluenceDraftContentType::Page {
+                "100"
+            } else {
+                "700"
+            };
             match mode {
                 "missing" => {
                     *backend.draft_read_failure.lock().unwrap() =
                         Some(ConfluenceBackendError::NotFound)
                 }
+                "forbidden" => {
+                    *backend.draft_read_failure.lock().unwrap() =
+                        Some(ConfluenceBackendError::Forbidden)
+                }
+                "protocol" => {
+                    *backend.draft_read_failure.lock().unwrap() = Some(
+                        ConfluenceBackendError::Protocol("synthetic malformed response".into()),
+                    )
+                }
                 "malformed" => {
-                    let kind = if action.starts_with("page") {
-                        ConfluenceDraftContentType::Page
-                    } else {
-                        ConfluenceDraftContentType::Blog
-                    };
-                    // This is the strict parser's actual missing-parent failure.
-                    let error = draft_content_from_value(json!({"id":"100","type":kind.as_str(),"title":"Competing","status":"draft","spaceId":"98765","version":{"number":1}}), kind).unwrap_err();
+                    let error = draft_content_from_value(json!({"id":"100","type":"page","title":"Competing","status":"draft","spaceId":"98765","version":{"number":1}}), kind).unwrap_err();
                     assert_eq!(error, ConfluenceBackendError::ScopeUnresolved);
                     *backend.draft_read_failure.lock().unwrap() = Some(error);
-                }
-                "wrong_lifecycle" | "space_missing" => {
-                    let kind = if action.starts_with("page") {
-                        ConfluenceDraftContentType::Page
-                    } else {
-                        ConfluenceDraftContentType::Blog
-                    };
-                    let mut draft = backend.draft(
-                        if kind == ConfluenceDraftContentType::Page {
-                            "100"
-                        } else {
-                            "700"
-                        },
-                        kind,
-                    );
-                    if mode == "wrong_lifecycle" {
-                        draft.status = Some("current".into());
-                    } else {
-                        draft.space_id = "99999".into();
-                    }
-                    *backend.draft_read_override.lock().unwrap() = Some(draft);
                 }
                 "budget" => {
                     let state =
                         ProviderState::require::<ContentOperationState>(request.state()).unwrap();
                     *backend.draft_read_budget.lock().unwrap() = Some(state.budget.clone());
                 }
-                _ => {}
+                "present" => {}
+                _ => {
+                    let mut content = backend.draft(id, kind);
+                    if mode.starts_with("current") {
+                        content.status = Some("current".into());
+                    }
+                    match mode {
+                        "archived" => content.status = Some("archived".into()),
+                        "missing_status" => content.status = None,
+                        "space_missing" => content.space_id = "99999".into(),
+                        "current_wrong_id" | "draft_wrong_id" => content.id = "99999".into(),
+                        "current_wrong_type" | "draft_wrong_type" => {
+                            content.content_type = "other".into()
+                        }
+                        "current_wrong_space_id"
+                        | "draft_wrong_space_id"
+                        | "current_wrong_space_key"
+                        | "draft_wrong_space_key" => {
+                            let mut other = space();
+                            other.id = "99999".into();
+                            if mode.ends_with("_key") {
+                                other.key = "OPS".into();
+                            }
+                            backend
+                                .extra_spaces
+                                .lock()
+                                .unwrap()
+                                .insert(other.id.clone(), other);
+                            content.space_id = "99999".into();
+                        }
+                        _ => {}
+                    }
+                    *backend.draft_read_override.lock().unwrap() = Some(content);
+                }
             }
             let result = provider.invoke(request).await;
-            if mode == "missing" {
-                assert!(result.is_ok(), "{action} {mode}: {result:?}");
-                assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+            if matches!(mode, "missing" | "current") {
+                let result = result.unwrap_or_else(|error| panic!("{action} {mode}: {error:?}"));
+                assert_eq!(backend.writes.load(Ordering::SeqCst), 1, "{action} {mode}");
+                assert_eq!(result.result["operation"], action);
+                assert_eq!(result.result["status"], "draft");
+                assert_eq!(result.result["expectedBaseVersion"], 1);
+                let writes = backend.publish_requests.lock().unwrap();
+                assert_eq!(writes.len(), 1);
+                assert_eq!(writes[0].content_id, id);
+                assert_eq!(writes[0].space_id, "98765");
+                assert_eq!(writes[0].status, "draft");
+                assert_eq!(writes[0].version_number, 1);
             } else {
                 let error = result.unwrap_err();
-                assert_eq!(
-                    error.reason_code(),
-                    if mode == "present" {
-                        ReasonCode::VersionConflict
-                    } else {
-                        ReasonCode::ScopeUnresolved
-                    },
-                    "{action} {mode}"
-                );
+                let reason = match mode {
+                    "present" => ReasonCode::VersionConflict,
+                    "protocol" => ReasonCode::UpstreamProtocolFailed,
+                    "forbidden" => ReasonCode::UpstreamForbidden,
+                    _ => ReasonCode::ScopeUnresolved,
+                };
+                assert_eq!(error.reason_code(), reason, "{action} {mode}: {error:?}");
                 assert_eq!(backend.writes.load(Ordering::SeqCst), 0, "{action} {mode}");
+                assert!(backend.publish_requests.lock().unwrap().is_empty());
             }
         }
     }

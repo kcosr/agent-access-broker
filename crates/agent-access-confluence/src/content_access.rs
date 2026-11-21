@@ -1085,6 +1085,10 @@ pub(crate) fn admitted_space(request: &AdmittedRequest) -> Result<&str, Provider
 }
 
 impl ContentOperationState {
+    pub(crate) fn matches_admitted_space(&self, id: &str, key: &str) -> bool {
+        self.initial.space.id == id && self.initial.space.key == key
+    }
+
     fn with_failure_audit(&self, mut error: ProviderError) -> ProviderError {
         self.record_failure_audit(&mut error);
         error

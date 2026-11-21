@@ -12,7 +12,8 @@ All notable changes to this project are documented in this file.
   typed-parent v5 handles. Page creation takes `parent: {kind, id}` or `parentUrl`,
   and the CLI uses `--parent-kind` with `--parent-id`. Access previews/options now
   distinguish unscoped, scalar and location authority; grant-selection previews
-  require `credentialMode`. SDK consumers must use the explicit scalar and
+  require `credentialMode`. Service scope metadata declares
+  `matching: "scalar"` or `"containment"`. SDK consumers must use the explicit scalar and
   containment contracts. See [content access](docs/confluence-content-access.md).
   Configure proof and scan limits under `[providers.confluence.content_access]`
   and `[providers.confluence.content_search]`. The latter's

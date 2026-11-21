@@ -3716,14 +3716,20 @@ impl ConfluenceProvider {
             .await
         {
             Ok(Some(response)) => {
-                require_draft_content(&response.value, ConfluenceDraftContentType::Page)?;
-                return Err(draft_version_conflict_error(
-                    &request,
+                if stage_probe_is_draft(
                     &response.value,
                     ConfluenceDraftContentType::Page,
-                    inputs.base_version,
-                    self.backend.egress_proxy_audit(lookup_credential),
-                ));
+                    &current.id,
+                    ProviderState::require::<ContentOperationState>(request.state())?,
+                )? {
+                    return Err(draft_version_conflict_error(
+                        &request,
+                        &response.value,
+                        ConfluenceDraftContentType::Page,
+                        inputs.base_version,
+                        self.backend.egress_proxy_audit(lookup_credential),
+                    ));
+                }
             }
             Ok(None) => {}
             Err(error) => return Err(error),
@@ -5763,14 +5769,20 @@ impl ConfluenceProvider {
             .await
         {
             Ok(Some(response)) => {
-                require_draft_content(&response.value, ConfluenceDraftContentType::Blog)?;
-                return Err(draft_version_conflict_error(
-                    &request,
+                if stage_probe_is_draft(
                     &response.value,
                     ConfluenceDraftContentType::Blog,
-                    inputs.base_version,
-                    self.backend.egress_proxy_audit(lookup_credential),
-                ));
+                    &current.id,
+                    ProviderState::require::<ContentOperationState>(request.state())?,
+                )? {
+                    return Err(draft_version_conflict_error(
+                        &request,
+                        &response.value,
+                        ConfluenceDraftContentType::Blog,
+                        inputs.base_version,
+                        self.backend.egress_proxy_audit(lookup_credential),
+                    ));
+                }
             }
             Ok(None) => {}
             Err(error) => return Err(error),
@@ -7392,8 +7404,9 @@ impl ConfluenceProvider {
             .seal_draft_handle(request.context(), request.execution(), &handle)
     }
 
-    /// Only an upstream missing draft is absence. Parsing, space resolution and
-    /// shared proof-budget failures must stop the competing-draft guard.
+    /// Only an upstream missing object becomes None. Successful current/draft
+    /// responses are classified separately after identity checks; parsing,
+    /// space resolution and shared proof-budget errors stop the stage guard.
     async fn optional_draft_response_with_space(
         &self,
         kind: ConfluenceDraftContentType,
@@ -10286,6 +10299,27 @@ fn ensure_authorized_draft_handle(
         return Err(invalid_draft_handle_error());
     }
     Ok(())
+}
+
+/// `get-draft=true` may return the published content when no draft is visible.
+/// That successful shape is distinct from a failed or unresolved draft read.
+fn stage_probe_is_draft(
+    content: &ConfluenceDraftContent,
+    content_type: ConfluenceDraftContentType,
+    content_id: &str,
+    state: &ContentOperationState,
+) -> Result<bool, ProviderError> {
+    if content.id != content_id
+        || content.content_type != content_type.as_str()
+        || !state.matches_admitted_space(&content.space_id, &content.space)
+    {
+        return Err(location_unresolved());
+    }
+    match content.status.as_deref() {
+        Some("draft") => Ok(true),
+        Some("current") => Ok(false),
+        _ => Err(location_unresolved()),
+    }
 }
 
 fn require_draft_content(

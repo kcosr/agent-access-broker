@@ -358,3 +358,89 @@ async fn move_root_limit_counts_only_roots_in_the_current_space() {
         assert_eq!(root_reads, if space_key == "OPS" { 0 } else { 64 });
     }
 }
+
+#[tokio::test]
+async fn draft_stage_classifies_current_draft_and_missing_http_probe_responses() {
+    for (action, route, kind, id, id_field) in [
+        ("page.draft.stage", "pages", "page", "123", "pageId"),
+        ("blog.draft.stage", "blogposts", "blogpost", "700", "blogId"),
+    ] {
+        for status in ["current", "draft", "missing"] {
+            let (server, base_provider) = fixture("current").await;
+            let provider = ConfluenceProvider::with_backend_and_signing_key(
+                confluence_config(),
+                ProviderLimits::default(),
+                base_provider.backend.clone(),
+                agent_access_provider::test_support::test_signing_key(91),
+            );
+            let mut probe = page(id);
+            probe["type"] = json!(kind);
+            probe["status"] = json!(status);
+            let response = if status == "missing" {
+                ResponseTemplate::new(404)
+            } else {
+                ResponseTemplate::new(200).set_body_json(probe)
+            };
+            Mock::given(method("GET"))
+                .and(path(format!("/wiki/api/v2/{route}/{id}")))
+                .and(query_param("get-draft", "true"))
+                .respond_with(response)
+                .with_priority(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            let mut staged = page(id);
+            staged["type"] = json!(kind);
+            staged["status"] = json!("draft");
+            staged["version"]["number"] = json!(1);
+            Mock::given(method("PUT"))
+                .and(path(format!("/wiki/api/v2/{route}/{id}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(staged))
+                .expect(if status == "draft" { 0 } else { 1 })
+                .mount(&server)
+                .await;
+            let outcome = provider
+                .invoke_fixture(invocation(
+                    action,
+                    json!({id_field:id,"baseVersion":7,"contentFormat":"storage","content":"<p>Staged body</p>"}),
+                ))
+                .await;
+            if status == "draft" {
+                assert_eq!(
+                    outcome.unwrap_err().reason_code(),
+                    ReasonCode::VersionConflict
+                );
+            } else {
+                let result = outcome
+                    .unwrap_or_else(|error| panic!("{action} {status}: {error:?}"))
+                    .result;
+                assert_eq!(result["operation"], action);
+                assert_eq!(result[id_field], id);
+                assert_eq!(result["status"], "draft");
+                assert_eq!(result["expectedBaseVersion"], 7);
+                assert!(result["draftHandle"].as_str().is_some());
+            }
+            let requests = server.received_requests().await.unwrap();
+            let writes = requests
+                .iter()
+                .filter(|request| request.method == "PUT")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                writes.len(),
+                usize::from(status != "draft"),
+                "{action} {status}"
+            );
+            if let Some(write) = writes.first() {
+                let body: Value = serde_json::from_slice(&write.body).unwrap();
+                assert_eq!(body["id"], id);
+                if kind == "blogpost" {
+                    assert_eq!(body["spaceId"], "10");
+                } else {
+                    assert!(body.get("spaceId").is_none());
+                }
+                assert_eq!(body["status"], "draft");
+                assert_eq!(body["version"]["number"], 1);
+            }
+        }
+    }
+}
