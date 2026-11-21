@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file.
   search request, so previously accepted large queries or grant sets may now
   fail with `scope_unresolved`. Raise it only after qualifying the selected
   upstream route; the independent absolute-URI ceiling still applies.
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
@@ -208,6 +209,7 @@ All notable changes to this project are documented in this file.
   location checks apply across reads, writes, creation, moves, drafts, comments,
   attachments and search. Search preserves every policy exclusion upstream and
   checks results before release. See [content access](docs/confluence-content-access.md).
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
 - **Jira issue workflow transitions.** Discover available transitions and apply
   one selected transition with independent project grants and typed CLI commands.
@@ -480,6 +482,7 @@ All notable changes to this project are documented in this file.
   version remains `version_conflict`, while an upstream 409 returns
   `confluence_update_conflict` without claiming a current version. See
   [page writes](docs/providers-confluence.md#pagecreate-pageupdate-and-pagemove).
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
 - **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
   portal page makes no longer send the page's address.
