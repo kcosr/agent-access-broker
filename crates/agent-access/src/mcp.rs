@@ -310,13 +310,19 @@ mod tests {
         // result it constructs before the SDK discards it.
         let (transport, _remote) = tokio::io::duplex(4096);
         let running = rmcp::service::serve_directly(server, transport, None);
-        let context = RequestContext::new(1.into(), running.peer().clone());
+        let context = RequestContext::new(
+            rmcp::model::NumberOrString::Number(1),
+            running.peer().clone(),
+        );
         context.ct.cancel();
         let result = running
             .service()
             .call_tool(CallToolRequestParams::new("services_list"), context)
             .await
             .unwrap();
+        let CallToolResponse::Complete(result) = result else {
+            panic!("cancelled handler must return a complete tool result");
+        };
         let result = serde_json::to_value(result).unwrap();
         assert_eq!(result["content"], json!([]));
         assert_eq!(result["isError"], true);
