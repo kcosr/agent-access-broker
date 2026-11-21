@@ -116,6 +116,7 @@ async fn read_only_identity_refuses_a_write_before_leasing_the_callers_oauth_acc
         .runtime
         .create_managed_resource(CreateResourceRequest {
             id: Some("collection-alpha".into()),
+            browser_url: None,
             display_name: None,
             resource_type: OAUTH_COLLECTION_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {

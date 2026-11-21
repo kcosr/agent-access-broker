@@ -116,7 +116,7 @@ export function agentTokenServiceHasResources(options: AgentTokenOptions, servic
   // A stale action may use resources when its grant returns. Dropping that
   // explicit boundary now would broaden the token's future effective access.
   return option === undefined
-    || option.actions.some((action) => action.resourceType !== null)
+    || option.actions.some((action) => action.scope !== "unscoped")
     || selectedActions.some((selected) => !option.actions.some((action) => action.action === selected));
 }
 

@@ -100,6 +100,7 @@ where
 struct ResourceCreateBody {
     id: Option<String>,
     display_name: Option<String>,
+    browser_url: Option<String>,
     resource_type: ResourceType,
     selector: ResourceSelector,
     allowed_execution_contexts: Vec<String>,
@@ -114,6 +115,8 @@ struct ResourcePatchBody {
     expected_version: i64,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
     display_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
+    browser_url: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_patch")]
     resource_type: Option<ResourceType>,
     #[serde(default, deserialize_with = "deserialize_patch")]
@@ -384,6 +387,7 @@ pub(crate) async fn admin_policy_resources_create(
     let request = CreateResourceRequest {
         id: body.id,
         display_name: body.display_name,
+        browser_url: body.browser_url,
         resource_type: body.resource_type,
         selector: body.selector,
         allowed_execution_contexts: body.allowed_execution_contexts,
@@ -441,6 +445,7 @@ pub(crate) async fn admin_policy_resources_patch(
     let request = PatchResourceRequest {
         id,
         display_name: body.display_name,
+        browser_url: body.browser_url,
         resource_type: body.resource_type,
         selector: body.selector,
         allowed_execution_contexts: body.allowed_execution_contexts,
@@ -793,10 +798,169 @@ pub(crate) async fn admin_policy_resource_groups_delete(
     .await
 }
 
+/// Instance metadata is confined to policy-management admission. No provider
+/// request, credential resolution or upstream existence check occurs here.
+pub(crate) async fn admin_policy_resource_locations(
+    State(state): State<AppState>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let operation = "admin.policy.resource_locations.list";
+    let context = match management_context(
+        &state,
+        remote_addr,
+        &headers,
+        operation,
+        ManagementAccess::PolicyRead,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    let services = context
+        .snapshot
+        .runtime
+        .service_descriptors()
+        // Filter before inspecting any service-specific capability or origin.
+        .filter(|descriptor| proposed_service_authorized(&context, &descriptor.service))
+        .filter_map(|descriptor| {
+            let capability = descriptor.location_entry.as_ref()?;
+            let authority = descriptor.upstream_authority.as_ref()?;
+            let site = url::Url::parse(authority.origin()).ok()?;
+            Some(json!({
+                "service": descriptor.service,
+                "resourceTypes": capability.resource_types(),
+                "siteHost": site.host_str()?,
+                "locationKinds": capability.location_kinds(),
+                "coverageKinds": capability.coverage_kinds(),
+                "normalizationRoute": "/v1/admin/policy/resource-locations/normalize",
+            }))
+        })
+        .collect::<Vec<_>>();
+    management_success_response(&context, operation, None, json!({"services": services})).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ResourceLocationBody {
+    service: String,
+    url: String,
+    coverage: String,
+}
+
+pub(crate) async fn admin_policy_resource_locations_normalize(
+    State(state): State<AppState>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    let operation = "admin.policy.resource_locations.normalize";
+    let context = match management_context(
+        &state,
+        remote_addr,
+        &headers,
+        operation,
+        ManagementAccess::PolicyRead,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(response) => return *response,
+    };
+    // Use the value-free parser: pasted URLs, title slugs and unexpected fields
+    // must never enter error responses or management audit records.
+    let body =
+        match parse_resource_json_body::<ResourceLocationBody>(&context, operation, body).await {
+            Ok(body) => body,
+            Err(response) => return *response,
+        };
+    if !proposed_service_authorized(&context, &body.service) {
+        return management_context_error_response(
+            &context,
+            StatusCode::FORBIDDEN,
+            operation,
+            ReasonCode::ManagementDenied,
+            "service is not within the caller's policy management scope",
+            None,
+        )
+        .await;
+    }
+    let runtime = &context.snapshot.runtime;
+    let descriptor = runtime.service_descriptor(&body.service);
+    let supported = descriptor.as_ref().and_then(|descriptor| {
+        Some((
+            descriptor.location_entry.as_ref()?,
+            descriptor.upstream_authority.as_ref()?,
+        ))
+    });
+    let Some((capability, authority)) = supported else {
+        return management_context_error_response(
+            &context,
+            StatusCode::BAD_REQUEST,
+            operation,
+            ReasonCode::InputInvalid,
+            "service does not support resource location entry",
+            None,
+        )
+        .await;
+    };
+    if !capability.coverage_kinds().contains(&body.coverage) {
+        return management_context_error_response(
+            &context,
+            StatusCode::BAD_REQUEST,
+            operation,
+            ReasonCode::InputInvalid,
+            "coverage is not supported by this service",
+            None,
+        )
+        .await;
+    }
+    let request = agent_access_provider::LocationNormalizationRequest::new(
+        authority.origin(),
+        &body.url,
+        &body.coverage,
+    );
+    match runtime
+        .resource_types()
+        .normalize_location(capability.normalizer(), &request)
+    {
+        Ok(result)
+            if capability.resource_types().contains(&result.resource_type)
+                && capability.location_kinds().contains(&result.location_kind) =>
+        {
+            management_success_response(&context, operation, None, json!(result)).await
+        }
+        Ok(_) => {
+            management_context_error_response(
+                &context,
+                StatusCode::BAD_REQUEST,
+                operation,
+                ReasonCode::InputInvalid,
+                "normalizer returned a location outside the service capability",
+                None,
+            )
+            .await
+        }
+        Err(error) => {
+            management_context_error_response(
+                &context,
+                StatusCode::BAD_REQUEST,
+                operation,
+                ReasonCode::InputInvalid,
+                &format!("{}: {}", error.field(), error),
+                None,
+            )
+            .await
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PolicyEffectiveAccessBody {
     service: String,
+    credential_mode: String,
     actions: Vec<String>,
     execution_contexts: Vec<ExecutionContext>,
     resources: ResourceSelection,
@@ -844,8 +1008,9 @@ pub(crate) async fn admin_policy_effective_access(
         &body.actions,
         &body.execution_contexts,
         &body.resources,
+        &body.credential_mode,
     ) {
-        Ok(result) => management_success_response(&context, operation, None, json!(result)).await,
+        Ok(result) => management_success_response(&context, operation, None, result).await,
         Err(error) => management_store_error_response(&context, operation, None, error).await,
     }
 }
@@ -906,7 +1071,7 @@ pub(super) async fn token_effective_access_response(
         .runtime
         .preview_agent_token_access(identity, &caveats)
     {
-        Ok(result) => management_success_response(context, operation, None, json!(result)).await,
+        Ok(result) => management_success_response(context, operation, None, result).await,
         Err(error) => management_store_error_response(context, operation, None, error).await,
     }
 }

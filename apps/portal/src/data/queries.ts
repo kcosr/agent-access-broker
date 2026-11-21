@@ -88,6 +88,16 @@ export function useResourceTypesQuery(): ResourceTypes {
   return query.data ?? NO_RESOURCE_TYPES;
 }
 
+/** Per-service URL entry is management-only and scoped by the broker. */
+export function useResourceLocations() {
+  const { viewer, policy, runQuery } = useQueryAccess();
+  return useQuery({
+    queryKey: portalQueryKeys.resourceLocations(viewer),
+    enabled: policy,
+    queryFn: () => runQuery((session) => brokerApi.resourceLocations(session))
+  });
+}
+
 /**
  * Credential targets, credential connections, and tokens (including revoked and expired
  * ones; views filter by status) for the signed-in user or an administered

@@ -338,7 +338,10 @@ async fn gmail_discovery_token_options_and_previews_follow_explicit_action_grant
         .unwrap();
     assert_eq!(preview.access.len(), 1);
     assert_eq!(preview.access[0].action, "thread.trash");
-    assert!(preview.access[0].resource_type.is_none());
+    assert!(matches!(
+        preview.access[0].scope,
+        agent_access_core::EffectiveAccessScope::Unscoped
+    ));
     let restricted=agent_access_core::AgentInvokeTokenCaveats::parse_stored(&json!({"readOnly": false, "allowedExecutionContexts":["default"],"allowedServices":["gmail"],"serviceRestrictions":{"gmail":{"actions":["thread.trash"],"resources":{"resourceIds":[],"resourceGroupIds":[]}}}})).unwrap();
     assert!(
         runtime
@@ -417,7 +420,8 @@ async fn gmail_resource_selections_fail_validation_and_preview() {
                 "gmail",
                 &["message.trash".into()],
                 &[agent_access_core::ExecutionContext::new("default").unwrap()],
-                &resources
+                &resources,
+                "per_user",
             )
             .is_err()
     );

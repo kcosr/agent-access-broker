@@ -6,10 +6,10 @@ use super::*;
 use agent_access_confluence::{
     AtlassianCredential, ConfluenceAttachment, ConfluenceAttachmentContent,
     ConfluenceAttachmentUpload, ConfluenceBackend, ConfluenceBackendError,
-    ConfluenceBackendResponse, ConfluencePage, ConfluencePageCreateRequest,
-    ConfluencePageUpdateRequest, ConfluenceProvider, ConfluenceProviderConfig,
-    ConfluenceSearchPage, ConfluenceSearchRequest, ConfluenceSpace, ConfluenceSpaceListPage,
-    ConfluenceSpaceListRequest,
+    ConfluenceBackendResponse, ConfluenceContentStatus, ConfluenceMetadataBudget, ConfluenceNode,
+    ConfluenceNodeKind, ConfluencePage, ConfluencePageCreateRequest, ConfluencePageUpdateRequest,
+    ConfluenceProvider, ConfluenceProviderConfig, ConfluenceRegularPage, ConfluenceSearchPage,
+    ConfluenceSearchRequest, ConfluenceSpace, ConfluenceSpaceListPage, ConfluenceSpaceListRequest,
 };
 use agent_access_core::ApiCatalog;
 use agent_access_core::mcp::{ProjectionMode, project_catalog, tool_name};
@@ -124,6 +124,69 @@ fn page() -> ConfluencePage {
 
 #[async_trait::async_trait]
 impl ConfluenceBackend for ReadBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _: bool,
+        _: &AtlassianCredential,
+        _: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        assert_eq!(kind, ConfluenceNodeKind::Page);
+        assert_eq!(id, "123456");
+        assert_eq!(status, ConfluenceContentStatus::Current);
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceNode {
+                id: id.into(),
+                kind,
+                space_id: "7".into(),
+                parent: None,
+                status,
+                version: Some(1),
+            },
+            status: 200,
+            duration_ms: 1,
+        })
+    }
+
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?;
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceRegularPage {
+                node: node.value,
+                title: "Runbook".into(),
+            },
+            status: node.status,
+            duration_ms: node.duration_ms,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        credential: &AtlassianCredential,
+        _: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        assert_eq!(id, "7");
+        self.space_by_key("ENG", credential).await
+    }
+
     async fn space_list(
         &self,
         _: ConfluenceSpaceListRequest,
@@ -166,7 +229,7 @@ impl ConfluenceBackend for ReadBackend {
                 web_url: None,
                 alias: None,
                 status: Some("current".into()),
-                homepage_id: None,
+                homepage_id: Some("123456".into()),
             },
             status: 200,
             duration_ms: 1,
@@ -451,7 +514,7 @@ fn assert_denial_audit(fixture: &Fixture, envelope: &Value, action: &str, inputs
         "page.create" | "page.draft.create" => &[
             ("space", "Space"),
             ("title", "Title"),
-            ("parentPageId", "Parent page ID"),
+            ("parent", "Parent"),
             ("parentUrl", "Parent URL"),
         ],
         "page.move" => &[
@@ -550,13 +613,13 @@ async fn confluence_schema_accepts_relations_that_the_provider_still_refuses() {
         ),
         (
             "page.create",
-            json!({"space": "ENG", "title": "Runbook", "parentPageId": "123456", "parentUrl": PAGE_URL, "content": SECRET, "contentFormat": "storage"}),
-            "confluence.page.create accepts parentPageId or parentUrl, not both",
+            json!({"space": "ENG", "title": "Runbook", "parent":{"kind":"page","id":"123456"}, "parentUrl": PAGE_URL, "content": SECRET, "contentFormat": "storage"}),
+            "confluence.page.create accepts parent or parentUrl, not both",
         ),
         (
             "page.draft.create",
-            json!({"space": "ENG", "title": "Runbook", "parentPageId": "123456", "parentUrl": PAGE_URL, "content": SECRET, "contentFormat": "storage"}),
-            "confluence.page.draft.create accepts parentPageId or parentUrl, not both",
+            json!({"space": "ENG", "title": "Runbook", "parent":{"kind":"page","id":"123456"}, "parentUrl": PAGE_URL, "content": SECRET, "contentFormat": "storage"}),
+            "confluence.page.draft.create accepts parent or parentUrl, not both",
         ),
         (
             "page.create",
@@ -575,14 +638,16 @@ async fn confluence_schema_accepts_relations_that_the_provider_still_refuses() {
             jsonschema::validator_for(schema).unwrap().is_valid(&inputs),
             "{action}: {inputs}"
         );
-        let response = invoke(
+        let response = http_invoke(
             &fixture,
-            &format!("confluence-plain-refusal-{index}"),
-            "confluence",
             action,
-            inputs.clone(),
+            &format!("confluence-plain-refusal-{index}"),
+            json!({"inputs": inputs}),
         )
         .await;
+        let status = response.status();
+        let response = response_json(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{}", response["reason"]);
         assert_eq!(response["reason"], expected);
         let called = fixture
             .call(
@@ -761,8 +826,9 @@ async fn confluence_content_denials_keep_non_input_reasons_and_statuses() {
             json!({"inputs": inputs}),
         )
         .await;
-        assert_eq!(response.status(), status);
+        let actual_status = response.status();
         let response = response_json(response).await;
+        assert_eq!(actual_status, status, "{}", response["reason"]);
         let called = fixture
             .call(
                 &session,

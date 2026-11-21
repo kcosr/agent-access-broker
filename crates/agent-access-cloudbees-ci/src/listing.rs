@@ -2,7 +2,7 @@
 use super::*;
 use agent_access_provider::{
     ContinuationError, ContinuationFamily, ContinuationLifetime, NativeSearchEnforcement,
-    ResourceSelector, SearchAuthorizationScope, SharedBodyBudget, UpstreamRequestBudget,
+    ScalarResourceSelector, SearchAuthorizationScope, SharedBodyBudget, UpstreamRequestBudget,
     read_bounded_body_with_budget,
 };
 use serde::Serialize;
@@ -183,7 +183,7 @@ fn component_valid(component: &str) -> bool {
 fn descendants(scope: &SearchAuthorizationScope, root: &str) -> bool {
     !scope
         .intersection(&SearchAuthorizationScope::from_selectors(
-            vec![ResourceSelector::Namespace { value: root.into() }],
+            vec![ScalarResourceSelector::Namespace { value: root.into() }],
             vec![],
         ))
         .is_empty()

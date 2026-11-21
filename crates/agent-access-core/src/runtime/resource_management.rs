@@ -330,6 +330,7 @@ mod tests {
             .create_managed_resource(CreateResourceRequest {
                 id: Some("restricted".into()),
                 display_name: None,
+                browser_url: None,
                 resource_type: INCLUSION_ONLY_RESOURCE.id().clone(),
                 selector: ResourceSelector::Exact {
                     value: "RESTRICTED".into(),
@@ -393,6 +394,7 @@ mod tests {
                     id: "supported".into(),
                     expected_version: 1,
                     display_name: Some(Some("Must roll back".into())),
+                    browser_url: None,
                     resource_type: Some(INCLUSION_ONLY_RESOURCE.id().clone()),
                     selector: None,
                     allowed_execution_contexts: None,
@@ -419,6 +421,7 @@ mod tests {
         let resource = ResourceDefinition {
             id: "restricted".into(),
             display_name: None,
+            browser_url: None,
             resource_type: INCLUSION_ONLY_RESOURCE.id().clone(),
             selector: ResourceSelector::All,
             allowed_execution_contexts: vec!["external".into()],
@@ -452,6 +455,7 @@ mod tests {
             .create_managed_resource(CreateResourceRequest {
                 id: Some(resource.id),
                 display_name: None,
+                browser_url: None,
                 resource_type: resource.resource_type,
                 selector: resource.selector,
                 allowed_execution_contexts: resource.allowed_execution_contexts,
@@ -497,6 +501,7 @@ mod tests {
                 attributes: Default::default(),
                 id: Some(id.into()),
                 display_name: None,
+                browser_url: None,
                 resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
                 selector: ResourceSelector::Exact { value: key.into() },
                 allowed_execution_contexts: vec!["default".into()],
@@ -662,6 +667,7 @@ mod tests {
                 id: "second".into(),
                 expected_version: 1,
                 display_name: None,
+                browser_url: None,
                 resource_type: None,
                 selector: None,
                 allowed_execution_contexts: Some(vec!["external".into()]),
@@ -683,6 +689,7 @@ mod tests {
                 id: "second".into(),
                 expected_version: 2,
                 display_name: None,
+                browser_url: None,
                 resource_type: None,
                 selector: None,
                 allowed_execution_contexts: Some(vec!["default".into()]),
@@ -704,6 +711,7 @@ mod tests {
                 id: "second".into(),
                 expected_version: 3,
                 display_name: None,
+                browser_url: None,
                 resource_type: None,
                 selector: None,
                 allowed_execution_contexts: None,
@@ -764,9 +772,7 @@ mod tests {
             .unwrap()
             .actions[0];
         assert!(
-            action.effective_access_by_execution_context
-                [&ExecutionContext::new("default").unwrap()]
-                .is_empty()
+            action.scalar_access().unwrap()[&ExecutionContext::new("default").unwrap()].is_empty()
         );
     }
 
@@ -789,6 +795,7 @@ mod tests {
                 attributes: Default::default(),
                 id: Some("all".into()),
                 display_name: None,
+                browser_url: None,
                 resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
                 selector: ResourceSelector::All,
                 allowed_execution_contexts: vec!["default".into()],
@@ -801,6 +808,7 @@ mod tests {
                 attributes: Default::default(),
                 id: Some("private".into()),
                 display_name: None,
+                browser_url: None,
                 resource_type: agent_access_fake::FAKE_PROJECT_RESOURCE.id().clone(),
                 selector: ResourceSelector::Exact {
                     value: "PRIVATE".into(),
@@ -854,10 +862,11 @@ mod tests {
                 &["echo".into()],
                 &[ExecutionContext::new("default").unwrap()],
                 &selection,
+                "service",
             )
             .unwrap();
         assert_eq!(preview.access.len(), 1);
-        assert!(!preview.access[0].clauses[0].matches("PRIVATE"));
+        assert!(!preview.access[0].clauses().unwrap()[0].matches("PRIVATE"));
         assert!(
             runtime
                 .policy_resource_catalog_for_scope(&PolicyReadScope::Services {
@@ -904,6 +913,7 @@ mod tests {
                 id: "second".into(),
                 expected_version: 1,
                 display_name: Some(Some("Second project".into())),
+                browser_url: None,
                 resource_type: None,
                 selector: None,
                 allowed_execution_contexts: None,

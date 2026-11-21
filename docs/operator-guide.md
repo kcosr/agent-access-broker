@@ -904,6 +904,28 @@ to durable audit records. Keep using the public `reasonCode` and safe result for
 caller behavior; the internal code must not be copied into caller-visible or
 audit records.
 
+Confluence move proof failures have a separate protected audit record under
+`locationAuthorization.rootVisibility`. The
+`confluence_move_relation_unresolved` diagnostic identifies the configured
+resource/group references for the required root that could not be checked.
+`root_budget_exhausted` distinguishes bounded work from unconfirmed visibility;
+an operation-wide limit may have no individual resource reference. A missing root
+can be unreadable rather than deleted, especially with per-user credentials.
+Because content identity carries no saved space, an unreadable required exclusion
+can block moves anywhere in the site. Diagnose the account's visibility or
+explicitly revise the policy; removing an exclusion broadens access. These facts
+are protected audit data, not the operator-only `diagnosticCode` described above.
+
+Content-constrained Confluence search performs sequential current metadata checks
+before releasing results, with at least a content and space read in both initial
+and final passes for each candidate. Account for upstream rate limits and client
+request timeouts. Proof budgets can shorten a result page or deny a request that
+cannot complete one candidate; a stale inaccessible indexed row can fail the whole
+response. Pure scalar-space authority retains its single-query indexed path and
+index-lag limitations. See [content access](confluence-content-access.md#search-and-discovery)
+for the exact path selection and outcomes. No root-space cache or broader-query
+fallback avoids these checks.
+
 A provider outcome its contract does not allow logs a `provider_contract_failed`
 warning with `service`, `action`, `phase` (`scope_resolution`,
 `body_admission`, `invocation`, or `credential_verification`), `emission`

@@ -1,18 +1,21 @@
 //! Normalized search authority, shared by native providers and host policy consumers.
-use crate::ResourceSelector;
+use crate::ScalarResourceSelector;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeSet;
 
 /// One independently granted region: included selectors minus its exclusions.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct SearchAuthorizationClause {
-    included: Vec<ResourceSelector>,
-    excluded: Vec<ResourceSelector>,
+    included: Vec<ScalarResourceSelector>,
+    excluded: Vec<ScalarResourceSelector>,
 }
 
 impl SearchAuthorizationClause {
     /// Normalize a clause using the shared selector algebra. Exclusions remain local.
-    pub fn new(mut included: Vec<ResourceSelector>, mut excluded: Vec<ResourceSelector>) -> Self {
+    pub fn new(
+        mut included: Vec<ScalarResourceSelector>,
+        mut excluded: Vec<ScalarResourceSelector>,
+    ) -> Self {
         included.sort();
         included.dedup();
         excluded.sort();
@@ -46,10 +49,10 @@ impl SearchAuthorizationClause {
         Self { included, excluded }
     }
 
-    pub fn included(&self) -> &[ResourceSelector] {
+    pub fn included(&self) -> &[ScalarResourceSelector] {
         &self.included
     }
-    pub fn excluded(&self) -> &[ResourceSelector] {
+    pub fn excluded(&self) -> &[ScalarResourceSelector] {
         &self.excluded
     }
     pub fn matches(&self, value: &str) -> bool {
@@ -95,8 +98,8 @@ impl<'de> Deserialize<'de> for SearchAuthorizationClause {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Input {
-            included: Vec<ResourceSelector>,
-            excluded: Vec<ResourceSelector>,
+            included: Vec<ScalarResourceSelector>,
+            excluded: Vec<ScalarResourceSelector>,
         }
         let input = Input::deserialize(deserializer)?;
         Ok(Self::new(input.included, input.excluded))
@@ -143,8 +146,8 @@ impl SearchAuthorizationScope {
         Self::default()
     }
     pub fn from_selectors(
-        included: Vec<ResourceSelector>,
-        excluded: Vec<ResourceSelector>,
+        included: Vec<ScalarResourceSelector>,
+        excluded: Vec<ScalarResourceSelector>,
     ) -> Self {
         Self::new(vec![SearchAuthorizationClause::new(included, excluded)])
     }
@@ -153,7 +156,7 @@ impl SearchAuthorizationScope {
         Self::from_selectors(
             values
                 .into_iter()
-                .map(|value| ResourceSelector::Exact { value })
+                .map(|value| ScalarResourceSelector::Exact { value })
                 .collect(),
             Vec::new(),
         )
@@ -161,10 +164,10 @@ impl SearchAuthorizationScope {
     /// Construct an all clause with exact exclusions.
     pub fn excluding_exact_values(values: Vec<String>) -> Self {
         Self::from_selectors(
-            vec![ResourceSelector::All],
+            vec![ScalarResourceSelector::All],
             values
                 .into_iter()
-                .map(|value| ResourceSelector::Exact { value })
+                .map(|value| ScalarResourceSelector::Exact { value })
                 .collect(),
         )
     }
@@ -178,10 +181,10 @@ impl SearchAuthorizationScope {
         self.clauses.is_empty()
     }
     pub fn is_universe(&self) -> bool {
-        self.covers(&ResourceSelector::All)
+        self.covers(&ScalarResourceSelector::All)
     }
     /// Prove coverage by subtracting every clause from the requested selector.
-    pub fn covers(&self, selector: &ResourceSelector) -> bool {
+    pub fn covers(&self, selector: &ScalarResourceSelector) -> bool {
         let mut remaining = vec![SearchAuthorizationClause::new(
             vec![selector.clone()],
             Vec::new(),
@@ -213,7 +216,7 @@ impl SearchAuthorizationScope {
             clause
                 .included
                 .iter()
-                .any(|selector| !matches!(selector, ResourceSelector::Exact { .. }))
+                .any(|selector| !matches!(selector, ScalarResourceSelector::Exact { .. }))
         }) {
             return vec!["*".into()];
         }
@@ -221,7 +224,9 @@ impl SearchAuthorizationScope {
             .iter()
             .flat_map(|clause| &clause.included)
             .filter_map(|selector| match selector {
-                ResourceSelector::Exact { value } if self.matches(value) => Some(value.clone()),
+                ScalarResourceSelector::Exact { value } if self.matches(value) => {
+                    Some(value.clone())
+                }
                 _ => None,
             })
             .collect::<BTreeSet<_>>()
@@ -240,18 +245,18 @@ impl SearchAuthorizationScope {
                 .any(|selector| {
                     !matches!(
                         selector,
-                        ResourceSelector::Exact { .. } | ResourceSelector::All
+                        ScalarResourceSelector::Exact { .. } | ScalarResourceSelector::All
                     )
                 })
             {
                 return Err(SearchProjectionError);
             }
-            if clause.included.contains(&ResourceSelector::All) {
+            if clause.included.contains(&ScalarResourceSelector::All) {
                 let current: BTreeSet<_> = clause
                     .excluded
                     .iter()
                     .filter_map(|selector| match selector {
-                        ResourceSelector::Exact { value } => Some(value.clone()),
+                        ScalarResourceSelector::Exact { value } => Some(value.clone()),
                         _ => None,
                     })
                     .collect();
@@ -265,7 +270,7 @@ impl SearchAuthorizationScope {
                         .included
                         .iter()
                         .filter_map(|selector| match selector {
-                            ResourceSelector::Exact { value } if clause.matches(value) => {
+                            ScalarResourceSelector::Exact { value } if clause.matches(value) => {
                                 Some(value.clone())
                             }
                             _ => None,

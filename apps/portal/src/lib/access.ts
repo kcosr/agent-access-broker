@@ -1,4 +1,4 @@
-import type { AgentTokenOptions, ConnectionConsumer, EffectiveAccessClause, EffectiveAccessItem, ResourceType } from "../types";
+import type { AgentTokenOptions, ConnectionConsumer, EffectiveAccessItem, EffectiveAccessScope } from "../types";
 
 /**
  * Service display names from the services consuming the principal's credential
@@ -23,10 +23,15 @@ export type AccessActionSummary = {
   /** Explicitly classified read-only; anything else may write. */
   readOnly: boolean;
   contexts: string[];
-  resourceType: ResourceType | null;
-  clauses: EffectiveAccessClause[];
+  coverage: EffectiveAccessScope;
 };
 export type AccessServiceSummary = { service: string; actions: AccessActionSummary[] };
+
+function hasCoverage(coverage: EffectiveAccessScope): boolean {
+  return coverage.scope === "unscoped" ||
+    (coverage.scope === "location" && coverage.projectionStatus === "too_complex") ||
+    coverage.clauses.length > 0;
+}
 
 /** Presentation-only grouping of the broker's compiled effective boundaries. */
 export function buildAccessSummary(options: AgentTokenOptions, executionContext: string | null = null): AccessServiceSummary[] {
@@ -36,12 +41,16 @@ export function buildAccessSummary(options: AgentTokenOptions, executionContext:
       for (const context of action.executionContexts) {
         if (executionContext !== null && context !== executionContext) continue;
         if (!options.executionContexts.includes(context) || !service.executionContexts.includes(context)) continue;
-        const clauses = action.effectiveAccessByExecutionContext[context] ?? [];
-        if (action.resourceType !== null && clauses.length === 0) continue;
-        const key = JSON.stringify(clauses);
+        const location = action.scope === "location" ? action.effectiveAccessByExecutionContext[context] : undefined;
+        const coverage: EffectiveAccessScope | undefined = action.scope === "unscoped"
+          ? { scope: "unscoped" }
+          : action.scope === "location" ? location ? { scope: "location", ...location } : undefined
+          : { scope: "resource", resourceType: action.resourceType, clauses: action.effectiveAccessByExecutionContext[context] ?? [] };
+        if (!coverage || !hasCoverage(coverage)) continue;
+        const key = JSON.stringify(coverage);
         const existing = grouped.get(key);
         if (existing) existing.contexts.push(context);
-        else grouped.set(key, { action: action.action, description: action.description, readOnly: action.readOnly === true, contexts: [context], resourceType: action.resourceType, clauses });
+        else grouped.set(key, { action: action.action, description: action.description, readOnly: action.readOnly === true, contexts: [context], coverage });
       }
       return [...grouped.values()];
     });
@@ -57,8 +66,7 @@ export type EffectiveAccessRow = {
   service: string;
   actions: string[];
   contexts: string[];
-  resourceType: ResourceType | null;
-  clauses: EffectiveAccessClause[];
+  coverage: EffectiveAccessScope;
 };
 
 /**
@@ -71,10 +79,12 @@ export type EffectiveAccessRow = {
  * broker's order.
  */
 export function mergeEffectiveAccess(items: EffectiveAccessItem[]): EffectiveAccessRow[] {
-  const signature = (item: Pick<EffectiveAccessItem, "resourceType" | "clauses">) => JSON.stringify([item.resourceType, item.clauses]);
+  const coverageOf = ({ service: _service, action: _action, executionContext: _context, ...coverage }: EffectiveAccessItem): EffectiveAccessScope => coverage;
+  const signature = (item: EffectiveAccessItem) => JSON.stringify(coverageOf(item));
   // service -> action -> clause signature -> contexts (insertion-ordered maps)
   const services = new Map<string, Map<string, Map<string, { contexts: string[]; item: EffectiveAccessItem }>>>();
   for (const item of items) {
+    if (!hasCoverage(item)) continue;
     const actions = services.get(item.service) ?? new Map<string, Map<string, { contexts: string[]; item: EffectiveAccessItem }>>();
     services.set(item.service, actions);
     const bySignature = actions.get(item.action) ?? new Map<string, { contexts: string[]; item: EffectiveAccessItem }>();
@@ -93,7 +103,7 @@ export function mergeEffectiveAccess(items: EffectiveAccessItem[]): EffectiveAcc
         const rowKey = JSON.stringify([contexts, key]);
         const row = merged.get(rowKey);
         if (row) row.actions.push(action);
-        else merged.set(rowKey, { service, actions: [action], contexts, resourceType: item.resourceType, clauses: item.clauses });
+        else merged.set(rowKey, { service, actions: [action], contexts, coverage: coverageOf(item) });
       }
     }
     rows.push(...merged.values());

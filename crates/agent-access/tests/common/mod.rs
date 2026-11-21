@@ -15,6 +15,7 @@ pub fn resource_catalog(
         .iter()
         .map(|(id, resource_type, selector)| ResourceDefinition {
             id: (*id).to_string(),
+            browser_url: None,
             display_name: None,
             resource_type: resource_type.clone(),
             selector: selector.clone(),

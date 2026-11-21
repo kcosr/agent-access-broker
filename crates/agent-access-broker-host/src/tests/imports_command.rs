@@ -297,6 +297,7 @@ async fn command_live_listing_is_reviewed_persisted_and_advertised_only_with_its
         .runtime()
         .create_managed_resource(agent_access_core::CreateResourceRequest {
             id: Some("all-projects".into()),
+            browser_url: None,
             display_name: None,
             resource_type,
             selector: agent_access_provider::ResourceSelector::All,

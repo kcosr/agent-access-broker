@@ -181,10 +181,10 @@ fn personal_space_cql_quotes_keys_and_keeps_exact_containment() {
             parse_cql_spaces(&raw).unwrap(),
             BTreeSet::from([key.to_string()])
         );
-        let scope = EffectiveSearchScope::Finite(BTreeSet::from([key.to_string()]));
+        let scope = FixtureSpaces::Finite(BTreeSet::from([key.to_string()]));
         assert!(scope.authorizes_value(key));
         assert!(!scope.authorizes_value("~bob"));
-        let query = build_confluence_search_query(
+        let query = build_fixture_page_query(
             &ConfluenceSearchQueryInput::Cql {
                 value: String::new(),
             },
@@ -192,10 +192,13 @@ fn personal_space_cql_quotes_keys_and_keeps_exact_containment() {
             &SearchLimitsConfig::default(),
         )
         .unwrap();
-        assert_eq!(query.cql, format!("type = page AND space IN (\"{key}\")"));
+        assert_eq!(
+            query.cql,
+            format!("type = page AND ((((space = \"{key}\"))))")
+        );
     }
-    let excluded = EffectiveSearchScope::AllExcept(BTreeSet::from(["~alice".to_string()]));
-    let query = build_confluence_search_query(
+    let excluded = FixtureSpaces::AllExcept(BTreeSet::from(["~alice".to_string()]));
+    let query = build_fixture_page_query(
         &ConfluenceSearchQueryInput::Cql {
             value: String::new(),
         },
@@ -203,7 +206,10 @@ fn personal_space_cql_quotes_keys_and_keeps_exact_containment() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert_eq!(query.cql, "type = page AND space NOT IN (\"~alice\")");
+    assert_eq!(
+        query.cql,
+        "type = page AND ((((type = page) AND NOT (space = \"~alice\"))))"
+    );
     assert!(!excluded.authorizes_value("~alice"));
     assert!(excluded.authorizes_value("~Alice"));
     for raw in [
@@ -333,7 +339,7 @@ async fn personal_space_page_and_blog_reads_and_writes_keep_authorized_space() {
         ),
     ] {
         let result = provider
-            .invoke(personal_invocation(action, inputs.clone(), "~alice"))
+            .invoke_fixture(personal_invocation(action, inputs.clone(), "~alice"))
             .await
             .unwrap();
         assert_eq!(result.result["space"], "~alice", "{action}");
@@ -346,7 +352,7 @@ async fn personal_space_page_and_blog_reads_and_writes_keep_authorized_space() {
             // supplies the authoritative space for the host's grant decision;
             // a fabricated invocation is not a host authorization test.
             let scopes = provider
-                .lookup_scopes(
+                .fixture_space_lookup(
                     action,
                     &inputs,
                     Some(&AtlassianCredential::from_static(credential())),
@@ -362,7 +368,7 @@ async fn personal_space_page_and_blog_reads_and_writes_keep_authorized_space() {
         }
         for other_key in ["~Alice", "~bob"] {
             let error = provider
-                .invoke(personal_invocation(action, inputs.clone(), other_key))
+                .invoke_fixture(personal_invocation(action, inputs.clone(), other_key))
                 .await
                 .unwrap_err();
             assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{action}");
@@ -389,9 +395,9 @@ async fn personal_space_page_and_blog_searches_enforce_finite_and_excluded_scope
         ] {
             let server = MockServer::start().await;
             let predicate = if all_except {
-                "space NOT IN (\"~bob\")"
+                &format!("((((type = {kind}) AND NOT (space = \"~bob\"))))")
             } else {
-                "space IN (\"~alice\")"
+                "((((space = \"~alice\"))))"
             };
             Mock::given(method("GET"))
                 .and(path("/wiki/rest/api/content/search"))
@@ -422,7 +428,7 @@ async fn personal_space_page_and_blog_searches_enforce_finite_and_excluded_scope
             .build();
             let result = agent_access_provider::host::with_correlation_context(
                 crate::CorrelationContext::for_tests(),
-                provider.invoke(request),
+                provider.invoke_fixture(request),
             )
             .await;
             if allowed {
@@ -433,9 +439,16 @@ async fn personal_space_page_and_blog_searches_enforce_finite_and_excluded_scope
                     format!("https://example.atlassian.net/wiki/spaces/{returned_key}")
                 );
             } else {
-                assert_eq!(
-                    result.unwrap_err().reason_code(),
-                    ReasonCode::ScopeUnresolved
+                let result = result.unwrap();
+                assert_eq!(result.result[result_field], json!([]));
+                assert_eq!(result.result["scanStatus"], "exhausted");
+                assert!(
+                    !result
+                        .audit
+                        .as_ref()
+                        .unwrap()
+                        .to_string()
+                        .contains(returned_key)
                 );
             }
         }
@@ -471,14 +484,10 @@ fn personal_space_draft_handles_preserve_space_and_reject_other_exact_grants() {
             )
             .unwrap();
         assert_eq!(opened.space, "~alice");
-        ensure_authorized_draft_handle(&opened, request.resource_scopes().unwrap()).unwrap();
+        ensure_authorized_draft_handle(&opened, "~alice").unwrap();
         ensure_draft_content_matches_handle(&content, &opened).unwrap();
         for other_key in ["~Alice", "~bob"] {
-            let request = personal_invocation("page.draft.view", json!({}), other_key);
-            assert_invalid_draft_handle(ensure_authorized_draft_handle(
-                &opened,
-                request.resource_scopes().unwrap(),
-            ));
+            assert_invalid_draft_handle(ensure_authorized_draft_handle(&opened, other_key));
             content.space = other_key.to_string();
             assert_eq!(
                 ensure_draft_content_matches_handle(&content, &opened)

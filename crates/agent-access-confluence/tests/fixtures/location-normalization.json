@@ -1,0 +1,2301 @@
+{
+  "cases": [
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "space",
+          "resourceType": "confluence_space",
+          "selector": {
+            "kind": "exact",
+            "value": "ENG"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "space-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "space",
+          "resourceType": "confluence_space",
+          "selector": {
+            "kind": "exact",
+            "value": "ENG"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "space-overview-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/overview/"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-overview-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/overview/"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-overview-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/overview/"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-overview-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/overview/"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "ENG"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-overview-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/overview/"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "~user.name@example.com"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "space",
+          "resourceType": "confluence_space",
+          "selector": {
+            "kind": "exact",
+            "value": "~user.name@example.com"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "space-personal-space",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "~user.name@example.com"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-personal-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "~user.name@example.com"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-personal-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "~user.name@example.com"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-personal-all",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "kind": "space",
+        "spaceKey": "~user.name@example.com"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "space-personal-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-alias-space",
+      "url": "https://example.atlassian.net/wiki/spaces/new-alias/pages/123/Title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-alias-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/new-alias/pages/123/Title"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-alias-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/new-alias/pages/123/Title"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-alias-all",
+      "url": "https://example.atlassian.net/wiki/spaces/new-alias/pages/123/Title"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-alias-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/new-alias/pages/123/Title"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-stale-space-space",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/pages/123/Old-title/"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-stale-space-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/pages/123/Old-title/"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-stale-space-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/pages/123/Old-title/"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-stale-space-all",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/pages/123/Old-title/"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-stale-space-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/pages/123/Old-title/"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-unicode-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/日本語"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-unicode-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/日本語"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-unicode-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/日本語"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-unicode-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/日本語"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-unicode-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/日本語"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-encoded-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Hello%20there"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-encoded-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Hello%20there"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-encoded-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Hello%20there"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-encoded-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Hello%20there"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-encoded-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123/Hello%20there"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-personal-space",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-personal-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com/pages/123"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-personal-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com/pages/123"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-personal-all",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com/pages/123"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-personal-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/~user.name@example.com/pages/123"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-short-key-space",
+      "url": "https://example.atlassian.net/wiki/spaces/x/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-short-key-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/x/pages/123"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-short-key-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/x/pages/123"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-short-key-all",
+      "url": "https://example.atlassian.net/wiki/spaces/x/pages/123"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-short-key-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/x/pages/123"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-numeric-key-space",
+      "url": "https://example.atlassian.net/wiki/spaces/1/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-numeric-key-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/1/pages/123"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-numeric-key-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/1/pages/123"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-numeric-key-all",
+      "url": "https://example.atlassian.net/wiki/spaces/1/pages/123"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-numeric-key-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/1/pages/123"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "12345678901234567890",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-max-id-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/12345678901234567890"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "12345678901234567890",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/12345678901234567890"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-max-id-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/12345678901234567890"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "12345678901234567890",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/page/12345678901234567890"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "page-max-id-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/12345678901234567890"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "12345678901234567890",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-max-id-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/12345678901234567890"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "12345678901234567890",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "page-max-id-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/12345678901234567890"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Runbooks"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-plus-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-plus-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations+Runbooks"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-encoded-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-encoded-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/456/Operations%20Runbooks/"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "folder",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "subtree",
+            "value": "https://example.atlassian.net/wiki/content/folder/456"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "folder-unicode-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "456",
+        "kind": "folder"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "folder-unicode-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/OLD/folder/456/日本語"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-title-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Release/"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-title-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Release/"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-title-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Release/"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-title-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Release/"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-title-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Release/"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20/789/Release"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-date-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20/789/Release"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20/789/Release"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20/789/Release"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20/789/Release"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-unpadded-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/1/2/789"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-date-unpadded-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/1/2/789"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-unpadded-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/1/2/789"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-unpadded-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/1/2/789"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-unpadded-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/1/2/789"
+    },
+    {
+      "coverage": "space",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-padded-space",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/01/02/789/Title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-date-padded-exact",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/01/02/789/Title"
+    },
+    {
+      "coverage": "subtree",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-padded-subtree",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/01/02/789/Title"
+    },
+    {
+      "coverage": "all",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-padded-all",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/01/02/789/Title"
+    },
+    {
+      "coverage": "namespace",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "rejectedField": "coverage"
+      },
+      "id": "blog-date-padded-namespace",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/01/02/789/Title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-date-leading-plus",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/+5/+6/789/Title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "2026",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/2026"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-year-like-id-and-title",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/5"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "blog-date-without-id",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "blog-three-segment-nondate",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Title/Extra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "host-case",
+      "url": "https://EXAMPLE.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "host-dot",
+      "url": "https://example.atlassian.net./wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "scheme-case",
+      "url": "HTTPS://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "max-key",
+      "url": "https://example.atlassian.net/wiki/spaces/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "max-personal",
+      "url": "https://example.atlassian.net/wiki/spaces/~Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "http",
+      "url": "http://example.atlassian.net/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "wrong-site",
+      "url": "https://other.atlassian.net/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "credentials",
+      "url": "https://user:secret@example.atlassian.net/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "empty-user",
+      "url": "https://@example.atlassian.net/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "port",
+      "url": "https://example.atlassian.net:443/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "ipv4",
+      "url": "https://127.0.0.1/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "ipv6",
+      "url": "https://[::1]/wiki/spaces/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "dot",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/../ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-dot",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/%2e%2e/ENG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-slash",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%2Fextra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-backslash",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%5cextra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-query",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%3Fextra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-fragment",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%23extra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "invalid-percent",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%XY"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-key",
+      "url": "https://example.atlassian.net/wiki/spaces/%45NG/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "unicode-key",
+      "url": "https://example.atlassian.net/wiki/spaces/日本/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "empty-key",
+      "url": "https://example.atlassian.net/wiki/spaces//pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "unsupported-key",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG.dot/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "personal-empty",
+      "url": "https://example.atlassian.net/wiki/spaces/~/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "zero-id",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/0"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "leading-zero-id",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/01"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "long-id",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123456789012345678901"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "query",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1?"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "fragment",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1#"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "extra-tail",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/a/b"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "folder-extra-tail",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/title/extra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "folder-title-encoded-slash",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/Title%2Fextra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "folder-title-encoded-dot",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/folder/1/%2e%2e"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "bad-date",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/13/20/1/title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "backslash",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1\\title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "control",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/ti\ttle"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "encoded-control",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/1/Title%00"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "shortlink",
+      "url": "https://example.atlassian.net/wiki/x/share"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "legacy",
+      "url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "identity-not-browser-url",
+      "url": "https://example.atlassian.net/wiki/content/page/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "oversize-key",
+      "url": "https://example.atlassian.net/wiki/spaces/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "oversize-personal",
+      "url": "https://example.atlassian.net/wiki/spaces/~Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/pages/1"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "leading-control",
+      "url": "\thttps://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "trailing-control",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123\n"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "123",
+        "kind": "page"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "page",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/page/123"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "surrounding-spaces",
+      "url": "  https://example.atlassian.net/wiki/spaces/ENG/pages/123  "
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "service"
+      },
+      "id": "invalid-service-159",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "http://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "service"
+      },
+      "id": "invalid-service-160",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://EXAMPLE.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "service"
+      },
+      "id": "invalid-service-161",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net/wiki",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "service"
+      },
+      "id": "invalid-service-162",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
+    }
+  ],
+  "version": 1
+}

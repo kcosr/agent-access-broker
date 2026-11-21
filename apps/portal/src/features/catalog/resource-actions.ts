@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { brokerApi } from "../../api";
-import type { ResourceGroupRecord, ResourceGroupWriteBody, ResourceRecord, ResourceWriteBody } from "../../types";
+import type { ResourceGroupRecord, ResourceGroupWriteBody, ResourceRecord, ResourceWriteBody, Session } from "../../types";
 import { portalQueryKeys, viewerKey } from "../../lib/portal-queries";
 import { useToast } from "../../workbench";
 import { useModal } from "../../app/modal";
@@ -14,7 +14,7 @@ export type ResourceKind = "resources" | "resource-groups";
 
 export function useResourceActions() {
   const queryClient = useQueryClient();
-  const { session, attempt } = useSession();
+  const { session, getSession, attempt } = useSession();
   const { confirm } = useModal();
   const toast = useToast();
   const viewer = viewerKey(session);
@@ -32,10 +32,14 @@ export function useResourceActions() {
       await queryClient.invalidateQueries({ queryKey: portalQueryKeys.resourceTypes(viewer) }, { throwOnError: true });
     }
 
-    async function saveResource(body: ResourceWriteBody, id?: string) {
-      const result = await attempt((current) => brokerApi.saveResource(current, body, id));
+    async function saveResource(body: ResourceWriteBody, id?: string, isCurrent?: (current: Session) => boolean) {
+      const result = await attempt((current) => {
+        // Check again on the session runner's CSRF retry, before any mutation.
+        if (isCurrent && !isCurrent(current)) throw new Error("The resource form or signed-in account changed. Review the resource and save again.");
+        return brokerApi.saveResource(current, body, id);
+      });
       await refresh();
-      toast(id ? "Resource saved" : "Resource added", { tone: "success" });
+      if (!isCurrent || isCurrent(getSession())) toast(id ? "Resource saved" : "Resource added", { tone: "success" });
       return result.record;
     }
 
@@ -47,6 +51,7 @@ export function useResourceActions() {
             resourceType: resource.resourceType,
             selector: resource.selector,
             displayName: resource.displayName,
+            browserUrl: resource.browserUrl ?? null,
             allowedExecutionContexts: resource.allowedExecutionContexts,
             expectedVersion: resource.version,
             enabled
@@ -89,5 +94,5 @@ export function useResourceActions() {
     }
 
     return { refresh, refreshResourceTypes, saveResource, setResourceEnabled, saveGroup, confirmDelete };
-  }, [queryClient, viewer, attempt, confirm, toast]);
+  }, [queryClient, viewer, attempt, getSession, confirm, toast]);
 }

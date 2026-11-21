@@ -269,21 +269,38 @@ terminal audit record reports `upstream_rate_limited`.
 
 After search authorization succeeds, broker audit records include
 `searchAuthorization`, even when credential resolution fails before upstream
-dispatch. This object contains `scopeType`, `credentialMode`, `matchedGrants`, and
-`scope`. The scope is a union of clauses, each with `included` and `excluded`
-resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
+dispatch. Scalar search records contain `scopeType`, `credentialMode`,
+`matchedGrants`, and `scope`. The scope is a union of clauses, each with
+`included` and `excluded` resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
 "excluded":[{"kind":"namespace","value":"engineering/private"}]}]}` permits
 all repositories except descendants of that namespace. Exclusions apply only to
 their own clause; a separate clause can restore an exact repository. An empty
 clause list denies all resources. Selectors use `exact`, `namespace`, or `all`;
 exact and namespace selectors carry `value`.
 
-The envelope's descriptive `resourceScopes` summary is `["*"]` if any normalized
-clause has an all or namespace positive selector. Otherwise it contains sorted,
+Location search records use `scope: "location"`, `scopeType`, `resourceTypes`,
+`domain`, `evidenceLevel`, `credentialMode`, `matchedGrants`, `authorityDigest`,
+`grantBoundaries`, and `tokenBoundary` (null when unrestricted).
+Each boundary has `included` and `excluded` arrays of
+`{resourceType, selector}`. Grant boundaries form the winning band's union;
+the token boundary independently intersects that union. The protected audit
+retains complete authored boundaries, including exclusions. The digest binds
+canonical current authority, not an unrelated policy generation. Evidence level
+is `container_only` or `complete_lineage`; these fields describe authorization
+and never grant it independently. Ordinary agent discovery does not expose this
+protected audit shape.
+
+For scalar searches, the envelope's descriptive `resourceScopes` summary is
+`["*"]` if any normalized clause has an all or namespace positive selector.
+Otherwise it contains sorted,
 deduplicated exact values accepted by the complete predicate. A wildcard summary
 can still have exclusions and never authorizes a resource. Audit retains the
 complete clauses. Historical audit records remain their original stored JSON.
 Command audit authority retains its separate exact resources/any-except shape.
+Confluence location searches report positive space coverage in `space` and
+disclosable canonical content roots in `page_location` or `blog_location`,
+omitting roots provably disjoint from the token. These summaries are not a complete authorization
+predicate and do not name exclusions or hidden competing roots.
 
 Health and discovery:
 
@@ -1050,6 +1067,12 @@ classifies upstream effects and never grants access. `displayName`,
 `brokerHosts`, and `readOnly` describe the configured service and action, so
 they do not depend on the caller's execution context or grants. This
 effective-policy projection also backs the portal's **Your Access** page.
+
+Resources in token options contain `id`, optional `displayName`, `resourceType`,
+`selector`, `allowedExecutionContexts`, and `enabled`. Authored group exclusions
+can remain selectable even when disabled. These references omit administrative
+`browserUrl` metadata, including URL title and space paths. Personal and
+administrative token options use the same restricted resource projection.
 
 The response also contains `mcp`, where an issued token connects MCP clients:
 `{"url": "https://broker.example.com/mcp"}` with the configured
@@ -1825,7 +1848,7 @@ Resource catalog administration uses these routes:
   private attribute to a global administrator.
 - The same routes under `/v1/admin/policy/resource-groups` manage resource groups.
 
-Resource creation accepts optional `id` and `displayName`, required
+Resource creation accepts optional `id`, `displayName` and `browserUrl`, required
 `resourceType`, `selector`, and `allowedExecutionContexts`, and optional
 `enabled` (default true). Group creation accepts optional `id`, required `name`,
 and `includedResourceIds` / `excludedResourceIds`. PATCH uses `expectedVersion`
@@ -1835,6 +1858,14 @@ rows contain `kind`, `id`, and applicable `service`, `principalId`, `viaGroupId`
 and `effect` fields. Catalog mutation and full reference inspection require
 global administrator authority for changes and administrative read access
 (admin or auditor) for full reference inspection.
+
+`browserUrl` is navigation metadata for Confluence content resources. It must be
+a trimmed browser URL of at most 4096 UTF-8 bytes that normalizes to the same
+site, kind and immutable ID as the resource selector. It grants no access and
+is validated offline. PATCH omission preserves the current URL; explicit `null`
+clears it. Changing a resource's target requires a matching replacement URL or
+clearing the previous URL in the same mutation. Unsupported resource types
+reject non-null browser URLs. See [content URL entry](confluence-content-access.md#resources-and-url-entry).
 
 Resource uniqueness is the pair of resource type and selector, independent of
 display name, execution contexts, or enabled state. A create or PATCH that
@@ -1868,8 +1899,19 @@ remain. Paused tokens still count; expired and revoked tokens do not. Unlink
 references manually or revoke tokens. Resource disable removes only positive
 permission and preserves its effect in exclusions. See [resources.md](resources.md).
 
+`GET /v1/admin/policy/resource-locations` lists authorized services offering
+pure URL entry. `POST /v1/admin/policy/resource-locations/normalize` accepts
+`{service, url, coverage}` and returns canonical resource type and
+selector plus `locationKind` and
+`verification: "not_checked"`. Both require management-class policy-read access;
+normalization applies browser CSRF. Ordinary agent credentials, including an
+administrator's agent token, cannot use them. The service scope is checked before
+its settings are inspected. No network lookup, credential access or mutation
+occurs. Resource writes still require canonical selectors and write permission.
+See [content URL entry](confluence-content-access.md#resources-and-url-entry).
+
 `POST /v1/admin/policy/effective-access` previews a grant selection from
-`{service, actions, executionContexts, resources}`. `POST
+`{service, actions, executionContexts, resources, credentialMode}`. `POST
 /v1/tokens/effective-access` previews the calling principal's token caveats;
 `POST /v1/admin/principals/{principal}/agent-token-effective-access` previews
 for an administered principal. Token previews require Boolean `readOnly` and
@@ -1878,9 +1920,9 @@ for an administered principal. Token previews require Boolean `readOnly` and
 owner's issuance mode or the manager's login path. Retained selections whose
 grants or classifications changed remain valid preview inputs and show their
 current intersection; a read-only token's reclassified write contributes no
-access. Responses contain
-`policyGeneration` and `access`, with service/action/context/resource-type rows
-and separate `clauses`. Each clause contains `included` / `excluded` selectors
+access. Responses contain `policyGeneration` and `access`, discriminated by
+`scope: unscoped|resource|location`. Scalar resource entries have one
+`resourceType` and separate `clauses`. Each scalar clause contains `included` / `excluded` selectors
 and may also contain `excludedRequests`, an array of boundaries with their own
 `included` / `excluded` selectors.
 
@@ -1893,6 +1935,23 @@ preview conditions, not an additional administrator-authored deny mechanism.
 Do not flatten them into global resource exclusions or combine partial clauses.
 Search and grant-selection previews ordinarily need only included/excluded
 selectors; token previews can carry whole-request conditions.
+
+Location entries have `resourceTypes`, `domain`, `enforcement` and
+`containmentVerification: "at_invocation"`. A complete entry has
+`projectionStatus: "complete"`, indexed typed `boundaries`, and clauses whose
+`required` and `excludedRequests` indices preserve the expression with its
+`credentialMode`. If the per-entry preview budget is exceeded,
+`projectionStatus: "too_complex"` and `reasonCode: "resource_access_too_complex"`
+replace the boundary/clauses arrays; access is unknown from that preview, not
+empty or broad. Preserve explicit selections. Aggregate inspection responses are
+bounded to 16 MiB and fail as a whole with HTTP 422 rather than omit actions;
+MCP additionally observes its configured response limit. Invocation and token
+issuance evaluate policy independently of preview serialization.
+
+Authorized management location previews can also report
+`requiresRuntimeRootVisibility: true`, including on `too_complex` entries. This
+means the operation needs current, readable configured-root evidence at runtime;
+it is an offline warning, not an existence or permission check.
 
 An empty access array describes no current access. Symbolic all-except coverage
 is preserved. Grant previews describe the proposed resource selection; token
@@ -2833,7 +2892,7 @@ so missing credentials are explained when `access` is empty:
 {"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
 ```
 
-A scoped `access` entry has `action`, `scope: "resource"`, `resourceType`,
+A scalar `access` entry has `action`, `scope: "resource"`, `resourceType`,
 `enforcement`, and `coverage`. `enforcement` is `request` for Broker checks of
 resolved request targets, `results` for native query/result containment, or
 `command` for grants handed to the approved command, which must check and filter
@@ -2843,7 +2902,22 @@ optional `inputs`, and `restricted`. Exact and namespace selectors carry `value`
 identities are never named. Restricted broad entries retain useful exact/narrower
 granted entries; containment removes an entry only under unrestricted coverage.
 Unscoped entries are `{action,scope:"unscoped"}`.
-MCP and OpenAPI imports currently use this form. Local credential checks filter
+Location entries instead have `action`, `scope: "location"`, `resourceTypes`,
+`domain`, `enforcement`, `containmentVerification: "at_invocation"`, and
+`coverage`. Each positive coverage entry carries `resourceType`, `selector`,
+`restricted`, and `conditional`; Confluence content selectors are `exact` or
+`subtree`. Conditional coverage needs current location evidence at invocation.
+Confluence content values such as `https://example.atlassian.net/wiki/content/page/12345`
+are stable policy identities, not action browser URLs. Use the selected action's
+documented ID input (`pageId`, `blogId` or typed parent as appropriate); action
+schemas and examples define the mapping. Point audit keeps observed space in
+protected `locationProof.space`/`spaceId`, separate from stable `resourceScopes`.
+Excluded and competing private roots are withheld; useful token roots can appear
+under broader grant coverage. Authorized management projections separately
+retain full conditions, as described under
+[admin policy management](#admin-policy-management).
+MCP and OpenAPI imports currently use the scalar or unscoped forms. Local
+credential checks filter
 all access; discovery does not contact the backend or refresh OAuth. This is a
 single-target summary, not full-request authorization. A compound-only action
 can have empty singleton coverage while a complete request is permitted. Native
@@ -2911,8 +2985,12 @@ the service does not use is rejected, as is an `action`/`resourceType` combinati
 whose action is not bound to that type. Service/action detail and
 unqualified action listing remain available.
 
-The original service capability endpoints retain their full response shapes;
-compact CLI/MCP service lists are projections of those canonical definitions.
+Service capability endpoints return the canonical definitions; compact CLI/MCP
+service lists are projections of those definitions. Each `resourceScopes` entry
+declares `matching: "scalar"` with `resourceType` and `selectors`, or
+`matching: "containment"` with `domain`, `selectorsByType`, `containerTypes`,
+`targetKinds`, `ancestorKinds` and `effects`. This describes a scope's matching
+contract, independently of the caller's granted coverage.
 
 
 Ordinary visible service entries report `surface: "invoke"`. Management
@@ -2997,12 +3075,14 @@ selector. `displayName` remains null and the snapshot's name field shows
 | `membership` | Group changes only: `includedAdded`, `includedRemoved`, `excludedAdded`, and `excludedRemoved` |
 
 Each revision is `{generation, updatedAt, updatedBy}`. `changedFields` uses
-`displayName`, `resourceType`, `selector`, `enabled`,
+`displayName`, `browserUrl`, `resourceType`, `selector`, `enabled`,
 `allowedExecutionContexts`, `privateAttributes`, `name`, `includedResourceIds`,
 and `excludedResourceIds` as applicable. `privateAttributes` indicates that
 private configuration changed; no attribute values are included. The HTTP
 success `result` remains `{record, previousRevision, revision}`; `change` is
 audit metadata, not a new mutation-response field.
+`browserUrl` changes record only the field name; browser URLs and their title
+segments are omitted from audit entities and snapshots.
 
 Snapshots include the entity-reference fields above. Resource snapshots add
 `enabled`, `allowedExecutionContexts`, `allowedExecutionContextsCount`, and
@@ -3357,12 +3437,14 @@ whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 | --- | --- | --- | --- |
 | `cloudbees_ci_log_chunk_exceeded` | CloudBees CI | deny | 413 |
 | `cloudbees_ci_log_scan_exceeded` | CloudBees CI | deny | 413 |
+| `confluence_update_conflict` | Confluence | error | 409 |
 | `jira_custom_field_not_allowed` | Jira | deny | 403 |
 | `jira_custom_field_rejected` | Jira | deny | 400 |
 | `jira_transition_unavailable` | Jira | deny | 409 |
 | `jira_transition_rejected` | Jira | deny | 400 |
 
-See [CloudBees CI errors](providers-cloudbees-ci.md#errors),
+See [Confluence page updates](providers-confluence.md#pagecreate-pageupdate-and-pagemove),
+[CloudBees CI errors](providers-cloudbees-ci.md#errors),
 [Jira custom-field updates](providers-jira.md#issuecustom_fieldset), and
 [Jira workflow transitions](providers-jira.md#issue-workflow-transitions) for when
 they occur.
@@ -4299,9 +4381,12 @@ linking uses `/v1/oauth/callback/google` for a registration named `google`. Call
 parsing tolerates bounded provider extension fields but rejects duplicate parameters;
 a supplied Google issuer must match. See [Gmail](providers-gmail.md).
 
-Agent-token action options and effective-access previews use `resourceType: null` for actions that have no
-resource selector (including Gmail). Their `executionContexts` describe explicit
-action grants; their resource-clause lists are empty. Caller-filtered discovery
+Agent-token action options and effective-access previews use `scope: "unscoped"`
+for actions without a resource selector (including Gmail), omitting resource fields.
+Scalar options use `scope: "resource"` and `resourceType`; containment options use
+`scope: "location"`, `resourceTypes` and `domain`. Their `executionContexts`
+describe explicit action grants. Location options retain complete or too-complex
+entries per execution context without inventing scalar clause arrays. Caller-filtered discovery
 uses ordinary grant selection for these actions and excludes them when a token
 tries to impose a resource restriction on that service.
 

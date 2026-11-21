@@ -763,7 +763,7 @@ async fn mcp_static_token_reload_and_idle_expiry_do_not_keep_stale_authority() {
 }
 
 #[tokio::test]
-async fn resource_access_size_failure_requests_filters_without_truncating_coverage() {
+async fn resource_access_size_failure_returns_complexity_error_without_truncating_coverage() {
     let fixture = Fixture::new(|config| {
         config.mcp.max_response_bytes = 64 * 1024;
         for index in 0..500 {
@@ -788,9 +788,15 @@ async fn resource_access_size_failure_requests_filters_without_truncating_covera
         )
         .await;
     assert_eq!(result["result"]["isError"], true, "{result}");
+    assert_eq!(structured(&result)["decision"], "error");
+    assert_eq!(
+        structured(&result)["reasonCode"],
+        "resource_access_too_complex"
+    );
+    assert!(structured(&result)["result"].is_null());
     assert_eq!(
         structured(&result)["error"]["message"],
-        "Resource access result exceeds MCP response limit; narrow action or resourceType filters, or check action availability for a known resource"
+        "Resource access response exceeds the result size limit."
     );
     assert!(structured(&result).get("access").is_none());
     assert!(structured(&result).get("registeredResources").is_none());

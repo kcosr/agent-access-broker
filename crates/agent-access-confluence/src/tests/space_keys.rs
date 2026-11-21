@@ -65,11 +65,11 @@ fn ordinary_space_keys_preserve_case_through_catalog_lookup_and_urls() {
 
 #[test]
 fn ordinary_space_keys_remain_exact_in_search_authority() {
-    let scope = EffectiveSearchScope::Finite(BTreeSet::from(["TeamDocs".to_string()]));
+    let scope = FixtureSpaces::Finite(BTreeSet::from(["TeamDocs".to_string()]));
     assert!(scope.authorizes_value("TeamDocs"));
     assert!(!scope.authorizes_value("TEAMDOCS"));
     assert!(!scope.authorizes_value("teamdocs"));
-    let query = build_confluence_search_query(
+    let query = build_fixture_page_query(
         &ConfluenceSearchQueryInput::Cql {
             value: String::new(),
         },
@@ -77,8 +77,8 @@ fn ordinary_space_keys_remain_exact_in_search_authority() {
         &SearchLimitsConfig::default(),
     )
     .unwrap();
-    assert_eq!(query.cql, "type = page AND space IN (TeamDocs)");
-    let scope = EffectiveSearchScope::AllExcept(BTreeSet::from(["TeamDocs".to_string()]));
+    assert_eq!(query.cql, "type = page AND ((((space = \"TeamDocs\"))))");
+    let scope = FixtureSpaces::AllExcept(BTreeSet::from(["TeamDocs".to_string()]));
     assert!(!scope.authorizes_value("TeamDocs"));
     assert!(scope.authorizes_value("TEAMDOCS"));
 }

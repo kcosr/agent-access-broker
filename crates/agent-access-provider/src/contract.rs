@@ -120,6 +120,11 @@ impl HookContext {
     pub fn check_failure(&self, error: &ProviderError) -> Result<(), ContractViolation> {
         let reason = error.reason_code();
         let decision = error.decision();
+        if self.phase == HookPhase::ScopeLocatorValidation
+            && (reason.host_port().is_some() || reason.domain().is_some())
+        {
+            return Err(ContractViolation::ReasonNotPermitted);
+        }
         if let (Some(port), Some(code)) = (reason.host_port(), reason.standard()) {
             return port
                 .permits(&decision, code)

@@ -58,12 +58,15 @@
 //! as an [`UpstreamAuthorization`](crate::UpstreamAuthorization).
 use crate::{
     AdmittedContext, AdmittedRequest, BrokerBodyPart, BrokerBodyPartFile, BuildContext,
-    ClientProfile, CorrelationContext, CredentialMode, CredentialPlacement, Decision,
-    DelegatedBindingId, DelegatedCredential, DelegatedLease, EgressDeclaration, EgressRoute,
-    ExecutionAccess, ExecutionCredential, HookPhase, InvocationAuthority, InvocationIdentity,
-    LookupAccess, ProviderAttributionConfig, ProviderError, ProviderFinalizationContext,
-    ProviderInvocation, ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode,
-    ResourceAttributes, ScopeRequest, StableSigningKey,
+    ClientProfile, ContainmentAuthorization, ContainmentBoundary,
+    ContainmentCollectionAuthorization, ContainmentError, ContainmentEvidence,
+    ContainmentEvidenceLevel, ContainmentScopeCapabilities, CorrelationContext, CredentialMode,
+    CredentialPlacement, Decision, DelegatedBindingId, DelegatedCredential, DelegatedLease,
+    EgressDeclaration, EgressRoute, ExecutionAccess, ExecutionCredential, HookPhase,
+    InvocationAuthority, InvocationIdentity, LocalScopeRequest, LookupAccess,
+    ProviderAttributionConfig, ProviderError, ProviderFinalizationContext, ProviderInvocation,
+    ProviderLimits, ProviderReasonDefinition, ProviderState, ReasonCode, ResourceAttributes,
+    ResourceTypeRegistry, ScopeRequest, StableSigningKey, TypedResourceSelector,
 };
 use serde_json::Value;
 use std::error::Error;
@@ -260,7 +263,7 @@ pub fn configure_client_profile(
 ///
 /// Intentionally exhaustive: the host supplies every input, so a new one
 /// fails to compile until the host provides it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ScopeRequestParts<'a> {
     pub service: &'a str,
     pub action: &'a str,
@@ -269,29 +272,106 @@ pub struct ScopeRequestParts<'a> {
     pub identity: &'a InvocationIdentity,
     pub correlation: &'a CorrelationContext,
     pub lookup_access: Option<&'a LookupAccess>,
+    pub containment_evidence_level: ContainmentEvidenceLevel,
+    pub containment_roots: &'a [TypedResourceSelector],
+    pub locator_state: Option<&'a ProviderState>,
+}
+
+impl std::fmt::Debug for ScopeRequestParts<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::scope::fmt_scope_request_debug(scope_request(*self), "ScopeRequestParts", f)
+    }
 }
 
 /// The request a provider's scope resolution receives. It carries no admitted
 /// authority and no execution credential.
 pub fn scope_request(parts: ScopeRequestParts<'_>) -> ScopeRequest<'_> {
-    let ScopeRequestParts {
-        service,
-        action,
-        inputs,
-        execution_context,
-        identity,
-        correlation,
-        lookup_access,
-    } = parts;
     ScopeRequest {
-        service,
-        action,
-        inputs,
-        execution_context,
-        identity,
-        correlation,
-        lookup_access,
+        service: parts.service,
+        action: parts.action,
+        inputs: parts.inputs,
+        execution_context: parts.execution_context,
+        identity: parts.identity,
+        correlation: parts.correlation,
+        lookup_access: parts.lookup_access,
+        containment_evidence_level: parts.containment_evidence_level,
+        containment_roots: parts.containment_roots,
+        locator_state: parts.locator_state,
     }
+}
+
+/// Every host-owned input to local locator validation. Intentionally exhaustive:
+/// the host must account for every security-relevant local binding.
+pub struct LocalScopeRequestParts<'a> {
+    pub service: &'a str,
+    pub action: &'a str,
+    pub inputs: &'a Value,
+    pub execution_context: &'a str,
+    pub identity: &'a InvocationIdentity,
+    pub correlation: &'a CorrelationContext,
+}
+pub fn local_scope_request(parts: LocalScopeRequestParts<'_>) -> LocalScopeRequest<'_> {
+    LocalScopeRequest {
+        service: parts.service,
+        action: parts.action,
+        inputs: parts.inputs,
+        execution_context: parts.execution_context,
+        identity: parts.identity,
+        correlation: parts.correlation,
+    }
+}
+
+/// Validates and seals the exact operation evidence the host has admitted.
+pub fn containment_authorization(
+    site_origin: &str,
+    contract: ContainmentScopeCapabilities,
+    evidence: ContainmentEvidence,
+    registry: &ResourceTypeRegistry,
+    evidence_level: ContainmentEvidenceLevel,
+    authority_digest: String,
+) -> Result<ContainmentAuthorization, ContainmentError> {
+    ContainmentAuthorization::new(
+        site_origin,
+        contract,
+        evidence,
+        registry,
+        evidence_level,
+        authority_digest,
+    )
+}
+
+/// Seals a selected collection band's complete boundaries and independent token
+/// ceiling. Providers never select or rerank the supplied boundaries.
+#[allow(clippy::too_many_arguments)]
+pub fn containment_collection_authorization(
+    site_origin: &str,
+    contract: ContainmentScopeCapabilities,
+    grant_boundaries: Vec<ContainmentBoundary>,
+    token_boundary: Option<ContainmentBoundary>,
+    registry: &ResourceTypeRegistry,
+    evidence_level: ContainmentEvidenceLevel,
+    authority_digest: String,
+) -> Result<ContainmentCollectionAuthorization, ContainmentError> {
+    ContainmentCollectionAuthorization::new(
+        site_origin,
+        contract,
+        grant_boundaries,
+        token_boundary,
+        registry,
+        evidence_level,
+        authority_digest,
+    )
+}
+
+/// Local validation may not return upstream, result, object or audit details.
+/// Call after checking the local hook reason contract.
+pub fn strip_scope_locator_details(mut error: ProviderError) -> ProviderError {
+    error.result = None;
+    error.audit = None;
+    error.object_ids = None;
+    error.upstream_status = None;
+    error.upstream_duration_ms = None;
+    error
 }
 
 /// A `basic_api_token` credential from the host's validated material.

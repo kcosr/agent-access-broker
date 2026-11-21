@@ -44,7 +44,7 @@ export function namespaceCoverage(types: ResourceTypes, type: ResourceType): Res
 
 export function selectorPlaceholder(types: ResourceTypes, type: ResourceType, kind: Exclude<ResourceSelector["kind"], "all">): string | undefined {
   const metadata = types.get(type);
-  return kind === "namespace" ? metadata?.namespace?.example : metadata?.example;
+  return kind === "namespace" ? metadata?.namespace?.example : kind === "subtree" ? metadata?.subtree?.example : metadata?.example;
 }
 
 /** Unknown type metadata cannot authorize a new exclusion. */

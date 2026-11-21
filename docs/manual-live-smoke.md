@@ -746,7 +746,7 @@ parent and `childPosition`:
   confluence page create \
   --space "$CONFLUENCE_SPACE" \
   --title "Agent Access Smoke Child Page" \
-  --parent <first-page-id> \
+  --parent-kind page --parent-id <first-page-id> \
   --content-file "$SMOKE_DIR/attribution-page-create.storage.html" \
   --content-format storage \
   > "$SMOKE_DIR/confluence-child-page-create.out.json"
@@ -803,7 +803,7 @@ Create new page and blog drafts, then leave them unpublished for review:
   confluence page draft create \
   --space "$CONFLUENCE_SPACE" \
   --title "Agent Access Draft Page" \
-  --parent "$CONFLUENCE_PAGE_ID" \
+  --parent-kind page --parent-id "$CONFLUENCE_PAGE_ID" \
   --content-file "$SMOKE_DIR/confluence-review-page-draft.storage.html" \
   --content-format storage \
   > "$SMOKE_DIR/confluence-review-page-draft-create.out.json"

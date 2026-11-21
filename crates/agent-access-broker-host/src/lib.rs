@@ -4,6 +4,7 @@
 //! supplies its composition and identity.
 mod admission;
 mod application;
+mod bounded_json;
 mod build_status;
 mod composition;
 mod handlers;

@@ -87,6 +87,7 @@ async fn gitlab_rest_fixture(gitlab: &MockServer) -> OAuthFixture {
         .runtime
         .create_managed_resource(CreateResourceRequest {
             id: Some("repository-sip-service".into()),
+            browser_url: None,
             display_name: None,
             resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {

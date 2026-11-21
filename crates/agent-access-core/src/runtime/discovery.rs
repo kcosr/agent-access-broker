@@ -63,6 +63,16 @@ pub enum ActionResourceAccess {
     Unscoped {
         action: String,
     },
+    Location {
+        action: String,
+        #[serde(rename = "resourceTypes")]
+        resource_types: Vec<ResourceType>,
+        domain: String,
+        enforcement: ResourceAccessEnforcement,
+        #[serde(rename = "containmentVerification")]
+        containment_verification: ContainmentVerification,
+        coverage: Vec<LocationCoverage>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,21 +86,31 @@ pub enum ResourceAccessEnforcement {
 impl ActionResourceAccess {
     pub fn action(&self) -> &str {
         match self {
-            Self::Resource { action, .. } | Self::Unscoped { action } => action,
+            Self::Resource { action, .. }
+            | Self::Unscoped { action }
+            | Self::Location { action, .. } => action,
         }
     }
 
     pub fn resource_type(&self) -> Option<&ResourceType> {
         match self {
             Self::Resource { resource_type, .. } => Some(resource_type),
-            Self::Unscoped { .. } => None,
+            Self::Unscoped { .. } | Self::Location { .. } => None,
+        }
+    }
+
+    pub fn resource_types(&self) -> Vec<&ResourceType> {
+        match self {
+            Self::Resource { resource_type, .. } => vec![resource_type],
+            Self::Location { resource_types, .. } => resource_types.iter().collect(),
+            Self::Unscoped { .. } => Vec::new(),
         }
     }
 
     pub fn coverage(&self) -> Option<&[ResourceCoverage]> {
         match self {
             Self::Resource { coverage, .. } => Some(coverage),
-            Self::Unscoped { .. } => None,
+            Self::Unscoped { .. } | Self::Location { .. } => None,
         }
     }
 }
@@ -169,6 +189,7 @@ pub struct ServiceDiscovery<'a> {
     capabilities: ServiceDescriptor,
     availability: ServiceAvailability,
     clauses: BTreeMap<String, Vec<EffectiveAccessClause>>,
+    location_modes: BTreeMap<String, Vec<String>>,
 }
 
 impl BrokerRuntime {
@@ -205,6 +226,7 @@ impl BrokerRuntime {
             capabilities: service.descriptor,
             availability: service.availability,
             clauses: service.clauses,
+            location_modes: service.location_modes,
         })
     }
 }
@@ -224,7 +246,7 @@ impl ServiceDiscovery<'_> {
             .capabilities
             .resource_scopes
             .values()
-            .map(|scope| scope.resource_type.clone())
+            .flat_map(|scope| scope.resource_types().into_iter().cloned())
             .collect::<BTreeSet<_>>();
         let chosen = match requested {
             Some(requested) if types.contains(requested) => Some(requested.clone()),
@@ -248,7 +270,41 @@ impl ServiceDiscovery<'_> {
     fn action_resource_type(&self, action: &str) -> Option<&ResourceType> {
         self.capabilities
             .action_resource_scope(action)
-            .map(|(_, binding)| &binding.resource_type)
+            .and_then(|(_, binding)| binding.as_scalar().map(|(resource_type, _)| resource_type))
+    }
+
+    fn action_uses_resource_type(&self, action: &str, resource_type: &ResourceType) -> bool {
+        self.capabilities
+            .action_resource_scope(action)
+            .is_some_and(|(_, binding)| binding.resource_types().contains(&resource_type))
+    }
+
+    fn location_mode_available(&self, action: &str, mode: &str) -> bool {
+        self.location_modes
+            .get(action)
+            .is_some_and(|modes| modes.iter().any(|candidate| candidate == mode))
+    }
+
+    fn location_reference_visible(
+        &self,
+        action: &str,
+        resource_type: &ResourceType,
+        selector: &ResourceSelector,
+    ) -> bool {
+        let Ok(token) = parsed_agent_invoke_token_caveats(self.identity) else {
+            return false;
+        };
+        self.runtime.containment_reference_visible(
+            &self.snapshot,
+            self.identity,
+            self.context,
+            &self.capabilities.service,
+            action,
+            token.as_ref(),
+            resource_type,
+            selector,
+            |mode| self.location_mode_available(action, mode),
+        )
     }
 
     fn clauses(&self, action: &str) -> Vec<EffectiveAccessClause> {
@@ -293,11 +349,26 @@ impl ServiceDiscovery<'_> {
             .filter(|action| {
                 resource.is_none_or(|resource| {
                     kind.is_some_and(|kind| {
-                        self.action_resource_type(&action.action) == Some(kind.id())
-                    }) && self
-                        .clauses(&action.action)
-                        .iter()
-                        .any(|clause| clause.matches_request(&[resource]))
+                        if self
+                            .runtime
+                            .action_containment_scope(&self.capabilities.service, &action.action)
+                            .is_some()
+                        {
+                            self.location_reference_visible(
+                                &action.action,
+                                kind.id(),
+                                &ResourceSelector::Exact {
+                                    value: resource.to_owned(),
+                                },
+                            )
+                        } else {
+                            self.action_resource_type(&action.action) == Some(kind.id())
+                                && self
+                                    .clauses(&action.action)
+                                    .iter()
+                                    .any(|clause| clause.matches_request(&[resource]))
+                        }
+                    })
                 })
             })
             .map(|action| action.action.clone())
@@ -343,7 +414,7 @@ impl ServiceDiscovery<'_> {
         }
         if let (Some(action), Some(resource_type)) =
             (query.action.as_deref(), query.resource_type.as_ref())
-            && self.action_resource_type(action) != Some(resource_type)
+            && !self.action_uses_resource_type(action, resource_type)
         {
             return Err("action does not use this resourceType");
         }
@@ -354,15 +425,16 @@ impl ServiceDiscovery<'_> {
                     .capabilities
                     .resource_scopes
                     .values()
-                    .any(|scope| &scope.resource_type == requested)
+                    .any(|scope| scope.resource_types().contains(&requested))
             })
         {
             return Err("resourceType is not used by this service");
         }
         actions.retain(|action| {
-            query.resource_type.as_ref().is_none_or(|requested| {
-                self.action_resource_type(&action.action) == Some(requested)
-            })
+            query
+                .resource_type
+                .as_ref()
+                .is_none_or(|requested| self.action_uses_resource_type(&action.action, requested))
         });
         actions.sort_by(|left, right| left.action.cmp(&right.action));
         let mut access = Vec::new();
@@ -371,6 +443,34 @@ impl ServiceDiscovery<'_> {
             if action.resource_scope.is_none() {
                 access.push(ActionResourceAccess::Unscoped {
                     action: action.action.clone(),
+                });
+                continue;
+            }
+            if let Some(scope) = self
+                .runtime
+                .action_containment_scope(&self.capabilities.service, &action.action)
+            {
+                let token = parsed_agent_invoke_token_caveats(self.identity)
+                    .map_err(|_| "caller restrictions are invalid")?;
+                access.push(ActionResourceAccess::Location {
+                    action: action.action.clone(),
+                    resource_types: scope.contract.selectors_by_type.keys().cloned().collect(),
+                    domain: scope.contract.domain,
+                    enforcement: if action.native_search.is_some() {
+                        ResourceAccessEnforcement::Results
+                    } else {
+                        ResourceAccessEnforcement::Request
+                    },
+                    containment_verification: ContainmentVerification::AtInvocation,
+                    coverage: self.runtime.containment_coverage(
+                        &self.snapshot,
+                        self.identity,
+                        self.context,
+                        &self.capabilities.service,
+                        &action.action,
+                        token.as_ref(),
+                        |mode| self.location_mode_available(&action.action, mode),
+                    ),
                 });
                 continue;
             }
@@ -402,7 +502,7 @@ impl ServiceDiscovery<'_> {
         }
         let types = access
             .iter()
-            .filter_map(ActionResourceAccess::resource_type)
+            .flat_map(ActionResourceAccess::resource_types)
             .collect::<BTreeSet<_>>();
         // Listing links have their own action permission and local credential
         // checks. Their scope is never claimed to equal the described action's.
@@ -444,12 +544,18 @@ impl ServiceDiscovery<'_> {
                     .prefix
                     .as_deref()
                     .is_some_and(|prefix| !value.starts_with(prefix))
-                    || !action_clauses.iter().any(|(action, clauses)| {
+                    || !(action_clauses.iter().any(|(action, clauses)| {
                         self.action_resource_type(action) == Some(&entry.resource_type)
                             && clauses
                                 .iter()
                                 .any(|clause| clause.matches_request(&[value.as_str()]))
-                    })
+                    }) || actions.iter().any(|action| {
+                        self.location_reference_visible(
+                            &action.action,
+                            &entry.resource_type,
+                            &entry.selector,
+                        )
+                    }))
                 {
                     return None;
                 }
@@ -569,8 +675,8 @@ impl ServiceDiscovery<'_> {
             .map(|provider| provider.resource_roots(kind.id()))
             .unwrap_or_default()
             .into_iter()
-            .map(|value| ResourceSelector::Namespace { value })
-            .filter(|root| kind.accepts(root))
+            .map(|value| ScalarResourceSelector::Namespace { value })
+            .filter(|root| kind.accepts(&ResourceSelector::from(root.clone())))
             .collect::<Vec<_>>();
         roots.sort();
         roots.dedup();
@@ -584,10 +690,10 @@ impl ServiceDiscovery<'_> {
                     .included
                     .iter()
                     .flat_map(|selector| match selector {
-                        ResourceSelector::All if !roots.is_empty() => roots.clone(),
-                        ResourceSelector::All
-                        | ResourceSelector::Namespace { .. }
-                        | ResourceSelector::Exact { .. } => vec![selector.clone()],
+                        ScalarResourceSelector::All if !roots.is_empty() => roots.clone(),
+                        ScalarResourceSelector::All
+                        | ScalarResourceSelector::Namespace { .. }
+                        | ScalarResourceSelector::Exact { .. } => vec![selector.clone()],
                         // A selector form this build does not know is never reported.
                         _ => Vec::new(),
                     })
@@ -608,17 +714,17 @@ impl ServiceDiscovery<'_> {
         let coverage = reached
             .iter()
             .filter(|entry| {
-                !matches!(entry, ResourceSelector::Namespace { .. })
+                !matches!(entry, ScalarResourceSelector::Namespace { .. })
                     || roots.is_empty()
                     || roots.iter().any(|root| root.contains(entry))
             })
             .map(|entry| ResourceCoverage {
-                selector: entry.clone(),
-                inputs: action_inputs(kind, entry),
+                selector: entry.clone().into(),
+                inputs: action_inputs(kind, &entry.clone().into()),
                 // A reached exact selector names one admitted singleton. A
                 // symbolic coverage proof would repeat quadratic normalization
                 // of the complete authority for every exact entry.
-                restricted: !matches!(entry, ResourceSelector::Exact { .. })
+                restricted: !matches!(entry, ScalarResourceSelector::Exact { .. })
                     && !boundaries_cover(&reach, entry),
             })
             .collect::<Vec<_>>();
@@ -632,9 +738,15 @@ impl ServiceDiscovery<'_> {
         coverage
             .iter()
             .filter(|entry| {
-                !unrestricted_broad
-                    .iter()
-                    .any(|other| *other != &entry.selector && other.contains(&entry.selector))
+                !unrestricted_broad.iter().any(|other| {
+                    *other != &entry.selector
+                        && ScalarResourceSelector::try_from(*other)
+                            .expect("scalar coverage")
+                            .contains(
+                                &ScalarResourceSelector::try_from(&entry.selector)
+                                    .expect("scalar coverage"),
+                            )
+                })
             })
             .cloned()
             .collect()

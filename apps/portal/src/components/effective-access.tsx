@@ -3,12 +3,12 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { brokerApi } from "../api";
-import type { EffectiveAccessClause, EffectiveAccessResult, GrantEffectiveAccessBody, ResourceType, TokenEffectiveAccessBody } from "../types";
+import type { EffectiveAccessClause, EffectiveAccessScope, EffectiveAccessResult, GrantEffectiveAccessBody, ResourceType, TokenEffectiveAccessBody } from "../types";
 import { ACTION_GRANT_LABEL } from "../lib/helpers";
 import { mergeEffectiveAccess } from "../lib/access";
 import { ActionName } from "./action-name";
 import { ServiceLabel } from "./service-label";
-import { clauseLabel } from "../lib/resource-labels";
+import { clauseLabel, coverageLabels } from "../lib/resource-labels";
 import { useResourceTypes } from "../lib/resource-types";
 import { portalQueryKeys } from "../lib/portal-queries";
 import { useSession } from "../app/session";
@@ -45,6 +45,27 @@ export function AccessClauses({ type, clauses }: { type: ResourceType | null; cl
       </ul>
     </>
   );
+}
+
+/** Location expressions retain each conjunction, local exclusion and precedence condition. */
+export function AccessCoverage({ coverage }: { coverage: EffectiveAccessScope }) {
+  const types = useResourceTypes();
+  if (coverage.scope === "unscoped") return <span>{ACTION_GRANT_LABEL}</span>;
+  if (coverage.scope === "resource") return <AccessClauses type={coverage.resourceType} clauses={coverage.clauses} />;
+  if (coverage.projectionStatus === "complete" && coverage.clauses.length === 0) return <span>No access currently</span>;
+  const rootVisibilityWarning = coverage.requiresRuntimeRootVisibility
+    ? <p className="pt-clause-note">Moves require runtime visibility of relevant excluded roots. This offline preview does not check whether those roots are current or readable. A stale, absent or unreadable root can block moves throughout the site. A root may be unreadable because the selected user legitimately lacks access. An administrator can inspect protected diagnostics and deliberately adjust visibility or policy when appropriate.</p>
+    : null;
+  if (coverage.projectionStatus === "too_complex") return <div className="flex flex-col gap-2"><p className="pt-prose">Coverage preview unavailable. Existing selections still apply; current policy is checked at invocation.</p>{rootVisibilityWarning}</div>;
+  return <div className="flex flex-col gap-2">
+    <p className="pt-clause-note">{coverage.enforcement === "results"
+      ? "Search uses the global highest grant rank and priority. Its boundaries are unioned, then restricted by the token. Query filters never select a lower grant."
+      : "One grant must cover the whole operation. Subject rank and priority choose the winner; a narrower location does not take precedence."} Current location is checked at invocation.</p>
+    <ul className="pt-clauses">{coverageLabels(types, coverage).map((label, index) => <li key={index}>{label}</li>)}</ul>
+    {coverage.domain === "page_destination" ? <p className="pt-clause-note">Creating a child requires space or subtree coverage. An exact parent does not grant child creation.</p> : null}
+    {coverage.domain === "page_move" ? <p className="pt-clause-note">A move must cover the entire current and proposed subtree, destination and anchor. Unreadable or hidden excluded roots can prevent the move.</p> : null}
+    {rootVisibilityWarning}
+  </div>;
 }
 
 /** Action names that wrap between names (and after dots within a long one). */
@@ -133,7 +154,7 @@ export function EffectiveAccessSummary({
                       ))}
                     </td>
                     <td>
-                      <AccessClauses type={row.resourceType} clauses={row.clauses} />
+                      <AccessCoverage coverage={row.coverage} />
                     </td>
                   </tr>
                 ))}

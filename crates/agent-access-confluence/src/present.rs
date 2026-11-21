@@ -439,11 +439,20 @@ fn render_confluence_content(
             ("Draft origin", optional_scalar(object, "draftOrigin")?),
         ],
     )?;
+    if let Some(parent) = object.get("parent") {
+        if parent.is_null() {
+            field(out, "Parent", "Space root")?;
+        } else {
+            let parent = as_object(parent)?;
+            budget.charge_work(parent.len())?;
+            field(out, "Parent kind", required_scalar(parent, "kind")?)?;
+            field_code(out, "Parent ID", required_scalar(parent, "id")?)?;
+        }
+    }
     let version = optional_display(object, "version")?;
     code_fields(
         out,
         &[
-            ("Parent page ID", optional_scalar(object, "parentPageId")?),
             ("Version", version.as_deref()),
             ("Created", optional_scalar(object, "createdAt")?),
             ("Updated", optional_scalar(object, "updatedAt")?),
@@ -507,8 +516,13 @@ fn render_confluence_search(
     if let Some(operation) = optional_scalar(object, "operation")? {
         field_code(out, "Operation", operation)?;
     }
+    let next_page_token = optional_scalar(object, "nextPageToken")?;
     if values.is_empty() {
-        out.push("\nNo results.\n")?;
+        out.push(if next_page_token.is_some() {
+            "\nNo results on this page. Continue with the next page token.\n"
+        } else {
+            "\nNo results.\n"
+        })?;
     }
     for item in values {
         let item = as_object(item)?;
@@ -536,8 +550,14 @@ fn render_confluence_search(
     }
     out.push("\n## Pagination\n")?;
     let maximum_results = optional_display(object, "maxResults")?;
-    code_fields(out, &[("Maximum results", maximum_results.as_deref())])?;
-    if let Some(token) = optional_scalar(object, "nextPageToken")? {
+    code_fields(
+        out,
+        &[
+            ("Maximum results", maximum_results.as_deref()),
+            ("Scan status", optional_scalar(object, "scanStatus")?),
+        ],
+    )?;
+    if let Some(token) = next_page_token {
         field_code(out, "Next page token", token)?;
     }
     Ok(())
@@ -1215,7 +1235,9 @@ mod tests {
                     kind,
                     ConfluenceContentKind::PageDraft | ConfluenceContentKind::BlogDraft
                 ) {
-                    value["parentPageId"] = json!("9");
+                    if kind == ConfluenceContentKind::PageDraft {
+                        value["parent"] = json!({"kind":"folder", "id":"9"});
+                    }
                     value["draftHandle"] = json!("opaque-handle");
                     value["draftOrigin"] = json!("broker_managed");
                 }
@@ -1238,9 +1260,9 @@ mod tests {
                 });
                 item[confluence_id_field(kind)] = json!("10");
                 if kind == ConfluenceContentKind::Blog {
-                    json!({"operation":"blog.search","blogs":[item],"count":1,"maxResults":25,"nextPageToken":"opaque-token"})
+                    json!({"operation":"blog.search","blogs":[item],"count":1,"maxResults":25,"scanStatus":"more","nextPageToken":"opaque-token"})
                 } else {
-                    json!({"operation":"search","pages":[item],"count":1,"maxResults":25,"nextPageToken":"opaque-token"})
+                    json!({"operation":"search","pages":[item],"count":1,"maxResults":25,"scanStatus":"more","nextPageToken":"opaque-token"})
                 }
             }
             WholeRenderer::Verify(kind) => {
@@ -1415,9 +1437,14 @@ mod tests {
                     ConfluenceContentKind::PageDraft | ConfluenceContentKind::BlogDraft
                 ) {
                     expected.extend([
-                        "- Parent page ID: `9`".to_string(),
                         "- Draft handle: `opaque-handle`".to_string(),
                         "- Draft origin: broker\\_managed".to_string(),
+                    ]);
+                }
+                if kind == ConfluenceContentKind::PageDraft {
+                    expected.extend([
+                        "- Parent kind: folder".to_string(),
+                        "- Parent ID: `9`".to_string(),
                     ]);
                 }
             }
@@ -1453,6 +1480,7 @@ mod tests {
                     "- Space URL: <https://example.test/spaces/SPACE>".to_string(),
                     "## Pagination".to_string(),
                     "- Maximum results: `25`".to_string(),
+                    "- Scan status: `more`".to_string(),
                     "- Next page token: `opaque-token`".to_string(),
                 ]);
                 expected.push(
@@ -1659,9 +1687,89 @@ mod tests {
     }
 
     #[test]
+    fn confluence_search_empty_pages_distinguish_continuation_from_exhaustion() {
+        for (action, collection) in [("search", "pages"), ("blog.search", "blogs")] {
+            for status in ["more", "scan_budget", "exhausted"] {
+                let continuing = status != "exhausted";
+                let mut result = json!({
+                    collection:[], "count":0, "maxResults":25, "scanStatus":status,
+                    "nextPageToken":if continuing { json!("opaque-token") } else { Value::Null }
+                });
+                present_provider_result(
+                    action,
+                    &mut result,
+                    ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+                    4096,
+                    16384,
+                )
+                .unwrap();
+                let markdown = result["value"].as_str().unwrap();
+                assert!(
+                    markdown.contains(&format!("- Scan status: `{status}`")),
+                    "{markdown}"
+                );
+                assert_eq!(
+                    markdown.contains("Continue with the next page token"),
+                    continuing,
+                    "{markdown}"
+                );
+                assert_eq!(
+                    markdown.contains("No results.\n"),
+                    !continuing,
+                    "{markdown}"
+                );
+                assert_eq!(
+                    markdown.contains("- Next page token:"),
+                    continuing,
+                    "{markdown}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn confluence_page_draft_parent_renders_typed_page_folder_or_root() {
+        for parent in [
+            json!({"kind":"page","id":"9"}),
+            json!({"kind":"folder","id":"9"}),
+            Value::Null,
+        ] {
+            let mut result =
+                confluence_whole_fixture(WholeRenderer::Content(ConfluenceContentKind::PageDraft));
+            result["parent"] = parent.clone();
+            present_provider_result(
+                "page.draft.view",
+                &mut result,
+                ResponseOptions::new(ReadContentFormat::Native, ResponseFormat::Markdown),
+                4096,
+                16384,
+            )
+            .unwrap();
+            let markdown = result["value"].as_str().unwrap();
+            if parent.is_null() {
+                assert!(markdown.contains("- Parent: Space root"), "{markdown}");
+                assert!(!markdown.contains("Parent ID"), "{markdown}");
+            } else {
+                assert!(
+                    markdown.contains(&format!(
+                        "- Parent kind: {}",
+                        parent["kind"].as_str().unwrap()
+                    )),
+                    "{markdown}"
+                );
+                assert!(markdown.contains("- Parent ID: `9`"), "{markdown}");
+                assert!(!markdown.contains("Space root"), "{markdown}");
+            }
+        }
+    }
+
+    #[test]
     fn confluence_empty_collections_are_explicit() {
         for (action, mut result) in [
-            ("search", json!({"pages":[],"maxResults":25})),
+            (
+                "search",
+                json!({"pages":[],"maxResults":25,"scanStatus":"exhausted","nextPageToken":null}),
+            ),
             (
                 "attachment.list",
                 json!({"page":{"id":"10","space":"SPACE"},"attachments":[],"count":0,"hasMore":false}),

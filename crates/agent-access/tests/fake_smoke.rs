@@ -36,6 +36,107 @@ fn cli_local_password_enable_requires_explicit_acknowledgment_and_set_is_removed
 }
 
 #[test]
+fn cli_resource_browser_url_wire_body_preserves_omission_and_explicit_clearing() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let original = "https://example.atlassian.net/wiki/spaces/ENG/folder/67890/Runbooks";
+    let moved = "https://example.atlassian.net/wiki/spaces/OPS/folder/67890/Runbooks";
+    let server = std::thread::spawn(move || {
+        for (method, expected_url) in [
+            ("POST", Some(serde_json::json!(original))),
+            ("PATCH", None),
+            ("PATCH", Some(serde_json::json!(moved))),
+            ("PATCH", Some(serde_json::Value::Null)),
+        ] {
+            let (mut stream, request) = accept_stub_request(&listener);
+            assert_eq!(request.method, method);
+            assert_eq!(
+                request.path,
+                if method == "POST" {
+                    "/v1/admin/policy/resources"
+                } else {
+                    "/v1/admin/policy/resources/folder"
+                }
+            );
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body.get("browserUrl"), expected_url.as_ref());
+            if method == "POST" {
+                assert_eq!(
+                    body["selector"]["value"],
+                    "https://example.atlassian.net/wiki/content/folder/67890"
+                );
+            } else {
+                assert_eq!(body["expectedVersion"], 1);
+                assert!(body.get("selector").is_none());
+            }
+            write_json_response(
+                &mut stream,
+                200,
+                serde_json::json!({"ok":true,"result":{"record":{"id":"folder"}}}),
+            );
+        }
+    });
+    for args in [
+        vec![
+            "create",
+            "--resource-type",
+            "confluence_content",
+            "--selector-kind",
+            "subtree",
+            "--selector-value",
+            "https://example.atlassian.net/wiki/content/folder/67890",
+            "--execution-context",
+            "internal",
+            "--browser-url",
+            original,
+        ],
+        vec![
+            "update",
+            "folder",
+            "--expected-version",
+            "1",
+            "--display-name",
+            "Runbooks",
+        ],
+        vec![
+            "update",
+            "folder",
+            "--expected-version",
+            "1",
+            "--browser-url",
+            moved,
+        ],
+        vec![
+            "update",
+            "folder",
+            "--expected-version",
+            "1",
+            "--clear-browser-url",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+            .args([
+                "--url",
+                &format!("http://{address}"),
+                "--no-token",
+                "admin",
+                "policy",
+                "resources",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    server.join().unwrap();
+}
+
+#[test]
 fn cli_local_password_reset_and_enable_send_distinct_operations() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();

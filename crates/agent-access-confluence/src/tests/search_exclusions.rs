@@ -74,14 +74,20 @@ fn negative_filters_keep_positive_type_policy_grouping_and_sort_order() {
     for (_, kind) in SEARCHES {
         for (scope, predicate) in [
             (
-                EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-                " AND space IN (ENG)",
+                FixtureSpaces::Finite(BTreeSet::from(["ENG".to_string()])),
+                " AND ((((space = \"ENG\"))))".to_string(),
             ),
             (
-                EffectiveSearchScope::AllExcept(BTreeSet::from(["PRIVATE".to_string()])),
-                " AND space NOT IN (PRIVATE)",
+                FixtureSpaces::AllExcept(BTreeSet::from(["PRIVATE".to_string()])),
+                format!(
+                    " AND ((((type = {}) AND NOT (space = \"PRIVATE\"))))",
+                    kind.cql_type()
+                ),
             ),
-            (EffectiveSearchScope::AllExcept(BTreeSet::new()), ""),
+            (
+                FixtureSpaces::AllExcept(BTreeSet::new()),
+                format!(" AND ((((type = {}))))", kind.cql_type()),
+            ),
         ] {
             for filter in [
                 "space != ARCHIVE",
@@ -90,7 +96,7 @@ fn negative_filters_keep_positive_type_policy_grouping_and_sort_order() {
                 "space NOT IN (ARCHIVE) AND (id != 12345 OR space = PRIVATE)",
             ] {
                 let raw = format!("{filter} ORDER BY lastModified DESC");
-                let query = build_confluence_search_query_for_kind(
+                let query = build_fixture_search_query(
                     &ConfluenceSearchQueryInput::Cql { value: raw.clone() },
                     &scope,
                     &SearchLimitsConfig::default(),
@@ -155,11 +161,14 @@ async fn exclusion_searches_check_the_whole_page_against_authorized_spaces() {
         for (scope, predicate) in [
             (
                 SearchAuthorizationScope::from_exact_values(vec!["ENG".into()]),
-                "space IN (ENG)",
+                "((((space = \"ENG\"))))".to_string(),
             ),
             (
                 SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".into()]),
-                "space NOT IN (PRIVATE)",
+                format!(
+                    "((((type = {}) AND NOT (space = \"PRIVATE\"))))",
+                    kind.cql_type()
+                ),
             ),
         ] {
             for include_denied in [false, true] {
@@ -195,18 +204,28 @@ async fn exclusion_searches_check_the_whole_page_against_authorized_spaces() {
                     .credential(credential())
                     .search(SearchAuthorization::new("space", scope.clone()))
                     .build();
-                let result = provider.invoke(request).await;
-                if include_denied {
-                    let error = result.unwrap_err();
-                    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
-                    assert!(error.result.is_none());
-                    assert!(error.object_ids.is_none());
-                } else {
-                    let result = result.unwrap();
-                    let key = if action == "search" { "pages" } else { "blogs" };
-                    assert_eq!(result.result[key].as_array().unwrap().len(), 1);
-                    assert_eq!(result.result[key][0]["space"], "ENG");
-                }
+                let result = provider.invoke_fixture(request).await;
+                let result = result.unwrap();
+                let key = if action == "search" { "pages" } else { "blogs" };
+                assert_eq!(result.result[key].as_array().unwrap().len(), 1);
+                assert_eq!(result.result[key][0]["space"], "ENG");
+                assert!(!result.result.to_string().contains("PRIVATE"));
+                assert!(
+                    !result
+                        .object_ids
+                        .as_ref()
+                        .unwrap()
+                        .to_string()
+                        .contains("98765")
+                );
+                assert!(
+                    !result
+                        .audit
+                        .as_ref()
+                        .unwrap()
+                        .to_string()
+                        .contains("PRIVATE")
+                );
                 let sent = server.received_requests().await.unwrap();
                 assert_eq!(sent.len(), 1, "no metadata lookup for {action}");
                 assert_eq!(sent[0].url.path(), "/wiki/rest/api/content/search");
@@ -224,7 +243,7 @@ async fn wildcard_keys_stay_invalid_and_text_wildcards_remain_constrained() {
             .and(query_param(
                 "cql",
                 format!(
-                    "type = {} AND space IN (ENG) AND (title ~ \"*\")",
+                    "type = {} AND ((((space = \"ENG\")))) AND (title ~ \"*\")",
                     kind.cql_type()
                 ),
             ))
@@ -239,7 +258,7 @@ async fn wildcard_keys_stay_invalid_and_text_wildcards_remain_constrained() {
         );
         for spaces in [json!([]), json!(["*"])] {
             let error = provider
-                .invoke(
+                .invoke_fixture(
                     InvocationBuilder::new("confluence", action)
                         .inputs(json!({ "query": { "type": "cql", "value": "id != 12345" }, "spaces": spaces }))
                         .credential(credential())
@@ -252,7 +271,7 @@ async fn wildcard_keys_stay_invalid_and_text_wildcards_remain_constrained() {
         }
         assert!(server.received_requests().await.unwrap().is_empty());
         provider
-            .invoke(
+            .invoke_fixture(
                 InvocationBuilder::new("confluence", action)
                     .inputs(json!({ "query": { "type": "text", "value": "*" } }))
                     .credential(credential())
@@ -296,9 +315,9 @@ fn documented_composed_cql_examples_match_the_builder() {
                 "--text" => ConfluenceSearchQueryInput::Text { value },
                 _ => panic!("unsupported documented search input: {input}"),
             };
-            let result = build_confluence_search_query_for_kind(
+            let result = build_fixture_search_query(
                 &query,
-                &EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
+                &FixtureSpaces::Finite(BTreeSet::from(["ENG".to_string()])),
                 &SearchLimitsConfig::default(),
                 kind,
             )

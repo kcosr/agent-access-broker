@@ -49,6 +49,7 @@ pub(super) struct AvailableService {
     pub descriptor: ServiceDescriptor,
     pub availability: ServiceAvailability,
     pub clauses: BTreeMap<String, Vec<EffectiveAccessClause>>,
+    pub location_modes: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -190,11 +191,15 @@ impl BrokerRuntime {
     ) -> AvailableService {
         let mut checks = BTreeMap::new();
         let mut clauses = BTreeMap::new();
+        let mut location_modes = BTreeMap::new();
         let mut requirements = Vec::new();
         let mut unknown = false;
         let actions = std::mem::take(&mut descriptor.actions);
         for action in actions {
             let scoped = action.resource_scope.is_some();
+            let location = self
+                .action_containment_scope(&descriptor.service, &action.action)
+                .is_some();
             let unscoped_modes = if scoped {
                 Vec::new()
             } else {
@@ -208,7 +213,7 @@ impl BrokerRuntime {
             };
             let mut available = false;
             for mode in ["service", "per_user"] {
-                let regions = if scoped {
+                let regions = if scoped && !location {
                     self.effective_resource_clauses_for_modes(
                         snapshot,
                         identity,
@@ -221,7 +226,18 @@ impl BrokerRuntime {
                 } else {
                     Vec::new()
                 };
-                if (scoped && regions.is_empty())
+                let location_available = location
+                    && self.containment_has_access(
+                        snapshot,
+                        identity,
+                        context,
+                        &descriptor.service,
+                        &action.action,
+                        token,
+                        |selected| selected == mode,
+                    );
+                if (scoped && !location && regions.is_empty())
+                    || (location && !location_available)
                     || (!scoped && !unscoped_modes.iter().any(|selected| selected == mode))
                 {
                     continue;
@@ -277,6 +293,12 @@ impl BrokerRuntime {
                 }
                 if usable {
                     available = true;
+                    if location {
+                        location_modes
+                            .entry(action.action.clone())
+                            .or_insert_with(Vec::new)
+                            .push(mode.to_owned());
+                    }
                     clauses
                         .entry(action.action.clone())
                         .or_insert_with(Vec::new)
@@ -320,6 +342,7 @@ impl BrokerRuntime {
                 message,
             },
             clauses,
+            location_modes,
         }
     }
 

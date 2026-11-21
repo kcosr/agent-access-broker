@@ -1,6 +1,6 @@
 import type { GroupAgentTokenIssuanceSetting, PrincipalAgentTokenIssuanceSetting } from "./types";
 import type { ImportAcceptResult, ImportActionStatus, ImportChangeBlocked, ImportClassificationChange, ImportDefinition, ImportListResult, ImportPreviewResult, ImportPurpose, ImportRecordResult, ImportResourceTypeIds, ImportSelection, ImportServiceStatus, ImportVersions } from "./import-types";
-import type { CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
+import type { ResourceLocationService, ResourceLocationRequest, NormalizedResourceLocation, CatalogMutation, ResourceRecord, ResourceGroupRecord, ResourceWriteBody, ResourceGroupWriteBody, ResourceUsedBy, EffectiveAccessResult, GrantEffectiveAccessBody, TokenEffectiveAccessBody } from "./types";
 import type {
   ApplicationAccess,
   ApplicationAuthorization,
@@ -309,6 +309,8 @@ export const brokerApi = {
   saveResourceGroup: (session: Session, body: ResourceGroupWriteBody, id?: string) => managementRequest<CatalogMutation<ResourceGroupRecord>>(`/v1/admin/policy/resource-groups${id ? `/${enc(id)}` : ""}`, { method: id ? "PATCH" : "POST", body: JSON.stringify(body) }, session),
   resourceUsedBy: (session: Session, kind: "resources" | "resource-groups", id: string) => managementRequest<ResourceUsedBy>(`/v1/admin/policy/${kind}/${enc(id)}/used-by`, {}, session),
   deleteResourceEntry: (session: Session, kind: "resources" | "resource-groups", id: string, expectedVersion: number) => managementRequest<CatalogMutation<null>>(`/v1/admin/policy/${kind}/${enc(id)}?expectedVersion=${expectedVersion}`, { method: "DELETE" }, session),
+  resourceLocations: (session: Session) => managementRequest<{ services: ResourceLocationService[] }>("/v1/admin/policy/resource-locations", {}, session),
+  normalizeResourceLocation: (session: Session, body: ResourceLocationRequest) => managementRequest<NormalizedResourceLocation>("/v1/admin/policy/resource-locations/normalize", { method: "POST", body: JSON.stringify(body) }, session),
   grantEffectiveAccess: (session: Session, body: GrantEffectiveAccessBody) => managementRequest<EffectiveAccessResult>("/v1/admin/policy/effective-access", { method: "POST", body: JSON.stringify(body) }, session),
   tokenEffectiveAccess: (session: Session, body: TokenEffectiveAccessBody, principalId?: string) => managementRequest<EffectiveAccessResult>(principalId ? `/v1/admin/principals/${enc(principalId)}/agent-token-effective-access` : "/v1/tokens/effective-access", { method: "POST", body: JSON.stringify(body) }, session),
   session: () => authRequest<Session>("/v1/auth/session"),

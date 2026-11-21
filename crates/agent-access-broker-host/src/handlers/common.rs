@@ -719,6 +719,31 @@ pub(crate) fn input_error_envelope(
     }
 }
 
+pub(crate) fn resource_access_too_complex_envelope(
+    agent_request_id: String,
+    service: String,
+) -> BrokerResponse<Value> {
+    let reason_code = agent_access_provider::ReasonCode::ResourceAccessTooComplex;
+    let message = "Resource access response exceeds the result size limit.".to_owned();
+    BrokerResponse {
+        retry_after_seconds: None,
+        status: reason_code.http_status(),
+        envelope: ResponseEnvelope {
+            agent_request_id,
+            broker_request_id: new_broker_request_id(),
+            decision: agent_access_provider::Decision::Error,
+            service,
+            action: String::new(),
+            resource_scopes: ResourceScopes::new(),
+            reason_code: Some(reason_code.into()),
+            reason: Some(message.clone()),
+            result: None,
+            error: Some(agent_access_core::ErrorBody { message }),
+        },
+        stream: None,
+    }
+}
+
 pub(crate) fn discovery_unavailable_envelope(agent_request_id: String) -> BrokerResponse<Value> {
     let message = "local discovery could not complete".to_owned();
     BrokerResponse {

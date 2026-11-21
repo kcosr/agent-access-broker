@@ -483,7 +483,7 @@ test("token boundaries use live resource references and allow empty effective ac
   ];
   const options = {
     policyGeneration: 5, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
-    services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
+    services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ scope: "resource" as const, action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
       internal: [{ included: [{ kind: "all" }], excluded: [] }],
       external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }]
     } }] }],
@@ -2137,15 +2137,15 @@ test("the catalog adds, filters, groups, and deletes resources with live referen
 
   editor = await addResource();
   await editor.getByLabel("Resource type").selectOption("confluence_space");
-  await editor.getByLabel("Coverage").selectOption("all");
-  await expect(editor.getByLabel("Canonical identifier")).toHaveCount(0);
+  await editor.getByRole("button", { name: "All spaces", exact: true }).click();
+  await expect(editor.getByLabel("Space key", { exact: true })).toHaveCount(0);
   for (const context of ["default", "internal", "external"]) await editor.getByRole("group", { name: "Allowed execution contexts" }).getByLabel(context, { exact: true }).check();
   await editor.getByRole("button", { name: "Save resource", exact: true }).click();
   await expect(tableRow(page, "All Confluence spaces")).toBeVisible();
 
   editor = await addResource();
   await editor.getByLabel("Resource type").selectOption("confluence_space");
-  await editor.getByLabel("Canonical identifier").fill("HIDDEN");
+  await editor.getByLabel("Space key", { exact: true }).fill("HIDDEN");
   await editor.getByRole("group", { name: "Allowed execution contexts" }).getByLabel("internal", { exact: true }).check();
   await editor.getByRole("switch", { name: "Enabled" }).or(editor.getByRole("checkbox", { name: "Enabled" })).uncheck();
   await editor.getByRole("button", { name: "Save resource", exact: true }).click();
@@ -2249,8 +2249,8 @@ test("the catalog preserves personal Confluence space keys through creation, edi
   await page.getByRole("main").getByRole("button", { name: "Add resource", exact: true }).first().click();
   const add = page.getByRole("complementary", { name: "Add resource", exact: true });
   await add.getByLabel("Resource type").selectOption("confluence_space");
-  await add.getByLabel("Coverage").selectOption("exact");
-  await add.getByLabel("Canonical identifier").fill("~alice");
+  await add.getByRole("button", { name: "By space key", exact: true }).click();
+  await add.getByLabel("Space key", { exact: true }).fill("~alice");
   await add.getByLabel("Display name").fill("Alice personal space");
   await add.getByRole("group", { name: "Allowed execution contexts" }).getByLabel("default", { exact: true }).check();
   await add.getByRole("button", { name: "Save resource", exact: true }).click();
@@ -2264,8 +2264,8 @@ test("the catalog preserves personal Confluence space keys through creation, edi
 
   await details.getByRole("button", { name: "Edit", exact: true }).click();
   const edit = page.getByRole("complementary", { name: "Edit resource Alice personal space", exact: true });
-  await expect(edit.getByLabel("Canonical identifier")).toHaveValue("~alice");
-  await edit.getByLabel("Canonical identifier").fill("~Alice");
+  await expect(edit.getByLabel("Space key", { exact: true })).toHaveValue("~alice");
+  await edit.getByLabel("Space key", { exact: true }).fill("~Alice");
   await edit.getByLabel("Display name").fill("Alice personal documentation");
   await edit.getByRole("button", { name: "Save resource", exact: true }).click();
   const renamed = page.getByRole("complementary", { name: "Resource Alice personal documentation", exact: true });
@@ -2675,9 +2675,9 @@ test("a grant's effective access merges only identical contexts into compact row
       body: managementResult({
         policyGeneration: 7,
         access: [
-          { service: "jira", action: "issue.view", executionContext: "default", resourceType: "jira_project", clauses: all },
-          { service: "jira", action: "issue.view", executionContext: "internal", resourceType: "jira_project", clauses: all },
-          { service: "jira", action: "issue.view", executionContext: "external", resourceType: "jira_project", clauses: eng }
+          { scope: "resource" as const, service: "jira", action: "issue.view", executionContext: "default", resourceType: "jira_project", clauses: all },
+          { scope: "resource" as const, service: "jira", action: "issue.view", executionContext: "internal", resourceType: "jira_project", clauses: all },
+          { scope: "resource" as const, service: "jira", action: "issue.view", executionContext: "external", resourceType: "jira_project", clauses: eng }
         ]
       })
     })
@@ -2727,7 +2727,7 @@ test("effective access keeps long merged contexts inside the drawer and lists al
       body: managementResult({
         policyGeneration: 7,
         access: ["issue.view", "search"].flatMap((action) =>
-          contexts.map((executionContext) => ({ service: "jira", action, executionContext, resourceType: "jira_project", clauses }))
+          contexts.map((executionContext) => ({ scope: "resource" as const, service: "jira", action, executionContext, resourceType: "jira_project", clauses }))
         )
       })
     })
@@ -2799,13 +2799,13 @@ test("access resource details disclose exclusions with their own alternative", a
     contentType: "application/json",
     body: envelope({
       policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
-      services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{
+      services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{ scope: "resource" as const,
         action: "issue.view", description: "View issues", readOnly: true, resourceType: "jira_project", executionContexts: ["internal"],
         effectiveAccessByExecutionContext: { internal: [
           { included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "SECRET" }], excluded: [] }] },
           { included: [{ kind: "exact", value: "ENG" }], excluded: [] }
         ] }
-      }] }, { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{
+      }] }, { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{ scope: "resource" as const,
         action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", executionContexts: ["external"],
         effectiveAccessByExecutionContext: { external: [
           { included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "PRIVATE" }], excluded: [] }] }

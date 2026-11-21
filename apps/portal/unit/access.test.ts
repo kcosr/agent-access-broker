@@ -3,16 +3,16 @@ import { buildAccessSummary } from "../src/lib/access";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AccessClause } from "../src/components/effective-access";
-import { clauseLabel, resourceLabel, resourceSelectionLabels, selectorLabel } from "../src/lib/resource-labels";
+import { coverageLabels, resourceLabel, resourceSelectionLabels, selectorLabel } from "../src/lib/resource-labels";
 import { indexResourceTypes, namespaceCoverage, NO_RESOURCE_TYPES, ResourceTypesProvider, resourceTypeLabel, selectorPlaceholder } from "../src/lib/resource-types";
-import type { AgentTokenOptions, ResourceRecord } from "../src/types";
+import type { AgentTokenActionOption, AgentTokenOptions, ResourceRecord } from "../src/types";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 
 const types = indexResourceTypes(RESOURCE_TYPES);
 
 const options: AgentTokenOptions = {
   policyGeneration: 4, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
-  services: [{ service: "gitlab", displayName: "Gitlab", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{
+  services: [{ service: "gitlab", displayName: "Gitlab", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ scope: "resource" as const,
     action: "repository.tree", description: "Read files", readOnly: true, resourceType: "git_repository", requiredScopeTypes: ["repository"], executionContexts: ["internal", "external"],
     effectiveAccessByExecutionContext: {
       internal: [{ included: [{ kind: "all" }], excluded: [] }],
@@ -25,11 +25,17 @@ const options: AgentTokenOptions = {
   mcp: null
 };
 
+function scopedAction(options: AgentTokenOptions): Extract<AgentTokenActionOption, { scope: "resource" }> {
+  const action = options.services[0].actions[0];
+  if (action.scope !== "resource") throw new Error("Expected resource fixture");
+  return action;
+}
+
 describe("effective access presentation", () => {
   test("preserves separate grant clauses instead of applying exclusions globally", () => {
     const external = buildAccessSummary(options, "external")[0].actions[0];
-    expect(external.clauses).toEqual(options.services[0].actions[0].effectiveAccessByExecutionContext.external);
-    expect(external.clauses.map((clause) => clauseLabel(types, external.resourceType!, clause))).toEqual([
+    expect(external.coverage).toMatchObject({ scope: "resource", clauses: scopedAction(options).effectiveAccessByExecutionContext.external });
+    expect(coverageLabels(types, external.coverage)).toEqual([
       "All Git repositories except Repositories under private", "private/approved"
     ]);
   });
@@ -37,15 +43,17 @@ describe("effective access presentation", () => {
   test("combines contexts only when their compiled boundaries match", () => {
     expect(buildAccessSummary(options)[0].actions).toHaveLength(2);
     const identical = structuredClone(options);
-    identical.services[0].actions[0].effectiveAccessByExecutionContext.external = identical.services[0].actions[0].effectiveAccessByExecutionContext.internal;
+    scopedAction(identical).effectiveAccessByExecutionContext.external = scopedAction(identical).effectiveAccessByExecutionContext.internal;
     expect(buildAccessSummary(identical)[0].actions[0].contexts).toEqual(["internal", "external"]);
   });
 
   test("retains whole-request conditions separately from resource exclusions", () => {
     const conditional = structuredClone(options);
-    const clause = conditional.services[0].actions[0].effectiveAccessByExecutionContext.external[0];
+    const clause = scopedAction(conditional).effectiveAccessByExecutionContext.external[0];
     clause.excludedRequests = [{ included: [{ kind: "namespace", value: "engineering" }], excluded: [] }];
-    const displayed = buildAccessSummary(conditional, "external")[0].actions[0].clauses[0];
+    const coverage = buildAccessSummary(conditional, "external")[0].actions[0].coverage;
+    if (coverage.scope !== "resource") throw new Error("Expected resource coverage");
+    const displayed = coverage.clauses[0];
     expect(displayed.excludedRequests).toEqual(clause.excludedRequests);
     expect(displayed.excluded).toEqual([{ kind: "namespace", value: "private" }]);
     const markup = renderToStaticMarkup(createElement(ResourceTypesProvider, { value: types }, createElement(AccessClause, { type: "git_repository", clause: displayed })));
@@ -55,7 +63,7 @@ describe("effective access presentation", () => {
 
   test("keeps empty effective access empty", () => {
     const empty = structuredClone(options);
-    empty.services[0].actions[0].effectiveAccessByExecutionContext = {};
+    scopedAction(empty).effectiveAccessByExecutionContext = {};
     expect(buildAccessSummary(empty)).toEqual([]);
     expect(buildAccessSummary(options, "missing")).toEqual([]);
   });
@@ -99,6 +107,6 @@ describe("resource type metadata", () => {
 });
 
 test("scope-free actions remain visible with explicit action grants", () => {
-  const gmail: AgentTokenOptions = {policyGeneration:1,agentTokenIssuancePolicy:{ source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] },resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],resourceType:null,executionContexts:["default"],effectiveAccessByExecutionContext:{default:[]}}]}],mcp:null};
-  expect(buildAccessSummary(gmail)[0].actions[0]).toMatchObject({action:"thread.trash",resourceType:null,contexts:["default"]});
+  const gmail: AgentTokenOptions = {policyGeneration:1,agentTokenIssuancePolicy:{ source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] },resources:[],resourceGroups:[],executionContexts:["default"],services:[{service:"gmail",displayName:"Gmail",brokerHosts:[],executionContexts:["default"],actions:[{ scope: "unscoped" as const,action:"thread.trash",readOnly:false,description:"Trash",requiredScopeTypes:[],executionContexts:["default"],}]}],mcp:null};
+  expect(buildAccessSummary(gmail)[0].actions[0]).toMatchObject({action:"thread.trash",coverage:{scope:"unscoped"},contexts:["default"]});
 });

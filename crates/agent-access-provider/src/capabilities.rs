@@ -28,20 +28,57 @@ pub struct ServiceCapabilities {
     pub actions: Vec<ActionCapabilities>,
 }
 
-/// The resource type a scope authorizes and the selector forms it offers.
+/// One declared matching contract. Containment is never projected as a scalar
+/// type or an evidence-free exact/all approximation.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ResourceScopeCapabilities {
-    pub resource_type: ResourceType,
-    pub selectors: Vec<String>,
+#[serde(tag = "matching", rename_all = "snake_case")]
+pub enum ResourceScopeCapabilities {
+    Scalar {
+        #[serde(rename = "resourceType")]
+        resource_type: ResourceType,
+        selectors: Vec<String>,
+    },
+    Containment(crate::ContainmentScopeCapabilities),
 }
 
 impl ResourceScopeCapabilities {
     pub fn new(resource_type: ResourceType, selectors: Vec<String>) -> Self {
-        Self {
+        Self::Scalar {
             resource_type,
             selectors,
+        }
+    }
+    pub fn containment(contract: crate::ContainmentScopeCapabilities) -> Self {
+        Self::Containment(contract)
+    }
+    pub fn as_scalar(&self) -> Option<(&ResourceType, &[String])> {
+        match self {
+            Self::Scalar {
+                resource_type,
+                selectors,
+            } => Some((resource_type, selectors)),
+            Self::Containment(_) => None,
+        }
+    }
+    pub fn as_containment(&self) -> Option<&crate::ContainmentScopeCapabilities> {
+        match self {
+            Self::Containment(contract) => Some(contract),
+            Self::Scalar { .. } => None,
+        }
+    }
+    pub fn resource_types(&self) -> Vec<&ResourceType> {
+        match self {
+            Self::Scalar { resource_type, .. } => vec![resource_type],
+            Self::Containment(contract) => contract.selectors_by_type.keys().collect(),
+        }
+    }
+    pub fn accepts_resource_type(&self, resource_type: &ResourceType) -> bool {
+        match self {
+            Self::Scalar {
+                resource_type: own, ..
+            } => own == resource_type,
+            Self::Containment(contract) => contract.selectors_by_type.contains_key(resource_type),
         }
     }
 }

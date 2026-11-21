@@ -6,8 +6,53 @@ use agent_access_atlassian::{
 };
 use agent_access_provider::host::UpstreamClientFactory;
 
+#[path = "hierarchy_backend.rs"]
+mod hierarchy_backend;
+pub use hierarchy_backend::*;
+
 #[async_trait]
 pub trait ConfluenceBackend: Send + Sync {
+    async fn hierarchy_node(
+        &self,
+        _kind: ConfluenceNodeKind,
+        _id: &str,
+        _status: ConfluenceContentStatus,
+        _require_parent: bool,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        Err(ConfluenceBackendError::ScopeUnresolved)
+    }
+
+    async fn regular_page_metadata(
+        &self,
+        _id: &str,
+        _require_parent: bool,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        Err(ConfluenceBackendError::ScopeUnresolved)
+    }
+
+    async fn blog_location_metadata(
+        &self,
+        _id: &str,
+        _status: ConfluenceContentStatus,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        Err(ConfluenceBackendError::ScopeUnresolved)
+    }
+
+    async fn space_location_metadata(
+        &self,
+        _id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        Err(ConfluenceBackendError::ScopeUnresolved)
+    }
+
     async fn space_list(
         &self,
         request: ConfluenceSpaceListRequest,
@@ -61,25 +106,6 @@ pub trait ConfluenceBackend: Send + Sync {
         Err(ConfluenceBackendError::Protocol(
             "Confluence blog metadata is not supported by this backend".to_string(),
         ))
-    }
-
-    async fn blog_scope_evidence(
-        &self,
-        blog_id: &str,
-        credential: &AtlassianCredential,
-    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
-    {
-        let response = self.blog_metadata(blog_id, credential).await?;
-        Ok(ConfluenceBackendResponse {
-            value: ConfluenceBlogScopeEvidence {
-                id: response.value.id,
-                space: response.value.space,
-                space_id: response.value.space_id,
-                space_alias: response.value.space_alias,
-            },
-            status: response.status,
-            duration_ms: response.duration_ms,
-        })
     }
 
     async fn blog(
@@ -595,16 +621,6 @@ pub struct ConfluenceBlogSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfluenceBlogScopeEvidence {
-    pub id: String,
-    pub space: String,
-    pub space_id: String,
-    /// The URL alias of `space`, which only checks a URL locator's space
-    /// segment; see [`ConfluenceSpace::alias`].
-    pub space_alias: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfluenceSearchBlog {
     pub blogs: Vec<ConfluenceBlogSummary>,
     pub max_results: u32,
@@ -621,7 +637,6 @@ pub struct ConfluenceSearchPage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfluenceSearchRequest {
     pub cql: String,
-    pub spaces: Vec<String>,
     pub max_results: u32,
     pub next_page_token: Option<String>,
 }
@@ -654,7 +669,7 @@ pub struct ConfluenceDraftContent {
     /// The URL alias its v2 space object reports for `space`; see
     /// [`ConfluenceSpace::alias`].
     pub space_alias: Option<String>,
-    pub parent_page_id: Option<String>,
+    pub parent: Option<ConfluenceParent>,
     pub web_url: Option<String>,
     pub space_web_url: Option<String>,
     pub status: Option<String>,
@@ -671,7 +686,7 @@ pub struct ConfluenceDraftCreateRequest {
     pub content_type: String,
     pub space: String,
     pub space_id: String,
-    pub parent_page_id: Option<String>,
+    pub parent: Option<ConfluenceParent>,
     pub title: String,
     pub body: ConfluencePageBody,
 }
@@ -697,7 +712,7 @@ pub struct ConfluencePageBody {
 pub struct ConfluencePageCreateRequest {
     pub space: String,
     pub space_id: String,
-    pub parent_page_id: Option<String>,
+    pub parent: Option<ConfluenceParent>,
     pub title: String,
     pub body: ConfluencePageBody,
 }
@@ -706,30 +721,10 @@ pub struct ConfluencePageCreateRequest {
 pub struct ConfluencePageUpdateRequest {
     pub page_id: String,
     pub space: String,
+    pub space_id: String,
     pub title: String,
     pub base_version: u64,
     pub body: ConfluencePageBody,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConfluencePagePreflight {
-    pub(crate) page: ConfluencePage,
-    pub(crate) upstream_status: u16,
-    pub(crate) upstream_duration_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConfluenceBlogPreflight {
-    pub(crate) blog: ConfluenceBlog,
-    pub(crate) upstream_status: u16,
-    pub(crate) upstream_duration_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConfluenceDraftContentPreflight {
-    pub(crate) content: ConfluenceDraftContent,
-    pub(crate) upstream_status: u16,
-    pub(crate) upstream_duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -882,6 +877,9 @@ pub struct ConfluenceBackendResponse<T> {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ConfluenceBackendError {
+    /// Current containment could not be proved, or its operation budget ended.
+    #[error("Confluence scope could not be resolved")]
+    ScopeUnresolved,
     #[error("upstream unauthorized")]
     Unauthorized,
     #[error("upstream forbidden")]
@@ -969,6 +967,10 @@ pub(crate) fn accepted_if_success(
 
 pub(crate) fn confluence_backend_error(error: ConfluenceBackendError) -> ProviderError {
     match error {
+        ConfluenceBackendError::ScopeUnresolved => ProviderError::deny(
+            ReasonCode::ScopeUnresolved,
+            "Confluence content scope could not be resolved",
+        ),
         ConfluenceBackendError::AcceptedUnreadable(error) => confluence_backend_error(*error),
         ConfluenceBackendError::Unauthorized => ProviderError::error(
             ReasonCode::UpstreamUnauthorized,
@@ -1037,6 +1039,7 @@ pub(crate) fn map_confluence_conflict(error: ConfluenceBackendError) -> Provider
 
 pub(crate) fn confluence_backend_reason_code(error: &ConfluenceBackendError) -> ReasonCode {
     match error {
+        ConfluenceBackendError::ScopeUnresolved => ReasonCode::ScopeUnresolved,
         ConfluenceBackendError::AcceptedUnreadable(error) => confluence_backend_reason_code(error),
         ConfluenceBackendError::Unauthorized => ReasonCode::UpstreamUnauthorized,
         ConfluenceBackendError::Forbidden => ReasonCode::UpstreamForbidden,
@@ -1079,6 +1082,70 @@ pub(crate) struct HttpConfluenceBackend {
 }
 
 impl HttpConfluenceBackend {
+    pub(crate) fn search_request_url(
+        &self,
+        request: &ConfluenceSearchRequest,
+        credential: &AtlassianCredential,
+    ) -> Result<Url, ConfluenceBackendError> {
+        let mut url = self
+            .api_base(credential)?
+            .join("content/search")
+            .map_err(|_| ConfluenceBackendError::ScopeUnresolved)?;
+        let limit = request.max_results.to_string();
+        let mut query_bytes = 0usize;
+        for (key, value) in [
+            ("cql", request.cql.as_str()),
+            ("limit", limit.as_str()),
+            ("expand", "space,version,history"),
+        ]
+        .into_iter()
+        .chain(
+            request
+                .next_page_token
+                .as_deref()
+                .map(|cursor| ("cursor", cursor)),
+        ) {
+            if query_bytes != 0 {
+                query_bytes = query_bytes
+                    .checked_add(1)
+                    .ok_or(ConfluenceBackendError::ScopeUnresolved)?;
+            }
+            query_bytes = query_bytes
+                .checked_add(key.len())
+                .and_then(|n| n.checked_add(1))
+                .and_then(|n| n.checked_add(form_encoded_len(value)?))
+                .ok_or(ConfluenceBackendError::ScopeUnresolved)?;
+        }
+        let target_bytes = url
+            .path()
+            .len()
+            .checked_add(1)
+            .and_then(|n| n.checked_add(query_bytes))
+            .ok_or(ConfluenceBackendError::ScopeUnresolved)?;
+        let absolute_bytes = url
+            .as_str()
+            .len()
+            .checked_add(1)
+            .and_then(|n| n.checked_add(query_bytes))
+            .ok_or(ConfluenceBackendError::ScopeUnresolved)?;
+        // http 1.4.2 Uri::from_shared: MAX_LEN = u16::MAX - 1.
+        if target_bytes > self.config.content_search.max_encoded_request_target_bytes as usize
+            || absolute_bytes > 65_534
+        {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        let mut query = url.query_pairs_mut();
+        query
+            .append_pair("cql", &request.cql)
+            .append_pair("limit", &limit)
+            .append_pair("expand", "space,version,history");
+        if let Some(cursor) = &request.next_page_token {
+            query.append_pair("cursor", cursor);
+        }
+        drop(query);
+        Ok(url)
+    }
+
     #[cfg(test)]
     pub(crate) fn for_tests(config: ConfluenceProviderConfig, limits: ProviderLimits) -> Self {
         let host = agent_access_provider::test_support::TestHost::with_limits(limits.clone());
@@ -1224,6 +1291,130 @@ impl HttpConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for HttpConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if !numeric_content_id(id)
+            || (kind != ConfluenceNodeKind::Page && status != ConfluenceContentStatus::Current)
+        {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        let mut url = self
+            .api_v2_base(credential)?
+            .join(&format!("{}/{id}", kind.endpoint()))
+            .map_err(|_| ConfluenceBackendError::ScopeUnresolved)?;
+        if status == ConfluenceContentStatus::Draft {
+            url.query_pairs_mut().append_pair("get-draft", "true");
+        }
+        let response = self
+            .location_json(url, credential, budget, "content.location")
+            .await?;
+        Ok(ConfluenceBackendResponse {
+            value: hierarchy_backend::node_from_value(
+                &response.value,
+                kind,
+                id,
+                status,
+                require_parent,
+            )?,
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        if !numeric_content_id(id) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        let mut url = self
+            .api_v2_base(credential)?
+            .join("pages")
+            .map_err(|_| ConfluenceBackendError::ScopeUnresolved)?;
+        url.query_pairs_mut()
+            .append_pair("id", id)
+            .append_pair("status", "current")
+            .append_pair("subtype", "page")
+            .append_pair("limit", "1");
+        let response = self
+            .location_json(url, credential, budget, "page.regular.metadata")
+            .await?;
+        Ok(ConfluenceBackendResponse {
+            value: hierarchy_backend::regular_page_from_results(
+                &response.value,
+                id,
+                require_parent,
+            )?,
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if !numeric_content_id(id) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        let mut url = self
+            .api_v2_base(credential)?
+            .join(&format!("blogposts/{id}"))
+            .map_err(|_| ConfluenceBackendError::ScopeUnresolved)?;
+        if status == ConfluenceContentStatus::Draft {
+            url.query_pairs_mut().append_pair("get-draft", "true");
+        }
+        let response = self
+            .location_json(url, credential, budget, "blog.location")
+            .await?;
+        Ok(ConfluenceBackendResponse {
+            value: hierarchy_backend::blog_location_from_value(&response.value, id, status)?,
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if !numeric_content_id(id) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        let url = self
+            .api_v2_base(credential)?
+            .join(&format!("spaces/{id}"))
+            .map_err(|_| ConfluenceBackendError::ScopeUnresolved)?;
+        let response = self
+            .location_json(url, credential, budget, "space.location")
+            .await?;
+        let space = space_from_value(response.value)?;
+        if space.id != id || !matches!(space.status.as_deref(), Some("current" | "archived")) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(ConfluenceBackendResponse {
+            value: space,
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
     async fn space_list(
         &self,
         request: ConfluenceSpaceListRequest,
@@ -1677,37 +1868,6 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         })
     }
 
-    async fn blog_scope_evidence(
-        &self,
-        blog_id: &str,
-        credential: &AtlassianCredential,
-    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
-    {
-        let url = self
-            .api_v2_base(credential)?
-            .join(&format!("blogposts/{blog_id}"))
-            .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        let started = Instant::now();
-        let client = self.request_client(credential)?;
-        let response = send_confluence_request(
-            client,
-            credential,
-            client
-                .request(Method::GET, url.clone())
-                .header("Accept", "application/json"),
-            UpstreamCall::new("blog.scope"),
-        )
-        .await?;
-        let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
-        Ok(ConfluenceBackendResponse {
-            value: blog_scope_evidence_from_value(value)?,
-            status,
-            duration_ms: elapsed_ms(started),
-        })
-    }
-
     async fn blog(
         &self,
         blog_id: &str,
@@ -1744,22 +1904,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         request: ConfluenceSearchRequest,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchPage>, ConfluenceBackendError> {
-        let mut url = self
-            .api_base(credential)?
-            .join("content/search")
-            .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        {
-            let mut query = url.query_pairs_mut();
-            query
-                .append_pair("cql", &request.cql)
-                .append_pair("limit", &request.max_results.to_string())
-                // Content search returns content `status` in the base item; expand only
-                // requests nested objects needed for validation and output.
-                .append_pair("expand", "space,version,history");
-            if let Some(token) = &request.next_page_token {
-                query.append_pair("cursor", token);
-            }
-        }
+        let url = self.search_request_url(&request, credential)?;
         let started = Instant::now();
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
@@ -1773,7 +1918,8 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         .await?;
         let status = response.status().as_u16();
         let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+            confluence_search_response_value(response, self.limits.max_upstream_response_bytes)
+                .await?;
         Ok(ConfluenceBackendResponse {
             value: search_page_from_value(value, request.max_results)?,
             status,
@@ -1786,20 +1932,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         request: ConfluenceSearchRequest,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSearchBlog>, ConfluenceBackendError> {
-        let mut url = self
-            .api_base(credential)?
-            .join("content/search")
-            .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        {
-            let mut query = url.query_pairs_mut();
-            query
-                .append_pair("cql", &request.cql)
-                .append_pair("limit", &request.max_results.to_string())
-                .append_pair("expand", "space,version,history");
-            if let Some(token) = &request.next_page_token {
-                query.append_pair("cursor", token);
-            }
-        }
+        let url = self.search_request_url(&request, credential)?;
         let started = Instant::now();
         let client = self.request_client(credential)?;
         let response = send_confluence_request(
@@ -1813,7 +1946,8 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         .await?;
         let status = response.status().as_u16();
         let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
+            confluence_search_response_value(response, self.limits.max_upstream_response_bytes)
+                .await?;
         Ok(ConfluenceBackendResponse {
             value: search_blog_from_value(value, request.max_results)?,
             status,
@@ -1826,12 +1960,16 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         request: ConfluencePageCreateRequest,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
+        validate_creation_parent(&request.parent)?;
+        if !numeric_content_id(&request.space_id) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
         let mut url = self
             .api_v2_base(credential)?
             .join("pages")
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        // With root-level=false, Confluence v2 assigns the space homepage when
-        // parentId is omitted. Explicit parent placement still sends parentId.
+        // The provider has already resolved and authorized the explicit parent,
+        // including a homepage chosen for a parent-omitted caller request.
         url.query_pairs_mut().append_pair("root-level", "false");
         let started = Instant::now();
         let client = self.request_client(credential)?;
@@ -1849,6 +1987,15 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
             .await
             .map_err(accepted_if_success(status))?;
+        let actual_parent =
+            hierarchy_backend::strict_parent(&value).map_err(accepted_if_success(status))?;
+        if actual_parent != request.parent
+            || value.get("status").and_then(Value::as_str) != Some("current")
+        {
+            return Err(accepted_if_success(status)(
+                ConfluenceBackendError::ScopeUnresolved,
+            ));
+        }
         Ok(ConfluenceBackendResponse {
             value: page_from_v2_value(value, &request.space, &request.space_id)
                 .map_err(accepted_if_success(status))?,
@@ -1862,9 +2009,13 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         request: ConfluencePageUpdateRequest,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
+        if !numeric_content_id(&request.page_id) || !numeric_content_id(&request.space_id) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        let body = page_update_request_body(&request)?;
         let url = self
-            .api_base(credential)?
-            .join(&format!("content/{}", request.page_id))
+            .api_v2_base(credential)?
+            .join(&format!("pages/{}", request.page_id))
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
         let started = Instant::now();
         let client = self.request_client(credential)?;
@@ -1874,13 +2025,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             client
                 .request(Method::PUT, url.clone())
                 .header("Accept", "application/json")
-                .json(&content_request_body(
-                    request.page_id,
-                    request.base_version + 1,
-                    request.space,
-                    request.title,
-                    request.body,
-                )),
+                .json(&body),
             UpstreamCall::new("page.update"),
         )
         .await?;
@@ -1889,7 +2034,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             .await
             .map_err(accepted_if_success(status))?;
         Ok(ConfluenceBackendResponse {
-            value: page_from_value(value).map_err(accepted_if_success(status))?,
+            value: page_update_response(value, &request).map_err(accepted_if_success(status))?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -1900,11 +2045,15 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         request: ConfluenceDraftCreateRequest,
         credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
+        validate_creation_parent(&request.parent)?;
+        if request.content_type != "page" || !numeric_content_id(&request.space_id) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
         let mut url = self
             .api_v2_base(credential)?
             .join("pages")
             .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        // Draft creation follows the same homepage default as current pages.
+        // Draft placement also carries the explicit authorized page/folder parent.
         url.query_pairs_mut().append_pair("root-level", "false");
         let started = Instant::now();
         let client = self.request_client(credential)?;
@@ -1922,9 +2071,18 @@ impl ConfluenceBackend for HttpConfluenceBackend {
         let value = confluence_response_value(response, self.limits.max_upstream_response_bytes)
             .await
             .map_err(accepted_if_success(status))?;
+        let draft = draft_content_from_value(value, ConfluenceDraftContentType::Page)
+            .map_err(accepted_if_success(status))?;
+        if draft.parent != request.parent
+            || draft.space_id != request.space_id
+            || draft.status.as_deref() != Some("draft")
+        {
+            return Err(accepted_if_success(status)(
+                ConfluenceBackendError::ScopeUnresolved,
+            ));
+        }
         Ok(ConfluenceBackendResponse {
-            value: draft_content_from_value(value, ConfluenceDraftContentType::Page)
-                .map_err(accepted_if_success(status))?,
+            value: draft,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -3228,10 +3386,24 @@ pub(crate) async fn send_confluence_request(
     request: reqwest::RequestBuilder,
     call: UpstreamCall<'_>,
 ) -> Result<reqwest::Response, ConfluenceBackendError> {
+    let budget = hierarchy_backend::current_metadata_budget();
+    send_confluence_request_with_budget(client, credential, request, call, budget.as_ref()).await
+}
+
+pub(crate) async fn send_confluence_request_with_budget(
+    client: &UpstreamClient,
+    credential: &AtlassianCredential,
+    request: reqwest::RequestBuilder,
+    call: UpstreamCall<'_>,
+    budget: Option<&ConfluenceMetadataBudget>,
+) -> Result<reqwest::Response, ConfluenceBackendError> {
     let mut request = request;
     let mut attempt = call.attempt;
     loop {
         let presented = credential.present().await?;
+        if let Some(budget) = budget {
+            budget.charge_request()?;
+        }
         // A copy for the one repeat a delegated 401 permits.
         let replay = if attempt == call.attempt && presented.is_delegated() {
             request.try_clone()
@@ -3785,6 +3957,31 @@ pub(crate) async fn confluence_response_value(
     value
 }
 
+fn form_encoded_len(value: &str) -> Option<usize> {
+    value.bytes().try_fold(0usize, |count, byte| {
+        count.checked_add(
+            if byte.is_ascii_alphanumeric() || b" *-._".contains(&byte) {
+                1
+            } else {
+                3
+            },
+        )
+    })
+}
+
+async fn confluence_search_response_value(
+    mut response: reqwest::Response,
+    byte_cap: u64,
+) -> Result<Value, ConfluenceBackendError> {
+    if response.status().as_u16() == 414 {
+        complete_upstream_trace(&mut response, Some(ReasonCode::ScopeUnresolved.into()));
+        return Err(ConfluenceBackendError::ScopeUnresolved);
+    }
+    // No tenant's structured 400 length discriminator is qualified yet. Keep
+    // ordinary 400 mapping; never infer length from arbitrary upstream text.
+    confluence_response_value(response, byte_cap).await
+}
+
 /// Reads a JSON response whose detached trace the caller completes.
 pub(crate) async fn read_confluence_response_value(
     response: reqwest::Response,
@@ -3855,6 +4052,9 @@ pub(crate) async fn confluence_response_bytes_untraced(
     byte_cap: u64,
     expose_validation: bool,
 ) -> Result<Vec<u8>, ConfluenceBackendError> {
+    if let Some(budget) = hierarchy_backend::current_metadata_budget() {
+        return hierarchy_backend::read_metadata_body(response, byte_cap, &budget).await;
+    }
     let status = response.status().as_u16();
     if expose_validation && matches!(status, 400 | 422) && response_has_json_content_type(&response)
     {
@@ -4055,34 +4255,93 @@ pub(crate) fn page_create_request_body(request: &ConfluencePageCreateRequest) ->
             "value": request.body.value,
         }
     });
-    if let Some(parent_page_id) = &request.parent_page_id {
-        value["parentId"] = json!(parent_page_id);
+    if let Some(parent) = &request.parent {
+        value["parentId"] = json!(parent.id);
     }
     value
 }
 
-pub(crate) fn content_request_body(
-    page_id: String,
-    next_version: u64,
-    space: String,
-    title: String,
-    body: ConfluencePageBody,
-) -> Value {
-    let mut body_map = serde_json::Map::new();
-    body_map.insert(
-        body.representation.clone(),
-        json!({
-            "value": body.value,
-            "representation": body.representation,
-        }),
-    );
-    json!({
-        "id": page_id,
-        "type": "page",
-        "title": title,
-        "space": { "key": space },
-        "body": Value::Object(body_map),
-        "version": { "number": next_version },
+fn validate_creation_parent(
+    parent: &Option<ConfluenceParent>,
+) -> Result<(), ConfluenceBackendError> {
+    if parent.as_ref().is_some_and(|parent| {
+        matches!(
+            parent.kind,
+            ConfluenceNodeKind::Page | ConfluenceNodeKind::Folder
+        ) && numeric_content_id(&parent.id)
+    }) {
+        Ok(())
+    } else {
+        Err(ConfluenceBackendError::ScopeUnresolved)
+    }
+}
+
+pub(crate) fn page_update_request_body(
+    request: &ConfluencePageUpdateRequest,
+) -> Result<Value, ConfluenceBackendError> {
+    let version = request
+        .base_version
+        .checked_add(1)
+        .ok_or(ConfluenceBackendError::ScopeUnresolved)?;
+    Ok(json!({
+        "id": request.page_id,
+        "status": "current",
+        "title": request.title,
+        "body": { "representation": request.body.representation, "value": request.body.value },
+        "version": { "number": version },
+    }))
+}
+
+pub(crate) fn page_update_response(
+    value: Value,
+    request: &ConfluencePageUpdateRequest,
+) -> Result<ConfluencePage, ConfluenceBackendError> {
+    hierarchy_backend::check_optional_type(&value, "page")?;
+    let version = request
+        .base_version
+        .checked_add(1)
+        .ok_or_else(hierarchy_backend::malformed_metadata)?;
+    if value.get("id").and_then(Value::as_str) != Some(&request.page_id)
+        || value.get("spaceId").and_then(Value::as_str) != Some(&request.space_id)
+        || value.get("status").and_then(Value::as_str) != Some("current")
+        || value.pointer("/version/number").and_then(Value::as_u64) != Some(version)
+    {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
+    let optional_string = |path: &str| -> Result<Option<String>, ConfluenceBackendError> {
+        match value.pointer(path) {
+            None => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(_) => Err(hierarchy_backend::malformed_metadata()),
+        }
+    };
+    if value.get("_links").is_some_and(|links| !links.is_object()) {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
+    let created_by = optional_string("/authorId")?.map(|account_id| ConfluenceCommentAuthor {
+        account_id: Some(account_id),
+        display_name: None,
+    });
+    let updated_by =
+        optional_string("/version/authorId")?.map(|account_id| ConfluenceCommentAuthor {
+            account_id: Some(account_id),
+            display_name: None,
+        });
+    Ok(ConfluencePage {
+        id: request.page_id.clone(),
+        title: request.title.clone(),
+        space: request.space.clone(),
+        web_url: optional_string("/_links/webui")?,
+        // The invocation supplies both from its final authorized space metadata.
+        space_web_url: None,
+        space_alias: None,
+        status: Some("current".to_string()),
+        version,
+        created_at: optional_string("/createdAt")?,
+        updated_at: optional_string("/version/createdAt")?,
+        created_by,
+        updated_by,
+        bodies: BTreeMap::new(),
     })
 }
 
@@ -4127,9 +4386,9 @@ pub(crate) fn draft_create_request_body(request: &ConfluenceDraftCreateRequest) 
         }
     });
     if request.content_type == "page"
-        && let Some(parent_page_id) = &request.parent_page_id
+        && let Some(parent) = &request.parent
     {
-        value["parentId"] = json!(parent_page_id);
+        value["parentId"] = json!(parent.id);
     }
     value
 }
@@ -4615,9 +4874,12 @@ pub(crate) fn space_from_value(value: Value) -> Result<ConfluenceSpace, Confluen
             })
         })
         .transpose()?;
-    if status.as_deref().is_some_and(|value| value != "current") {
+    if status
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "current" | "archived"))
+    {
         return Err(ConfluenceBackendError::Protocol(
-            "space status is not current".to_string(),
+            "space status is unsupported".to_string(),
         ));
     }
     Ok(ConfluenceSpace {
@@ -4757,16 +5019,8 @@ pub(crate) fn draft_content_from_value(
         .filter(|id| is_page_id(id))
         .ok_or_else(|| ConfluenceBackendError::Protocol("draft space id missing".to_string()))?
         .to_string();
-    let parent_page_id = if content_type == ConfluenceDraftContentType::Page {
-        value
-            .get("parentId")
-            .and_then(Value::as_str)
-            .map(|id| {
-                validate_page_id(id).map_err(|_| {
-                    ConfluenceBackendError::Protocol("draft parent id is invalid".to_string())
-                })
-            })
-            .transpose()?
+    let parent = if content_type == ConfluenceDraftContentType::Page {
+        hierarchy_backend::strict_parent(&value)?
     } else {
         None
     };
@@ -4803,7 +5057,7 @@ pub(crate) fn draft_content_from_value(
         space: String::new(),
         space_id,
         space_alias: None,
-        parent_page_id,
+        parent,
         web_url,
         space_web_url: None,
         status,
@@ -4813,38 +5067,6 @@ pub(crate) fn draft_content_from_value(
         created_by: confluence_created_by(&value),
         updated_by: confluence_updated_by(&value),
         bodies,
-    })
-}
-
-pub(crate) fn blog_scope_evidence_from_value(
-    value: Value,
-) -> Result<ConfluenceBlogScopeEvidence, ConfluenceBackendError> {
-    if value
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|content_type| content_type != "blogpost")
-    {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence content is not a blog post".to_string(),
-        ));
-    }
-    let id = value
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| is_blog_id(id))
-        .ok_or_else(|| ConfluenceBackendError::Protocol("blog id missing".to_string()))?
-        .to_string();
-    let space_id = value
-        .get("spaceId")
-        .and_then(Value::as_str)
-        .filter(|id| is_page_id(id))
-        .ok_or_else(|| ConfluenceBackendError::Protocol("blog space id missing".to_string()))?
-        .to_string();
-    Ok(ConfluenceBlogScopeEvidence {
-        id,
-        space: String::new(),
-        space_id,
-        space_alias: None,
     })
 }
 
@@ -5237,19 +5459,15 @@ pub(crate) fn search_page_from_value(
     value: Value,
     max_results: u32,
 ) -> Result<ConfluenceSearchPage, ConfluenceBackendError> {
-    let results = value
-        .get("results")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ConfluenceBackendError::Protocol("search results missing".to_string()))?;
+    let results = bounded_search_results(&value, max_results)?;
     let mut pages = Vec::with_capacity(results.len());
+    let mut seen = BTreeSet::new();
     for item in results {
-        let content = search_content_from_value(item);
+        let content = search_content_from_value(item)?;
+        validate_search_content(&content, "page", &mut seen)?;
         pages.push(page_from_value(content)?);
     }
-    let next_page_token = value
-        .pointer("/_links/next")
-        .and_then(Value::as_str)
-        .and_then(next_cursor_from_link);
+    let next_page_token = search_next_cursor(&value)?;
     Ok(ConfluenceSearchPage {
         pages,
         max_results,
@@ -5261,19 +5479,15 @@ pub(crate) fn search_blog_from_value(
     value: Value,
     max_results: u32,
 ) -> Result<ConfluenceSearchBlog, ConfluenceBackendError> {
-    let results = value
-        .get("results")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ConfluenceBackendError::Protocol("search results missing".to_string()))?;
+    let results = bounded_search_results(&value, max_results)?;
     let mut blogs = Vec::with_capacity(results.len());
+    let mut seen = BTreeSet::new();
     for item in results {
-        let content = search_content_from_value(item);
+        let content = search_content_from_value(item)?;
+        validate_search_content(&content, "blogpost", &mut seen)?;
         blogs.push(blog_summary_from_search_value(content)?);
     }
-    let next_page_token = value
-        .pointer("/_links/next")
-        .and_then(Value::as_str)
-        .and_then(next_cursor_from_link);
+    let next_page_token = search_next_cursor(&value)?;
     Ok(ConfluenceSearchBlog {
         blogs,
         max_results,
@@ -5281,7 +5495,52 @@ pub(crate) fn search_blog_from_value(
     })
 }
 
-pub(crate) fn search_content_from_value(item: &Value) -> Value {
+fn bounded_search_results(value: &Value, maximum: u32) -> Result<&[Value], ConfluenceBackendError> {
+    let results = value
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(hierarchy_backend::malformed_metadata)?;
+    if maximum == 0 || results.len() > maximum as usize {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
+    Ok(results)
+}
+
+fn validate_search_content(
+    value: &Value,
+    kind: &str,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), ConfluenceBackendError> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| numeric_content_id(id))
+        .ok_or_else(hierarchy_backend::malformed_metadata)?;
+    if value.get("type").and_then(Value::as_str) != Some(kind)
+        || value.get("status").and_then(Value::as_str) != Some("current")
+        || !value
+            .pointer("/space/key")
+            .and_then(Value::as_str)
+            .is_some_and(is_space_key)
+        || !value
+            .pointer("/version/number")
+            .and_then(Value::as_u64)
+            .is_some_and(|version| version > 0)
+        || !seen.insert(id.to_string())
+    {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
+    Ok(())
+}
+
+pub(crate) fn search_content_from_value(item: &Value) -> Result<Value, ConfluenceBackendError> {
+    if !item.is_object()
+        || item
+            .get("content")
+            .is_some_and(|content| !content.is_object())
+    {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
     let mut content = item.get("content").unwrap_or(item).clone();
     if content.pointer("/_links/webui").is_none()
         && let Some(webui) = item.pointer("/_links/webui").cloned()
@@ -5292,14 +5551,75 @@ pub(crate) fn search_content_from_value(item: &Value) -> Value {
             links.insert("webui".to_string(), webui);
         }
     }
-    content
+    Ok(content)
 }
 
-pub(crate) fn next_cursor_from_link(link: &str) -> Option<String> {
-    let parsed = Url::parse(&format!("https://example.invalid{link}")).ok()?;
-    parsed
-        .query_pairs()
-        .find_map(|(key, value)| (key == "cursor").then(|| value.into_owned()))
+fn search_next_cursor(value: &Value) -> Result<Option<String>, ConfluenceBackendError> {
+    if value.get("_links").is_some_and(|links| !links.is_object()) {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
+    match value.pointer("/_links/next") {
+        None => Ok(None),
+        Some(Value::String(link)) => next_cursor_from_link(link).map(Some),
+        Some(_) => Err(hierarchy_backend::malformed_metadata()),
+    }
+}
+
+pub(crate) fn next_cursor_from_link(link: &str) -> Result<String, ConfluenceBackendError> {
+    // Extract a cursor from the documented relative link. The URL is never
+    // followed, and none of its query/filter parameters can replace authority.
+    if link.is_empty()
+        || link.len() > 65_534
+        || !link.starts_with(['/', '?'])
+        || link.starts_with("//")
+        || link.contains(['\\', '#'])
+        || link.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(hierarchy_backend::malformed_metadata());
+    }
+    let parsed = Url::parse(&format!("https://example.invalid{link}"))
+        .map_err(|_| hierarchy_backend::malformed_metadata())?;
+    let query = parsed
+        .query()
+        .ok_or_else(hierarchy_backend::malformed_metadata)?;
+    let mut cursor = None;
+    for pair in query.split('&') {
+        let (key, value) = pair
+            .split_once('=')
+            .ok_or_else(hierarchy_backend::malformed_metadata)?;
+        let key = strict_form_decode(key)?;
+        let value = strict_form_decode(value)?;
+        if key == "cursor" {
+            if cursor.is_some() || value.trim().is_empty() || value.chars().any(char::is_control) {
+                return Err(hierarchy_backend::malformed_metadata());
+            }
+            cursor = Some(value);
+        }
+    }
+    cursor.ok_or_else(hierarchy_backend::malformed_metadata)
+}
+
+fn strict_form_decode(value: &str) -> Result<String, ConfluenceBackendError> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut bytes = value.bytes();
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'+' => decoded.push(b' '),
+            b'%' => {
+                let high = bytes
+                    .next()
+                    .and_then(|b| (b as char).to_digit(16))
+                    .ok_or_else(hierarchy_backend::malformed_metadata)?;
+                let low = bytes
+                    .next()
+                    .and_then(|b| (b as char).to_digit(16))
+                    .ok_or_else(hierarchy_backend::malformed_metadata)?;
+                decoded.push((high * 16 + low) as u8);
+            }
+            other => decoded.push(other),
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| hierarchy_backend::malformed_metadata())
 }
 
 /// Position and shared budgets of a live space collection request.

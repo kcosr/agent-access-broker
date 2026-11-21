@@ -2,11 +2,11 @@
 // administered principal (the user page's Access tab): services, their
 // actions per execution context, resource scope, and a detail drawer.
 import { useId, useMemo } from "react";
-import type { AgentTokenOptions, CredentialConnection } from "../../types";
+import type { AgentTokenOptions, CredentialConnection, EffectiveAccessScope } from "../../types";
 import { buildAccessSummary, serviceDisplayNames } from "../../lib/access";
-import { ACTION_GRANT_LABEL, credentialStatus, credentialTone } from "../../lib/helpers";
+import { credentialStatus, credentialTone } from "../../lib/helpers";
 import { connectionForService, oauthRowKey } from "../../lib/credentials";
-import { clauseLabel } from "../../lib/resource-labels";
+import { coverageLabels } from "../../lib/resource-labels";
 import { useResourceTypes } from "../../lib/resource-types";
 import { urlParam } from "../../lib/url-state";
 import { actionEffectsParam, matchesActionEffects, type ActionEffect } from "../../lib/action-effects";
@@ -42,7 +42,7 @@ import { useTableUrlState } from "../../app/list-state";
 import { paths } from "../../app/paths";
 import { useAgentTokenOptions, useConsoleData } from "../../data/queries";
 import { useAgentTokenActions } from "../../mutations/tokens";
-import { AccessClauses } from "../../components/effective-access";
+import { AccessCoverage } from "../../components/effective-access";
 
 const GROUPINGS = ["none", "service"] as const;
 
@@ -62,8 +62,7 @@ export type AccessRow = {
   action: string;
   description: string;
   contexts: string[];
-  resourceType: string | null;
-  clauses: ReturnType<typeof buildAccessSummary>[number]["actions"][number]["clauses"];
+  coverage: EffectiveAccessScope;
   resourceLabels: string[];
   /** Explicitly classified read-only (from the token options); anything else may write. */
   readOnly: boolean;
@@ -88,9 +87,8 @@ export function accessRows(options: AgentTokenOptions | null, context: string | 
       action: action.action,
       description: action.description,
       contexts: action.contexts,
-      resourceType: action.resourceType,
-      clauses: action.clauses,
-      resourceLabels: action.resourceType === null ? [ACTION_GRANT_LABEL] : action.clauses.map((clause) => clauseLabel(types, action.resourceType!, clause)),
+      coverage: action.coverage,
+      resourceLabels: coverageLabels(types, action.coverage),
       readOnly: action.readOnly
     }))
   );
@@ -441,7 +439,7 @@ export function AccessDrawer({ model }: { model: AccessListModel }) {
       </DrawerSection>
       <DrawerSection title="Resources">
         <div className="wb-small wb-fg-2">
-          <AccessClauses type={open.resourceType} clauses={open.clauses} />
+          <AccessCoverage coverage={open.coverage} />
         </div>
       </DrawerSection>
       <DrawerSection title="Service">

@@ -137,8 +137,8 @@ These shapes are intentionally exhaustive, each an explicit API decision:
 | `ProviderResultStreamSource` | A body is in memory or streamed, and the host must deliver every source. |
 | `presentation::ReadContentFormat` | Every embedded-body codec receives the format and must render each one. |
 | `AttachmentLimitsConfig`, `MediaTypePolicyConfig`, `SearchLimitsConfig`, `EgressProxyConfig`, `OAuthRegistrationConfig`, `OAuthPermissionProfile`, `OAuthLoginBinding` | Configuration schema: the fields are the documented keys of tables that reject unknown keys, so a new key is a configuration contract change every renderer and validator must handle. Build them from `Default` with struct update syntax or by deserializing. |
-| `host::ScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. |
-| `InvalidReasonCodeId`, `SigningError`, `SearchProjectionError`, `UnsupportedCredentialMode`, `presentation::RenderError` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. |
+| `host::ScopeRequestParts`, `host::LocalScopeRequestParts`, `host::AdmittedRequestParts` | The host supplies every input, so a new input fails to compile until the host provides it. Local locator validation must explicitly account for every caller, context and correlation binding before credentials or lookup are available. |
+| `InvalidReasonCodeId`, `SigningError`, `SearchProjectionError`, `NonScalarResourceSelector`, `UnsupportedCredentialMode`, `presentation::RenderError` | Unit errors by design: they carry no detail, so nothing sensitive leaks through them. `NonScalarResourceSelector` reports that a selector needs containment evidence without exposing its value. |
 
 Changing any of these, or making a non-exhaustive item exhaustive, is an
 incompatible change reviewed under the rules below.

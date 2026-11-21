@@ -29,8 +29,8 @@ fn provider(
 }
 fn scope() -> SearchAuthorizationScope {
     SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::All],
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::All],
+        vec![ScalarResourceSelector::Exact {
             value: "DENIED".into(),
         }],
     )
@@ -180,7 +180,7 @@ async fn mixed_case_listing_keys_use_exact_inclusions_and_exclusions() {
     )
     .await;
     let p = provider(&server, config(&server), ProviderLimits::default());
-    let exact = ResourceSelector::Exact {
+    let exact = ScalarResourceSelector::Exact {
         value: "Eng".into(),
     };
     for (scope, expected) in [
@@ -189,7 +189,10 @@ async fn mixed_case_listing_keys_use_exact_inclusions_and_exclusions() {
             json!(["Eng"]),
         ),
         (
-            SearchAuthorizationScope::from_selectors(vec![ResourceSelector::All], vec![exact]),
+            SearchAuthorizationScope::from_selectors(
+                vec![ScalarResourceSelector::All],
+                vec![exact],
+            ),
             json!(["ENG", "eng"]),
         ),
     ] {
@@ -320,7 +323,7 @@ async fn canonical_keys_filter_before_metadata_and_aliases_only_control_links() 
         assert!(!result.audit.as_ref().unwrap().to_string().contains(secret));
     }
     let alias = SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::Exact {
             value: "personal-home".into(),
         }],
         vec![],
@@ -509,7 +512,7 @@ async fn continuation_binds_scope_context_route_method_action_and_page_size_befo
     let request = invocation(json!({"maxResults":1,"pageToken":token}), scope());
     let mut changed = scope();
     changed = changed.intersection(&SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::Exact {
             value: "ENG".into(),
         }],
         vec![],
@@ -789,7 +792,7 @@ async fn all_current_space_types_and_independent_allows_keep_clause_exclusions()
         .unwrap();
     assert_eq!(excluded.result["count"], 6);
     let independent = scope().union(&SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::Exact {
+        vec![ScalarResourceSelector::Exact {
             value: "DENIED".into(),
         }],
         vec![],

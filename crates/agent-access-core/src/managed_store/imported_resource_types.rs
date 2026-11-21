@@ -128,6 +128,7 @@ pub(super) fn type_usage<'a>(
             let selector = match kind.as_str() {
                 "exact" => ResourceSelector::Exact { value },
                 "namespace" => ResourceSelector::Namespace { value },
+                "subtree" => ResourceSelector::Subtree { value },
                 "all" => ResourceSelector::All,
                 _ => {
                     return Err(ManagedStoreError::SchemaInvalid(
