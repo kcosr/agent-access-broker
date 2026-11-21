@@ -30,8 +30,8 @@
 //!   package with [`module_metadata!`].
 //! - [`presentation`] holds response presentation: the
 //!   [`ActionPresentation`](presentation::ActionPresentation) a descriptor
-//!   attaches, the renderer traits, the shared render budget and the Markdown
-//!   helpers renderers use.
+//!   attaches, the body codec, concrete selected content, shared source budgets,
+//!   request preference resolution and declared-field validation.
 //! - [`host`] holds the cooperation ports the Broker host implements and
 //!   calls: the network factory contract, construction of admitted request
 //!   values, the initial correlation, hook and deadline scopes, service-scoped

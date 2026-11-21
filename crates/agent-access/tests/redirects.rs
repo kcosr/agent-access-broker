@@ -1,4 +1,6 @@
 //! Authenticated broker redirects never send an identity token to another origin.
+#[path = "common/jira_catalog.rs"]
+mod jira_catalog;
 use std::process::Command;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
@@ -50,6 +52,12 @@ async fn broker_redirects_are_rejected_for_json_upload_and_download() {
             ),
         ] {
             let broker = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/spec/catalog"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(jira_catalog::catalog()))
+                .expect(1)
+                .mount(&broker)
+                .await;
             Mock::given(method("POST"))
                 .and(path(route))
                 .respond_with(ResponseTemplate::new(status).insert_header(
@@ -88,11 +96,13 @@ async fn broker_redirects_are_rejected_for_json_upload_and_download() {
             assert!(!stderr.contains("synthetic-identity-token"), "{stderr}");
             broker.verify().await;
             let requests = broker.received_requests().await.unwrap();
-            assert_eq!(requests.len(), 1, "{route}");
-            assert_eq!(
-                requests[0].headers["x-agent-access-identity-token"],
-                "synthetic-identity-token"
-            );
+            assert_eq!(requests.len(), 2, "{route}");
+            for request in requests {
+                assert_eq!(
+                    request.headers["x-agent-access-identity-token"],
+                    "synthetic-identity-token"
+                );
+            }
             assert!(
                 target.received_requests().await.unwrap().is_empty(),
                 "redirect reached another origin: {status} {route}"

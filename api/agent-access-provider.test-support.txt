@@ -266,7 +266,9 @@ pub mod agent_access_provider::presentation
 #[non_exhaustive] pub enum agent_access_provider::presentation::BodyPathSegment
 pub agent_access_provider::presentation::BodyPathSegment::Each
 pub agent_access_provider::presentation::BodyPathSegment::Field(&'static str)
+pub agent_access_provider::presentation::BodyPathSegment::NullableField(&'static str)
 pub agent_access_provider::presentation::BodyPathSegment::OptionalField(&'static str)
+pub agent_access_provider::presentation::BodyPathSegment::OptionalNullableField(&'static str)
 impl core::clone::Clone for agent_access_provider::presentation::BodyPathSegment
 pub fn agent_access_provider::presentation::BodyPathSegment::clone(&self) -> agent_access_provider::presentation::BodyPathSegment
 impl core::cmp::Eq for agent_access_provider::presentation::BodyPathSegment
@@ -283,34 +285,39 @@ impl core::marker::Unpin for agent_access_provider::presentation::BodyPathSegmen
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::BodyPathSegment
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::BodyPathSegment
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::BodyPathSegment
-pub enum agent_access_provider::presentation::ReadContentFormat
-pub agent_access_provider::presentation::ReadContentFormat::Markdown
-pub agent_access_provider::presentation::ReadContentFormat::Native
-pub agent_access_provider::presentation::ReadContentFormat::Text
-impl agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::as_str(self) -> &'static str
-impl core::clone::Clone for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::clone(&self) -> agent_access_provider::presentation::ReadContentFormat
-impl core::cmp::Eq for agent_access_provider::presentation::ReadContentFormat
-impl core::cmp::PartialEq for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::eq(&self, &agent_access_provider::presentation::ReadContentFormat) -> bool
-impl core::default::Default for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::default() -> agent_access_provider::presentation::ReadContentFormat
-impl core::fmt::Debug for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::ReadContentFormat
-impl serde_core::ser::Serialize for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::ReadContentFormat
-pub fn agent_access_provider::presentation::ReadContentFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-impl core::marker::Freeze for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::Send for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::Sync for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::Unpin for agent_access_provider::presentation::ReadContentFormat
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ReadContentFormat
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ReadContentFormat
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ReadContentFormat
+#[non_exhaustive] pub enum agent_access_provider::presentation::OutputContentFormat
+pub agent_access_provider::presentation::OutputContentFormat::Adf
+pub agent_access_provider::presentation::OutputContentFormat::Markdown
+pub agent_access_provider::presentation::OutputContentFormat::Storage
+pub agent_access_provider::presentation::OutputContentFormat::Text
+impl agent_access_provider::presentation::OutputContentFormat
+pub const fn agent_access_provider::presentation::OutputContentFormat::as_str(self) -> &'static str
+impl core::clone::Clone for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::clone(&self) -> agent_access_provider::presentation::OutputContentFormat
+impl core::cmp::Eq for agent_access_provider::presentation::OutputContentFormat
+impl core::cmp::Ord for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::cmp(&self, &agent_access_provider::presentation::OutputContentFormat) -> core::cmp::Ordering
+impl core::cmp::PartialEq for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::eq(&self, &agent_access_provider::presentation::OutputContentFormat) -> bool
+impl core::cmp::PartialOrd for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::partial_cmp(&self, &agent_access_provider::presentation::OutputContentFormat) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::OutputContentFormat
+impl serde_core::ser::Serialize for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::OutputContentFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::Send for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::Sync for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::Unpin for agent_access_provider::presentation::OutputContentFormat
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::OutputContentFormat
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::OutputContentFormat
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::OutputContentFormat
 #[non_exhaustive] pub enum agent_access_provider::presentation::RenderBudgetExhausted
 pub agent_access_provider::presentation::RenderBudgetExhausted::Nodes
 pub agent_access_provider::presentation::RenderBudgetExhausted::WorkUnits
@@ -333,39 +340,14 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderBudgetEx
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderBudgetExhausted
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderBudgetExhausted
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderBudgetExhausted
-#[non_exhaustive] pub enum agent_access_provider::presentation::ResponseFormat
-pub agent_access_provider::presentation::ResponseFormat::Json
-pub agent_access_provider::presentation::ResponseFormat::Markdown
-impl agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::as_str(self) -> &'static str
-impl core::clone::Clone for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::clone(&self) -> agent_access_provider::presentation::ResponseFormat
-impl core::cmp::Eq for agent_access_provider::presentation::ResponseFormat
-impl core::cmp::PartialEq for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::eq(&self, &agent_access_provider::presentation::ResponseFormat) -> bool
-impl core::default::Default for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::default() -> agent_access_provider::presentation::ResponseFormat
-impl core::fmt::Debug for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for agent_access_provider::presentation::ResponseFormat
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::ResponseFormat
-impl serde_core::ser::Serialize for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::ResponseFormat
-pub fn agent_access_provider::presentation::ResponseFormat::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-impl core::marker::Freeze for agent_access_provider::presentation::ResponseFormat
-impl core::marker::Send for agent_access_provider::presentation::ResponseFormat
-impl core::marker::Sync for agent_access_provider::presentation::ResponseFormat
-impl core::marker::Unpin for agent_access_provider::presentation::ResponseFormat
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseFormat
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseFormat
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseFormat
 #[non_exhaustive] pub struct agent_access_provider::presentation::ActionPresentation
 impl agent_access_provider::presentation::ActionPresentation
-pub fn agent_access_provider::presentation::ActionPresentation::capabilities(&self) -> agent_access_provider::presentation::ResponseCapabilities
+pub fn agent_access_provider::presentation::ActionPresentation::body_fields(&self) -> alloc::vec::Vec<agent_access_provider::presentation::BodyField>
 pub const fn agent_access_provider::presentation::ActionPresentation::embedded_bodies(&self) -> &'static [agent_access_provider::presentation::EmbeddedBody]
-pub const fn agent_access_provider::presentation::ActionPresentation::new(&'static [agent_access_provider::presentation::EmbeddedBody], core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>) -> Self
-pub const fn agent_access_provider::presentation::ActionPresentation::whole(&self) -> core::option::Option<&'static dyn agent_access_provider::presentation::WholeResultRenderer>
+pub const fn agent_access_provider::presentation::ActionPresentation::native_output_content_format(&self) -> agent_access_provider::presentation::OutputContentFormat
+pub const fn agent_access_provider::presentation::ActionPresentation::new(&'static [agent_access_provider::presentation::EmbeddedBody], &'static [agent_access_provider::presentation::OutputContentFormat], agent_access_provider::presentation::OutputContentFormat) -> Self
+pub const fn agent_access_provider::presentation::ActionPresentation::output_content_formats(&self) -> &'static [agent_access_provider::presentation::OutputContentFormat]
+pub fn agent_access_provider::presentation::ActionPresentation::validate(&self) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
 impl core::clone::Clone for agent_access_provider::presentation::ActionPresentation
 pub fn agent_access_provider::presentation::ActionPresentation::clone(&self) -> agent_access_provider::presentation::ActionPresentation
 impl core::cmp::PartialEq for agent_access_provider::presentation::ActionPresentation
@@ -380,13 +362,52 @@ impl core::marker::Unpin for agent_access_provider::presentation::ActionPresenta
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ActionPresentation
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ActionPresentation
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ActionPresentation
+#[non_exhaustive] pub struct agent_access_provider::presentation::BodyField
+pub agent_access_provider::presentation::BodyField::field: alloc::string::String
+pub agent_access_provider::presentation::BodyField::nullable: bool
+pub agent_access_provider::presentation::BodyField::nullable_owner_prefixes: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::presentation::BodyField::optional: bool
+pub agent_access_provider::presentation::BodyField::optional_owner_prefixes: alloc::vec::Vec<alloc::string::String>
+pub agent_access_provider::presentation::BodyField::owner_equals: core::option::Option<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>>
+pub agent_access_provider::presentation::BodyField::owner_path: alloc::string::String
+impl agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::BodyField::nullable(self) -> Self
+pub fn agent_access_provider::presentation::BodyField::optional(self) -> Self
+pub fn agent_access_provider::presentation::BodyField::with_nullable_owner_prefixes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::BodyField::with_optional_owner_prefixes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::BodyField::with_owner_equals(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> Self
+impl core::clone::Clone for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::clone(&self) -> agent_access_provider::presentation::BodyField
+impl core::cmp::Eq for agent_access_provider::presentation::BodyField
+impl core::cmp::PartialEq for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::eq(&self, &agent_access_provider::presentation::BodyField) -> bool
+impl core::fmt::Debug for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::BodyField
+impl serde_core::ser::Serialize for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for agent_access_provider::presentation::BodyField
+pub fn agent_access_provider::presentation::BodyField::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for agent_access_provider::presentation::BodyField
+impl core::marker::Send for agent_access_provider::presentation::BodyField
+impl core::marker::Sync for agent_access_provider::presentation::BodyField
+impl core::marker::Unpin for agent_access_provider::presentation::BodyField
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::BodyField
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::BodyField
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::BodyField
 #[non_exhaustive] pub struct agent_access_provider::presentation::EmbeddedBody
 impl agent_access_provider::presentation::EmbeddedBody
+pub fn agent_access_provider::presentation::EmbeddedBody::body_field(&self) -> agent_access_provider::presentation::BodyField
 pub const fn agent_access_provider::presentation::EmbeddedBody::codec(&self) -> &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec
-pub const fn agent_access_provider::presentation::EmbeddedBody::new(&'static [agent_access_provider::presentation::BodyPathSegment], &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec) -> Self
-pub fn agent_access_provider::presentation::EmbeddedBody::owner_optional_prefixes(&self) -> alloc::vec::Vec<alloc::string::String>
+pub const fn agent_access_provider::presentation::EmbeddedBody::field(&self) -> &'static str
+pub const fn agent_access_provider::presentation::EmbeddedBody::is_nullable(&self) -> bool
+pub const fn agent_access_provider::presentation::EmbeddedBody::is_optional(&self) -> bool
+pub const fn agent_access_provider::presentation::EmbeddedBody::new(&'static [agent_access_provider::presentation::BodyPathSegment], &'static str, &'static dyn agent_access_provider::presentation::EmbeddedBodyCodec) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::nullable(self) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::optional(self) -> Self
+pub const fn agent_access_provider::presentation::EmbeddedBody::owner_equals(self, &'static [(&'static str, &'static str)]) -> Self
 pub const fn agent_access_provider::presentation::EmbeddedBody::owner_path(&self) -> &'static [agent_access_provider::presentation::BodyPathSegment]
-pub fn agent_access_provider::presentation::EmbeddedBody::owner_pointer(&self) -> alloc::string::String
 impl core::clone::Clone for agent_access_provider::presentation::EmbeddedBody
 pub fn agent_access_provider::presentation::EmbeddedBody::clone(&self) -> agent_access_provider::presentation::EmbeddedBody
 impl core::cmp::PartialEq for agent_access_provider::presentation::EmbeddedBody
@@ -401,42 +422,6 @@ impl core::marker::Unpin for agent_access_provider::presentation::EmbeddedBody
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::EmbeddedBody
 impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::EmbeddedBody
 impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::EmbeddedBody
-pub struct agent_access_provider::presentation::MarkdownWriter
-impl agent_access_provider::presentation::MarkdownWriter
-pub fn agent_access_provider::presentation::MarkdownWriter::finish(self) -> alloc::string::String
-pub fn agent_access_provider::presentation::MarkdownWriter::is_empty(&self) -> bool
-pub fn agent_access_provider::presentation::MarkdownWriter::len(&self) -> usize
-pub fn agent_access_provider::presentation::MarkdownWriter::new(u64) -> Self
-pub fn agent_access_provider::presentation::MarkdownWriter::normalize_terminal_lf(&mut self) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_code(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_escaped(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_heading_text(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::push_url(&mut self, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::MarkdownWriter::remaining(&self) -> u64
-impl core::marker::Freeze for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Send for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Sync for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Unpin for agent_access_provider::presentation::MarkdownWriter
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::MarkdownWriter
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::MarkdownWriter
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::MarkdownWriter
-pub struct agent_access_provider::presentation::PresentationBudget
-pub agent_access_provider::presentation::PresentationBudget::rich_content: agent_access_provider::presentation::RenderBudget
-impl agent_access_provider::presentation::PresentationBudget
-pub fn agent_access_provider::presentation::PresentationBudget::charge_fenced_literal_work(&mut self, usize) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::PresentationBudget::charge_rendered(&mut self, usize) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::PresentationBudget::charge_work(&mut self, usize) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::PresentationBudget::new(u64) -> Self
-impl core::fmt::Debug for agent_access_provider::presentation::PresentationBudget
-pub fn agent_access_provider::presentation::PresentationBudget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Freeze for agent_access_provider::presentation::PresentationBudget
-impl core::marker::Send for agent_access_provider::presentation::PresentationBudget
-impl core::marker::Sync for agent_access_provider::presentation::PresentationBudget
-impl core::marker::Unpin for agent_access_provider::presentation::PresentationBudget
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::PresentationBudget
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::PresentationBudget
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::PresentationBudget
 pub struct agent_access_provider::presentation::RenderBudget
 impl agent_access_provider::presentation::RenderBudget
 pub fn agent_access_provider::presentation::RenderBudget::charge_node(&mut self) -> core::result::Result<(), agent_access_provider::presentation::RenderBudgetExhausted>
@@ -455,17 +440,6 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderBudget
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderBudget
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderBudget
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderBudget
-#[non_exhaustive] pub struct agent_access_provider::presentation::RenderContext
-pub agent_access_provider::presentation::RenderContext::budget: agent_access_provider::presentation::PresentationBudget
-pub agent_access_provider::presentation::RenderContext::max_body_bytes: u64
-pub agent_access_provider::presentation::RenderContext::out: agent_access_provider::presentation::MarkdownWriter
-impl core::marker::Freeze for agent_access_provider::presentation::RenderContext
-impl core::marker::Send for agent_access_provider::presentation::RenderContext
-impl core::marker::Sync for agent_access_provider::presentation::RenderContext
-impl core::marker::Unpin for agent_access_provider::presentation::RenderContext
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderContext
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderContext
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderContext
 pub struct agent_access_provider::presentation::RenderError
 impl core::clone::Clone for agent_access_provider::presentation::RenderError
 pub fn agent_access_provider::presentation::RenderError::clone(&self) -> agent_access_provider::presentation::RenderError
@@ -486,35 +460,32 @@ impl core::marker::Unpin for agent_access_provider::presentation::RenderError
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderError
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderError
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderError
-#[non_exhaustive] pub struct agent_access_provider::presentation::RenderedBody
-pub agent_access_provider::presentation::RenderedBody::format: agent_access_provider::presentation::ReadContentFormat
-pub agent_access_provider::presentation::RenderedBody::value: alloc::string::String
-impl agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::new(agent_access_provider::presentation::ReadContentFormat, impl core::convert::Into<alloc::string::String>) -> Self
-impl core::clone::Clone for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::clone(&self) -> agent_access_provider::presentation::RenderedBody
-impl core::cmp::Eq for agent_access_provider::presentation::RenderedBody
-impl core::cmp::PartialEq for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::eq(&self, &agent_access_provider::presentation::RenderedBody) -> bool
-impl core::fmt::Debug for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for agent_access_provider::presentation::RenderedBody
-impl serde_core::ser::Serialize for agent_access_provider::presentation::RenderedBody
-pub fn agent_access_provider::presentation::RenderedBody::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl core::marker::Freeze for agent_access_provider::presentation::RenderedBody
-impl core::marker::Send for agent_access_provider::presentation::RenderedBody
-impl core::marker::Sync for agent_access_provider::presentation::RenderedBody
-impl core::marker::Unpin for agent_access_provider::presentation::RenderedBody
-impl core::marker::UnsafeUnpin for agent_access_provider::presentation::RenderedBody
-impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::RenderedBody
-impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::RenderedBody
+pub struct agent_access_provider::presentation::ResolvedPresentation
+impl agent_access_provider::presentation::ResolvedPresentation
+pub const fn agent_access_provider::presentation::ResolvedPresentation::output_content_format(&self) -> core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub const fn agent_access_provider::presentation::ResolvedPresentation::presentation(&self) -> core::option::Option<&agent_access_provider::presentation::ActionPresentation>
+impl core::clone::Clone for agent_access_provider::presentation::ResolvedPresentation
+pub fn agent_access_provider::presentation::ResolvedPresentation::clone(&self) -> agent_access_provider::presentation::ResolvedPresentation
+impl core::cmp::PartialEq for agent_access_provider::presentation::ResolvedPresentation
+pub fn agent_access_provider::presentation::ResolvedPresentation::eq(&self, &agent_access_provider::presentation::ResolvedPresentation) -> bool
+impl core::fmt::Debug for agent_access_provider::presentation::ResolvedPresentation
+pub fn agent_access_provider::presentation::ResolvedPresentation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Freeze for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Send for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Sync for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::Unpin for agent_access_provider::presentation::ResolvedPresentation
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResolvedPresentation
+impl !core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResolvedPresentation
+impl !core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResolvedPresentation
 #[non_exhaustive] pub struct agent_access_provider::presentation::ResponseCapabilities
-pub agent_access_provider::presentation::ResponseCapabilities::read_content_formats: core::option::Option<&'static [&'static str]>
-pub agent_access_provider::presentation::ResponseCapabilities::response_formats: core::option::Option<&'static [&'static str]>
+pub agent_access_provider::presentation::ResponseCapabilities::default_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub agent_access_provider::presentation::ResponseCapabilities::native_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub agent_access_provider::presentation::ResponseCapabilities::output_content_formats: core::option::Option<&'static [agent_access_provider::presentation::OutputContentFormat]>
 impl agent_access_provider::presentation::ResponseCapabilities
-pub const fn agent_access_provider::presentation::ResponseCapabilities::new(core::option::Option<&'static [&'static str]>, core::option::Option<&'static [&'static str]>) -> Self
-pub fn agent_access_provider::presentation::ResponseCapabilities::supports_markdown_response(self) -> bool
-pub fn agent_access_provider::presentation::ResponseCapabilities::supports_read_content(self) -> bool
+pub const fn agent_access_provider::presentation::ResponseCapabilities::new(core::option::Option<&'static [agent_access_provider::presentation::OutputContentFormat]>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> Self
+pub fn agent_access_provider::presentation::ResponseCapabilities::supports_output_content(self) -> bool
 impl core::clone::Clone for agent_access_provider::presentation::ResponseCapabilities
 pub fn agent_access_provider::presentation::ResponseCapabilities::clone(&self) -> agent_access_provider::presentation::ResponseCapabilities
 impl core::cmp::Eq for agent_access_provider::presentation::ResponseCapabilities
@@ -532,10 +503,10 @@ impl core::marker::UnsafeUnpin for agent_access_provider::presentation::Response
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseCapabilities
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseCapabilities
 #[non_exhaustive] pub struct agent_access_provider::presentation::ResponseOptions
-pub agent_access_provider::presentation::ResponseOptions::read_content_format: agent_access_provider::presentation::ReadContentFormat
-pub agent_access_provider::presentation::ResponseOptions::response_format: agent_access_provider::presentation::ResponseFormat
+pub agent_access_provider::presentation::ResponseOptions::output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
+pub agent_access_provider::presentation::ResponseOptions::preferred_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
 impl agent_access_provider::presentation::ResponseOptions
-pub const fn agent_access_provider::presentation::ResponseOptions::new(agent_access_provider::presentation::ReadContentFormat, agent_access_provider::presentation::ResponseFormat) -> Self
+pub const fn agent_access_provider::presentation::ResponseOptions::new(core::option::Option<agent_access_provider::presentation::OutputContentFormat>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> Self
 impl core::clone::Clone for agent_access_provider::presentation::ResponseOptions
 pub fn agent_access_provider::presentation::ResponseOptions::clone(&self) -> agent_access_provider::presentation::ResponseOptions
 impl core::cmp::Eq for agent_access_provider::presentation::ResponseOptions
@@ -558,39 +529,43 @@ impl core::marker::Unpin for agent_access_provider::presentation::ResponseOption
 impl core::marker::UnsafeUnpin for agent_access_provider::presentation::ResponseOptions
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::ResponseOptions
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::ResponseOptions
-pub const agent_access_provider::presentation::MAX_PRESENTATION_WORK_UNITS: usize
-pub const agent_access_provider::presentation::READ_CONTENT_FORMATS: &[&str]
+pub struct agent_access_provider::presentation::SelectedContent
+impl agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::adf(serde_json::map::Map<alloc::string::String, serde_json::value::Value>) -> Self
+pub const fn agent_access_provider::presentation::SelectedContent::format(&self) -> agent_access_provider::presentation::OutputContentFormat
+pub fn agent_access_provider::presentation::SelectedContent::into_value(self) -> serde_json::value::Value
+pub fn agent_access_provider::presentation::SelectedContent::markdown(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::SelectedContent::storage(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn agent_access_provider::presentation::SelectedContent::text(impl core::convert::Into<alloc::string::String>) -> Self
+pub const fn agent_access_provider::presentation::SelectedContent::value(&self) -> &serde_json::value::Value
+impl core::clone::Clone for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::clone(&self) -> agent_access_provider::presentation::SelectedContent
+impl core::cmp::Eq for agent_access_provider::presentation::SelectedContent
+impl core::cmp::PartialEq for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::eq(&self, &agent_access_provider::presentation::SelectedContent) -> bool
+impl core::fmt::Debug for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for agent_access_provider::presentation::SelectedContent
+impl serde_core::ser::Serialize for agent_access_provider::presentation::SelectedContent
+pub fn agent_access_provider::presentation::SelectedContent::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for agent_access_provider::presentation::SelectedContent
+impl core::marker::Send for agent_access_provider::presentation::SelectedContent
+impl core::marker::Sync for agent_access_provider::presentation::SelectedContent
+impl core::marker::Unpin for agent_access_provider::presentation::SelectedContent
+impl core::marker::UnsafeUnpin for agent_access_provider::presentation::SelectedContent
+impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::presentation::SelectedContent
+impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::presentation::SelectedContent
+pub const agent_access_provider::presentation::OUTPUT_CONTENT_FORMATS: &[agent_access_provider::presentation::OutputContentFormat]
 pub const agent_access_provider::presentation::RENDER_FAILURE_MESSAGE: &str
-pub const agent_access_provider::presentation::RESPONSE_FORMATS: &[&str]
 pub trait agent_access_provider::presentation::EmbeddedBodyCodec: core::marker::Sync
-pub fn agent_access_provider::presentation::EmbeddedBodyCodec::render(&self, &serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agent_access_provider::presentation::ReadContentFormat, u64, &mut agent_access_provider::presentation::RenderBudget) -> core::result::Result<core::option::Option<agent_access_provider::presentation::RenderedBody>, agent_access_provider::presentation::RenderError>
-pub trait agent_access_provider::presentation::WholeResultRenderer: core::marker::Sync
-pub fn agent_access_provider::presentation::WholeResultRenderer::render(&self, &serde_json::value::Value, &mut agent_access_provider::presentation::RenderContext) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-impl<F> agent_access_provider::presentation::WholeResultRenderer for F where F: core::ops::function::Fn(&serde_json::value::Value, &mut agent_access_provider::presentation::RenderContext) -> core::result::Result<(), agent_access_provider::presentation::RenderError> + core::marker::Sync
-pub fn F::render(&self, &serde_json::value::Value, &mut agent_access_provider::presentation::RenderContext) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::array(&serde_json::value::Value) -> core::result::Result<&[serde_json::value::Value], agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::as_object(&serde_json::value::Value) -> core::result::Result<&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::code_fields(&mut agent_access_provider::presentation::MarkdownWriter, &[(&str, core::option::Option<&str>)]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::code_span(&str) -> alloc::string::String
+pub fn agent_access_provider::presentation::EmbeddedBodyCodec::select(&self, &serde_json::value::Value, agent_access_provider::presentation::OutputContentFormat, u64, &mut agent_access_provider::presentation::RenderBudget) -> core::result::Result<core::option::Option<agent_access_provider::presentation::SelectedContent>, agent_access_provider::presentation::RenderError>
+pub fn agent_access_provider::presentation::EmbeddedBodyCodec::supported_formats(&self) -> &'static [agent_access_provider::presentation::OutputContentFormat]
 pub fn agent_access_provider::presentation::enforce_serialized_bound(&serde_json::value::Value, u64) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::escaped(&str) -> alloc::string::String
-pub fn agent_access_provider::presentation::fence_for(&str, char) -> alloc::string::String
-pub fn agent_access_provider::presentation::field(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::field_code(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::field_raw(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::field_url(&mut agent_access_provider::presentation::MarkdownWriter, &str, &str) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::fields(&mut agent_access_provider::presentation::MarkdownWriter, &[(&str, core::option::Option<&str>)]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::normalize_fenced_text_literal(&str) -> alloc::string::String
-pub fn agent_access_provider::presentation::optional_display(&serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<alloc::string::String>, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::optional_scalar<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<core::option::Option<&'a str>, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::present_result(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, &mut serde_json::value::Value, agent_access_provider::presentation::ResponseOptions, u64, u64) -> core::result::Result<(), agent_access_provider::ProviderError>
-pub fn agent_access_provider::presentation::required<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<&'a serde_json::value::Value, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::required_scalar<'a>(&'a serde_json::map::Map<alloc::string::String, serde_json::value::Value>, &str) -> core::result::Result<&'a str, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::response_capabilities(core::option::Option<&agent_access_provider::presentation::ActionPresentation>) -> agent_access_provider::presentation::ResponseCapabilities
-pub fn agent_access_provider::presentation::safe_autolink(&str) -> core::option::Option<alloc::string::String>
-pub fn agent_access_provider::presentation::scalar(&serde_json::value::Value) -> core::result::Result<&str, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::serialize_json_pretty_bounded(&serde_json::value::Value, u64) -> core::result::Result<alloc::string::String, agent_access_provider::presentation::RenderError>
-pub fn agent_access_provider::presentation::validate_response_options(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, agent_access_provider::presentation::ResponseOptions) -> core::result::Result<(), agent_access_provider::ProviderError>
+pub fn agent_access_provider::presentation::present_result(&agent_access_provider::presentation::ResolvedPresentation, &mut serde_json::value::Value, u64, u64) -> core::result::Result<(), agent_access_provider::ProviderError>
+pub fn agent_access_provider::presentation::resolve_response_options(core::option::Option<agent_access_provider::presentation::ActionPresentation>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>, agent_access_provider::presentation::ResponseOptions) -> core::result::Result<agent_access_provider::presentation::ResolvedPresentation, agent_access_provider::ProviderError>
+pub fn agent_access_provider::presentation::response_capabilities(core::option::Option<&agent_access_provider::presentation::ActionPresentation>, core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> agent_access_provider::presentation::ResponseCapabilities
+pub fn agent_access_provider::presentation::validate_body_fields(&[agent_access_provider::presentation::BodyField]) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
+pub fn agent_access_provider::presentation::validate_selected_content(&serde_json::value::Value, &[agent_access_provider::presentation::BodyField], core::option::Option<agent_access_provider::presentation::OutputContentFormat>) -> core::result::Result<(), agent_access_provider::presentation::RenderError>
 pub mod agent_access_provider::test_support
 #[non_exhaustive] pub struct agent_access_provider::test_support::BuiltClient
 pub agent_access_provider::test_support::BuiltClient::base: url::Url
@@ -1535,6 +1510,7 @@ impl core::marker::UnsafeUnpin for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::LookupRequirement
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::LookupRequirement
 #[non_exhaustive] pub enum agent_access_provider::MutationStatus
+pub agent_access_provider::MutationStatus::Applied
 pub agent_access_provider::MutationStatus::AppliedUnverified
 pub agent_access_provider::MutationStatus::NotApplied
 pub agent_access_provider::MutationStatus::Unknown
@@ -3860,6 +3836,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for agent_access_provider::Multipar
 impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::MultipartUploadSpec
 pub struct agent_access_provider::MutationReceipt
 impl agent_access_provider::MutationReceipt
+pub const fn agent_access_provider::MutationReceipt::applied() -> Self
 pub fn agent_access_provider::MutationReceipt::applied_unverified(impl core::convert::Into<alloc::string::String>, serde_json::value::Value) -> Self
 pub const fn agent_access_provider::MutationReceipt::not_applied() -> Self
 pub fn agent_access_provider::MutationReceipt::retry_safe(&self) -> bool
@@ -4481,6 +4458,7 @@ impl core::panic::unwind_safe::UnwindSafe for agent_access_provider::ProviderRea
 #[non_exhaustive] pub struct agent_access_provider::ProviderResult
 pub agent_access_provider::ProviderResult::audit: core::option::Option<serde_json::value::Value>
 pub agent_access_provider::ProviderResult::object_ids: core::option::Option<serde_json::value::Value>
+pub agent_access_provider::ProviderResult::presentation_recovery_receipt: core::option::Option<agent_access_provider::MutationReceipt>
 pub agent_access_provider::ProviderResult::result: serde_json::value::Value
 pub agent_access_provider::ProviderResult::stream: core::option::Option<agent_access_provider::ProviderResultStream>
 pub agent_access_provider::ProviderResult::upstream_duration_ms: core::option::Option<u64>
@@ -4489,6 +4467,7 @@ impl agent_access_provider::ProviderResult
 pub fn agent_access_provider::ProviderResult::new(serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderResult::with_audit(self, serde_json::value::Value) -> Self
 pub fn agent_access_provider::ProviderResult::with_object_ids(self, serde_json::value::Value) -> Self
+pub fn agent_access_provider::ProviderResult::with_presentation_recovery_receipt(self, agent_access_provider::MutationReceipt) -> Self
 pub fn agent_access_provider::ProviderResult::with_stream(self, agent_access_provider::ProviderResultStream) -> Self
 pub fn agent_access_provider::ProviderResult::with_upstream(self, core::option::Option<u16>, core::option::Option<u64>) -> Self
 impl core::clone::Clone for agent_access_provider::ProviderResult
@@ -5159,6 +5138,7 @@ pub agent_access_provider::ServiceDescriptor::actions: alloc::vec::Vec<agent_acc
 pub agent_access_provider::ServiceDescriptor::credentials: agent_access_provider::CredentialDescriptor
 pub agent_access_provider::ServiceDescriptor::display_name: alloc::string::String
 pub agent_access_provider::ServiceDescriptor::location_entry: core::option::Option<agent_access_provider::LocationEntryCapability>
+pub agent_access_provider::ServiceDescriptor::preferred_output_content_format: core::option::Option<agent_access_provider::presentation::OutputContentFormat>
 pub agent_access_provider::ServiceDescriptor::presentation_body_limit: core::option::Option<u64>
 pub agent_access_provider::ServiceDescriptor::resource_scopes: alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>
 pub agent_access_provider::ServiceDescriptor::service: alloc::string::String
@@ -5180,6 +5160,7 @@ pub fn agent_access_provider::ServiceDescriptor::validate_builtin_mcp_names(&sel
 pub fn agent_access_provider::ServiceDescriptor::with_actions(self, alloc::vec::Vec<agent_access_provider::ActionDescriptor>) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_credentials(self, agent_access_provider::CredentialDescriptor) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_location_entry(self, agent_access_provider::LocationEntryCapability) -> Self
+pub fn agent_access_provider::ServiceDescriptor::with_preferred_output_content_format(self, agent_access_provider::presentation::OutputContentFormat) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_presentation_body_limit(self, u64) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_resource_scopes(self, alloc::collections::btree::map::BTreeMap<alloc::string::String, agent_access_provider::ResourceScopeCapabilities>) -> Self
 pub fn agent_access_provider::ServiceDescriptor::with_surface(self, agent_access_provider::ServiceSurface) -> Self
@@ -5782,9 +5763,8 @@ enum agent_access_provider::UpstreamResourceOwnership: non-exhaustive
 enum agent_access_provider::host::ContractViolation: non-exhaustive
 enum agent_access_provider::host::HostPort: non-exhaustive
 enum agent_access_provider::presentation::BodyPathSegment: non-exhaustive
-enum agent_access_provider::presentation::ReadContentFormat: exhaustive
+enum agent_access_provider::presentation::OutputContentFormat: non-exhaustive
 enum agent_access_provider::presentation::RenderBudgetExhausted: non-exhaustive
-enum agent_access_provider::presentation::ResponseFormat: non-exhaustive
 struct agent_access_provider::ActionCapabilities: named fields, non-exhaustive
 struct agent_access_provider::ActionDescriptor: named fields, non-exhaustive
 struct agent_access_provider::AdmissionStage: named fields, private fields
@@ -5934,15 +5914,14 @@ struct agent_access_provider::host::ScopeRequestParts: named fields
 struct agent_access_provider::host::TransportClient: named fields, private fields
 struct agent_access_provider::host::UpstreamClientFactoryError: tuple fields, private fields
 struct agent_access_provider::presentation::ActionPresentation: named fields, private fields, non-exhaustive
+struct agent_access_provider::presentation::BodyField: named fields, non-exhaustive
 struct agent_access_provider::presentation::EmbeddedBody: named fields, private fields, non-exhaustive
-struct agent_access_provider::presentation::MarkdownWriter: named fields, private fields
-struct agent_access_provider::presentation::PresentationBudget: named fields, private fields
 struct agent_access_provider::presentation::RenderBudget: named fields, private fields
-struct agent_access_provider::presentation::RenderContext: named fields, non-exhaustive
 struct agent_access_provider::presentation::RenderError: unit
-struct agent_access_provider::presentation::RenderedBody: named fields, non-exhaustive
+struct agent_access_provider::presentation::ResolvedPresentation: named fields, private fields
 struct agent_access_provider::presentation::ResponseCapabilities: named fields, non-exhaustive
 struct agent_access_provider::presentation::ResponseOptions: named fields, non-exhaustive
+struct agent_access_provider::presentation::SelectedContent: named fields, private fields
 struct agent_access_provider::test_support::BuiltClient: named fields, non-exhaustive
 struct agent_access_provider::test_support::InvocationBuilder: named fields, private fields
 struct agent_access_provider::test_support::ScopeRequestFixture: named fields, private fields
@@ -6009,9 +5988,8 @@ trait agent_access_provider::continuation::sealed::Stage: dyn-compatible
 trait agent_access_provider::host::UpstreamClientFactory: dyn-compatible
 trait agent_access_provider::host::UpstreamClientFactory::build_client: required fn
 trait agent_access_provider::presentation::EmbeddedBodyCodec: dyn-compatible
-trait agent_access_provider::presentation::EmbeddedBodyCodec::render: required fn
-trait agent_access_provider::presentation::WholeResultRenderer: dyn-compatible
-trait agent_access_provider::presentation::WholeResultRenderer::render: required fn
+trait agent_access_provider::presentation::EmbeddedBodyCodec::select: required fn
+trait agent_access_provider::presentation::EmbeddedBodyCodec::supported_formats: required fn
 trait agent_access_provider::test_support::DescribedProvider: dyn-compatible
 trait agent_access_provider::test_support::DescribedProvider::descriptor: required fn
 variant agent_access_provider::CredentialSource::Static: named fields, non-exhaustive

@@ -303,7 +303,6 @@ Discover issue types before creating an issue:
 
 ```bash
 agent-access jira issue-type list --project PROJ
-agent-access jira issue-type list --project PROJ --output-format markdown
 agent-access jira issue-type list --project PROJ --start-at 50 --max-results 50
 agent-access invoke jira.issue_type.list --input-json '{"project":"PROJ"}'
 ```
@@ -347,7 +346,7 @@ upstream visibility. No lookup credential or per-project detail request is used.
 ```bash
 agent-access jira project list --max-results 50
 agent-access jira project list --max-results 50 --page-token '<nextPageToken>'
-agent-access jira project list --output-format markdown
+agent-access jira project list
 agent-access invoke jira.project.list --input-json '{"maxResults":50}'
 ```
 
@@ -393,7 +392,6 @@ fields, then `search` to run bounded JQL in that project:
 ```bash
 agent-access jira project list
 agent-access jira project view PROJ
-agent-access jira project view PROJ --output-format markdown
 agent-access jira project view PROJ --include fields,versions --query external
 agent-access jira issue search --project PROJ --jql 'cf[12345] ~ "EXT-4812" AND fixVersion = "2.4"'
 agent-access invoke jira.project.view --input-json '{"project":"PROJ","include":["fields","versions"]}'
@@ -582,27 +580,37 @@ issue, comment and selected custom-field IDs of an update. Inspect the issue
 before repeating a write with either receipt. A 4xx rejection and throttling of the write itself carry
 no receipt.
 
-## Read response formats
+## Output content formats
 
-Jira normalized reads use common top-level invoke fields, never Jira `inputs`.
-`readContentFormat` accepts `native`, `markdown`, or `text`; omission is
-`native`. It is advertised on exactly these eight actions:
+Jira results stay structured JSON. The common top-level `outputContentFormat`
+selects `markdown`, `text`, or `adf` for every declared rich body in the result.
+Each selected body is `{ "format": "markdown", "value": "..." }` (or a text
+string/ADF object paired with its corresponding tag). Metadata remains beside
+the body in the same result structure. These eight actions declare rich bodies:
 
-- `issue.view`, whose `renderedBody` is beside root `description`, with a
-  companion inside each supported non-null ADF custom-field entry and beside
-  each included `commentPage.comments[].body`;
-- `comment.list`, whose companion is beside each returned `comments[].body`
-  when `includeBodies` is true;
-- `issue.create` and `issue.update`, whose companion is inside `result.issue`;
-- `comment.view`, `comment.add`, `comment.reply`, and `comment.update`, whose
-  companion is inside `result.comment` beside `body`.
+- `issue.view`: root `description`, each supported ADF custom-field `value`,
+  and each included `commentPage.comments[].body`;
+- `issue.create` and `issue.update`: `issue.description`;
+- `comment.list`: each `comments[].body` when `includeBodies` is true;
+- `comment.view`, `comment.add`, `comment.reply`, and `comment.update`:
+  `comment.body`.
 
-Markdown and text preserve the native ADF field unchanged. Missing or null
-native content has no companion; a present empty document has a present,
-possibly empty companion. `search` stays description-free. `comment.list`
-without `includeBodies` stays body-free, so `readContentFormat` has no effect
-on that metadata-only result. `issue.child.create` does not expose its internal description
-readback, and comment-property JSON is never guessed to be ADF.
+Missing and null bodies retain their absence or null value. Present empty
+content produces a selected body with an empty value/document. `search` and
+metadata-only comment lists stay body-free. `issue.child.create` does not
+expose its internal description readback, and comment-property JSON remains
+ordinary JSON.
+
+Without an exact selection, the Broker uses `preferredOutputContentFormat`
+from the request or connection, then `providers.jira.content.preferred_output_format`,
+then Markdown. A preference unsupported by the action selects its native
+format, ADF, without consulting lower-priority preferences. Exact unsupported
+formats fail before provider work. Write `inputs.contentFormat` is independent.
+The CLI flag is `--output-content-format`; its configured preference is
+`[defaults].preferred_output_content_format`. Inspect `outputContentFormats`,
+`nativeOutputContentFormat`, `defaultOutputContentFormat`, and `bodyFields` in
+the caller-filtered catalog. See [HTTP invocation](http-api.md) and
+[CLI output](cli.md).
 
 The deterministic ADF subset covers documents, paragraphs, headings, hard
 breaks, rules, quotes, panels, expands, bullet/ordered/task/decision lists,
@@ -613,44 +621,25 @@ information, plus `mailto`, remain active. Unknown containers preserve safe
 textual descendants, unknown leaves emit `[unsupported content]`, and media
 fallbacks never disclose internal IDs. Plain text uses the same structural
 traversal without Markdown markers. Conversion is offline, preserves source
-order, never fetches linked content, and never truncates or returns a partial
-rendering.
+order, never fetches linked content, and never truncates a body.
 
-`responseFormat` accepts `json` or `markdown`; omission is `json`. Exactly eleven
-retrievals advertise whole-result Markdown: `project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`,
-`comment.list`, `comment.view`, `comment.property.list`,
-`comment.property.get`, `attachment.list`, and `verify`. Their deterministic
-templates represent every meaningful present field, preserve exact identifiers,
-URLs, timestamps, booleans, counts, collection order, and pagination tokens,
-and end with one LF. Copyable identifiers and timestamps render as code spans;
-safe absolute URLs render as autolinks. Metadata text has control characters and
-embedded newlines neutralized so it cannot create unintended Markdown structure.
-Arbitrary comment-property JSON, including the valid value `null`, is retained
-in a safely delimited `json` fence. Verification mismatches use the same template
-while retaining `allow_with_result`, HTTP 409, and CLI exit 2.
+Every declared ADF field is structurally validated and bounded by
+`providers.jira.content.max_body_bytes`, including exact ADF output. Malformed
+custom ADF is withheld as described under [custom fields](#custom-fields);
+malformed descriptions or comments fail the request. Complexity and byte
+exhaustion fail the entire result as sanitized `upstream_protocol_failed`/502.
+No failed selection or conversion triggers fallback. The separate
+[comment-page byte budget](#comment-pagination-and-limits) selects complete
+native comments with an explicit continuation; it never shortens a body.
+The final serialized JSON must fit `limits.max_upstream_response_bytes`.
 
-Whole-result formatting uses the exact result already produced: it makes no
-second Jira call, changes no selected fields or query parameters, follows no
-pagination token, and fetches no related content. Direct HTTP and `send` retain
-the normal JSON response envelope with
-`result = { "format": "markdown", "value": "..." }`; typed CLI and generic
-`invoke --output-format markdown` print only `result.value` on a formatted
-success. The caller-filtered catalog, OpenAPI, and action-specific send schema
-advertise support. Confluence and GitLab normalized reads are also available on
-their declared actions.
-
-Every returned declared ADF field is structurally validated and bounded by
-`providers.jira.content.max_body_bytes` even in native mode. Malformed custom
-ADF is explicitly withheld as described under [custom fields](#custom-fields);
-malformed descriptions or comment bodies fail the request. Oversized individual
-bodies and over-complex or over-budget native/rendered content fail the complete
-request without truncation as sanitized `upstream_protocol_failed`/502. The
-separate [comment-page byte budget](#comment-pagination-and-limits) can select
-fewer complete comments with an explicit continuation; it never shortens a body.
-Native ADF,
-custom-field names and values, rendered content, whole-result Markdown, property
-values, and pagination tokens are excluded from audit, tracing, logs, errors,
-and object identifiers.
+For an already completed `issue.create`, `issue.update`, `comment.add`,
+`comment.reply`, or `comment.update`, a later presentation failure preserves
+`mutationStatus: "applied"` and `retrySafe: false` with a payload-free receipt.
+Its message says the mutation completed but its response could not be produced.
+Do not repeat the write. Reads carry no mutation-completion claim. Native and
+selected bodies, custom-field names and values, property values, and pagination
+tokens remain excluded from audit and diagnostics.
 
 ## Keys, locators, and project confirmation
 
@@ -812,13 +801,11 @@ the issue response's embedded comments. Continue through `comment.list` with
 
 Successful results include issue id/key/project, generated `webUrl`, summary,
 status, issue type, `created`, `updated`, `creator`, `reporter`, `assignee`,
-`priority`, `labels`, `description`, and `customFields`. The description is Jira
-ADF JSON when Jira returns one and `null` when Jira returns no description or
-omits the field. The [standard context](#standard-context) fields below are
+`priority`, `labels`, `description`, and `customFields`. The description is a selected `{format,value}` body when Jira returns one
+and `null` when Jira returns no description or omits the field. The [standard context](#standard-context) fields below are
 also always present; [parent/subtasks](#parent-and-subtasks) and
 [issue links](#issue-links) depend on the shared disclosure rule.
-When requested through `readContentFormat`, the broker also adds the normalized
-companion described above. User summaries expose only `accountId` and
+The selected representation follows the output content rules above. User summaries expose only `accountId` and
 `displayName`; priority exposes only `id` and `name`.
 
 Returned descriptions are validated with a read-path structural ADF check and
@@ -939,8 +926,7 @@ A missing/null cascading option child becomes null. A textarea's schema uses
 Every array member must validate or the entire field is withheld. Projection
 strips other option/user properties, including email and self/avatar URLs.
 Custom Labels preserve string order and duplicates, with null and empty arrays
-retained under the normal custom-field rules. Markdown displays each label as
-a literal code span. Only the exact `labels` implementation and matching
+retained under the normal custom-field rules. Only the exact `labels` implementation and matching
 array/string schema qualify; an arbitrary string-array schema is unsupported.
 Project, issue, group, version, sprint, Assets, and app-specific fields are
 unsupported as custom-field implementations; the standard context projections
@@ -950,12 +936,11 @@ The expanded raw issue, unrelated standard fields, and complete `names`/`schema`
 maps are never returned. Free text and ADF can mention resources, under the same
 policy as issue descriptions.
 
-Whole-result Markdown has a custom-field section with escaped names, IDs, and
-readable values. Null and empty arrays display as not set, retaining an
-unsupported/withheld marker when applicable. `readContentFormat` preserves
-native values and adds `renderedBody` only inside supported non-null `adf`
-entries, at `/result/customFields/*`; the description's companion stays at the
-root. Unsupported, withheld, and null ADF entries have no companion.
+Supported non-null `adf` entries wrap only their `value` in the selected
+`{format,value}` representation. Their provider field `type` remains `adf`, even
+when `value.format` is `markdown` or `text`. The declaration is conditional on
+both `status: "supported"` and `type: "adf"`; unsupported, withheld, null, and
+other field types retain their ordinary values.
 
 `providers.jira.content.max_body_bytes` applies to each ADF document separately
 (default 1 MiB), not to the custom-field collection. Description and custom
@@ -1626,10 +1611,11 @@ The returned `documentation` object includes
 field/operator, function, and sorting tables generated from the parser definitions.
 Use the tool name exposed by your client; the service/action IDs remain stable.
 
-The typed CLI lowers to that shape:
+With an [authenticated CLI identity](cli.md#config-env-and-default-precedence),
+the typed CLI lowers to that shape:
 
 ```bash
-agent-access --url http://127.0.0.1:8787 --no-token \
+agent-access --url http://127.0.0.1:8787 \
   jira issue search --project PROJ --jql 'status = Done ORDER BY updated DESC'
 ```
 
@@ -1968,9 +1954,9 @@ authorization and re-confirms the issue during invocation.
   or email-like user fields. Use `comment.view` for a selected individual body.
 - `comment.view` fetches one comment through the scoped
   `issue/{key}/comment/{id}` path and validates that Jira returned the requested
-  numeric comment id. Its returned ADF body is structurally validated and
-  bounded by `providers.jira.content.max_body_bytes` in native and rendered
-  modes; overflow or malformed upstream ADF returns the fixed sanitized
+  numeric comment id. Its native ADF body is structurally validated and
+  bounded by `providers.jira.content.max_body_bytes` before producing the selected
+  `{format,value}` representation; overflow or malformed upstream ADF returns the fixed sanitized
   `upstream_protocol_failed`/502.
 - `comment.reply` fetches the requested parent through the scoped issue-comment
   path. If the requested parent is already a reply, the broker resolves the
@@ -2018,10 +2004,9 @@ agent-access invoke jira.issue.view --input-json '{"issue":"PROJ-123","includeCo
 agent-access invoke jira.comment.list --input-json '{"issue":"PROJ-123","includeBodies":true}'
 ```
 
-`readContentFormat` and `responseFormat` remain common invocation fields,
-not action inputs. Body-enabled lists and embedded pages support the same native
-ADF, Markdown/text companions and whole-result Markdown as the individual
-comment read. Replies remain flat entries with `parentCommentId`; a reply's
+`outputContentFormat` and `preferredOutputContentFormat` are common invocation
+fields, outside action inputs. Body-enabled lists and embedded pages select the
+same ADF, Markdown, or text body representations as individual comment reads. Replies remain flat entries with `parentCommentId`; a reply's
 parent can be on another page. Metadata listing followed by `comment.view`
 remains useful for selecting individual comments in any order.
 

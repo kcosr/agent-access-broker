@@ -43,8 +43,8 @@ exact names that client exposes. Broker wire names and canonical service/action
 IDs do not identify aliases added by a client.
 
 Jira `project.list` lists live authorized projects with only `maxResults` and
-`pageToken`. It has independent action permission and supports whole-result
-Markdown. Continue empty `scan_budget` pages using `nextPageToken` until
+`pageToken`. It has independent action permission and returns structured JSON.
+Continue empty `scan_budget` pages using `nextPageToken` until
 `exhausted`; issue search has its own contract. Local
 `resource_access_describe` reports policy access and registered references.
 
@@ -171,8 +171,10 @@ listing explicitly after relevant grants or definitions change; no change
 notifications or background import refresh are added.
 
 Keep `mcp.public_url` at the canonical `/mcp` base. Scoped paths append exactly one
-canonical service ID. Encoded aliases, extra segments, trailing slashes and query
-strings are rejected without redirects. Allow both `/mcp` and `/mcp/<service>` in
+canonical service ID. Encoded aliases, extra segments and trailing slashes are
+rejected without redirects. The only accepted endpoint query is the optional
+[output-content preference](#output-content-formats). Allow both `/mcp` and
+`/mcp/<service>` in
 reverse-proxy rules using the same identity, context, Host and Origin protections.
 All connections share broker sessions, control concurrency, invocation limits and
 audit. Two clients with four service connections each consume the default eight
@@ -438,7 +440,10 @@ token_file = "/home/me/.config/agent-access/token"
 The client header and scheme must match the selected broker identity source.
 `Authorization` with `Bearer` matches both published broker templates. Use an
 issued token for managed identity, or a token registered by the configured static
-identity source. The anonymous quickstart keeps client identity disabled.
+identity source. Local stdio provider listing and calls require authenticated
+runtime catalog access. The anonymous HTTP quickstart does not provide that
+access; configure an identity source and matching grants before using local
+stdio provider tools, or use an already configured authenticated ingress.
 
 Alternatively, set these variables in the environment that launches your MCP
 client, then forward all four to the subprocess:
@@ -664,7 +669,9 @@ Aggregate stdio helpers use ordinary `/v1/services` visibility, including
 anonymous access where the broker permits it and supported
 non-agent token classes. Their fixed names resolve through a bounded helper
 registry without fetching the authenticated provider catalog. Native provider
-tools require the complete caller runtime catalog and its bounded registry. Descriptions and raw schemas come from broker
+tools require authenticated access to the complete caller runtime catalog and
+its bounded registry. An anonymous catalog request fails before provider dispatch,
+even when the Broker permits anonymous direct HTTP invocation. Descriptions and raw schemas come from broker
 capability definitions. Invoke `actions_describe` additionally checks the fresh
 caller catalog and returns its IO, sensitive-field, presentation metadata and
 exact native MCP wrapper schema. Gateways are omitted from ordinary service/action
@@ -711,7 +718,7 @@ both, and the adapter rejects a call that sends neither.
 
 An argument the tool schema does not declare is a tool error that names it and
 lists the arguments the tool accepts, for example
-``unsupported argument `readContentFormat`; this tool accepts: inputs, outputPath, requestFile``.
+``unsupported argument `unknownOption`; this tool accepts: inputs, outputPath, requestFile``.
 Both transports and the discovery helpers apply this rule. The error repeats
 only names that are plain identifiers (a letter followed by up to 63 letters,
 digits, or underscores) and never argument values.
@@ -723,7 +730,7 @@ JSON and multipart-upload tools, including writes, accept optional `outputPath`:
 ```
 
 The adapter saves the complete successful broker envelope as JSON, including
-nested Markdown when `responseFormat: "markdown"` is selected. It returns a
+each selected rich-text value at its declared field. It returns a
 small receipt in text and `structuredContent` instead of the saved result.
 The receipt keeps correlation/status identifiers, sets `operationStatus` to
 `succeeded` for confirmed success, and adds
@@ -839,13 +846,60 @@ the client must restart the process. This bounds input buffering even for an
 unterminated frame. Other concurrent requests may have uncertain outcomes. Use
 the file input mode to keep large payloads out of protocol frames.
 
-Actions advertising response presentation accept `readContentFormat` and/or
-`responseFormat`. CLI defaults apply when supported. Explicit whole-result
-Markdown overrides an ambient embedded-content default; conflicting explicit
-formats are rejected. Responses retain the broker envelope in both MCP text and
-structured content, or in the saved JSON envelope when `outputPath` is used.
-Rate-limited tool errors are the one exception to the text copy; see
+## Output content formats
+
+Ordinary results retain the Broker JSON envelope in both MCP text and
+`structuredContent`, or in the saved JSON envelope when `outputPath` is used.
+Each declared rich-text field contains one `{format,value}`. Markdown is preferred
+by default; ADF uses an object value, while Markdown, text and storage use strings.
+Rate-limited tool errors are the exception to the full JSON text copy; see
 [rate limits](#rate-limits).
+
+Body-capable action schemas expose optional `outputContentFormat` beside `inputs`.
+It is an exact request from the action's supported `markdown`, `text`, `adf` or
+`storage` formats. Unsupported selections fail without provider lookup. Omit the
+argument to use the connection preference, service preference, then Markdown.
+If the chosen preference is unsupported, the action's declared native format is
+used without trying lower preference tiers. Body-free actions ignore preferences
+and do not expose the exact argument. Write `contentFormat` and upstream
+`bodyFormat` remain provider inputs with their own documented meanings.
+
+HTTP MCP accepts one literal `preferredOutputContentFormat` query parameter:
+
+```text
+https://broker.example/mcp?preferredOutputContentFormat=text
+https://broker.example/mcp/jira?preferredOutputContentFormat=adf
+```
+
+The optional value must be `markdown`, `text`, `adf`, or `storage`. Empty,
+duplicate, unknown, malformed and encoded-alias query parameters return HTTP 400
+before dispatch. `mcp.public_url` remains query-free. The preference belongs to
+each HTTP request and does not mutate session identity or view. Keep the same
+preference while continuing paginated discovery; a cross-preference cursor is
+rejected.
+
+Stdio uses the client setting `[defaults].preferred_output_content_format`, or
+`AGENT_ACCESS_PREFERRED_OUTPUT_CONTENT_FORMAT` when that setting is absent.
+`agent-access mcp serve --preferred-output-content-format text` overrides it for
+the process. Without a process override, configuration retains its per-call
+reload behavior. These preferences are not additional MCP tool arguments.
+`actions_describe` reports the effective connection default; the canonical
+catalog keeps service defaults.
+
+Retired format settings at startup exit 3 on stderr before protocol output. An
+invalid setting introduced by a later stdio reload produces a normal tool error
+without dispatch and leaves the process alive. Refresh discovery after upgrading
+the Broker: even calls with no format argument receive the new tagged bodies.
+See [upgrade requirements](operator-guide.md#output-content-contract-upgrade).
+
+Stdio validates selected values on inline and file-bound successful responses.
+Invalid paths, tags or value types produce `isError: true` with a bounded
+`response_content_invalid` receipt in `structuredContent` and its JSON text copy.
+The receipt preserves known completion, sets `retrySafe: false`, and includes
+neither the invalid content nor a fabricated output path. The operation is not
+replayed. A server presentation-error receipt with `mutationStatus: "applied"`
+means the write
+completed but its response could not be produced; do not repeat it.
 
 ## Sensitive data and errors
 

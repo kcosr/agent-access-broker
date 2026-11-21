@@ -119,11 +119,10 @@ async fn exact_draft_publish_only_grant_needs_no_create_update_or_parent_coverag
     assert_eq!(backend.pages.lock().unwrap().len(), 1);
     assert_eq!(backend.page_drafts.lock().unwrap().len(), 1);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let output = confluence_cli()
         .args([
             "--url",
             &broker.public_url(),
-            "--no-token",
             "confluence",
             "page",
             "draft",

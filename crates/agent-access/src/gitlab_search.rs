@@ -1,4 +1,4 @@
-use super::{CliContext, WholeOutputArgs, run_typed_invoke_value};
+use super::{CliContext, OutputContentArgs, run_typed_invoke_value};
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
@@ -8,7 +8,7 @@ pub(super) struct ProjectListArgs {
     #[command(flatten)]
     page: SearchPageArgs,
     #[command(flatten)]
-    response: WholeOutputArgs,
+    response: OutputContentArgs,
 }
 
 impl ProjectListArgs {
@@ -33,7 +33,7 @@ pub(super) struct ProjectSearchArgs {
     #[command(flatten)]
     page: SearchPageArgs,
     #[command(flatten)]
-    response: WholeOutputArgs,
+    response: OutputContentArgs,
 }
 
 impl ProjectSearchArgs {
@@ -89,7 +89,7 @@ pub(super) struct ContentSearchArgs {
     #[command(flatten)]
     page: SearchPageArgs,
     #[command(flatten)]
-    response: WholeOutputArgs,
+    response: OutputContentArgs,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -131,7 +131,7 @@ impl SearchPageArgs {
 }
 
 impl SearchCommand {
-    fn invocation(&self) -> (&'static str, Value, &WholeOutputArgs) {
+    fn invocation(&self) -> (&'static str, Value, &OutputContentArgs) {
         let (action, args, regex) = match self {
             Self::Issues(args) => ("gitlab.search.issues", args, false),
             Self::MergeRequests(args) => ("gitlab.search.merge_requests", args, false),
@@ -160,8 +160,7 @@ pub(super) async fn run_project(ctx: &CliContext<'_>, args: &ProjectSearchArgs) 
         ctx,
         "gitlab.project.search",
         args.inputs(),
-        None,
-        args.response.output_format,
+        args.response.output_content_format,
     )
     .await
 }
@@ -171,21 +170,20 @@ pub(super) async fn run_project_list(ctx: &CliContext<'_>, args: &ProjectListArg
         ctx,
         "gitlab.project.list",
         args.inputs(),
-        None,
-        args.response.output_format,
+        args.response.output_content_format,
     )
     .await
 }
 
 pub(super) async fn run_content(ctx: &CliContext<'_>, command: &SearchCommand) -> Result<()> {
     let (action, inputs, response) = command.invocation();
-    run_typed_invoke_value(ctx, action, inputs, None, response.output_format).await
+    run_typed_invoke_value(ctx, action, inputs, response.output_content_format).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cli, Command, GitlabCommand, GitlabProjectCommand, OutputFormatArg};
+    use crate::{Cli, Command, GitlabCommand, GitlabProjectCommand, OutputContentFormatArg};
     use clap::Parser;
 
     #[test]
@@ -199,7 +197,7 @@ mod tests {
             "20",
             "--page-token",
             "opaque",
-            "--output-format",
+            "--output-content-format",
             "markdown",
         ])
         .unwrap();
@@ -213,7 +211,10 @@ mod tests {
             panic!("expected project list command")
         };
         assert_eq!(args.inputs(), json!({"maxResults":20,"pageToken":"opaque"}));
-        assert_eq!(args.response.output_format, Some(OutputFormatArg::Markdown));
+        assert_eq!(
+            args.response.output_content_format,
+            Some(OutputContentFormatArg::Markdown)
+        );
         for flag in [
             "--search",
             "--archived",
@@ -272,7 +273,7 @@ mod tests {
             "20",
             "--page-token",
             "opaque",
-            "--output-format",
+            "--output-content-format",
             "markdown",
         ]);
         assert_eq!(
@@ -282,7 +283,10 @@ mod tests {
                 "maxResults": 20, "pageToken": "opaque",
             })
         );
-        assert_eq!(args.response.output_format, Some(OutputFormatArg::Markdown));
+        assert_eq!(
+            args.response.output_content_format,
+            Some(OutputContentFormatArg::Markdown)
+        );
         let args = parse_project(&[
             "agent-access",
             "gitlab",
@@ -324,8 +328,8 @@ mod tests {
                 "20",
                 "--page-token",
                 "opaque",
-                "--output-format",
-                "json",
+                "--output-content-format",
+                "text",
                 "--output",
                 "results.json",
             ]);
@@ -338,7 +342,10 @@ mod tests {
                     "engine": "advanced", "maxResults": 20, "pageToken": "opaque",
                 })
             );
-            assert_eq!(response.output_format, Some(OutputFormatArg::Json));
+            assert_eq!(
+                response.output_content_format,
+                Some(OutputContentFormatArg::Text)
+            );
         }
     }
 

@@ -139,7 +139,7 @@ async fn jira_transitions_typed_invoke_send_and_http_use_selected_execution_cred
                 &inputs().to_string(),
             ],
         ));
-        applied(&run(&base, &["send","--request-json",&json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":APPLY,"inputs":inputs()}).to_string()]));
+        applied(&run(&base, &["send","--request-json",&json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":APPLY,"inputs":inputs()}).to_string()]));
         let response = reqwest::Client::new()
             .post(format!("{base}/v1/invoke/jira/{APPLY}"))
             .header(REQUEST_ID_HEADER, uuid::Uuid::new_v4().to_string())

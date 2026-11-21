@@ -244,7 +244,7 @@ async fn gitlab_plain_inputs_preserve_stdio_invoke_and_send_contracts() {
         );
     }
     for inputs in [None, Some(json!({})), Some(json!({"url": PROJECT_URL}))] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "gitlab", "action": "project.view"});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "gitlab", "action": "project.view"});
         if let Some(inputs) = inputs {
             request["inputs"] = inputs;
         }
@@ -353,7 +353,7 @@ async fn gitlab_plain_relationships_preserve_provider_denials_and_audit_after_po
         assert_eq!(called["result"]["isError"], true, "{called}");
         let envelope = &called["result"]["structuredContent"];
         assert_denial(envelope, expected);
-        let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "gitlab", "action": action, "inputs": inputs});
+        let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "gitlab", "action": action, "inputs": inputs});
         let mut command = cli(&base);
         if sensitive {
             let path = broker
@@ -439,7 +439,7 @@ async fn gitlab_plain_webhook_schema_keeps_local_secret_injection_and_false_clea
             .as_deref(),
         Some(SECRET)
     );
-    let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "gitlab", "action": "webhook.update", "inputs": inputs, "secretSources": sources});
+    let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "gitlab", "action": "webhook.update", "inputs": inputs, "secretSources": sources});
     let output = cli(&base)
         .args(["send", "--request-json", &request.to_string()])
         .output()

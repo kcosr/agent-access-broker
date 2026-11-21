@@ -46,7 +46,7 @@ Ordinary service/action discovery omits gateways, including Git. Use the
 administrator-provided native-client setup for gateway traffic. The explicit
 resource-access route still supports an already known gateway service ID.
 
-The runtime catalog contract is `agent-access.catalog.v2`. Select actions by
+The runtime catalog contract is `agent-access.catalog.v3`. Select actions by
 canonical service and action IDs, not display names or MCP projections. Read an
 action's `inputSchema` and extended `documentation` for query syntax, content
 formats, relationships, continuation, companion permissions and outcomes.
@@ -77,13 +77,17 @@ documented. Field descriptions can require alternatives or companions that a
 plain object schema does not enforce. Do not add a CLI send envelope, local
 file paths, `secretSources` or arbitrary top-level fields to REST invokes.
 
-Optional `readContentFormat` and `responseFormat` are siblings of `inputs`.
-Explicit `native`/`json` defaults are valid; non-defaults must be advertised in
-the action's `readContentFormats` and `responseFormats`. Embedded `markdown|text`
-preserves native content and adds rendered companions. Whole-result Markdown
-stays in the JSON envelope as `result: {"format":"markdown","value":"..."}`;
-it is not `text/markdown` negotiation. Do not combine whole-result Markdown with
-an explicit non-native embedded format. Provider write formats stay in `inputs`.
+Optional `outputContentFormat` and `preferredOutputContentFormat` are siblings
+of `inputs`. Both accept `markdown`, `text`, `adf`, or `storage`; omit unused
+selectors rather than sending null. The exact selector must be supported by the
+action's `outputContentFormats`. Otherwise the Broker uses the request preference,
+service preference, then Markdown, falling back from an unsupported preference
+to the declared native format. It does not try lower preference tiers.
+Each present declared body contains `{format,value}` at its original field;
+ADF values are objects and the other values are strings. The surrounding JSON
+envelope and metadata remain structured. Inspect `bodyFields`,
+`nativeOutputContentFormat` and `defaultOutputContentFormat` in discovery.
+Provider write formats stay in `inputs`.
 When the action supplies Broker attribution, submit the intended content without
 adding an attribution footer yourself.
 
@@ -192,3 +196,11 @@ complete correlated Broker proofs; for example, a pre-admission cancellation
 receipt requires `executionState: "not_dispatched"` and `retrySafe: true`. A new
 rejected attempt cannot resolve an earlier uncertain write. Authentication/context
 denials are not retryable capacity errors.
+
+A presentation-error receipt with `mutationStatus: "applied"` and
+`retrySafe: false` means the
+write completed but its response could not be produced. A client
+`response_content_invalid` receipt means received selected-body data was unusable;
+preserve any reported completion and do not replay the operation to recover its
+response. Read-only calls may be made again explicitly with a supported native
+format when conversion exceeded an output limit; native source limits still apply.

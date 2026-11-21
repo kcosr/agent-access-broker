@@ -219,7 +219,7 @@ async fn empty_comment_pages_accept_zero_upstream_maximum_across_read_modes() {
                 "--issue",
                 "PROJ-1",
                 "--include-bodies",
-                "--read-content-format",
+                "--output-content-format",
                 "text",
             ],
             false,
@@ -233,7 +233,7 @@ async fn empty_comment_pages_accept_zero_upstream_maximum_across_read_modes() {
                 "view",
                 "PROJ-1",
                 "--include-comments",
-                "--read-content-format",
+                "--output-content-format",
                 "text",
             ],
             true,
@@ -300,7 +300,7 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
             "view",
             "PROJ-1",
             "--include-comments",
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ],
     );
@@ -314,7 +314,7 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
     assert_eq!(page["comments"][0]["commentId"], "10000");
     assert_eq!(page["comments"][1]["parentCommentId"], "10000");
     assert_eq!(
-        page["comments"][0]["renderedBody"],
+        page["comments"][0]["body"],
         json!({"format":"text", "value":format!("{COMMENT_BODY}-0")})
     );
     let requests = server.received_requests().await.unwrap();
@@ -360,7 +360,7 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
             "--include-bodies",
             "--start-at",
             &next_offset,
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ],
     );
@@ -373,7 +373,7 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
         "10000"
     );
     assert_eq!(
-        continued["result"]["comments"][2]["renderedBody"]["value"],
+        continued["result"]["comments"][2]["body"]["value"],
         format!("{COMMENT_BODY}-22")
     );
 
@@ -384,7 +384,7 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
             "view",
             "PROJ-1",
             "--include-comments",
-            "--output-format",
+            "--output-content-format",
             "markdown",
         ],
         vec![
@@ -395,13 +395,21 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
             "--issue",
             "PROJ-1",
             "--include-bodies",
-            "--output-format",
+            "--output-content-format",
             "markdown",
         ],
     ] {
         let output = cli(&base).args(arguments).output().unwrap();
         assert_success("comment body Markdown", &output);
-        let markdown = String::from_utf8(output.stdout).unwrap();
+        let markdown: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let page = markdown["result"]
+            .get("commentPage")
+            .unwrap_or(&markdown["result"]);
+        let markdown = page["comments"][0]["body"]["value"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+            + &page.to_string();
         assert!(
             markdown.contains(&format!("{COMMENT_BODY}-0").replace('-', "\\-")),
             "{markdown}"
@@ -421,8 +429,8 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
         ),
     ] {
         let request = json!({
-            "version":"agent-access.send.v1", "kind":"invoke", "service":"jira",
-            "action":action, "inputs":inputs, "readContentFormat":"text"
+            "version":"agent-access.send.v2", "kind":"invoke", "service":"jira",
+            "action":action, "inputs":inputs, "outputContentFormat":"text"
         });
         let result = run(&base, &["send", "--request-json", &request.to_string()]);
         assert!(!result.to_string().contains(COMMENT_BODY));
@@ -455,7 +463,7 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
     }
     let called = mcp.request("tools/call", json!({
         "name":tool(&listing, "comment.list")["name"],
-        "arguments":{"inputs":{"issue":"PROJ-1", "includeBodies":true, "startAt":20}, "readContentFormat":"text"}
+        "arguments":{"inputs":{"issue":"PROJ-1", "includeBodies":true, "startAt":20}, "outputContentFormat":"text"}
     })).await;
     assert_eq!(called["result"]["isError"], false, "{called}");
     assert_eq!(
@@ -486,12 +494,12 @@ async fn comment_bodies_are_opt_in_and_continue_in_batches_across_cli_and_mcp() 
                 &(10000 + index).to_string(),
                 "--issue",
                 "PROJ-1",
-                "--read-content-format",
+                "--output-content-format",
                 "text",
             ],
         );
         assert_eq!(
-            selected["result"]["comment"]["renderedBody"]["value"],
+            selected["result"]["comment"]["body"]["value"],
             format!("{COMMENT_BODY}-{index}")
         );
     }
@@ -617,12 +625,12 @@ async fn comment_body_flags_do_not_fall_back_from_the_winning_personal_grant() {
             "10022",
             "--issue",
             "PROJ-1",
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ],
     );
     assert_eq!(
-        selected["result"]["comment"]["renderedBody"]["value"],
+        selected["result"]["comment"]["body"]["value"],
         format!("{COMMENT_BODY}-22")
     );
     let requests = server.received_requests().await.unwrap();

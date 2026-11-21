@@ -256,7 +256,7 @@ TLS child fixture below. This fixture uses real Git smart HTTP, not a live GitLa
 deployment or an external ingress proxy.
 
 Local action-output coverage checks JSON/multipart send-schema eligibility and
-destination dependencies, CLI format versus destination flags, saved JSON/Markdown,
+destination dependencies, CLI body-format versus destination flags, saved JSON,
 private atomic replacement, compact receipts, and local stdio MCP output. Reads,
 writes, and uploads can save supported responses; HTTP MCP rejects local paths
 and raw downloads retain their transfer contract. A forced local save failure
@@ -692,14 +692,14 @@ The offline smoke harnesses live in `crates/agent-access/tests/`:
   the current project is granted, and deny without content on every issue
   path when only the previous key is. Embedded issue links exercise real
   Broker token admission: unrestricted same-mode coverage includes links in
-  JSON/Markdown, a project-restricted token omits them, and upstream absent
+  JSON with selected bodies, a project-restricted token omits them, and upstream absent
   versus empty lists stay distinct without linked-issue requests. This uses a
   stub Jira backend; live upstream permissions and embedded field behavior
   require the [manual link checks](manual-live-smoke.md#jira-embedded-link-checks).
   Project-view discovery uses the production Jira HTTP transport against a
   synthetic Jira server through typed CLI, invoke, send, direct HTTP, and
   stdio/HTTP MCP. It covers service and personal execution credentials,
-  metadata selection, name/ID filtering, identity-only reads, Markdown,
+  metadata selection, name/ID filtering, identity-only reads, JSON output,
   catalog/documentation/OpenAPI/send projections, offline local discovery,
   project-ID-bound autocomplete, and project-constrained custom-field JQL.
   Scope/action denials and removal of the selected credential exercise the
@@ -782,8 +782,8 @@ change identity; fix the change rather than regenerating the vectors.
 The backend-contract acceptance suite (`cargo test -p agent-access-broker-host
 conformance`) registers the test-only `agent-access-conformance` backend beside
 the linked backends and exercises it through TOML configuration and
-validation, discovery, the catalog/OpenAPI/send-schema projections, JSON,
-Markdown, raw-download, and multipart-upload invocation against a stubbed
+validation, discovery, the catalog/OpenAPI/send-schema projections, JSON with
+selected rich-text fields, raw-download and multipart-upload invocation against a stubbed
 upstream, and MCP. A managed-policy fixture enables its endpoints and checks
 private resource attributes end to end: the admin API's attribute rules,
 encrypted storage, reveal, replacement, and that a key reaches the upstream
@@ -1396,14 +1396,11 @@ cargo test -p agent-access --test real_jira_smoke \
   real_broker_jira_read_smoke -- --ignored --exact
 ```
 
-The read smoke exercises one representative Jira ADF body in embedded
-Markdown/text mode and one body-free search or list in whole-result Markdown
-mode. It asserts that omitted presentation options preserve native JSON,
-`readContentFormat` preserves the native body while adding the correctly placed
-`renderedBody`, and `responseFormat=markdown` returns the bounded Markdown result
-wrapper. The typed CLI prints only the Markdown value, while direct HTTP and
-JSON `send` retain the normal JSON envelope. The smoke also confirms search
-stays body-free and that native and rendered sentinels are absent from audit.
+The read smoke exercises representative Jira descriptions in selected Markdown,
+text and ADF formats, checking a single tagged body with structured JSON metadata.
+It also checks that body-free searches/lists remain body-free and that content
+sentinels stay out of audit. The command above is a live-provider test; ordinary
+unit and isolated-Broker fixtures do not establish live-tenant validation.
 
 ### Write, Download, And Verify Smoke
 
@@ -1536,18 +1533,19 @@ The smoke calls `jira issue dependency add`, then asserts `status=present`,
 `verification.status=matched`, and matching blocking/blocked issue keys in the
 broker response.
 
-Deterministic Jira normalized-read coverage asserts the common top-level
-`readContentFormat` (`native`, `markdown`, `text`) and `responseFormat` (`json`,
-`markdown`) contract across catalog, OpenAPI, action-specific send schema,
-typed CLI, generic `invoke`, JSON `send`, multipart/direct HTTP, and provider
-execution. Omission and explicit defaults preserve the exact native JSON shape;
-unknown top-level fields and mutually exclusive non-native embedded plus
-whole-Markdown requests return `input_invalid`/400. A representation not
-advertised by the resolved action returns
-`response_format_unsupported`/415 after identity/token admission but before
-policy authorization, credential selection, or provider access. Projection
-tests also require every action-specific OpenAPI/send invoke schema to accept
-explicit `native`/`json` protocol defaults when capability arrays are absent.
+Deterministic output-content coverage checks exact `outputContentFormat` and
+soft `preferredOutputContentFormat` across catalog v3, send v2, OpenAPI, typed
+CLI, generic invoke, send, multipart/direct HTTP and both MCP transports. It must
+cover Markdown preference, service/client overrides, unsupported-preference
+native fallback without lower-tier cascade, strict unsupported selections,
+invalid/null values, body-free actions and configuration reload. Capability
+checks occur after identity/token admission and action resolution, before policy
+and provider lookup; tests assert no provider call for rejected exact formats.
+
+Every CLI invocation performs one fresh catalog/version check. Tests distinguish
+ordinary JSON stdout's permitted missing-catalog-action path from I/O-dependent
+and exact-selector refusals. Old/new version mismatch, rejected retired
+controls/settings/environment, and unchanged spec JSON export are required.
 
 Custom-field JQL parser cases cover stable numeric `cf[ID]` references, supported
 operators, quoted text operands, bounded lists, canonicalization, and project
@@ -1564,8 +1562,8 @@ dispatch and separately cover changes to the composed authorization constraint.
 Jira descriptor completeness tests enumerate every declared issue-description
 and comment-body result path, including mutation readbacks, and the issue-view
 custom-field owner path `/result/customFields/*`. They assert that
-Markdown/text rendering preserves native ADF and adds one correctly placed
-`renderedBody` for present content, distinguishes missing/null from
+selected Markdown/text/ADF replaces the native field with one tagged object,
+distinguishes missing/null from
 present-empty bodies, never guesses similarly named or arbitrary property
 fields, and keeps body-free search/list results body-free. Golden and
 adversarial ADF tests cover every supported node and mark, safe and unsafe
@@ -1582,7 +1580,8 @@ containment, identity mismatches, and renamed-project handling. Projection cases
 canonical numeric-ID ordering, duplicate/missing names, every allowlisted type,
 null/empty sentinels, stripped option/user properties, unsupported app/reference
 data, malformed values marked `withheld`, and sanitized metadata-map failures.
-Search and create/update readbacks must retain their existing shapes.
+Search and create/update readbacks retain their surrounding metadata and apply
+selected content only to their declared body fields.
 
 Standard-context cases cover resolution, dates, components, fix/affected
 versions, status category, nullable names, missing/null/empty values, ordered
@@ -1593,71 +1592,64 @@ proof for links, parent, and subtasks together, including exclusions, restored
 same-mode unions, competing modes and token restrictions. Both HTTP projection
 and provider output must suppress unsolicited references without that proof.
 Eligible missing/null parents normalize to null; missing subtasks stay absent.
-Snapshots distinguish `No parent returned.` from an absent parent section and
-empty **Subtasks**, preserve IDs when names are null, and exercise malicious
-Markdown prefixes in all new dynamic values. Audit assertions permit only
-reference disclosure statuses and counts, not hierarchy or context content.
+Assertions distinguish null and absent parents from empty subtasks, preserve IDs
+when names are null, and keep malicious Markdown-looking metadata as literal JSON
+strings. Audit permits only reference disclosure statuses and counts, not hierarchy
+or context content.
 
-Presentation fixtures check escaped custom names and values, explicit status
-markers, empty fields versus no returned fields, and per-entry `renderedBody`
-only for supported non-null ADF. A substantial fixture with hundreds of fields
-and about 2 MiB of varied rich text exercises complete native JSON, normalized
-companions, whole-result Markdown, and stdio MCP delivery below transport caps.
-Separate cases exhaust shared render complexity, exceed per-document bytes,
-and lower the configured HTTP MCP response cap to require the explicit
-`mcp_response_too_large` failure. The CLI fixture exercises typed commands,
-generic invoke, JSON send, and direct HTTP. These fixtures use synthetic Jira
-responses; they do not validate a live tenant.
+Presentation fixtures retain custom names, explicit statuses and empty versus
+missing values. Only supported non-null ADF custom fields get selected tagged
+values, while the outer custom-field `type` remains `adf`. Large synthetic results
+exercise native and converted content and both MCP copies under transport caps.
+Separate cases exhaust shared complexity, per-document bytes and the HTTP MCP
+response cap. CLI fixtures use typed commands, generic invoke, send and direct
+HTTP. These fixtures use synthetic Jira responses, not a live tenant.
 
 Comment-body acceptance fixtures use a discussion longer than the default body
 page to exercise issue inclusion, list continuation, flat reply parent IDs and
 selected individual reads. They require one collection request per batch with
-no individual-comment fanout, preserve metadata-only defaults, compare native,
-embedded text and whole-result Markdown, and exercise typed CLI, JSON send and
+no individual-comment fanout, preserve metadata-only defaults, compare
+selected ADF, text and Markdown, and exercise typed CLI, JSON send and
 stdio MCP. Missing companion grants and a different winning credential mode
 must deny body inclusion before content requests while ordinary reads remain
 usable. Separate core tests cover exact resources, precedence, caller ceilings,
 snapshot use and direct-only companion proofs.
 
-Capability projection tests require `readContentFormats` on exactly
-`issue.view`, `issue.create`, `issue.update`, `comment.list`, `comment.view`,
-`comment.add`, `comment.reply`, and `comment.update`. They require
-`responseFormats` on exactly
-`project.list`, `project.view`, `issue_type.list`, `issue.view`, `search`, `comment.list`, `comment.view`,
-`comment.property.list`, `comment.property.get`, `attachment.list`, and
-`verify`. Representative child-create, property mutation, attachment mutation,
-and raw-download actions assert absence rather than accepting a compatibility
-fallback.
+Capability projection tests require `outputContentFormats` and matching
+`bodyFields` for exactly the eight Jira body actions. No-body actions expose no
+output-body capabilities. All 62 body-capable action families across Jira,
+Confluence and GitLab must be covered, including conditional and compound paths,
+custom-field predicates, source configuration combinations and optional/null rules.
 
-Whole-result contract snapshots cover every eligible Jira retrieval family:
-project details/searchable fields, project issue-type metadata, singleton issue/comment,
-issue views with comment pages, body-free search, metadata and full-body comment
-lists, attachment lists, comment-property list/get with arbitrary JSON,
-verification success, and the `allow_with_result` verification mismatch. Assertions require stable field
-and collection ordering, exact identifiers/timestamps/URLs/booleans/counts and
-pagination tokens, field-specific absent/null handling, one terminal newline,
-no raw ADF, and the same provider request count, endpoint, query, selected fields, and
-pagination inputs as JSON mode. Mutations and raw attachment downloads must not
-advertise whole-result Markdown. Renderer snapshots also require identifiers and
-timestamps as code spans, safe URLs as autolinks, neutralized metadata controls
-and newlines, and fenced preservation of valid JSON-null property values.
+Clients validate the selected object/tag/value only at declared fields. Exact
+requests require an exact tag; preference-selected responses remain valid after
+reload expands supported sources. Test both enabling a native Confluence source
+between discovery and invocation, and disabling sources so optional bodies vanish.
+Stdio exercises inline and saved responses; invalid successful selected bodies
+produce bounded `response_content_invalid` receipts without rejected data or replay.
+CLI/send writes that receipt on stderr and exits 5; MCP returns it as an error
+with structured content and the usual JSON text copy.
 
-CLI tests derive each Jira command's presentation flags from compiled catalog
-capabilities. They verify `--read-content-format` appears on declared embedded
-read and mutation-readback actions, `--output-format` appears only on eligible
-retrievals, unsupported presentation flags are rejected, and JSON is the default.
-They also cover command/config/environment/built-in precedence, invalid ambient
-values, omission of unsupported ambient defaults (including a caller-filtered
-catalog that omits the action), local rejection of explicit unsupported flags,
-whole-Markdown suppression of ambient embedded formatting, generic-invoke
-catalog-fetch behavior, shared core contract validation, no ambient
-injection by `send`, Markdown-only successful stdout, JSON errors, existing
-`allow_with_result` exit policy, and exit 5 for malformed promised response
-shapes.
+Successful recovery-receipt coverage must mechanically match all 31 body-bearing
+native mutations: five Jira, ten Confluence and sixteen GitLab actions. Each case
+runs its real native implementation against a synthetic upstream and verifies a
+provider-authored completed receipt. Forced conversion and final-size failures
+must preserve the original error code, upstream/audit facts, `mutationStatus:
+"applied"`, `retrySafe: false`, and the fixed completion message in both `reason`
+and `error.message`, with no rejected body. Existing uncertain/unverified outcomes
+remain distinct. Exercise delivery over HTTP, CLI and both MCP transports.
+
+HTTP MCP cases cover strict preference query parsing, service/aggregate views,
+session isolation and cross-preference cursor rejection. Stdio cases cover process
+preference precedence, startup exit 3 before protocol output for retired settings,
+and normal tool errors on invalid later configuration reloads. JSON stdout/file
+results and unchanged binary download bytes, multipart handling and local-output
+failure receipts remain separate acceptance surfaces.
 
 Bounds and observability tests apply Jira `max_body_bytes` to every declared
-native body even in omitted or explicit-native mode, plus traversal, rendered,
-aggregate, whole-document, and final-result limits. Malformed or oversized Jira
+native source and selected body, plus traversal, render, aggregate and final-result
+limits. Include a read whose native output succeeds while default Markdown exceeds
+the same output cap; conversion must fail without falling back. Malformed or oversized Jira
 description/comment content returns sanitized `upstream_protocol_failed`/502
 without partial stdout or a second provider request. Invalid custom values or
 malformed custom ADF are explicitly withheld; byte or complexity exhaustion
@@ -1666,11 +1658,12 @@ sentinels and custom-field names/values must remain absent from audit JSONL,
 tracing/log captures, errors, object identifiers, and metric labels.
 
 Deterministic Confluence normalized-read coverage uses the same top-level
-protocol and capability checks. Descriptor tests enumerate exactly 26 embedded
+protocol and capability checks. Descriptor tests enumerate exactly 26 body-capable
 actions across page/blog/draft views, body-bearing comment/reply collections,
 comment views, and mutation readbacks. They cover root, wrapped, and collection
-placement; bare `blog.view.body.storage`; empty/missing representation maps;
-present-empty bodies; and deterministic ADF-before-storage selection. Serialized
+placement; native blog-storage normalization; empty/missing representation maps;
+configured-out body omission; present-empty bodies; and deterministic
+ADF-before-storage selection. Serialized
 ADF source bytes are bounded before one parse, and malformed selected ADF fails
 without falling back to storage.
 
@@ -1678,20 +1671,18 @@ Confluence storage golden/adversarial tests cover standard HTML, namespaced
 `ac:`/`ri:` references, macros, active-content suppression, entities, unknown
 nodes, safe/unsafe links, malformed fragments, depth/event/work/output limits,
 determinism, and secrecy of macro parameters and internal identifiers.
-Whole-result snapshots cover exactly 27 retrievals: live space listing, current page/blog
-view/search/verify, page/blog draft view/verify, current/draft attachment lists,
-and all page/blog footer/inline comment list/view/reply-list reads. They verify
-that body-free actions stay body-free, collection bodies are converted in
-place, `allow_with_result` verification semantics survive formatting, and JSON
-and Markdown modes make identical upstream requests.
+Body-free actions remain body-free, collection bodies are replaced in place,
+and verification errors preserve their original outcome. Confluence exact ADF and
+storage selections must return the requested configured source, omitting optional
+bodies when that source is absent; required draft/comment source absence remains
+an error. Validate all fetched configured representations, even an unselected one.
+Retain blog/draft storage reads when blog writes are disabled.
 
-Confluence CLI tests derive presentation flags from capabilities, reject
-unsupported flags, and require JSON default output.
-Bounds apply `providers.confluence.content.max_body_bytes` to every declared
-native body in every mode, plus aggregate, whole-document, and final-result
-limits. Malformed or oversized content returns sanitized
-`upstream_protocol_failed`/502 without partial output or body-derived audit,
-tracing, log, error, object-ID, or metric data.
+Confluence CLI tests derive output-content flags from capabilities, reject
+unsupported selections and retain JSON output. Source and selected-body bounds,
+aggregate and final-result limits apply; failures contain no partial output or
+body-derived diagnostics. PR #122 content-location/reparenting cases must still
+fail at the same authorization boundary before releasing selected content.
 
 Deterministic GitLab normalized-read coverage enumerates the declared embedded
 action families: issue view/search/create/update and note list/add/update;
@@ -1699,24 +1690,13 @@ merge-request view/search/create/update and note list/add/update; discussion
 list/view/general-add/inline-add/note-add/note-update/resolve/reopen; and draft
 note list/view/add/update. Contract tests cover singleton and
 collection descriptions, note bodies, every nested discussion note, mutation
-readbacks, missing/null/present-empty values, byte-exact embedded Markdown,
+readbacks, missing/null/present-empty values, byte-exact selected Markdown,
 bounded text extraction, raw-HTML suppression, and non-guessing of file,
 commit, job, or similarly named fields.
 
-Whole-result fixtures cover the eligible GitLab retrieval families: project
-view; issue view/search/note list; merge-request view/search/note
-list/discussion list/view; reviewer, MR commit, MR pipeline, current structured
-diff, diff-version, draft-note list/view, approval summary/state, and
-approval-rule list/view reads;
-branch and protected-branch list/view; protected-branch verify; file view;
-commit list/view; pipeline list/view; and job list/view. They assert semantic
-field completeness and stable ordering, body-bearing search/list behavior,
-nested-note structure, collision-safe literal commit messages and file text,
-ordinary protected-branch verification results, exact pagination metadata on
-issue/MR searches, note/discussion lists, and every merge-request review-context
-collection plus draft-note lists, one terminal LF, and safe closure of
-untrusted Markdown before following metadata. Mutations and raw file, MR-diff,
-and job-trace streams advertise no whole-result Markdown.
+GitLab surrounding metadata retains exact identifiers, timestamps, pagination,
+positions, suggestions, commit messages and file text as structured JSON. Summary projections remain body-free and keep their existing
+continuation semantics. Raw file, diff and trace streams stay binary contracts.
 
 Review-context parser coverage uses one positioned multiline text discussion
 to assert note type, exact path/line-range association, normalized suggestion
@@ -1738,7 +1718,7 @@ same endpoint, query, filters, page inputs, and upstream call count. CLI tests
 derive GitLab flags from the shared capability registry and exercise typed,
 generic invoke, send, and HTTP behavior plus config/environment precedence.
 Bounds cover every native body in all modes, parsing work, per-body/aggregate
-rendered output, whole-result output, and GitLab's common final serialized
+selected output, and GitLab's common final serialized
 result cap. Unique description/note/rendered/base64/pagination sentinels remain
 absent from audit, tracing, logs, errors, object IDs, and metric labels; all
 limit or parse failures are fixed sanitized
@@ -2075,11 +2055,10 @@ Optional inputs:
   `webUrl`/`spaceUrl` host exactly.
 
 The read smoke asserts page view and page search return browser-shaped
-`webUrl` and `spaceUrl` values. It also exercises one storage/ADF body in
-embedded Markdown/text mode and body-free search in whole-result Markdown,
-asserting that the native body is unchanged, `renderedBody` is beside `body`,
-and the Markdown search performs no additional fetch. Configure the CQL so it
-returns at least one page in the target space.
+`webUrl` and `spaceUrl` values. It exercises selected Markdown/text and supported
+native body formats with one tagged `body`, while search remains body-free and
+selection makes no additional request. Configure CQL to return at least one page
+in the target space.
 
 To check a personal space, use its exact key, for example
 `AGENT_ACCESS_REAL_CONFLUENCE_SPACE='~alice'`, a page ID inside that space, and

@@ -1,8 +1,8 @@
 //! View-only custom-field projection. Jira implementation IDs, rather than
 //! generic JSON types, determine which values are safe to disclose.
 use super::JiraBackendError;
-use agent_access_content::{ContentRenderError, render_adf_bounded_with_budget};
-use agent_access_provider::presentation::{ReadContentFormat, RenderBudget};
+use agent_access_content::{ContentRenderError, validate_adf_bounded_with_budget};
+use agent_access_provider::presentation::RenderBudget;
 use agent_access_provider::{ProviderError, ReasonCode};
 use serde_json::{Map, Value, json};
 
@@ -267,14 +267,7 @@ fn preflight_adf(
     max_body_bytes: u64,
     budget: &mut RenderBudget,
 ) -> Result<(), ContentRenderError> {
-    render_adf_bounded_with_budget(
-        document,
-        ReadContentFormat::Native,
-        max_body_bytes,
-        max_body_bytes,
-        budget,
-    )
-    .map(|_| ())
+    validate_adf_bounded_with_budget(document, max_body_bytes, budget)
 }
 
 #[cfg(test)]

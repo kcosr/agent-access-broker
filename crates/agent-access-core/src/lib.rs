@@ -3,8 +3,7 @@ use agent_access_provider::{
     OAuthScopeMode, ProviderLimits, ReasonCodeId, ResourceScopes, ResourceSelector,
     ResourceTypeRegistry, ServiceCredentialKinds, ServiceDescriptor, ValidationContext,
     default_download_max_bytes, is_action_name, is_env_name, is_loopback_or_localhost,
-    is_secret_ref, is_service_name,
-    presentation::{ReadContentFormat, ResponseFormat},
+    is_secret_ref, is_service_name, presentation::OutputContentFormat,
     validate_egress_proxy_config, validate_upstream_allowlist,
 };
 use attribution::validate_attribution_config;
@@ -1466,9 +1465,7 @@ pub struct CliConfig {
 #[serde(deny_unknown_fields)]
 pub struct CliDefaultsConfig {
     #[serde(default)]
-    pub read_content_format: ReadContentFormat,
-    #[serde(default)]
-    pub output_format: ResponseFormat,
+    pub preferred_output_content_format: Option<OutputContentFormat>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

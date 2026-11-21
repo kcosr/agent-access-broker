@@ -830,8 +830,7 @@ mod tests {
             identity_header: "Authorization".into(),
             identity_scheme: "Bearer".into(),
             allow_insecure_broker_http: false,
-            read_content_format: ReadContentFormat::Native,
-            output_format: ResponseFormat::Json,
+            preferred_output_content_format: None,
         }
     }
 

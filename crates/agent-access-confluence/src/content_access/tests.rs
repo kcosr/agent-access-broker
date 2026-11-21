@@ -1788,3 +1788,53 @@ async fn draft_stage_accepts_only_absent_or_matching_current_probe_responses() {
 }
 
 mod stable_identity;
+
+#[tokio::test]
+async fn selected_body_is_released_only_after_current_location_recheck() {
+    use agent_access_provider::presentation::{
+        ResponseOptions, present_result, resolve_response_options,
+    };
+    for moved in [false, true] {
+        let mut raw = EvidenceBackend::new();
+        raw.move_during_body = moved;
+        let backend = Arc::new(raw);
+        let provider = backend.provider();
+        let request = admitted(
+            &provider,
+            "page.view",
+            ContainmentEvidenceLevel::CompleteLineage,
+        )
+        .await;
+        let resolved = resolve_response_options(
+            crate::present::presentation("page.view", &config().content),
+            None,
+            ResponseOptions::default(),
+        )
+        .unwrap();
+        match provider.invoke(request).await {
+            Ok(mut result) => {
+                assert!(!moved);
+                present_result(&resolved, &mut result.result, 1024, 16384).unwrap();
+                assert_eq!(
+                    result.result["body"],
+                    json!({"format":"markdown","value":"safe"})
+                );
+                assert!(result.presentation_recovery_receipt.is_none());
+                assert_eq!(
+                    result.audit.unwrap()["locationProof"]["finalCheck"],
+                    "matched"
+                );
+            }
+            Err(error) => {
+                assert!(moved);
+                assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+                assert!(error.result.is_none());
+                assert_eq!(
+                    error.audit.unwrap()["locationProof"]["finalCheck"],
+                    "changed"
+                );
+            }
+        }
+        assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+    }
+}

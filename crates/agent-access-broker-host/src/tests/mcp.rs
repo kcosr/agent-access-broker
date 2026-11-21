@@ -3,6 +3,7 @@ use super::*;
 use agent_access_provider::{ScopeRequest, ScopeResolution};
 use axum::http::HeaderValue;
 
+mod content_formats;
 pub(super) mod names;
 mod rate_wait;
 mod trusted_user;

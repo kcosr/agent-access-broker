@@ -72,6 +72,7 @@ impl Handler {
             &request.context,
             &request.view,
         );
+        mcp::apply_output_content_preference(&mut catalog, request.preferred_output_content_format);
         catalog
     }
     fn registry(request: &Admitted, catalog: &ApiCatalog) -> Result<ToolRegistry, ErrorData> {
@@ -218,6 +219,7 @@ impl Handler {
                 &request.owner,
                 request.context.as_str(),
                 &request.view,
+                request.preferred_output_content_format,
                 bytes,
             ))
             .unwrap()
@@ -549,20 +551,21 @@ impl ServerHandler for Handler {
         if !args.get("inputs").is_some_and(Value::is_object) {
             return Ok(output::message("inputs is required and must be a JSON object").into());
         }
-        for (key, allowed) in [
-            ("readContentFormat", &action.read_content_formats),
-            ("responseFormat", &action.response_formats),
-        ] {
-            if let Some(v) = args.get(key)
-                && !v.as_str().is_some_and(|s| allowed.iter().any(|a| a == s))
-            {
-                return Ok(output::message("Unsupported response presentation option").into());
-            }
+        if let Some(value) = args.get("outputContentFormat")
+            && !value.as_str().is_some_and(|format| {
+                action
+                    .output_content_formats
+                    .iter()
+                    .any(|allowed| allowed.as_str() == format)
+            })
+        {
+            return Ok(output::message("Unsupported output content format").into());
         }
-        let invoke: InvokeRequest = match serde_json::from_value(Value::Object(args)) {
+        let mut invoke: InvokeRequest = match serde_json::from_value(Value::Object(args)) {
             Ok(v) => v,
             Err(_) => return Ok(output::message("Invalid action input wrapper").into()),
         };
+        invoke.preferred_output_content_format = request.preferred_output_content_format;
         let state = AppState {
             reloadable: self.endpoint.0.state.clone(),
         };

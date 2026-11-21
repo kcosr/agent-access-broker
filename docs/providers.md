@@ -127,13 +127,16 @@ use the narrowest upstream role that supports the approved workflow.
   identifies the provider-native destination. Catalog schemas are the
   capability signal for clients: inspect each action's `contentFormat.enum`,
   never a Broker version. There is no format default or inference.
-- **Normalized read content** - response presentation uses top-level common
-  invoke fields rather than provider inputs. `readContentFormat` preserves
-  native content and can add Markdown or text `renderedBody` companions;
-  `responseFormat = "markdown"` returns a semantic Markdown wrapper inside the
-  standard envelope. Inspect each action's `readContentFormats` and
-  `responseFormats` catalog fields. Jira, Confluence, and GitLab implement
-  these capabilities on their declared rich-content and retrieval results.
+- **Selected output content** - ordinary invocation responses retain structured
+  JSON metadata and one `{format,value}` at each declared rich-text field.
+  Top-level `outputContentFormat` selects an exact supported format;
+  `preferredOutputContentFormat` supplies a soft client preference. Service/client
+  preferences default to Markdown and use the action's native format when the
+  chosen preference is unsupported. Jira supports Markdown, text and ADF;
+  Confluence also supports configured storage; GitLab supports Markdown and text.
+  Inspect `outputContentFormats`, `nativeOutputContentFormat`,
+  `defaultOutputContentFormat` and `bodyFields`. Output selection never implies a
+  new body fetch or changes explicit write-content requirements.
 
 ## Built-In Providers
 

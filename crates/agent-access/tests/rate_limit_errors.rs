@@ -1,6 +1,8 @@
 //! HTTP 429 exits 7. Broker and upstream rate limits also repeat the broker's
 //! message as one stderr line, while stdout keeps the JSON envelope and
 //! nothing is retried. Synthetic broker responses stand in for the broker.
+#[path = "common/jira_catalog.rs"]
+mod jira_catalog;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Output};
@@ -14,20 +16,7 @@ const UPSTREAM_LIMIT: &str =
     "jira is rate limiting requests. Retry after 30s (at 2026-09-25T14:03:30Z).";
 
 fn catalog() -> Value {
-    json!({
-        "version":"agent-access.catalog.v2", "identity":{}, "routes":[],
-        "send":{"version":"agent-access.send.v1","catalogRequired":true},
-        "services":[{
-            "service":"jira", "displayName":"Jira", "surface":"invoke", "scopedMcpReady":true,
-            "scopeTypes":[], "actions":[{
-                "action":"issue.view", "scopedMcpName":"issue.view", "readOnly":true, "description":"View an issue",
-                "requiredScopeTypes":[], "credentialModes":[],
-                "inputSchema":{"type":"object"}, "io":{"type":"json"},
-                "responseKind":"response_envelope", "exitPolicy":"invoke_decision",
-                "responseFormats":["json", "markdown"]
-            }]
-        }]
-    })
+    jira_catalog::catalog()
 }
 
 fn envelope(action: &str, reason_code: &str, message: &str, result: Option<Value>) -> Value {
@@ -126,7 +115,7 @@ async fn rate_limits_exit_seven_and_repeat_the_broker_message_on_stderr() {
     const SEND: [&str; 3] = [
         "send",
         "--request-json",
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"ABC-1"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"issue.view","inputs":{"issue":"ABC-1"}}"#,
     ];
     const DOWNLOAD: [&str; 5] = ["jira", "issue", "attachment", "download", "ABC-1"];
     for (reason_code, message, result) in rate_limits() {
@@ -139,7 +128,7 @@ async fn rate_limits_exit_seven_and_repeat_the_broker_message_on_stderr() {
         let destination = temp.path().join("saved");
         std::fs::write(&destination, "existing content").unwrap();
         let download_args = [&DOWNLOAD[..], &["10001"]].concat();
-        let markdown = [&INVOKE[..], &["--output-format", "markdown"]].concat();
+        let markdown = [&INVOKE[..], &["--output-content-format", "markdown"]].concat();
         for (label, args, output, expected) in [
             ("invoke", &INVOKE[..], None, &view),
             (

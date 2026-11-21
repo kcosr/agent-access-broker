@@ -26,8 +26,8 @@ fn command(directory: &Path, broker: &MockServer) -> Command {
 
 fn catalog() -> Value {
     json!({
-        "version":"agent-access.catalog.v2", "identity":{}, "routes":[],
-        "send":{"version":"agent-access.send.v1","catalogRequired":true},
+        "version":"agent-access.catalog.v3", "identity":{}, "routes":[],
+        "send":{"version":"agent-access.send.v2","catalogRequired":true},
         "services":[{
             "service":"jira", "displayName":"Jira", "surface":"invoke", "scopedMcpReady":true,
             "scopeTypes":[], "actions":[{
@@ -36,7 +36,7 @@ fn catalog() -> Value {
                 "requiredScopeTypes":[], "credentialModes":[],
                 "inputSchema":{"type":"object"}, "io":{"type":"json"},
                 "responseKind":"response_envelope", "exitPolicy":"invoke_decision",
-                "responseFormats":["json"]
+                "outputContentFormats":[]
             }]
         }]
     })
@@ -65,7 +65,7 @@ async fn typed_custom_field_set_preserves_json_types_and_identity_guard() {
         Mock::given(method("GET"))
             .and(path("/v1/spec/catalog"))
             .respond_with(ResponseTemplate::new(200).set_body_json(catalog()))
-            .expect(if saved { 1 } else { 0 })
+            .expect(1)
             .mount(&broker)
             .await;
         let response = json!({

@@ -180,7 +180,7 @@ actions and exposes typed wrappers for supported services.
   before provider dispatch, including downloads, and preserve unverified mutation
   outcomes in compact receipts without exposing catalog-marked secrets.
   `--output` is a destination and
-  `--output-format` is representation; preserve dedicated raw-download actions
+  `--output-content-format` selects declared body representation within JSON; preserve dedicated raw-download actions
   and receipt metadata. Generic `invoke --output` selects JSON versus raw bytes
   from one fresh caller catalog; it must not retry after stale discovery.
   Downloads preserve explicit mutation outcomes on local/transfer failure, and
@@ -198,6 +198,25 @@ actions and exposes typed wrappers for supported services.
   the same change when behavior, commands, config, architecture, security
   posture, provider semantics, operational workflows, or repository layout
   changes.
+
+## Output content contracts
+
+Ordinary invocation results stay JSON. Return one selected `{format,value}` at
+each declared rich-text field; retain metadata, absence/null rules and binary
+contracts. Exact `outputContentFormat` is strict. Resolve a soft preference from
+request/connection, service, then Markdown against the admitted descriptor;
+an unsupported preference uses the declared native format without checking lower
+tiers. Pin that selection through finalization. Never fall back after missing or
+malformed source data, conversion failure or exhausted budgets, and never fetch
+additional sources to satisfy a format.
+
+Keep the four concrete format/value pairings, `bodyFields`, catalog/send versions,
+CLI and MCP projections aligned. Validate successful selected content only at
+declared fields; preference output may use a newly enabled native source after
+catalog discovery. Preserve explicit provider-authored completed mutation receipts
+when presentation fails. Client validation errors withhold invalid content, keep
+known completion and do not replay an invocation. Provider content preferences
+use `preferred_output_format`; client defaults use `preferred_output_content_format`.
 
 ## Invocation admission and discovery
 

@@ -1,7 +1,6 @@
-//! Rich-content formats shared by backends: bounded rendering of Atlassian
-//! Document Format, Confluence storage (XHTML), and GitLab Markdown to
-//! Markdown or text; bounded conversion of Markdown and plain text into
-//! those formats; and attribution footers for each representation.
+//! Rich-content formats shared by backends: bounded native-source validation
+//! and concrete selection of Atlassian Document Format, Confluence storage
+//! (XHTML), Markdown or text; bounded write conversion and attribution footers.
 
 mod attribution;
 mod rendering;

@@ -17,19 +17,21 @@ verify_certificates = true
 # ]
 
 [defaults]
-# Applied only when the selected action advertises the matching response
-# capability for Jira, Confluence, or GitLab. Command flags override these
-# values; config overrides environment.
-read_content_format = "native"
-output_format = "json"
+# Soft client preference for declared rich-text output. Config overrides the
+# environment; an explicit --output-content-format is strict. Unsupported
+# preferences use the action's native format. Omit to use the service preference.
+# preferred_output_content_format = "markdown"  # markdown | text | adf | storage
 
 [identity]
 header = "Authorization"
 scheme = "Bearer"
-disabled = true
-# Enable identity and set token_file to use `agent-access auth token set`.
+disabled = false
+# Set token_file to use `agent-access auth token set` with an issued or registered token.
 # These Authorization/Bearer settings match both broker configuration templates;
 # the selected broker identity source must use the same header and scheme.
-# Keep disabled = true only for an anonymous development broker.
+# Provider invocation requires authenticated runtime catalog access. Use
+# disabled = true only when authenticated ingress supplies the identity, or for
+# basic service discovery that permits anonymous callers. Use direct HTTP for
+# anonymous development invocations.
 # A leading `~` expands to the current user's home directory.
 # token_file = "~/.config/agent-access/token"

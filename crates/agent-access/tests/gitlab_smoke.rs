@@ -111,7 +111,7 @@ async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
     std::fs::write(
         &send_path,
         serde_json::to_vec(&serde_json::json!({
-            "version": "agent-access.send.v1",
+            "version": "agent-access.send.v2",
             "kind": "invoke",
             "service": "gitlab",
             "action": "project.upload",
@@ -172,8 +172,8 @@ async fn cli_uploads_gitlab_project_html_through_typed_and_send_commands() {
 async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
     let upload_path = temp_path("session.html");
     std::fs::write(&upload_path, b"<html>private-agent-session-content</html>").unwrap();
-    // A caller without the project or the action gets the concealed denial;
-    // an authorized caller learns which file limit to fix.
+    // An absent action is rejected from the fresh catalog before dispatch.
+    // Project and file-limit denials retain their invocation envelopes.
     for (case, reason) in [
         ("repository", "scope_unresolved"),
         ("action", "scope_unresolved"),
@@ -201,8 +201,7 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
         } else {
             "sip/service"
         };
-        let upload = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-            .args(["--url", &base_url, "--no-token"])
+        let upload = gitlab_cli(&base_url)
             .args([
                 "gitlab",
                 "project",
@@ -221,18 +220,35 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
             String::from_utf8_lossy(&upload.stdout),
             String::from_utf8_lossy(&upload.stderr)
         );
-        // HTTP 403, 413 or 415.
-        assert_eq!(upload.status.code(), Some(2), "{report}");
-        let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
-            .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
-        assert_eq!(value["decision"], "deny", "{report}");
-        assert_eq!(value["reasonCode"], reason, "{report}");
+        if case == "action" {
+            assert_eq!(upload.status.code(), Some(3), "{report}");
+            assert!(upload.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&upload.stderr)
+                    .contains("runtime catalog does not expose action gitlab.project.upload")
+            );
+        } else {
+            assert_eq!(upload.status.code(), Some(2), "{report}");
+            let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
+                .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
+            assert_eq!(value["decision"], "deny", "{report}");
+            assert_eq!(value["reasonCode"], reason, "{report}");
+        }
         assert!(
             backend.uploaded_projects.lock().unwrap().is_empty(),
             "{case} reached upstream upload"
         );
         let audit = broker.audit().unwrap();
-        audit.require_action("gitlab", "project.upload");
+        if case == "action" {
+            assert!(
+                audit
+                    .records()
+                    .iter()
+                    .all(|record| record["action"] != "project.upload")
+            );
+        } else {
+            audit.require_action("gitlab", "project.upload");
+        }
         let audit = audit.text();
         assert!(!audit.contains("private-agent-session-content"));
         assert!(!audit.contains("gitlab-service-token"));
@@ -241,10 +257,9 @@ async fn cli_gitlab_project_upload_enforces_grants_and_file_limits() {
     std::fs::remove_dir_all(upload_path.parent().unwrap()).unwrap();
 }
 
-/// The Broker refuses this upload after its metadata part, with most of the
-/// file unsent: in scope resolution for a caller without the action, and in
-/// body admission for a file over the size cap. The CLI must still receive
-/// the denial, not a reset connection, on every attempt.
+/// Missing-action discovery refuses the upload locally. For an authorized
+/// action, the Broker refuses a file over the cap after its metadata part.
+/// Every attempt must report the appropriate refusal without an upstream upload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cli_gitlab_project_upload_receives_the_denial_of_a_large_file() {
     const ATTEMPTS: usize = 8;
@@ -290,12 +305,20 @@ async fn cli_gitlab_project_upload_receives_the_denial_of_a_large_file() {
                 String::from_utf8_lossy(&upload.stdout),
                 String::from_utf8_lossy(&upload.stderr)
             );
-            // HTTP 403 or 413.
-            assert_eq!(upload.status.code(), Some(2), "{report}");
-            let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
-                .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
-            assert_eq!(value["decision"], "deny", "{report}");
-            assert_eq!(value["reasonCode"], reason, "{report}");
+            if case == "action" {
+                assert_eq!(upload.status.code(), Some(3), "{report}");
+                assert!(upload.stdout.is_empty());
+                assert!(
+                    String::from_utf8_lossy(&upload.stderr)
+                        .contains("runtime catalog does not expose action gitlab.project.upload")
+                );
+            } else {
+                assert_eq!(upload.status.code(), Some(2), "{report}");
+                let value: serde_json::Value = serde_json::from_slice(&upload.stdout)
+                    .unwrap_or_else(|error| panic!("no JSON envelope ({error}): {report}"));
+                assert_eq!(value["decision"], "deny", "{report}");
+                assert_eq!(value["reasonCode"], reason, "{report}");
+            }
         }
         assert!(backend.uploaded_projects.lock().unwrap().is_empty());
         stop(broker).await;
@@ -313,16 +336,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     .await;
     let base_url = broker.public_url();
 
-    let project = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "project",
-            "view",
-            "sip/service",
-        ])
+    let project = gitlab_cli(&base_url)
+        .args(["gitlab", "project", "view", "sip/service"])
         .output()
         .unwrap();
     assert_success("project view", &project);
@@ -337,11 +352,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
         "sip/service"
     );
 
-    let issue = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "view",
@@ -355,7 +367,7 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     assert_eq!(issue_json["result"]["issue"]["iid"], 7);
     assert_eq!(issue_json["result"]["issue"]["title"], "visible issue");
     assert_eq!(
-        issue_json["result"]["issue"]["description"],
+        issue_json["result"]["issue"]["description"]["value"],
         "issue context"
     );
     assert_eq!(
@@ -369,11 +381,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     );
     assert_eq!(issue_json["result"]["issue"]["milestone"]["title"], "M1");
 
-    let issue_search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_search = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "search",
@@ -410,11 +419,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     let issue_next_page_token = issue_search_json["result"]["nextPageToken"]
         .as_str()
         .unwrap();
-    let issue_search_second_page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_search_second_page = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "search",
@@ -443,17 +449,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     assert_eq!(last_issue_search.request.page, 2);
     assert_eq!(last_issue_search.request.labels, vec!["bug".to_string()]);
 
-    let merge_request = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "merge-request",
-            "view",
-            "sip/service",
-            "5",
-        ])
+    let merge_request = gitlab_cli(&base_url)
+        .args(["gitlab", "merge-request", "view", "sip/service", "5"])
         .output()
         .unwrap();
     assert_success("merge request view", &merge_request);
@@ -464,7 +461,7 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
         "visible merge request"
     );
     assert_eq!(
-        merge_request_json["result"]["mergeRequest"]["description"],
+        merge_request_json["result"]["mergeRequest"]["description"]["value"],
         "merge request context"
     );
     assert_eq!(
@@ -485,11 +482,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
         901
     );
 
-    let merge_request_search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_search = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "search",
@@ -520,11 +514,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     let merge_request_next_page_token = merge_request_search_json["result"]["nextPageToken"]
         .as_str()
         .unwrap();
-    let merge_request_search_second_page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_search_second_page = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "search",
@@ -562,11 +553,8 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
         Some("feature/rest")
     );
 
-    let branch_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let branch_list = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "branch",
             "list",
@@ -583,28 +571,16 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     assert_eq!(last_branch_list.project_id, 42);
     assert_eq!(last_branch_list.request.search.as_deref(), Some("main"));
 
-    let branch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "branch",
-            "view",
-            "sip/service",
-            "main",
-        ])
+    let branch = gitlab_cli(&base_url)
+        .args(["gitlab", "branch", "view", "sip/service", "main"])
         .output()
         .unwrap();
     assert_success("branch view", &branch);
     let branch_json: serde_json::Value = serde_json::from_slice(&branch.stdout).unwrap();
     assert_eq!(branch_json["result"]["branch"]["name"], "main");
 
-    let commit_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let commit_list = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "commit",
             "list",
@@ -626,33 +602,16 @@ async fn cli_invokes_gitlab_read_actions_against_stubbed_backend() {
     assert_eq!(last_commit_list.request.max_results, 2);
     assert_eq!(last_commit_list.request.first_parent, Some(true));
 
-    let commit = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "commit",
-            "view",
-            "sip/service",
-            TEST_SHA,
-        ])
+    let commit = gitlab_cli(&base_url)
+        .args(["gitlab", "commit", "view", "sip/service", TEST_SHA])
         .output()
         .unwrap();
     assert_success("commit view", &commit);
     let commit_json: serde_json::Value = serde_json::from_slice(&commit.stdout).unwrap();
     assert_eq!(commit_json["result"]["commit"]["title"], "initial commit");
 
-    let denied = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "project",
-            "view",
-            "secret/service",
-        ])
+    let denied = gitlab_cli(&base_url)
+        .args(["gitlab", "project", "view", "secret/service"])
         .output()
         .unwrap();
     assert_eq!(
@@ -690,8 +649,8 @@ async fn cli_invokes_all_gitlab_webhook_actions_and_preserves_secret_files() {
     let base_url = broker.public_url();
 
     let run = |args: &[&str]| {
-        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-            .args(["--url", &base_url, "--no-token", "gitlab", "webhook"])
+        let output = gitlab_cli(&base_url)
+            .args(["gitlab", "webhook"])
             .args(args)
             .output()
             .unwrap();
@@ -705,11 +664,8 @@ async fn cli_invokes_all_gitlab_webhook_actions_and_preserves_secret_files() {
     let signing_token_path = temp_path("gitlab-webhook-signing-token.txt");
     let signing_token = "whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     std::fs::write(&signing_token_path, signing_token).unwrap();
-    let create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let create = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "webhook",
             "create",
@@ -1323,7 +1279,7 @@ async fn cli_and_http_cover_gitlab_approval_and_suggestion_workflows() {
     std::fs::write(
         &send_path,
         format!(
-            r#"{{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"merge_request.suggestion.batch_apply","inputs":{{"project":"sip/service","iid":5,"expectedHeadSha":"{TEST_SHA}","suggestions":[{{"discussionId":"discussion-1","noteId":900,"suggestionId":456}},{{"discussionId":"discussion-1","noteId":900,"suggestionId":457}}]}}}}"#
+            r#"{{"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"merge_request.suggestion.batch_apply","inputs":{{"project":"sip/service","iid":5,"expectedHeadSha":"{TEST_SHA}","suggestions":[{{"discussionId":"discussion-1","noteId":900,"suggestionId":456}},{{"discussionId":"discussion-1","noteId":900,"suggestionId":457}}]}}}}"#
         ),
     )
     .unwrap();
@@ -1987,7 +1943,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     let view_path = temp_path("gitlab-draft-view-send.json");
     std::fs::write(
         &view_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"merge_request.draft_note.view","inputs":{"project":"sip/service","iid":5,"draftNoteId":801}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"merge_request.draft_note.view","inputs":{"project":"sip/service","iid":5,"draftNoteId":801}}"#,
     )
     .unwrap();
     let view = gitlab_cli(&base_url)
@@ -2008,7 +1964,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
             "5",
             "--max-results",
             "20",
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ])
         .output()
@@ -2022,7 +1978,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
         .find(|draft| draft["id"] == 801)
         .unwrap();
     assert!(unpositioned["position"].is_null());
-    assert_eq!(unpositioned["renderedBody"]["format"], "text");
+    assert_eq!(unpositioned["body"]["format"], "text");
 
     let text_view = gitlab_cli(&base_url)
         .args([
@@ -2032,7 +1988,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
             "sip/service",
             "5",
             "802",
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ])
         .output()
@@ -2040,10 +1996,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     assert_success("typed unpositioned draft text view", &text_view);
     let text_view: serde_json::Value = serde_json::from_slice(&text_view.stdout).unwrap();
     assert!(text_view["result"]["draftNote"]["position"].is_null());
-    assert_eq!(
-        text_view["result"]["draftNote"]["renderedBody"]["format"],
-        "text"
-    );
+    assert_eq!(text_view["result"]["draftNote"]["body"]["format"], "text");
 
     let general = gitlab_cli(&base_url)
         .args([
@@ -2063,7 +2016,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     let reply_path = temp_path("gitlab-draft-reply-send.json");
     std::fs::write(
         &reply_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"merge_request.draft_note.add","inputs":{"project":"sip/service","iid":5,"inReplyToDiscussionId":"discussion-outdated","resolveDiscussion":true,"content":"reply draft secret","contentFormat":"markdown"}}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"merge_request.draft_note.add","inputs":{"project":"sip/service","iid":5,"inReplyToDiscussionId":"discussion-outdated","resolveDiscussion":true,"content":"reply draft secret","contentFormat":"markdown"}}"#,
     )
     .unwrap();
     let reply = gitlab_cli(&base_url)
@@ -2165,7 +2118,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     let update: serde_json::Value = serde_json::from_slice(&update.stdout).unwrap();
     assert_eq!(update["result"]["draftNoteId"], 803);
     assert_eq!(
-        update["result"]["draftNote"]["body"],
+        update["result"]["draftNote"]["body"]["value"],
         "updated draft secret"
     );
     assert_review_context(&update, "service", "shared");
@@ -2189,7 +2142,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     let positioned_update: serde_json::Value =
         serde_json::from_slice(&positioned_update.stdout).unwrap();
     assert_eq!(
-        positioned_update["result"]["draftNote"]["body"],
+        positioned_update["result"]["draftNote"]["body"]["value"],
         "edited positioned draft secret"
     );
     assert_eq!(
@@ -2235,7 +2188,7 @@ async fn broker_exposes_gitlab_draft_lifecycle_and_review_submission_across_call
     let position_only_update: serde_json::Value =
         serde_json::from_slice(&position_only_update.stdout).unwrap();
     assert_eq!(
-        position_only_update["result"]["draftNote"]["body"],
+        position_only_update["result"]["draftNote"]["body"]["value"],
         "edited positioned draft secret"
     );
     assert_eq!(
@@ -3647,7 +3600,10 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         .unwrap();
     assert_success("native issue view", &native);
     let native_json: serde_json::Value = serde_json::from_slice(&native.stdout).unwrap();
-    assert_eq!(native_json["result"]["issue"]["description"], ISSUE_BODY);
+    assert_eq!(
+        native_json["result"]["issue"]["description"]["value"],
+        ISSUE_BODY
+    );
     assert!(native_json["result"]["issue"].get("renderedBody").is_none());
     let native_operations = take_backend_operations(&backend);
 
@@ -3658,43 +3614,32 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
             "view",
             "sip/service",
             "7",
-            "--read-content-format",
+            "--output-content-format",
             "markdown",
         ])
         .output()
         .unwrap();
     assert_success("typed embedded issue view", &embedded);
-    let mut embedded_json: serde_json::Value = serde_json::from_slice(&embedded.stdout).unwrap();
+    let embedded_json: serde_json::Value = serde_json::from_slice(&embedded.stdout).unwrap();
     assert_eq!(
-        embedded_json["result"]["issue"]["renderedBody"],
+        embedded_json["result"]["issue"]["description"],
         serde_json::json!({"format":"markdown", "value":ISSUE_BODY})
     );
-    embedded_json["result"]["issue"]
-        .as_object_mut()
-        .unwrap()
-        .remove("renderedBody");
     assert_eq!(embedded_json["result"], native_json["result"]);
     assert_eq!(take_backend_operations(&backend), native_operations);
 
     let whole = gitlab_cli(&base_url)
-        .args([
-            "gitlab",
-            "issue",
-            "view",
-            "sip/service",
-            "7",
-            "--output-format",
-            "markdown",
-        ])
+        .args(["gitlab", "issue", "view", "sip/service", "7"])
         .output()
         .unwrap();
     assert_success("typed Markdown issue view", &whole);
     let whole_stdout = String::from_utf8(whole.stdout).unwrap();
     assert!(whole.stderr.is_empty());
-    assert!(whole_stdout.starts_with("# GitLab issue "));
     assert!(whole_stdout.contains(ISSUE_BODY));
-    assert!(!whole_stdout.contains("\"decision\""));
-    assert!(!whole_stdout.contains("\"description\""));
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&whole_stdout).unwrap()["result"],
+        native_json["result"]
+    );
     assert_eq!(take_backend_operations(&backend), native_operations);
 
     let generic = gitlab_cli(&base_url)
@@ -3703,7 +3648,7 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
             "gitlab.merge_request.view",
             "--input-json",
             r#"{"project":"sip/service","iid":5}"#,
-            "--read-content-format",
+            "--output-content-format",
             "text",
         ])
         .output()
@@ -3711,11 +3656,11 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
     assert_success("generic embedded merge request view", &generic);
     let generic_json: serde_json::Value = serde_json::from_slice(&generic.stdout).unwrap();
     assert_eq!(
-        generic_json["result"]["mergeRequest"]["renderedBody"],
+        generic_json["result"]["mergeRequest"]["description"],
         serde_json::json!({"format":"text", "value":MERGE_REQUEST_BODY})
     );
     assert_eq!(
-        generic_json["result"]["mergeRequest"]["description"],
+        generic_json["result"]["mergeRequest"]["description"]["value"],
         MERGE_REQUEST_BODY
     );
     take_backend_operations(&backend);
@@ -3728,16 +3673,16 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         "gitlab-direct-merge-request-search",
         serde_json::json!({
             "inputs":{"project":"sip/service","maxResults":2},
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(
-        merge_request_search["result"]["mergeRequests"][0]["renderedBody"],
+        merge_request_search["result"]["mergeRequests"][0]["description"],
         serde_json::json!({"format":"markdown", "value":MERGE_REQUEST_BODY})
     );
     assert_eq!(
-        merge_request_search["result"]["mergeRequests"][0]["description"],
+        merge_request_search["result"]["mergeRequests"][0]["description"]["value"],
         MERGE_REQUEST_BODY
     );
     take_backend_operations(&backend);
@@ -3745,7 +3690,7 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
     let send_path = temp_path("gitlab-normalized-read-send.json");
     std::fs::write(
         &send_path,
-        r#"{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"issue.note.list","inputs":{"project":"sip/service","iid":7,"maxResults":2},"readContentFormat":"markdown"}"#,
+        r#"{"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"issue.note.list","inputs":{"project":"sip/service","iid":7,"maxResults":2},"outputContentFormat":"markdown"}"#,
     )
     .unwrap();
     let send = gitlab_cli(&base_url)
@@ -3755,10 +3700,13 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
     assert_success("send embedded issue notes", &send);
     let send_json: serde_json::Value = serde_json::from_slice(&send.stdout).unwrap();
     assert_eq!(
-        send_json["result"]["notes"][0]["renderedBody"],
+        send_json["result"]["notes"][0]["body"],
         serde_json::json!({"format":"markdown", "value":ISSUE_NOTE_BODY})
     );
-    assert_eq!(send_json["result"]["notes"][0]["body"], ISSUE_NOTE_BODY);
+    assert_eq!(
+        send_json["result"]["notes"][0]["body"]["value"],
+        ISSUE_NOTE_BODY
+    );
     take_backend_operations(&backend);
 
     let discussion = invoke_gitlab(
@@ -3768,17 +3716,17 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         "gitlab-direct-discussion-list",
         serde_json::json!({
             "inputs":{"project":"sip/service","iid":5,"maxResults":2},
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(discussion["decision"], "allow");
     assert_eq!(
-        discussion["result"]["discussions"][0]["notes"][0]["renderedBody"],
+        discussion["result"]["discussions"][0]["notes"][0]["body"],
         serde_json::json!({"format":"markdown", "value":DISCUSSION_BODY})
     );
     assert_eq!(
-        discussion["result"]["discussions"][0]["notes"][0]["body"],
+        discussion["result"]["discussions"][0]["notes"][0]["body"]["value"],
         DISCUSSION_BODY
     );
     let review_note = &discussion["result"]["discussions"][0]["notes"][0];
@@ -3807,16 +3755,16 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
                 "iid":5,
                 "discussionId":"discussion-1"
             },
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(
-        resolved["result"]["discussion"]["notes"][0]["renderedBody"],
+        resolved["result"]["discussion"]["notes"][0]["body"],
         serde_json::json!({"format":"markdown", "value":RESOLVED_DISCUSSION_BODY})
     );
     assert_eq!(
-        resolved["result"]["discussion"]["notes"][0]["body"],
+        resolved["result"]["discussion"]["notes"][0]["body"]["value"],
         RESOLVED_DISCUSSION_BODY
     );
     take_backend_operations(&backend);
@@ -3833,16 +3781,19 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
                 "content":"caller supplied note",
                 "contentFormat":"markdown"
             },
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(mutation["decision"], "allow");
     assert_eq!(
-        mutation["result"]["note"]["renderedBody"],
+        mutation["result"]["note"]["body"],
         serde_json::json!({"format":"markdown", "value":CREATED_NOTE_BODY})
     );
-    assert_eq!(mutation["result"]["note"]["body"], CREATED_NOTE_BODY);
+    assert_eq!(
+        mutation["result"]["note"]["body"]["value"],
+        CREATED_NOTE_BODY
+    );
     take_backend_operations(&backend);
 
     let rejected_source = "unsupported whole mutation source sentinel";
@@ -3860,7 +3811,7 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
                 "content":rejected_source,
                 "contentFormat":"markdown"
             },
-            "responseFormat":"markdown"
+            "outputContentFormat":"adf"
         }))
         .send()
         .await
@@ -3881,12 +3832,12 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
         "gitlab-direct-search-native",
         serde_json::json!({
             "inputs":{"project":"sip/service","maxResults":2},
-            "readContentFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
     assert_eq!(
-        first_page["result"]["issues"][0]["renderedBody"],
+        first_page["result"]["issues"][0]["description"],
         serde_json::json!({"format":"markdown", "value":ISSUE_BODY})
     );
     let page_token = first_page["result"]["nextPageToken"]
@@ -3905,15 +3856,14 @@ async fn gitlab_normalized_reads_cover_all_callers_nested_content_and_pagination
                 "maxResults":2,
                 "pageToken":page_token
             },
-            "responseFormat":"markdown"
+            "outputContentFormat":"markdown"
         }),
     )
     .await;
-    assert_eq!(second_page["result"]["format"], "markdown");
-    let search_markdown = second_page["result"]["value"].as_str().unwrap();
-    assert!(search_markdown.starts_with("# GitLab issues"));
-    assert!(search_markdown.contains(ISSUE_BODY));
-    assert!(!search_markdown.contains("\"issues\""));
+    assert_eq!(
+        second_page["result"]["issues"][0]["description"],
+        serde_json::json!({"format":"markdown","value":ISSUE_BODY})
+    );
     assert_eq!(take_backend_operations(&backend), first_page_operations);
     assert_eq!(
         backend
@@ -4010,7 +3960,7 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
         .header("X-Agent-Access-Identity-Token", "agent-token")
         .json(&serde_json::json!({
             "inputs":{"project":"sip/service","iid":5,"maxResults":2},
-            "readContentFormat":"native"
+            "outputContentFormat":"markdown"
         }))
         .send()
         .await
@@ -4058,8 +4008,6 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
             "--ref",
             "main",
             "--include-content",
-            "--output-format",
-            "markdown",
         ])
         .output()
         .unwrap();
@@ -4092,8 +4040,6 @@ async fn gitlab_normalized_read_failures_are_atomic_bounded_and_secret() {
             "--ref",
             "main",
             "--include-content",
-            "--output-format",
-            "markdown",
         ])
         .output()
         .unwrap();
@@ -4193,11 +4139,8 @@ async fn gitlab_inline_file_over_one_mib_works_over_http_and_cli() {
             .decoded_content_bytes,
         content.len() as u64
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let output = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "create",
@@ -4244,11 +4187,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     .await;
     let base_url = broker.public_url();
 
-    let branch_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let branch_create = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "branch",
             "create",
@@ -4264,11 +4204,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_eq!(observed_branch.branch, "work/docs");
     assert_eq!(observed_branch.ref_name, "main");
 
-    let branch_create_from_short_sha = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let branch_create_from_short_sha = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "branch",
             "create",
@@ -4287,11 +4224,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_eq!(observed_branch.branch, "work/from-short-sha");
     assert_eq!(observed_branch.ref_name, "01234567");
 
-    let branch_default_denied = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let branch_default_denied = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "branch",
             "create",
@@ -4312,11 +4246,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         serde_json::from_slice(&branch_default_denied.stdout).unwrap();
     assert_eq!(denied_json["reasonCode"], "git_ref_denied");
 
-    let branch_wildcard_denied = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let branch_wildcard_denied = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "branch",
             "create",
@@ -4337,11 +4268,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         serde_json::from_slice(&branch_wildcard_denied.stdout).unwrap();
     assert_eq!(denied_json["reasonCode"], "git_ref_denied");
 
-    let file_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_view = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "view",
@@ -4367,11 +4295,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
             .is_none()
     );
 
-    let file_raw = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_raw = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "raw",
@@ -4392,11 +4317,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_eq!(raw_json["result"]["size"], 15);
     assert_eq!(raw_json["result"]["resolvedRef"], TEST_SHA);
 
-    let file_raw_stdout = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_raw_stdout = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "raw",
@@ -4413,11 +4335,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_success("file raw download to stdout", &file_raw_stdout);
     assert_eq!(file_raw_stdout.stdout, b"readme contents");
 
-    let file_update_missing_last_commit = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_update_missing_last_commit = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "update",
@@ -4443,11 +4362,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         serde_json::from_slice(&file_update_missing_last_commit.stdout).unwrap();
     assert_eq!(update_denied_json["reasonCode"], "version_conflict");
 
-    let file_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_update = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "update",
@@ -4470,11 +4386,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_eq!(observed_update.path, "docs/existing.md");
     assert_eq!(observed_update.decoded_content_bytes, 19);
 
-    let file_update_from_start_branch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_update_from_start_branch = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "update",
@@ -4503,11 +4416,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     assert_eq!(observed_update.branch, "feature/from-main");
     assert_eq!(observed_update.start_branch.as_deref(), Some("main"));
 
-    let file_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let file_create = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "file",
             "create",
@@ -4545,11 +4455,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .unwrap(),
     )
     .unwrap();
-    let commit_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let commit_create = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "commit",
             "create",
@@ -4567,11 +4474,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
     let observed_commit = backend.last_commit_create.lock().unwrap().clone().unwrap();
     assert_eq!(observed_commit.actions.len(), 2);
 
-    let commit_create_short_start_sha = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let commit_create_short_start_sha = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "commit",
             "create",
@@ -4609,11 +4513,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .unwrap(),
     )
     .unwrap();
-    let commit_create_conflict_from_start_branch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let commit_create_conflict_from_start_branch = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "commit",
             "create",
@@ -4652,11 +4553,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         .unwrap(),
     )
     .unwrap();
-    let commit_create_update_from_start_branch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let commit_create_update_from_start_branch = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "commit",
             "create",
@@ -4694,11 +4592,8 @@ async fn cli_invokes_gitlab_repository_write_and_raw_file_actions_against_stubbe
         serde_json::to_vec_pretty(&many_actions).unwrap(),
     )
     .unwrap();
-    let commit_too_many_actions = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let commit_too_many_actions = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "commit",
             "create",
@@ -4743,11 +4638,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     .await;
     let base_url = broker.public_url();
 
-    let pipeline_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let pipeline_list = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "pipeline",
             "list",
@@ -4777,26 +4669,14 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     );
     assert_eq!(observed_pipeline_list.request.max_results, 2);
 
-    let pipeline_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "pipeline",
-            "view",
-            "sip/service",
-            "321",
-        ])
+    let pipeline_view = gitlab_cli(&base_url)
+        .args(["gitlab", "pipeline", "view", "sip/service", "321"])
         .output()
         .unwrap();
     assert_success("pipeline view", &pipeline_view);
 
-    let pipeline_run = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let pipeline_run = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "pipeline",
             "run",
@@ -4810,18 +4690,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     let observed_pipeline_run = backend.last_pipeline_run.lock().unwrap().clone().unwrap();
     assert_eq!(observed_pipeline_run.ref_name, "feature/rest");
 
-    let pipeline_run_main = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "pipeline",
-            "run",
-            "sip/service",
-            "--ref",
-            "main",
-        ])
+    let pipeline_run_main = gitlab_cli(&base_url)
+        .args(["gitlab", "pipeline", "run", "sip/service", "--ref", "main"])
         .output()
         .unwrap();
     assert!(
@@ -4834,11 +4704,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         serde_json::from_slice(&pipeline_run_main.stdout).unwrap();
     assert_eq!(pipeline_run_main_json["reasonCode"], "git_ref_denied");
 
-    let pipeline_run_release = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let pipeline_run_release = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "pipeline",
             "run",
@@ -4862,17 +4729,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         ("pipeline retry", "retry", "retry_pipeline"),
         ("pipeline cancel", "cancel", "cancel_pipeline"),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-            .args([
-                "--url",
-                &base_url,
-                "--no-token",
-                "gitlab",
-                "pipeline",
-                command,
-                "sip/service",
-                "321",
-            ])
+        let output = gitlab_cli(&base_url)
+            .args(["gitlab", "pipeline", command, "sip/service", "321"])
             .output()
             .unwrap();
         assert_success(label, &output);
@@ -4886,11 +4744,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         );
     }
 
-    let job_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let job_list = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "job",
             "list",
@@ -4914,26 +4769,14 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
     );
     assert_eq!(observed_job_list.request.max_results, 2);
 
-    let job_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "job",
-            "view",
-            "sip/service",
-            "9001",
-        ])
+    let job_view = gitlab_cli(&base_url)
+        .args(["gitlab", "job", "view", "sip/service", "9001"])
         .output()
         .unwrap();
     assert_success("job view", &job_view);
 
-    let job_trace = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let job_trace = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "job",
             "trace",
@@ -4957,17 +4800,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         ("job retry", "retry", "retry_job"),
         ("job cancel", "cancel", "cancel_job"),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-            .args([
-                "--url",
-                &base_url,
-                "--no-token",
-                "gitlab",
-                "job",
-                command,
-                "sip/service",
-                "9001",
-            ])
+        let output = gitlab_cli(&base_url)
+            .args(["gitlab", "job", command, "sip/service", "9001"])
             .output()
             .unwrap();
         assert_success(label, &output);
@@ -4981,32 +4815,14 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         );
     }
 
-    let job_play = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "job",
-            "play",
-            "sip/service",
-            "9002",
-        ])
+    let job_play = gitlab_cli(&base_url)
+        .args(["gitlab", "job", "play", "sip/service", "9002"])
         .output()
         .unwrap();
     assert_success("job play", &job_play);
 
-    let job_play_main = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "job",
-            "play",
-            "sip/service",
-            "9003",
-        ])
+    let job_play_main = gitlab_cli(&base_url)
+        .args(["gitlab", "job", "play", "sip/service", "9003"])
         .output()
         .unwrap();
     assert!(
@@ -5019,17 +4835,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         serde_json::from_slice(&job_play_main.stdout).unwrap();
     assert_eq!(job_play_main_json["reasonCode"], "git_ref_denied");
 
-    let job_play_mismatched_ref = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "job",
-            "play",
-            "sip/service",
-            "9004",
-        ])
+    let job_play_mismatched_ref = gitlab_cli(&base_url)
+        .args(["gitlab", "job", "play", "sip/service", "9004"])
         .output()
         .unwrap();
     assert!(
@@ -5045,17 +4852,8 @@ async fn cli_invokes_gitlab_ci_actions_against_stubbed_backend() {
         "upstream_protocol_failed"
     );
 
-    let job_play_release = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "job",
-            "play",
-            "sip/service",
-            "9005",
-        ])
+    let job_play_release = gitlab_cli(&base_url)
+        .args(["gitlab", "job", "play", "sip/service", "9005"])
         .output()
         .unwrap();
     assert!(
@@ -5097,11 +4895,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
     let base_url = broker.public_url();
 
     *backend.protected_branch_list_has_next_page.lock().unwrap() = true;
-    let protected_branch_list_overflow = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let protected_branch_list_overflow = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "protected-branch",
             "list",
@@ -5126,11 +4921,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
     );
     *backend.protected_branch_list_has_next_page.lock().unwrap() = false;
 
-    let protected_branch_list = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let protected_branch_list = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "protected-branch",
             "list",
@@ -5150,11 +4942,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
         "main"
     );
 
-    let protected_branch_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let protected_branch_view = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "protected-branch",
             "view",
@@ -5171,11 +4960,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
         "release/*"
     );
 
-    let protected_branch_verify = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let protected_branch_verify = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "protected-branch",
             "verify",
@@ -5200,11 +4986,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
         && check["covered"] == true
         && check["matchedRule"] == "release/*"));
 
-    let merge_request_missing_sha = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_missing_sha = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "invoke",
             "gitlab.merge_request.merge",
             "--input-json",
@@ -5222,11 +5005,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
         serde_json::from_slice(&merge_request_missing_sha.stdout).unwrap();
     assert_eq!(missing_sha_json["reasonCode"], "input_invalid");
 
-    let merge_request_short_sha = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_short_sha = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "invoke",
             "gitlab.merge_request.merge",
             "--input-json",
@@ -5251,11 +5031,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
     );
 
     *backend.merge_response_description.lock().unwrap() = Some("x".repeat(4096));
-    let merge_request_merge = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_merge = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "merge",
@@ -5308,11 +5085,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
         Some("squash secret message")
     );
 
-    let merge_request_stale_sha = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_stale_sha = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "merge",
@@ -5334,11 +5108,8 @@ async fn cli_invokes_gitlab_protected_branch_and_mr_merge_actions_against_stubbe
     assert_eq!(stale_sha_json["reasonCode"], "version_conflict");
 
     *backend.merge_conflict_after_preflight.lock().unwrap() = true;
-    let merge_request_preflight_race = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_preflight_race = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "merge",
@@ -5407,11 +5178,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     .await;
     let base_url = broker.public_url();
 
-    let issue_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_create = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "create",
@@ -5454,11 +5222,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     );
     backend.credential_observations.lock().unwrap().clear();
 
-    let issue_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_update = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "update",
@@ -5492,11 +5257,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         Some("issue update literal \\@alice \\#12 \\<tag\\>")
     );
 
-    let issue_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "comment",
@@ -5518,11 +5280,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.request.body, "issue secret note");
     assert_eq!(observed.request.confidential, Some(false));
 
-    let issue_update_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_update_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "update-comment",
@@ -5552,18 +5311,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     );
 
     backend.credential_observations.lock().unwrap().clear();
-    let issue_view_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
-        .args([
-            "--url",
-            &base_url,
-            "--no-token",
-            "gitlab",
-            "issue",
-            "view-comment",
-            "sip/service",
-            "7",
-            "701",
-        ])
+    let issue_view_comment = gitlab_cli(&base_url)
+        .args(["gitlab", "issue", "view-comment", "sip/service", "7", "701"])
         .output()
         .unwrap();
     assert_success("issue view-comment", &issue_view_comment);
@@ -5572,11 +5321,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(issue_view_comment["result"]["note"]["id"], 701);
 
     backend.credential_observations.lock().unwrap().clear();
-    let issue_delete_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_delete_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "delete-comment",
@@ -5611,11 +5357,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     );
     backend.credential_observations.lock().unwrap().clear();
 
-    let issue_comments = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_comments = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "list-comments",
@@ -5657,11 +5400,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         .unwrap();
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.max_results, 2);
-    let issue_comments_second_page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let issue_comments_second_page = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "issue",
             "list-comments",
@@ -5691,11 +5431,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.request.page, 2);
 
     backend.credential_observations.lock().unwrap().clear();
-    let merge_request_create = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_create = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "create",
@@ -5755,11 +5492,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     );
     backend.credential_observations.lock().unwrap().clear();
 
-    let merge_request_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_update = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "update",
@@ -5794,11 +5528,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         Some("merge update literal \\@bob \\!17 https\\:\\/\\/example\\.test")
     );
 
-    let merge_request_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "comment",
@@ -5821,11 +5552,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.body, "mr secret note");
 
-    let merge_request_update_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_update_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "update-comment",
@@ -5857,11 +5585,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         "mr updated \\@bob \\!17 https\\:\\/\\/example\\.test"
     );
 
-    let merge_request_view_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_view_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "view-comment",
@@ -5876,11 +5601,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         serde_json::from_slice(&merge_request_view_comment.stdout).unwrap();
     assert_eq!(merge_request_view_comment["result"]["note"]["id"], 501);
 
-    let merge_request_delete_comment = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_delete_comment = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "delete-comment",
@@ -5904,11 +5626,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.request.iid, 5);
     assert_eq!(observed.request.note_id, 501);
 
-    let merge_request_comments = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_comments = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "list-comments",
@@ -5953,11 +5672,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         .unwrap();
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.max_results, 2);
-    let merge_request_comments_second_page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let merge_request_comments_second_page = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "list-comments",
@@ -5986,11 +5702,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         .unwrap();
     assert_eq!(observed.request.page, 2);
 
-    let discussion = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussion = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "discussion",
@@ -6013,11 +5726,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.body, "mr secret discussion");
 
-    let discussion_note_update = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussion_note_update = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "update-discussion-note",
@@ -6052,11 +5762,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     );
 
     backend.credential_observations.lock().unwrap().clear();
-    let discussion_note_delete = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussion_note_delete = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "delete-discussion-note",
@@ -6096,11 +5803,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     );
     backend.credential_observations.lock().unwrap().clear();
 
-    let discussion_resolve = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussion_resolve = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "resolve-discussion",
@@ -6125,11 +5829,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
         GitlabDiscussionStateChange::Resolve
     );
 
-    let discussion_reopen = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussion_reopen = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "reopen-discussion",
@@ -6149,11 +5850,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.change, GitlabDiscussionStateChange::Reopen);
 
-    let discussions = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussions = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "list-discussions",
@@ -6190,11 +5888,8 @@ async fn cli_invokes_gitlab_collaboration_write_actions_against_stubbed_backend(
     assert_eq!(observed.project_id, 42);
     assert_eq!(observed.request.max_results, 2);
 
-    let discussions_second_page = Command::new(env!("CARGO_BIN_EXE_agent-access"))
+    let discussions_second_page = gitlab_cli(&base_url)
         .args([
-            "--url",
-            &base_url,
-            "--no-token",
             "gitlab",
             "merge-request",
             "list-discussions",
@@ -9795,6 +9490,14 @@ fn job_fixture(id: u64, pipeline_id: u64, ref_name: &str, status: &str) -> Gitla
 
 fn gitlab_cli(base_url: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
+    let config = temp_path("gitlab-cli-defaults.toml");
+    std::fs::write(&config, "").unwrap();
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("AGENT_ACCESS_") {
+            command.env_remove(key);
+        }
+    }
+    command.arg("--config").arg(config);
     command.args([
         "--url",
         base_url,
@@ -9946,7 +9649,8 @@ async fn stop(broker: RunningBroker) {
 /// Who may call the broker.
 #[derive(Clone, Copy, Debug)]
 enum GitlabCallers {
-    /// Anonymous callers.
+    /// Anonymous HTTP callers and an authenticated CLI principal with the
+    /// same service grants.
     Anonymous,
     /// The static principal `agent-one`, identified by `agent-token` and a
     /// member of group `agents`, whose own GitLab credential is
@@ -10135,13 +9839,24 @@ read_only = true
             lookup_token = secret_ref(directory, "gitlab-lookup-token.txt", "gitlab-lookup-token"),
         );
         match self.callers {
-            GitlabCallers::Anonymous => document.push_str(
+            GitlabCallers::Anonymous => document.push_str(&format!(
                 r#"
 [identity]
-mode = "anonymous"
+mode = "optional"
 authority = "toml"
+
+[[identity.sources]]
+name = "local"
+type = "static_principals"
+header = "X-Agent-Access-Identity-Token"
+scheme = "raw"
+
+[[identity.sources.principals]]
+principal = "agent-one"
+token_refs = [{agent_token}]
 "#,
-            ),
+                agent_token = secret_ref(directory, "gitlab-agent-token.txt", "agent-token"),
+            )),
             GitlabCallers::AgentOne => {
                 let token = directory
                     .secret_file("gitlab-per-user-token.txt", "gitlab-per-user-token")
@@ -10235,6 +9950,13 @@ allowed_execution_contexts = ["default"]
             resource_type = toml_string(GIT_REPOSITORY_RESOURCE.id().as_str()),
         ));
         for grant in &self.grants {
+            let mut subjects = grant.subjects.clone();
+            if matches!(self.callers, GitlabCallers::Anonymous)
+                && subjects.iter().any(|subject| subject == "group:anonymous")
+                && !subjects.iter().any(|subject| subject == "user:agent-one")
+            {
+                subjects.push("user:agent-one".to_string());
+            }
             document.push_str(&format!(
                 r#"
 [[policy.grants]]
@@ -10244,7 +9966,7 @@ actions = {actions}
 resources = {{ resource_ids = {resources} }}
 credential_mode = {credential_mode}
 "#,
-                subjects = toml_strings(&grant.subjects),
+                subjects = toml_strings(&subjects),
                 actions = toml_strings(&grant.actions),
                 resources = toml_strings(&grant.resources),
                 credential_mode = toml_string(&grant.credential_mode),

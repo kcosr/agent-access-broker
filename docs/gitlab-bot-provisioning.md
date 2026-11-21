@@ -188,7 +188,7 @@ For JSON `send`, use the normal request document:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "gitlab",
   "action": "project.access_token.create",

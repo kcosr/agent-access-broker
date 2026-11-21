@@ -129,13 +129,16 @@ cargo run --locked -p agent-access-broker -- \
   --config tests/fixtures/fake-broker.toml serve --listen 127.0.0.1:8787
 ```
 
-In another terminal, check readiness and invoke one action:
+In another terminal, check readiness and invoke one action over HTTP. This
+fixture permits anonymous HTTP calls; [CLI invocation](docs/cli.md) requires an
+authenticated identity for runtime catalog discovery.
 
 ```bash
 curl -fsS http://127.0.0.1:8787/v1/readyz
-cargo run --locked -p agent-access -- \
-  --url http://127.0.0.1:8787 --no-token \
-  invoke fake.echo --input-json '{"project":"TEST","message":"hello"}'
+curl -fsS http://127.0.0.1:8787/v1/invoke/fake/echo \
+  -H 'Content-Type: application/json' \
+  -H 'X-Agent-Access-Request-Id: local-quickstart' \
+  --data '{"inputs":{"project":"TEST","message":"hello"}}'
 ```
 
 An allowed response has `decision = "allow"` and echoes `hello` in `result`.

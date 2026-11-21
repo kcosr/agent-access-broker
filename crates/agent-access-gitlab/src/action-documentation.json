@@ -61,7 +61,7 @@
   },
   "file.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Metadata is returned by default. includeContent=true adds complete UTF-8 text without NUL bytes when it fits the content budget. Whole-result Markdown renders metadata, contentStatus, and included text in a literal fenced block. Use the separately granted file.raw.download action for raw bytes.",
+    "presentation": "Metadata is returned by default. includeContent=true adds complete UTF-8 text without NUL bytes when it fits the content budget. The JSON result retains metadata, contentStatus, and any included plain text; rich-body selection does not change repository-file content. Use the separately granted file.raw.download action for raw bytes.",
     "inputExamples": [
       {
         "label": "File metadata",
@@ -102,7 +102,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "descriptionInput": "The content pair is optional. Omission leaves the description absent and adds no attribution footer. Explicit empty content stays empty when attribution is disabled and produces a footer-only description when enabled.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to issue.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Issue create",
@@ -126,7 +126,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Issue note add",
@@ -147,9 +147,9 @@
   "issue.note.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue list-comments [OPTIONS] <PROJECT> <IID>; run agent-access gitlab issue list-comments --help for flags and input alternatives.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
-    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, suggestions, resolvedBy and redundant target metadata. Summary JSON is body-free and outputContentFormat has no body to select. Repeat projection with pageToken.",
     "inputExamples": [
       {
         "label": "Issue note list with summary projection",
@@ -169,7 +169,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "This content update does not append attribution.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Issue note update",
@@ -186,7 +186,7 @@
   "issue.note.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab issue view-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab issue view-comment --help for flags and input alternatives.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "lookup": "Read one known positive noteId under project and iid. The Broker proves the parent and note target, then returns the full normalized note; this read is separately grantable from listing.",
     "inputExamples": [
       {
@@ -202,7 +202,7 @@
   "issue.search": {
     "relatedSearch": "This action lists and filters one required project. The separately granted search.issues/search.merge_requests family performs configured native content search and has a different input and continuation contract.",
     "result": "Returned issues can include createdAt, updatedAt, author, assignees, labels and milestone. User summaries contain only available id, username, name and webUrl fields.",
-    "presentation": "Embedded rendering belongs to each returned issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned issue.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Issue search",
@@ -230,7 +230,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "descriptionInput": "The content pair is optional. Omission preserves the existing description. Explicit empty content clears it when attribution is disabled and produces a footer-only description when enabled.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to issue.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Issue update",
@@ -248,7 +248,7 @@
   },
   "issue.view": {
     "result": "Returned issues can include createdAt, updatedAt, author, assignees, labels and milestone. User summaries contain only available id, username, name and webUrl fields.",
-    "presentation": "Embedded rendering belongs to issue.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to issue.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Issue view",
@@ -398,7 +398,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "descriptionInput": "The content pair is optional. Omission leaves the description absent and adds no attribution footer. Explicit empty content stays empty when attribution is disabled and produces a footer-only description when enabled.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to mergeRequest.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request create [OPTIONS] --source-branch <SOURCE_BRANCH> --target-branch <TARGET_BRANCH> --title <TITLE> <PROJECT>; run agent-access gitlab merge-request create --help for flags and input alternatives."
   },
   "merge_request.diff.list": {
@@ -421,7 +421,7 @@
   },
   "merge_request.diff.raw.download": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "download": "Requires GitLab 17.9+. Streams the current raw diff and reports headShaAtPreflight; GitLab exposes no SHA-pinned raw endpoint, so a concurrent push can change the stream. Use merge_request.diff_version.view for historical snapshots. No embedded or whole-result Markdown applies to raw bytes.",
+    "download": "Requires GitLab 17.9+. Streams the current raw diff and reports headShaAtPreflight; GitLab exposes no SHA-pinned raw endpoint, so a concurrent push can change the stream. Use merge_request.diff_version.view for historical snapshots. Rich-body output selection does not apply to raw bytes.",
     "inputExamples": [
       {
         "label": "Merge request diff raw download",
@@ -472,7 +472,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned nested notes[].body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request discussion [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.inline.add": {
@@ -481,7 +481,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned nested notes[].body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "positionPreconditions": "Supplying or replacing position requires a freshly read full expectedHeadSha. The Broker obtains a complete non-null current base/start/head triplet and a prepared, collected diff; callers supply coordinates, not SHAs inside position. Text/file/image shapes are closed; image x/y are nonnegative integers. Stale/unprepared state uses version_conflict; permanent multiline failure uses input_invalid with coordinates_unresolved or patch_unavailable, including overflow/without_files versions. Correct the coordinates or choose another valid action instead of resending unchanged input.",
     "recovery": "Verify the returned positioned discussion against the freshly prepared head and re-read its exact thread. An ambiguous write or failed proof remains applied_unverified with only proven discussion/note IDs.",
     "inputExamples": [
@@ -506,9 +506,9 @@
   },
   "merge_request.discussion.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned nested notes[].body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
-    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, suggestions, resolvedBy and redundant target metadata. Summary JSON is body-free and outputContentFormat has no body to select. Repeat projection with pageToken.",
     "summaryOrder": "Summary retains every nested note in its original order and reports noteCount; it does not truncate the discussion to a representative note.",
     "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; merge_request.diff_version.view reads that history.",
     "inputExamples": [
@@ -538,7 +538,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "association": "Reply to the proven discussionId, which may identify a general, current or outdated diff thread. Resolving or reopening it requires its own action.",
     "recovery": "Verify the new reply through the exact discussion and note. Failed response/readback proof remains applied_unverified; only proven discussion/note IDs are safe locators.",
     "inputExamples": [
@@ -566,25 +566,25 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "This content update does not append attribution.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "association": "The Broker proves the note through its exact project/iid/discussionId route. Updating content does not resolve the thread; resolve/reopen are separate actions.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request update-discussion-note [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID> <NOTE_ID>; run agent-access gitlab merge-request update-discussion-note --help for flags and input alternatives."
   },
   "merge_request.discussion.reopen": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned nested notes[].body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request reopen-discussion [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID>; run agent-access gitlab merge-request reopen-discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.resolve": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned nested notes[].body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "association": "This independently granted action changes thread resolution through the discussion endpoint; it does not edit note content or rebase historical positions.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request resolve-discussion [OPTIONS] <PROJECT> <IID> <DISCUSSION_ID>; run agent-access gitlab merge-request resolve-discussion --help for flags and input alternatives."
   },
   "merge_request.discussion.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Embedded rendering belongs to each returned nested notes[].body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned nested notes[].body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "positions": "Inspect each notes[].position for paths, coordinates and reported base/start/head SHAs. baseSha may be null; startSha/headSha remain present. Broker/API range endpoints use old for removed/context points and new for added points; returned UI data may use null for context. Preserve those values. Positions remain tied to their original diff version after pushes; merge_request.diff_version.view reads that history.",
     "inputExamples": [
       {
@@ -604,7 +604,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned draftNote.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "positionPreconditions": "Supplying or replacing position requires a freshly read full expectedHeadSha. The Broker obtains a complete non-null current base/start/head triplet and a prepared, collected diff; callers supply coordinates, not SHAs inside position. Text/file/image shapes are closed; image x/y are nonnegative integers. Stale/unprepared state uses version_conflict; permanent multiline failure uses input_invalid with coordinates_unresolved or patch_unavailable, including overflow/without_files versions. Correct the coordinates or choose another valid action instead of resending unchanged input.",
     "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
     "draftMode": "Create one general draft, a positioned draft using position plus expectedHeadSha, or a reply draft using inReplyToDiscussionId. Only reply drafts may set resolveDiscussion; reply and independent position are mutually exclusive.",
@@ -668,9 +668,9 @@
   },
   "merge_request.draft_note.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned draftNote.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "pagination": "Pass nextPageToken as pageToken with unchanged inputs, including projection. Each request fetches a fresh bounded upstream draft array and applies a signed local offset; concurrent edits can repeat or omit entries. Tokens also bind the proven upstream actor, so a different credential owner invalidates continuation.",
-    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, suggestions, resolvedBy and redundant target metadata. Summary JSON is body-free and outputContentFormat has no body to select. Repeat projection with pageToken.",
     "summaryLocators": "Summary retains discussionId for reply drafts and the full position for positioned drafts.",
     "positions": "Normalized position is the authoritative draft location; top-level lineCode is absent. Native line codes can still appear inside multiline position.lineRange anchors. Preserve returned side/type and SHA association.",
     "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
@@ -737,7 +737,7 @@
     "content": "Use the advertised content/contentFormat pair. markdown preserves GitLab-native Markdown; plain_text escapes punctuation, HTML, mentions, references and autolinks into literal Markdown. The Broker does not guess a format or truncate content; configured source/final body limits still apply.",
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "attribution": "Draft updates do not append attribution. This differs from draft creation and optional publish-all/review-submit summaries.",
-    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned draftNote.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "positionPreconditions": "Supplying or replacing position requires a freshly read full expectedHeadSha. The Broker obtains a complete non-null current base/start/head triplet and a prepared, collected diff; callers supply coordinates, not SHAs inside position. Text/file/image shapes are closed; image x/y are nonnegative integers. Stale/unprepared state uses version_conflict; permanent multiline failure uses input_invalid with coordinates_unresolved or patch_unavailable, including overflow/without_files versions. Correct the coordinates or choose another valid action instead of resending unchanged input.",
     "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
     "draftMode": "Change content and/or replace the position, preserving omitted data. Replacement position requires expectedHeadSha; a reply cannot acquire an independent position. A body-only update of an existing position lacking a full SHA triplet fails with version_conflict; refresh and supply a current replacement position.",
@@ -758,7 +758,7 @@
   },
   "merge_request.draft_note.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
-    "presentation": "Embedded rendering belongs to each returned draftNote.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned draftNote.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "positions": "Normalized position is the authoritative draft location; top-level lineCode is absent. Native line codes can still appear inside multiline position.lineRange anchors. Preserve returned side/type and SHA association.",
     "ownership": "Operates on drafts/review state owned by the selected GitLab actor. reviewContext reports credentialMode, shared|principal credentialBinding and safe upstreamActor id/username. Service mode shares one actor draft set; per-user mode follows the selected principal credential, which need not represent a unique GitLab account. upstreamResourceOwnership=acting_user and scope_unresolved hints describe this model without proving that a requested draft exists.",
     "inputExamples": [
@@ -784,7 +784,7 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
     "inputExamples": [
       {
@@ -806,9 +806,9 @@
   "merge_request.note.list": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request list-comments [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request list-comments --help for flags and input alternatives.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "pagination": "Pass nextPageToken as pageToken on the same action with unchanged locators, filters and maxResults; retain unidiff and projection when those fields are advertised. Tokens are signed and reauthorized; continuation is not a snapshot.",
-    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, rendered bodies, suggestions, resolvedBy and redundant target metadata. Summary Markdown remains body-free and readContentFormat has no body to render. Repeat projection with pageToken.",
+    "projection": "full is the default. summary echoes the selection and keeps IDs, actor/state, timestamps and full positions, while omitting bodies, suggestions, resolvedBy and redundant target metadata. Summary JSON is body-free and outputContentFormat has no body to select. Repeat projection with pageToken.",
     "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
     "inputExamples": [
       {
@@ -828,13 +828,13 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "bodyInput": "Content is required and must contain non-whitespace text; supply its format explicitly.",
     "attribution": "This content update does not append attribution.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters."
   },
   "merge_request.note.view": {
     "scope": "Use the canonical namespace/project path. Authorization is repository scoped; a Broker resource ID is not a provider locator.",
     "typedCommand": "Canonical note terminology names the user-visible comment. Typed CLI wrapper: agent-access gitlab merge-request view-comment [OPTIONS] <PROJECT> <IID> <NOTE_ID>; run agent-access gitlab merge-request view-comment --help for flags and input alternatives.",
-    "presentation": "Embedded rendering belongs to each returned note.body. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned note.body. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "lookup": "Read one known positive noteId under project and iid. The Broker proves the parent and note target, then returns the full normalized note; this read is separately grantable from listing.",
     "association": "Ordinary Notes API comments are overview comments without file/line association. Use separately granted discussion reads when code-review position matters.",
     "inputExamples": [
@@ -903,7 +903,7 @@
   "merge_request.search": {
     "relatedSearch": "This action lists and filters one required project. The separately granted search.issues/search.merge_requests family performs configured native content search and has a different input and continuation contract.",
     "result": "Returned merge requests can include createdAt, updatedAt, author, assignees, reviewers, labels, milestone and draft state when GitLab supplies them.",
-    "presentation": "Embedded rendering belongs to each returned mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to each returned mergeRequest.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request search [OPTIONS] <PROJECT>; run agent-access gitlab merge-request search --help for flags and input alternatives."
   },
   "merge_request.suggestion.apply": {
@@ -972,13 +972,13 @@
     "quickActions": "Outside fenced code and suggestion blocks, an unfenced line whose first token after whitespace is / followed by an ASCII letter, then only ASCII letters/digits/_/-, ending at whitespace or end-of-line, is rejected. Inline prose, URLs, /usr/bin and /docs/readme.md remain allowed.",
     "descriptionInput": "The content pair is optional. Omission preserves the existing description. Explicit empty content clears it when attribution is disabled and produces a footer-only description when enabled.",
     "attribution": "Configured attribution is added by the Broker; submit only the intended content and do not append a duplicate footer.",
-    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to mergeRequest.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "typedCommand": "Typed CLI wrapper: agent-access gitlab merge-request update [OPTIONS] <PROJECT> <IID>; run agent-access gitlab merge-request update --help for flags and input alternatives."
   },
   "merge_request.view": {
     "result": "Returned merge requests can include createdAt, updatedAt, author, assignees, reviewers, labels, milestone and draft state when GitLab supplies them.",
     "reviewReadiness": "Use current diffRefs and detailedMergeStatus for positioned-write/approval preconditions. Read results may have baseSha:null while startSha/headSha remain present; positioned writes separately need a complete non-null triplet. After a source-changing write, refresh this state and wait for the new diff to be prepared.",
-    "presentation": "Embedded rendering belongs to mergeRequest.description. Markdown companions preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
+    "presentation": "Output content selection applies to mergeRequest.description. Each selected body uses {format,value}; Markdown values preserve the exact native string; text is bounded and suppresses active raw HTML. Formatting does not fetch related resources or further pages.",
     "inputExamples": [
       {
         "label": "Merge request view",
@@ -1056,7 +1056,7 @@
     "typedCommand": "Typed CLI wrapper: agent-access gitlab project access-token view [OPTIONS] <PROJECT> <TOKEN_ID>; run agent-access gitlab project access-token view --help for flags and input alternatives."
   },
   "project.list": {
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Project list",
@@ -1068,7 +1068,7 @@
     "typedCommand": "Typed CLI wrapper: agent-access gitlab project list [OPTIONS]; run agent-access gitlab project list --help for flags and input alternatives."
   },
   "project.search": {
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "authorization": "This live project discovery has its own grant. It can find namespace-authorized projects absent from registered resources; finding a project does not grant project.list, an object read, or a content-search action.",
     "inputExamples": [
       {
@@ -1140,7 +1140,7 @@
   },
   "search.code": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Search code",
@@ -1154,7 +1154,7 @@
   },
   "search.comments": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Native comments search",
@@ -1167,7 +1167,7 @@
   },
   "search.commits": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Native commits search",
@@ -1180,7 +1180,7 @@
   },
   "search.issues": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Search issues",
@@ -1193,7 +1193,7 @@
   },
   "search.merge_requests": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Native merge requests search",
@@ -1206,7 +1206,7 @@
   },
   "search.wiki": {
     "selection": "Choose an advertised engine and obey its project field description: project is required for a project-only route, omitted for an instance-only route, and optional only when both routes exist. Omitting engine selects the configured default; an unavailable default is not replaced by another engine.",
-    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON and whole-result Markdown use the same bounded previews; embedded readContentFormat is not advertised.",
+    "results": "Returns items, count, maxResults and scanStatus; content-search actions also return engine. Pass nextPageToken back as pageToken with every query/filter/engine/regex/page-size choice unchanged. Empty resumable pages may occur; a short page is not completion. JSON retains bounded previews; rich-body output selection is not advertised.",
     "inputExamples": [
       {
         "label": "Native wiki search",

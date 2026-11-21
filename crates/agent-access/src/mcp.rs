@@ -34,8 +34,14 @@ impl BrokerMcp {
     fn settings(&self) -> Result<crate::ResolvedCliSettings> {
         // Resolve for every request: token files and config may rotate while the
         // client keeps this subprocess alive. Never cache an identity or grants.
-        let settings = crate::resolve_cli_settings(&self.cli, &self.config)
-            .map_err(|_| anyhow::anyhow!(CONFIG_ERROR))?;
+        let settings = crate::resolve_cli_settings(&self.cli, &self.config).map_err(|error| {
+            anyhow::anyhow!(
+                error
+                    .downcast_ref::<agent_access_core::ConfigError>()
+                    .and_then(crate::retired_cli_default_message)
+                    .unwrap_or(CONFIG_ERROR)
+            )
+        })?;
         validate_broker_transport(&settings)?;
         Ok(settings)
     }
@@ -112,6 +118,10 @@ impl ServerHandler for BrokerMcp {
                     Err(error) if error.is::<tools::UnknownToolError>() => {
                         return Err(ErrorData::invalid_params(error.to_string(), None));
                     }
+                    Err(error) if error.is::<crate::output::ResponseContentFailure>() => {
+                        let failure = error.downcast_ref::<crate::output::ResponseContentFailure>().expect("matched content failure");
+                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true).expect("content failure is serializable")).expect("content failure is a tool result")
+                    }
                     Err(error) if error.is::<crate::output::LocalOutputFailure>() => {
                         let failure = error.downcast_ref::<crate::output::LocalOutputFailure>().expect("matched local output failure");
                         serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true)
@@ -172,7 +182,7 @@ fn paginate(
 
 pub async fn serve(cli: crate::Cli, config: PathBuf, view: McpView) -> Result<()> {
     let server = BrokerMcp { cli, config, view };
-    server.settings()?;
+    crate::require_cli_input(server.settings());
     // No CLI rendering or stdout logging is allowed here: stdout is exclusively
     // newline-delimited MCP JSON-RPC, including during authentication failures.
     let (input, oversized) = transport::BoundedStdioRead::new(tokio::io::stdin());
@@ -298,7 +308,7 @@ mod tests {
                 crate::Cli::try_parse_from(["agent-access", "mcp", "serve", "--service", service])
                     .unwrap();
             assert!(
-                matches!(cli.command, crate::Command::Mcp { command: crate::McpCommand::Serve { service: Some(selected) } } if selected == service)
+                matches!(cli.command, crate::Command::Mcp { command: crate::McpCommand::Serve { service: Some(selected), .. } } if selected == service)
             );
         }
         for service in [
@@ -332,7 +342,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             crate::Command::Mcp {
-                command: crate::McpCommand::Serve { service: None }
+                command: crate::McpCommand::Serve { service: None, .. }
             }
         ));
     }
@@ -396,8 +406,7 @@ mod tests {
             identity_header: "X-Agent-Access-Identity-Token".into(),
             identity_scheme: "raw".into(),
             allow_insecure_broker_http: false,
-            read_content_format: Default::default(),
-            output_format: Default::default(),
+            preferred_output_content_format: None,
         };
         // Rejected regardless of the ambient production setting; no process
         // environment mutation is needed to exercise the transport policy.
@@ -409,5 +418,61 @@ mod tests {
         assert!(message.contains("AGENT_ACCESS_ENVIRONMENT=production"));
         assert!(!message.contains("private-token-marker"));
         assert!(!message.contains("broker.example.test"));
+    }
+    #[test]
+    fn content_preferences_reload_and_process_override_stays_authoritative() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("client.toml");
+        let source = |format: &str| {
+            format!(
+                "[identity]\ndisabled=true\n[defaults]\npreferred_output_content_format={format:?}\n"
+            )
+        };
+        std::fs::write(&path, source("text")).unwrap();
+        let make = |extra: &[&str]| {
+            let mut args = vec![
+                "agent-access",
+                "--config",
+                path.to_str().unwrap(),
+                "mcp",
+                "serve",
+            ];
+            args.extend_from_slice(extra);
+            BrokerMcp {
+                cli: crate::Cli::try_parse_from(args).unwrap(),
+                config: path.clone(),
+                view: McpView::Aggregate,
+            }
+        };
+        let ambient = make(&[]);
+        let pinned = make(&["--preferred-output-content-format", "storage"]);
+        use agent_access_provider::presentation::OutputContentFormat;
+        assert_eq!(
+            ambient.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Text)
+        );
+        std::fs::write(&path, source("adf")).unwrap();
+        assert_eq!(
+            ambient.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Adf)
+        );
+        assert_eq!(
+            pinned.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Storage)
+        );
+        std::fs::write(&path, "[defaults]\nread_content_format=\"native\"").unwrap();
+        let retired = ambient.settings().unwrap_err().to_string();
+        assert!(retired.contains("[defaults].read_content_format"));
+        assert!(retired.contains("[defaults].preferred_output_content_format"));
+        // An invalid live configuration does not destroy the process or its override.
+        std::fs::write(&path, source("markdown")).unwrap();
+        assert_eq!(
+            ambient.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Markdown)
+        );
+        assert_eq!(
+            pinned.settings().unwrap().preferred_output_content_format,
+            Some(OutputContentFormat::Storage)
+        );
     }
 }

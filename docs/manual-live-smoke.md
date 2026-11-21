@@ -171,14 +171,14 @@ commands are ergonomic wrappers over those actions. For example,
 Confirm each caller catalog contains the expected `executionContext`, repeat
 discovery through another context entrypoint, and verify context-exclusive
 actions disappear. An admin `--visibility all` catalog must omit the field.
-For Jira, Confluence, and GitLab, also confirm action entries advertise
-`readContentFormats` only for declared rich-content result owners and
-`responseFormats` only for eligible retrievals. The corresponding
-`readContentFormat` and `responseFormat` fields are top-level request properties
-beside `inputs` in OpenAPI and action-specific send variants; they must not
-appear inside provider `inputs`. For GitLab, spot-check an embedded-capable
-mutation readback as well as a body-bearing retrieval, and confirm raw file and
-job-trace downloads advertise neither capability.
+For Jira, Confluence and GitLab, confirm only configured body-capable action
+entries expose `outputContentFormats`, `nativeOutputContentFormat`,
+`defaultOutputContentFormat` and `bodyFields`. Common `outputContentFormat` and
+`preferredOutputContentFormat` fields are beside `inputs` in HTTP and send
+requests; provider input schemas keep their own write/upstream format fields.
+Spot-check a body-bearing mutation readback and a retrieval. Raw file and trace
+downloads must expose no output-body capability. Confirm catalog v3 and send v2,
+and retain the captured schemas with the exact tested Broker/CLI revisions.
 
 For direct HTTP API probes, always include the request-id header required by the
 HTTP contract:
@@ -198,24 +198,26 @@ curl -fsS \
   > "$SMOKE_DIR/http-jira-issue-view.out.json"
 ```
 
-Repeat the direct Jira issue-view probe in embedded Markdown mode:
+Repeat the direct Jira issue-view probe with an exact Markdown selection:
 
 ```bash
 curl -fsS \
   --config "$SMOKE_DIR/curl-auth.cfg" \
   -H "X-Agent-Access-Request-Id: live-smoke-jira-view-rendered" \
   -H "Content-Type: application/json" \
-  -d '{"inputs":{"issue":"PROJ-123"},"readContentFormat":"markdown"}' \
+  -d '{"inputs":{"issue":"PROJ-123"},"outputContentFormat":"markdown"}' \
   "$BROKER_URL/v1/invoke/jira/issue.view" \
   > "$SMOKE_DIR/http-jira-issue-view-rendered.out.json"
 ```
 
-Confirm the original native ADF description is unchanged and a sibling
-`renderedBody` reports `format = "markdown"` with readable content. Then probe
-one eligible body-free Jira search or list with top-level
-`"responseFormat":"markdown"`; the HTTP response remains a JSON envelope whose
-`result` is `{ "format": "markdown", "value": "..." }`. Do not combine
-whole-result Markdown with a non-native `readContentFormat`.
+Confirm `result.description` contains exactly `format: "markdown"` and a string
+`value`, with no second native body. Repeat with exact `adf` and `text`, checking
+ADF's object value and the same surrounding metadata. With no selector and no
+client/service preference, confirm Markdown. Probe a body-free search/list with
+a soft preference and confirm its result remains body-free. An exact selector on
+such an action must fail before provider access. Check client versus service
+preference precedence on an isolated configuration, including an unsupported
+preference that selects native rather than a lower-tier preference.
 
 Also verify `GET /v1/tokens/options`, then exercise self and admin issuance with
 one and with multiple repeated `--execution-context` flags. For personal issuance,
@@ -250,27 +252,26 @@ Exercise the generic CLI invoke surface separately from typed wrappers:
   > "$SMOKE_DIR/invoke-gitlab-issue-view.out.json"
 ```
 
-Exercise both Jira presentation modes through generic `invoke` as well:
+Exercise exact body selection and a body-free Jira search through generic invoke:
 
 ```bash
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   invoke jira.issue.view \
   --input-json "{\"issue\":\"$JIRA_ISSUE\"}" \
-  --read-content-format markdown \
+  --output-content-format markdown \
   > "$SMOKE_DIR/invoke-jira-issue-view-rendered.out.json"
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   invoke jira.search \
   --input-json "{\"jql\":\"project = $JIRA_PROJECT\"}" \
-  --output-format markdown \
-  > "$SMOKE_DIR/invoke-jira-search.out.md"
+  > "$SMOKE_DIR/invoke-jira-search.out.json"
 ```
 
-The first output remains JSON with native ADF plus `renderedBody`. The second
-contains only the Markdown value—no envelope and no raw ADF. An omitted option
-must continue to produce native JSON. Unsupported explicit flags fail locally;
-ambient defaults for a capability the selected action does not advertise are
-omitted rather than sent.
+Both outputs remain full JSON envelopes. The issue has one tagged Markdown
+description; search remains body-free. Omission prefers Markdown unless a client
+or service preference changes it. Unsupported exact flags fail locally. Valid
+unsupported preferences are resolved by the Broker to the action's native format.
+Confirm every invocation obtains a fresh compatible catalog before dispatch.
 
 Exercise the JSON `send` surface with at least one JSON-body mutation and one
 file-bearing operation. `send` request files are ordinary local smoke artifacts;
@@ -280,7 +281,7 @@ Example JSON-body mutation request:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "comment.add",
@@ -292,11 +293,11 @@ Example JSON-body mutation request:
 }
 ```
 
-`send` never injects response defaults from CLI config or the environment. To
-exercise whole-result Markdown, put the explicit top-level camel-case field in
-the request file, for example an invoke-kind Jira `issue.view` request with
-`"responseFormat":"markdown"`. The CLI output remains the JSON response
-envelope; compare its `result.value` with the generic/typed Markdown output.
+`send` forwards its ambient client preference unless the envelope contains an
+explicit `preferredOutputContentFormat`. Add `"outputContentFormat":"markdown"`
+to select Markdown exactly. The output remains a JSON envelope; compare declared
+body tags/values and surrounding metadata with typed, generic and direct HTTP
+results. Keep preferences separate from write-side `inputs.contentFormat`.
 
 Run it with:
 
@@ -431,30 +432,29 @@ View the issue before mutation:
   > "$SMOKE_DIR/attribution-jira-issue-before.out.json"
 ```
 
-Exercise embedded and whole-result rendering before mutation:
+Exercise selected Markdown content and body-free search before mutation:
 
 ```bash
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   jira issue view "$JIRA_ISSUE" \
-  --read-content-format markdown \
+  --output-content-format markdown \
   > "$SMOKE_DIR/jira-issue-view-rendered.out.json"
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   jira issue search --jql "project = $JIRA_PROJECT" \
-  --output-format markdown \
-  > "$SMOKE_DIR/jira-issue-search.out.md"
+  > "$SMOKE_DIR/jira-issue-search.out.json"
 ```
 
-The embedded result must retain the exact native description and add its
-Markdown companion. The search Markdown must represent the same body-free
-metadata as the default JSON search—normalization must not add descriptions or
-cause an additional Jira fetch. JSON is the default Jira presentation.
+The issue description must be one tagged Markdown value with no native duplicate.
+Search must retain its ordinary JSON metadata and no description bodies. Selection
+must not add a Jira request. Repeat the issue read with `--output-content-format
+adf` and compare the parsed native document. All outputs remain JSON.
 
 Inspect the corresponding audit record (with a SQLite audit store,
 `agent-access admin audit requests inspect <brokerRequestId>`) and structured
 service logs. They may record requested/effective format names, byte counts,
 and conversion outcome, but must not contain native ADF, rendered text,
-whole-result Markdown, property values, pagination tokens, parser excerpts, or
+property values, pagination tokens, parser excerpts, or
 extracted links, new context values, or custom-field names/values. If an isolated
 smoke broker is deliberately configured with a low Jira `max_body_bytes`, an
 oversized returned issue description or comment body must fail with the fixed
@@ -507,32 +507,31 @@ Where available, include resolution/due dates, components, versions, status
 category, and a custom Labels field. Fixture preparation remains a separate
 administrator task; these checks create or change no Jira objects.
 
-Read each source in native JSON, embedded Markdown, and whole-result Markdown.
+Read each source with exact ADF, Markdown and text selections, retaining JSON metadata.
 For example:
 
 ```bash
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   jira issue view "$JIRA_ISSUE" \
-  --output-format markdown \
-  > "$SMOKE_DIR/jira-issue-context.out.md"
+  --output-content-format markdown \
+  > "$SMOKE_DIR/jira-issue-context.out.json"
 ```
 
 - Confirm all seven standard-context keys are present in JSON. Compare IDs,
   names, dates, collection order and duplicates with the source response under
   the same execution account. Null means unset, hidden, or not returned; record
-  the actual upstream distinction where observable. Markdown omits null
-  context, shows `None.` for empty collections, and retains IDs when names are
-  unavailable. Custom Labels preserve the string array and render literal
-  labels; embedded normalization changes only declared ADF companions.
+  the actual upstream distinction where observable. Custom Labels retain their
+  string arrays; output selection changes only declared rich-text fields. All
+  other context, nulls and empty collections remain structured JSON.
 - With an agent token whose effective `issue.view` access covers every project
   in its selected mode, confirm `parent` is present. Record separately whether
   Jira's source response omits `fields.parent`, returns null, or returns an
-  object. Omission and null both produce Broker `parent: null` and Markdown
-  `No parent returned.` This does not independently establish that the issue
+  object. Omission and null both produce Broker `parent: null`. This does not
+  independently establish that the issue
   has no parent. A parent object exposes only `key`, `summary`, and `issueType`.
 - Confirm subtasks use the same reference shape, preserving order and
   duplicates. An omitted upstream field stays absent; an empty array becomes
-  `[]` and `None.` under **Subtasks**. Record Browse/issue-security effects
+  `[]`. Record Browse/issue-security effects
   where available. Do not interpret this collection as all epic children or
   descendants, and do not infer an ancestor beyond the direct parent.
 - Repeat with a project-restricted token able to read the same source. Confirm
@@ -700,26 +699,25 @@ broker attachment-delete action.
 
 ## Confluence Page And Blog Smoke Matrix
 
-Before mutation, exercise one embedded native-body conversion and one body-free
-whole-result rendering:
+Before mutation, exercise one exact body conversion and one body-free search:
 
 ```bash
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   confluence page view "$CONFLUENCE_PAGE_ID" \
-  --read-content-format markdown \
+  --output-content-format markdown \
   > "$SMOKE_DIR/confluence-page-view-rendered.out.json"
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   confluence page search --space "$CONFLUENCE_SPACE" --text runbook \
-  --output-format markdown \
-  > "$SMOKE_DIR/confluence-page-search.out.md"
+  > "$SMOKE_DIR/confluence-page-search.out.json"
 ```
 
-Confirm page view preserves every native `body` representation and adds
-`renderedBody` beside `body`. If both ADF and storage are present, confirm ADF
-is selected. The search Markdown must represent the same body-free result and
-must not cause another Confluence request. JSON is the default Confluence
-presentation.
+Confirm page view has one tagged `body` and no representation map or companion.
+For Markdown/text, available ADF takes precedence over storage. Repeat with each
+configured native output format and check the matching value type. Search stays
+body-free and must not cause an extra request. In an isolated configuration,
+confirm disabled page/comment sources omit `body`, and that blog/draft storage
+reads remain usable when blog writes are disabled.
 
 Create a page and verify attribution:
 
@@ -845,8 +843,7 @@ Draft attachments are supported for new drafts only:
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   confluence page draft attachment list <page-id> \
-  --draft-handle <draft-handle> \
-  --output-format markdown
+  --draft-handle <draft-handle>
 ```
 
 For staged drafts from existing content, validate create/view/update/publish or
@@ -877,16 +874,15 @@ The same flow applies to `confluence blog footer-comment ...`. Inline comment
 top-level creation is not exposed; use `inline-comment reply` on an existing
 inline thread, then view/update/delete that reply as needed.
 
-Also list the footer-comment thread once with `--read-content-format text` and
-once with `--output-format markdown`. The embedded result must preserve each
-native comment body and place a companion inside every body-bearing `comments[]`
-item; whole-result output must include only the returned comments and must not
-fetch replies or another page. Audit and service logs may record format names,
-selected representation, byte counts, and stable outcomes, but not storage/ADF,
-rendered content, pagination tokens, parser excerpts, links, macro parameters,
-or internal identifiers. A deliberately low isolated Confluence
-`max_body_bytes` must produce sanitized `upstream_protocol_failed`/502 with no
-partial output; do not lower a shared live Broker solely for this check.
+Also list the footer-comment thread with `--output-content-format text`, then
+`markdown` and `storage`. Each body-bearing `comments[]` item must have exactly one
+tagged body with matching value type. The list must include only returned comments
+and must not fetch replies or another page. Audit and service logs may record
+format names, byte counts and stable outcomes, but not source/selected content,
+pagination tokens, parser excerpts, links, macro parameters or internal IDs.
+A deliberately low isolated `max_body_bytes` must produce sanitized
+`upstream_protocol_failed`/502 with no partial output; do not lower a shared live
+Broker solely for this check.
 
 ## GitLab Smoke Matrix
 
@@ -989,13 +985,12 @@ start with read-only actions:
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   gitlab issue view "$GITLAB_REPOSITORY" <issue-iid> \
-  --read-content-format markdown \
+  --output-content-format markdown \
   > "$SMOKE_DIR/gitlab-issue-view-rendered.out.json"
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   gitlab issue search "$GITLAB_REPOSITORY" --state opened --max-results 10 \
-  --output-format markdown \
-  > "$SMOKE_DIR/gitlab-issue-search.out.md"
+  > "$SMOKE_DIR/gitlab-issue-search.out.json"
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
   gitlab merge-request list-discussions "$GITLAB_REPOSITORY" <mr-iid> \
@@ -1036,11 +1031,12 @@ start with read-only actions:
   --output "$SMOKE_DIR/gitlab-mr.diff"
 ```
 
-Confirm the embedded result preserves the exact native GitLab description and
-adds a sibling Markdown `renderedBody`. The whole-result output must be plain
-Markdown with the same issue page and continuation metadata as JSON mode and no
-JSON envelope. Repeat one body-bearing note or discussion list in `text` and
-whole-result modes; formatting must not issue a second GitLab request.
+Confirm every declared GitLab description/note body contains one tagged value.
+Markdown `value` must equal the native source string byte-for-byte. Repeat a
+body-bearing note or discussion list with exact text selection. Surrounding
+metadata and pagination stay structured JSON, and selection must not add a GitLab
+request. A valid unsupported preference such as ADF should yield native Markdown;
+exact ADF must be refused before provider access.
 
 Use an MR containing at least one current line discussion and, if practical,
 one discussion made outdated by a later push. Verify each positioned note has
@@ -1070,13 +1066,12 @@ the preflight head but is not a SHA-pinned snapshot. Verify an older server
 fails explicitly rather than falling back to another route. Do not lower a
 shared download cap merely to force an overflow test.
 
-Also exercise the protocol surfaces: generic `invoke` with
-`--output-format markdown`, a JSON `send` request carrying top-level
-`responseFormat`, and direct HTTP carrying top-level `readContentFormat`.
-`send` and HTTP keep the standard JSON envelope; typed and generic CLI print
-only `result.value` on successful whole-result Markdown. Verify raw file, raw
-MR diff, and job-trace downloads reject the presentation flags and retain
-stream behavior.
+Also exercise generic invoke with `--output-content-format markdown`, and JSON
+send/direct HTTP with top-level `outputContentFormat`. Every surface must retain
+the JSON envelope with one selected body per declared field. Verify raw file,
+raw MR diff and job-trace downloads reject exact body selection and preserve their
+stream behavior. Record the particular real-service cases executed separately
+from deterministic fixture coverage.
 
 With a throwaway MR and a per-user grant, exercise direct and pending review
 participation. Replace the placeholders with a fresh head and coordinates from
@@ -1209,7 +1204,7 @@ REST term `note`, for example `issue.note.add` and `issue.note.update`.
   --title "Agent Access Smoke Issue" \
   --content-file "$SMOKE_DIR/attribution-gitlab-issue-create.md" \
   --content-format markdown \
-  --read-content-format markdown \
+  --output-content-format markdown \
   > "$SMOKE_DIR/gitlab-issue-create.out.json"
 
 "$AAB_BIN" --config "$AGENT_CONFIG" \
@@ -1321,7 +1316,7 @@ For `send`, the generated schema requires each upload file to declare
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "attachment.add",
@@ -1353,7 +1348,7 @@ output target and optional metadata output. Jira uses the `issue` locator:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "attachment.download",
@@ -1377,7 +1372,7 @@ Confluence page attachments use the same stream shape with `pageId`:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "confluence",
   "action": "attachment.download",

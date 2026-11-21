@@ -101,6 +101,8 @@ impl ConfluenceProviderConfig {
 #[serde(deny_unknown_fields)]
 pub struct ConfluenceContentConfig {
     #[serde(default)]
+    pub preferred_output_format: Option<agent_access_provider::presentation::OutputContentFormat>,
+    #[serde(default)]
     pub page_formats: Vec<String>,
     #[serde(default = "default_confluence_blog_formats")]
     pub blog_formats: Vec<String>,
@@ -113,6 +115,7 @@ pub struct ConfluenceContentConfig {
 impl Default for ConfluenceContentConfig {
     fn default() -> Self {
         Self {
+            preferred_output_format: None,
             page_formats: vec![],
             blog_formats: default_confluence_blog_formats(),
             comment_formats: default_confluence_comment_formats(),

@@ -1537,7 +1537,7 @@ fn descriptors_are_independent_sensitive_reads_with_plain_project_schemas() {
             Some(NativeSearchEnforcement::ResultFiltered)
         );
         assert_eq!(action.lookup, LookupRequirement::None);
-        assert!(action.presentation.is_some());
+        assert!(action.presentation.is_none());
         assert!(!action.sensitive_output_pointers.is_empty());
         assert_eq!(action.input_schema["additionalProperties"], false);
     }

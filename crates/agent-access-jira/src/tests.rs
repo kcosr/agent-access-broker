@@ -9703,3 +9703,5 @@ fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
         );
     }
 }
+#[path = "tests/content_output.rs"]
+mod content_output;

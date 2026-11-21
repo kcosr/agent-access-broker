@@ -1178,7 +1178,7 @@ async fn reference_command_imports_invokes_in_both_modes_verifies_and_lists_over
         files,
         "readonly-send.json",
         json!({
-            "version":"agent-access.send.v1", "kind":"invoke", "service":"ticketing",
+            "version":"agent-access.send.v2", "kind":"invoke", "service":"ticketing",
             "action":"issue.create", "inputs":inputs
         })
         .to_string(),

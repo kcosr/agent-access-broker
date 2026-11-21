@@ -194,7 +194,7 @@
   "blog.draft.publish": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the native representation; it is not a readContentFormat request.",
+    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the source representation; outputContentFormat only selects returned rich content.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -249,7 +249,7 @@
   "blog.draft.verify": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch; whole-result Markdown preserves that outcome.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch in the structured JSON result.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -267,7 +267,7 @@
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "draftOperation": "bodyFormat selects the provider-native representation and is distinct from readContentFormat. Native body is retained; renderedBody is beside root body. Formatting uses the returned body without another request.",
+    "draftOperation": "bodyFormat selects the provider-native source. outputContentFormat selects the returned body as one {format,value} object. Markdown is the default preference; selection makes no additional request.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -284,7 +284,7 @@
   "blog.footer_comment.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "inputExamples": [
       {
         "label": "Write plain text",
@@ -305,7 +305,7 @@
   },
   "blog.footer_comment.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -321,7 +321,7 @@
   "blog.footer_comment.reply.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "inputExamples": [
       {
         "label": "Write plain text",
@@ -337,7 +337,7 @@
   },
   "blog.footer_comment.reply.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -353,7 +353,7 @@
   "blog.footer_comment.update": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
     "inputExamples": [
       {
@@ -371,7 +371,7 @@
   },
   "blog.footer_comment.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -390,7 +390,7 @@
   },
   "blog.inline_comment.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -406,7 +406,7 @@
   "blog.inline_comment.reply.add": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "inputExamples": [
       {
         "label": "Write plain text",
@@ -422,7 +422,7 @@
   },
   "blog.inline_comment.reply.list": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -438,7 +438,7 @@
   "blog.inline_comment.update": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
     "inputExamples": [
       {
@@ -456,7 +456,7 @@
   },
   "blog.inline_comment.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -556,7 +556,7 @@
   },
   "blog.view": {
     "scope": "Authorize the current blog location using space or exact-blog resources. Page/folder resources confer no blog authority. Owner-bound comment and attachment actions resolve the actual blog and membership; each action needs its own permission.",
-    "presentation": "Returns current blog metadata and its configured native body. Non-native readContentFormat retains body.storage text and adds renderedBody beside root body. Whole-result Markdown uses only returned data; page action grants do not authorize this blog action.",
+    "presentation": "Returns current blog metadata and one {format,value} body, defaulting to a Markdown preference. outputContentFormat supports markdown, text and storage; absent source omits body. Selection uses only returned data; page action grants do not authorize this blog action.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -682,7 +682,7 @@
   "page.draft.publish": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the native representation; it is not a readContentFormat request.",
+    "draftOperation": "Publishes the stored draft body and title without adding another attribution footer. The provider requires draft version 1, publishes new drafts as current version 1 and staged drafts as baseVersion + 1, and verifies new-draft attachments. bodyFormat selects the source representation; outputContentFormat only selects returned rich content.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -737,7 +737,7 @@
   "page.draft.verify": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch; whole-result Markdown preserves that outcome.",
+    "expectations": "Give at least one of expectVersion, expectTitle or expectAttachmentId. Read verification.status for matched/mismatch in the structured JSON result.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -755,7 +755,7 @@
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "resultMetadata": "Created/updated actor and time fields are included when Confluence supplies them.",
     "draftHandle": "Supply the exact draftHandle returned for this content ID. It has no expiry and binds the tenant, execution context, content and credential method: static token kind, or OAuth connection and generation, plus the gateway cloud_id when that route is used. Routine OAuth refresh preserves the handle; reconnecting OAuth or changing its account invalidates it. Changing credential method, static token kind or gateway site also returns invalid_draft_handle. Replacing a static token value with the same kind and route preserves the binding. Per-user handles belong to that user; service-mode handles may be handed to another principal admitted in service mode under current policy. Every action reauthorizes current content access and confirms current placement. Version 5 handles carry typed page/folder parents; obsolete handles return invalid_draft_handle. Handle possession alone grants no permission.",
-    "draftOperation": "bodyFormat selects the provider-native representation and is distinct from readContentFormat. Native body is retained; renderedBody is beside root body. Formatting uses the returned body without another request.",
+    "draftOperation": "bodyFormat selects the provider-native source. outputContentFormat selects the returned body as one {format,value} object. Markdown is the default preference; selection makes no additional request.",
     "inputTemplates": [
       {
         "label": "Use a returned draft handle",
@@ -772,7 +772,7 @@
   "page.footer_comment.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "inputExamples": [
       {
         "label": "Write plain text",
@@ -793,7 +793,7 @@
   },
   "page.footer_comment.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -809,7 +809,7 @@
   "page.footer_comment.reply.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "inputExamples": [
       {
         "label": "Write plain text",
@@ -825,7 +825,7 @@
   },
   "page.footer_comment.reply.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -841,7 +841,7 @@
   "page.footer_comment.update": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
     "inputExamples": [
       {
@@ -859,7 +859,7 @@
   },
   "page.footer_comment.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -878,7 +878,7 @@
   },
   "page.inline_comment.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -894,7 +894,7 @@
   "page.inline_comment.reply.add": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. Do not append a manual footer; configured attribution is applied in native form. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "inputExamples": [
       {
         "label": "Write plain text",
@@ -910,7 +910,7 @@
   },
   "page.inline_comment.reply.list": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "pagination": "Pass returned nextPageToken unchanged as nextPageToken to the same comment action and target, keeping bodyFormat, filters and effective maxResults unchanged. Tokens expire after 15 minutes and every page is reauthorized. Stable-key list tokens can survive reload/restart with unchanged bindings; runtime-key tokens cannot. On rejection start a new listing without the token. Results carry comments, count, hasMore and nextPageToken; replies may include parentCommentId.",
     "inputExamples": [
       {
@@ -926,7 +926,7 @@
   "page.inline_comment.update": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
     "content": "Supply both content and explicit contentFormat; format is never inferred. When advertised, storage, markdown and plain_text are strings; normalized formats become storage. atlas_doc_format is not accepted by this action. The exact action's contentFormat enum reflects effective configuration; required-content actions without an effective target are absent. This comment update does not append attribution; do not add a manual footer. Oversize source or final content returns body_size_denied/413; unsupported format returns body_format_unsupported/415. Source and converted bodies do not enter audit or diagnostics.",
-    "readPresentation": "When advertised, readContentFormat preserves the returned comment's native body and places renderedBody beside that body's owning comment. It is separate from write contentFormat and makes no extra provider call.",
+    "readPresentation": "When advertised, outputContentFormat selects the returned comment.body as one {format,value} object. It is separate from write contentFormat, defaults to a Markdown preference and makes no extra provider call. A completed write whose output cannot be produced returns an applied, non-retryable receipt.",
     "version": "Supply the current baseVersion. A mismatch returns version_conflict before mutation; an update sends baseVersion + 1.",
     "inputExamples": [
       {
@@ -944,7 +944,7 @@
   },
   "page.inline_comment.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "bodyFormat selects the native comment representation. Non-native readContentFormat retains each native body and places renderedBody beside that body's owning comment. Whole-result Markdown and embedded formatting use only returned bodies and do not fetch more comments or pages.",
+    "presentation": "bodyFormat selects the native comment source. outputContentFormat selects each returned body as one {format,value} object, with a Markdown default preference. Disabled comment sources omit body; missing configured sources fail. Selection does not fetch more comments or pages.",
     "inputExamples": [
       {
         "label": "Canonical inputs",
@@ -1008,7 +1008,7 @@
   },
   "page.view": {
     "scope": "Authorize the current page location using space, exact-page or page/folder subtree resources. Owner-bound comment and attachment actions resolve the actual page and membership; each action needs its own permission. An exact page does not cover child pages.",
-    "presentation": "Returns current page metadata and configured native bodies. Non-native readContentFormat preserves the bodies and adds renderedBody beside root body. When both native representations are present, atlas_doc_format is selected before storage; malformed selected ADF fails instead of falling back. Whole-result Markdown uses only returned data.",
+    "presentation": "Returns current page metadata and one {format,value} body, defaulting to a Markdown preference. outputContentFormat supports markdown, text and configured adf/storage sources. Markdown/text use present ADF before storage; malformed configured sources fail. Missing selected native source or disabled content omits body. ADF output is an object; selection makes no extra request.",
     "inputExamples": [
       {
         "label": "Canonical inputs",

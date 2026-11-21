@@ -229,7 +229,7 @@ async fn confluence_plain_inputs_preserve_stdio_and_send_validation() {
         );
     }
     for inputs in [None, Some(json!({})), Some(json!({"url": PAGE_URL}))] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "confluence", "action": "page.view"});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "confluence", "action": "page.view"});
         if let Some(inputs) = inputs {
             request["inputs"] = inputs;
         }

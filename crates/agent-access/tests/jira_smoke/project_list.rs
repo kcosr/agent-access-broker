@@ -179,19 +179,13 @@ async fn jira_project_list_service_personal_cli_send_http_and_mcp() {
                 "2",
                 "--page-token",
                 token,
-                "--output-format",
-                "markdown",
             ])
             .output()
             .unwrap();
         assert_success("Markdown listing", &markdown);
         let markdown = String::from_utf8(markdown.stdout).unwrap();
-        assert!(
-            markdown.contains("Jira projects")
-                && markdown.contains("Visible project")
-                && markdown.contains("exhausted")
-        );
-        let send=json!({"version":"agent-access.send.v1","kind":"invoke","service":"jira","action":"project.list","inputs":{"maxResults":2,"pageToken":token}}).to_string();
+        assert!(markdown.contains("Visible project") && markdown.contains("exhausted"));
+        let send=json!({"version":"agent-access.send.v2","kind":"invoke","service":"jira","action":"project.list","inputs":{"maxResults":2,"pageToken":token}}).to_string();
         let sent = checked(
             authenticated_jira_cli(&base)
                 .args(["send", "--request-json", &send])
