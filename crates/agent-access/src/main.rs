@@ -1984,16 +1984,12 @@ enum JiraProjectCommand {
         include: Option<Vec<JiraProjectSection>>,
         #[arg(long, help = "Filter included metadata by name, ID, or JQL reference")]
         query: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
     List {
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
 }
 
@@ -2028,8 +2024,6 @@ enum JiraIssueTypeCommand {
         start_at: Option<u32>,
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100))]
         max_results: Option<u32>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
 }
 
@@ -2128,8 +2122,6 @@ enum JiraIssueCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
     Comment {
         #[command(subcommand)]
@@ -2152,8 +2144,6 @@ enum JiraIssueCommand {
         expect_comment_id: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
 }
 
@@ -2398,8 +2388,6 @@ enum JiraCommentPropertyCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
     Get {
         comment_id: String,
@@ -2408,8 +2396,6 @@ enum JiraCommentPropertyCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
     Set {
         comment_id: String,
@@ -2437,8 +2423,6 @@ enum JiraAttachmentCommand {
         issue: Option<String>,
         #[arg(long)]
         issue_url: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
     Download {
         issue: String,
@@ -2469,8 +2453,6 @@ enum ConfluenceSpaceCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[arg(long, value_enum)]
-        output_content_format: Option<OutputContentFormatArg>,
     },
 }
 
@@ -2496,8 +2478,6 @@ enum ConfluencePageCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Create {
         #[arg(long)]
@@ -2599,8 +2579,6 @@ enum ConfluencePageCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -2715,8 +2693,6 @@ enum ConfluencePageDraftCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Attach {
         page_id: String,
@@ -2743,8 +2719,6 @@ enum ConfluencePageDraftAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Download {
         page_id: String,
@@ -2765,8 +2739,6 @@ enum ConfluenceAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Download {
         page_id: String,
@@ -2979,8 +2951,6 @@ enum ConfluenceBlogCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Create {
         #[arg(long)]
@@ -3058,8 +3028,6 @@ enum ConfluenceBlogCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -3161,8 +3129,6 @@ enum ConfluenceBlogDraftCommand {
         expect_title: Option<String>,
         #[arg(long)]
         expect_attachment_id: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Attach {
         blog_id: String,
@@ -3189,8 +3155,6 @@ enum ConfluenceBlogDraftAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Download {
         blog_id: String,
@@ -3211,8 +3175,6 @@ enum ConfluenceBlogAttachmentCommand {
         max_results: Option<u32>,
         #[arg(long)]
         next_page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Download {
         blog_id: String,
@@ -3669,8 +3631,6 @@ enum CloudbeesCiJobCommand {
     View {
         #[command(flatten)]
         job: CloudbeesCiJobArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -3710,8 +3670,6 @@ enum CloudbeesCiBuildCommand {
         /// Most test cases to return.
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Download the detailed test report as JSON.
     TestsDownload {
@@ -3722,8 +3680,6 @@ enum CloudbeesCiBuildCommand {
     PendingInputs {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// List or download a build's archived artifacts.
     Artifact {
@@ -3737,15 +3693,11 @@ enum CloudbeesCiBuildCommand {
         /// Most builds to return.
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Read one build's status, causes, and parameters.
     View {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Read a bounded beginning, ending, or literal-search excerpt of a build log.
     Log {
@@ -3766,22 +3718,16 @@ enum CloudbeesCiBuildCommand {
         /// Returned text budget (defaults to 16384 bytes); does not raise the scan budget.
         #[arg(long, value_parser = clap::value_parser!(u64).range(1024..=65536))]
         max_bytes: Option<u64>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Read a build's test report summary.
     Tests {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Queue a parameterless build; do not retry an unverified trigger.
     Trigger {
         #[command(flatten)]
         job: CloudbeesCiJobArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -3791,8 +3737,6 @@ enum CloudbeesCiPipelineCommand {
     View {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Read one Pipeline node and its steps.
     Node {
@@ -3801,8 +3745,6 @@ enum CloudbeesCiPipelineCommand {
         /// Pipeline node ID from build pipeline view.
         #[arg(long)]
         node_id: String,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Read one Pipeline node's log.
     Log {
@@ -3811,8 +3753,6 @@ enum CloudbeesCiPipelineCommand {
         /// Pipeline node ID from build pipeline view.
         #[arg(long)]
         node_id: String,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -3822,8 +3762,6 @@ enum CloudbeesCiBuildArtifactCommand {
     List {
         #[command(flatten)]
         build: CloudbeesCiBuildArgs,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     /// Download one archived artifact; requires --output.
     Download {
@@ -3844,8 +3782,6 @@ enum CloudbeesCiQueueCommand {
         /// Queue item ID from build trigger.
         #[arg(long)]
         queue_id: u64,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -3929,8 +3865,6 @@ enum GitlabProjectCommand {
         project: Option<String>,
         #[arg(long)]
         project_url: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -4145,8 +4079,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ListCommits {
         project: String,
@@ -4155,8 +4087,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ListPipelines {
         project: String,
@@ -4165,8 +4095,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ListDiffs {
         project: String,
@@ -4177,8 +4105,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     DiffRaw {
         project: String,
@@ -4191,8 +4117,6 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ViewDiffVersion {
         project: String,
@@ -4200,8 +4124,6 @@ enum GitlabMergeRequestCommand {
         version_id: u64,
         #[arg(long)]
         unidiff: bool,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ViewDiscussion {
         project: String,
@@ -4314,14 +4236,10 @@ enum GitlabMergeRequestCommand {
     ViewApproval {
         project: String,
         iid: u64,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ViewApprovalState {
         project: String,
         iid: u64,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ListApprovalRules {
         project: String,
@@ -4330,15 +4248,11 @@ enum GitlabMergeRequestCommand {
         max_results: Option<u32>,
         #[arg(long)]
         page_token: Option<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     ViewApprovalRule {
         project: String,
         iid: u64,
         approval_rule_id: u64,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Approve {
         project: String,
@@ -4589,14 +4503,10 @@ enum GitlabBranchCommand {
         regex: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     View {
         project: String,
         branch: String,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Create {
         project: String,
@@ -4614,21 +4524,15 @@ enum GitlabProtectedBranchCommand {
         search: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     View {
         project: String,
         branch_or_wildcard_name: String,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Verify {
         project: String,
         #[arg(long = "required-pattern")]
         required_patterns: Vec<String>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
 }
 
@@ -4646,8 +4550,6 @@ enum GitlabFileCommand {
         /// Whole-file byte budget; requires --include-content.
         #[arg(long, requires = "include_content", value_parser = clap::value_parser!(u64).range(1..))]
         max_content_bytes: Option<u64>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Raw {
         project: String,
@@ -4731,14 +4633,10 @@ enum GitlabCommitCommand {
         first_parent: Option<bool>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     View {
         project: String,
         sha: String,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Create {
         project: String,
@@ -4777,14 +4675,10 @@ enum GitlabPipelineCommand {
         updated_before: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     View {
         project: String,
         pipeline_id: u64,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Run {
         project: String,
@@ -4811,14 +4705,10 @@ enum GitlabJobCommand {
         scope: Option<String>,
         #[arg(long)]
         max_results: Option<u32>,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     View {
         project: String,
         job_id: u64,
-        #[command(flatten)]
-        response: OutputContentArgs,
     },
     Trace {
         project: String,
@@ -5419,7 +5309,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 ConfluenceSpaceCommand::List {
                     max_results,
                     page_token,
-                    output_content_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -5429,13 +5318,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
             if let Some(page_token) = page_token {
                 inputs.insert("pageToken".to_string(), serde_json::json!(page_token));
             }
-            run_typed_invoke_value(
-                ctx,
-                "confluence.space.list",
-                inputs.into(),
-                *output_content_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "confluence.space.list", inputs.into(), None).await
         }
 
         ConfluenceCommand::Page { command } => match command {
@@ -5465,7 +5348,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 spaces,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert(
@@ -5493,7 +5375,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     ctx,
                     "confluence.search",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -5596,7 +5478,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     page_url,
                     max_results,
                     next_page_token,
-                    response,
                 } => {
                     let mut inputs = match (page_id.as_deref(), page_url.as_deref()) {
                         (Some(page_id), None) => {
@@ -5626,7 +5507,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                         ctx,
                         "confluence.attachment.list",
                         serde_json::Value::Object(inputs),
-                        response.output_content_format,
+                        None,
                     )
                     .await
                 }
@@ -5658,7 +5539,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 expect_version,
                 expect_title,
                 expect_attachment_id,
-                response,
             } => {
                 if expect_version.is_none()
                     && expect_title.is_none()
@@ -5686,7 +5566,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     ctx,
                     "confluence.verify",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -5718,7 +5598,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 spaces,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert(
@@ -5746,7 +5625,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     ctx,
                     "confluence.blog.search",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -5820,7 +5699,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     blog_url,
                     max_results,
                     next_page_token,
-                    response,
                 } => {
                     let mut inputs = match (blog_id.as_deref(), blog_url.as_deref()) {
                         (Some(blog_id), None) => {
@@ -5850,7 +5728,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                         ctx,
                         "confluence.blog.attachment.list",
                         serde_json::Value::Object(inputs),
-                        response.output_content_format,
+                        None,
                     )
                     .await
                 }
@@ -5882,7 +5760,6 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 expect_version,
                 expect_title,
                 expect_attachment_id,
-                response,
             } => {
                 if expect_version.is_none()
                     && expect_title.is_none()
@@ -5910,7 +5787,7 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                     ctx,
                     "confluence.blog.verify",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -6067,7 +5944,6 @@ async fn run_confluence_page_draft_command(
             expect_version,
             expect_title,
             expect_attachment_id,
-            response,
         } => {
             let inputs = confluence_draft_verify_inputs(
                 "pageId",
@@ -6078,13 +5954,7 @@ async fn run_confluence_page_draft_command(
                 expect_attachment_id.as_deref(),
                 "confluence page draft verify",
             );
-            run_typed_invoke_value(
-                ctx,
-                "confluence.page.draft.verify",
-                inputs,
-                response.output_content_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "confluence.page.draft.verify", inputs, None).await
         }
         ConfluencePageDraftCommand::Attach {
             page_id,
@@ -6111,7 +5981,6 @@ async fn run_confluence_page_draft_command(
                 draft_handle,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let inputs = confluence_draft_attachment_list_inputs(
                     "pageId",
@@ -6120,13 +5989,8 @@ async fn run_confluence_page_draft_command(
                     *max_results,
                     next_page_token.as_deref(),
                 );
-                run_typed_invoke_value(
-                    ctx,
-                    "confluence.page.draft.attachment.list",
-                    inputs,
-                    response.output_content_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "confluence.page.draft.attachment.list", inputs, None)
+                    .await
             }
             ConfluencePageDraftAttachmentCommand::Download {
                 page_id,
@@ -6289,7 +6153,6 @@ async fn run_confluence_blog_draft_command(
             expect_version,
             expect_title,
             expect_attachment_id,
-            response,
         } => {
             let inputs = confluence_draft_verify_inputs(
                 "blogId",
@@ -6300,13 +6163,7 @@ async fn run_confluence_blog_draft_command(
                 expect_attachment_id.as_deref(),
                 "confluence blog draft verify",
             );
-            run_typed_invoke_value(
-                ctx,
-                "confluence.blog.draft.verify",
-                inputs,
-                response.output_content_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "confluence.blog.draft.verify", inputs, None).await
         }
         ConfluenceBlogDraftCommand::Attach {
             blog_id,
@@ -6333,7 +6190,6 @@ async fn run_confluence_blog_draft_command(
                 draft_handle,
                 max_results,
                 next_page_token,
-                response,
             } => {
                 let inputs = confluence_draft_attachment_list_inputs(
                     "blogId",
@@ -6342,13 +6198,8 @@ async fn run_confluence_blog_draft_command(
                     *max_results,
                     next_page_token.as_deref(),
                 );
-                run_typed_invoke_value(
-                    ctx,
-                    "confluence.blog.draft.attachment.list",
-                    inputs,
-                    response.output_content_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "confluence.blog.draft.attachment.list", inputs, None)
+                    .await
             }
             ConfluenceBlogDraftAttachmentCommand::Download {
                 blog_id,
@@ -7097,11 +6948,9 @@ async fn run_cloudbees_ci_command(
     command: &CloudbeesCiCommand,
 ) -> Result<()> {
     match cloudbees_ci_invocation(command) {
-        CloudbeesCiInvocation::Json {
-            action,
-            inputs,
-            format,
-        } => run_typed_invoke_value(ctx, &format!("cloudbees_ci.{action}"), inputs, format).await,
+        CloudbeesCiInvocation::Json { action, inputs } => {
+            run_typed_invoke_value(ctx, &format!("cloudbees_ci.{action}"), inputs, None).await
+        }
         CloudbeesCiInvocation::Download { action, inputs } => {
             run_attachment_download(
                 ctx,
@@ -7118,7 +6967,6 @@ enum CloudbeesCiInvocation {
     Json {
         action: &'static str,
         inputs: serde_json::Value,
-        format: Option<OutputContentFormatArg>,
     },
     Download {
         action: &'static str,
@@ -7140,10 +6988,7 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
         serde_json::Value::Object(inputs)
     };
     let download = |action, inputs| CloudbeesCiInvocation::Download { action, inputs };
-    let list_response = OutputContentArgs {
-        output_content_format: None,
-    };
-    let (action, inputs, response) = match command {
+    let (action, inputs) = match command {
         CloudbeesCiCommand::Job {
             command:
                 CloudbeesCiJobCommand::List {
@@ -7165,30 +7010,23 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                     ),
                 ],
             ),
-            &list_response,
         ),
         CloudbeesCiCommand::Job {
-            command: CloudbeesCiJobCommand::View { job, response },
-        } => ("job.view", with(job.inputs(), &[]), response),
+            command: CloudbeesCiJobCommand::View { job },
+        } => ("job.view", with(job.inputs(), &[])),
         CloudbeesCiCommand::Queue {
-            command:
-                CloudbeesCiQueueCommand::View {
-                    job,
-                    queue_id,
-                    response,
-                },
+            command: CloudbeesCiQueueCommand::View { job, queue_id },
         } => (
             "queue.view",
             with(
                 job.inputs(),
                 &[("queueId", Some(serde_json::json!(queue_id)))],
             ),
-            response,
         ),
         CloudbeesCiCommand::Build { command } => match command {
             Build::Artifact {
-                command: Artifact::List { build, response },
-            } => ("build.artifact.list", with(build.inputs(), &[]), response),
+                command: Artifact::List { build },
+            } => ("build.artifact.list", with(build.inputs(), &[])),
             Build::Artifact {
                 command:
                     Artifact::Download {
@@ -7210,11 +7048,7 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
             Build::TestsDownload { build } => {
                 return download("build.tests.download", with(build.inputs(), &[]));
             }
-            Build::TestsDetails {
-                build,
-                max_results,
-                response,
-            } => (
+            Build::TestsDetails { build, max_results } => (
                 "build.tests.details",
                 with(
                     build.inputs(),
@@ -7223,51 +7057,32 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                         max_results.map(|value| serde_json::json!(value)),
                     )],
                 ),
-                response,
             ),
-            Build::PendingInputs { build, response } => (
-                "build.pending-inputs.list",
-                with(build.inputs(), &[]),
-                response,
-            ),
+            Build::PendingInputs { build } => {
+                ("build.pending-inputs.list", with(build.inputs(), &[]))
+            }
             Build::Pipeline {
-                command: Pipeline::View { build, response },
-            } => ("build.pipeline.view", with(build.inputs(), &[]), response),
+                command: Pipeline::View { build },
+            } => ("build.pipeline.view", with(build.inputs(), &[])),
             Build::Pipeline {
-                command:
-                    Pipeline::Node {
-                        build,
-                        node_id,
-                        response,
-                    },
+                command: Pipeline::Node { build, node_id },
             } => (
                 "build.pipeline.node.view",
                 with(
                     build.inputs(),
                     &[("nodeId", Some(serde_json::json!(node_id)))],
                 ),
-                response,
             ),
             Build::Pipeline {
-                command:
-                    Pipeline::Log {
-                        build,
-                        node_id,
-                        response,
-                    },
+                command: Pipeline::Log { build, node_id },
             } => (
                 "build.pipeline.node.log.read",
                 with(
                     build.inputs(),
                     &[("nodeId", Some(serde_json::json!(node_id)))],
                 ),
-                response,
             ),
-            Build::List {
-                job,
-                max_results,
-                response,
-            } => (
+            Build::List { job, max_results } => (
                 "build.list",
                 with(
                     job.inputs(),
@@ -7276,9 +7091,8 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                         max_results.map(|value| serde_json::json!(value)),
                     )],
                 ),
-                response,
             ),
-            Build::View { build, response } => ("build.view", with(build.inputs(), &[]), response),
+            Build::View { build } => ("build.view", with(build.inputs(), &[])),
             Build::Log {
                 build,
                 mode,
@@ -7286,7 +7100,6 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                 query,
                 max_matches,
                 max_bytes,
-                response,
             } => (
                 "build.log.read",
                 with(
@@ -7308,21 +7121,12 @@ fn cloudbees_ci_invocation(command: &CloudbeesCiCommand) -> CloudbeesCiInvocatio
                         ("maxBytes", max_bytes.map(|value| serde_json::json!(value))),
                     ],
                 ),
-                response,
             ),
-            Build::Tests { build, response } => {
-                ("build.tests.view", with(build.inputs(), &[]), response)
-            }
-            Build::Trigger { job, response } => {
-                ("build.trigger", with(job.inputs(), &[]), response)
-            }
+            Build::Tests { build } => ("build.tests.view", with(build.inputs(), &[])),
+            Build::Trigger { job } => ("build.trigger", with(job.inputs(), &[])),
         },
     };
-    CloudbeesCiInvocation::Json {
-        action,
-        inputs,
-        format: response.output_content_format,
-    }
+    CloudbeesCiInvocation::Json { action, inputs }
 }
 
 async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Result<()> {
@@ -7371,20 +7175,13 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
             GitlabProjectCommand::View {
                 project,
                 project_url,
-                response,
             } => {
                 let inputs = gitlab_project_locator_inputs(
                     project.as_deref(),
                     project_url.as_deref(),
                     "gitlab project view",
                 );
-                run_typed_invoke_value(
-                    ctx,
-                    "gitlab.project.view",
-                    inputs,
-                    response.output_content_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "gitlab.project.view", inputs, None).await
             }
         },
         GitlabCommand::Issue { command } => match command {
@@ -7708,7 +7505,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7719,7 +7515,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         *max_results,
                         page_token.as_deref(),
                     ),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -7728,7 +7524,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7739,7 +7534,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         *max_results,
                         page_token.as_deref(),
                     ),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -7748,7 +7543,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7759,7 +7553,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         *max_results,
                         page_token.as_deref(),
                     ),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -7769,7 +7563,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 unidiff,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7781,7 +7574,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         *max_results,
                         page_token.as_deref(),
                     ),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -7799,7 +7592,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -7810,7 +7602,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         *max_results,
                         page_token.as_deref(),
                     ),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -7819,13 +7611,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 version_id,
                 unidiff,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.diff_version.view",
                     gitlab_merge_request_diff_version_inputs(project, *iid, *version_id, *unidiff),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8027,29 +7818,21 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 ));
                 run_invoke_value(ctx, "gitlab.merge_request.review.submit", inputs).await
             }
-            GitlabMergeRequestCommand::ViewApproval {
-                project,
-                iid,
-                response,
-            } => {
+            GitlabMergeRequestCommand::ViewApproval { project, iid } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.approval.view",
                     gitlab_merge_request_inputs(project, *iid),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
-            GitlabMergeRequestCommand::ViewApprovalState {
-                project,
-                iid,
-                response,
-            } => {
+            GitlabMergeRequestCommand::ViewApprovalState { project, iid } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.approval_state.view",
                     gitlab_merge_request_inputs(project, *iid),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8058,7 +7841,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 iid,
                 max_results,
                 page_token,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -8069,7 +7851,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         *max_results,
                         page_token.as_deref(),
                     ),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8077,13 +7859,12 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 project,
                 iid,
                 approval_rule_id,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.merge_request.approval_rule.view",
                     gitlab_approval_rule_inputs(project, *iid, *approval_rule_id),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8502,7 +8283,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 search,
                 regex,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8513,15 +8293,11 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.branch.list",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
-            GitlabBranchCommand::View {
-                project,
-                branch,
-                response,
-            } => {
+            GitlabBranchCommand::View { project, branch } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.branch.view",
@@ -8529,7 +8305,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "project": project,
                         "branch": branch,
                     }),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8555,7 +8331,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 project,
                 search,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8565,14 +8340,13 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.protected_branch.list",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
             GitlabProtectedBranchCommand::View {
                 project,
                 branch_or_wildcard_name,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -8581,14 +8355,13 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "project": project,
                         "branchOrWildcardName": branch_or_wildcard_name,
                     }),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
             GitlabProtectedBranchCommand::Verify {
                 project,
                 required_patterns,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8597,7 +8370,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.protected_branch.verify",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8609,7 +8382,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 ref_name,
                 include_content,
                 max_content_bytes,
-                response,
             } => {
                 let mut inputs = serde_json::json!({
                     "project": project,
@@ -8620,13 +8392,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 if let Some(maximum) = max_content_bytes {
                     inputs["maxContentBytes"] = serde_json::json!(maximum);
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "gitlab.file.view",
-                    inputs,
-                    response.output_content_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "gitlab.file.view", inputs, None).await
             }
             GitlabFileCommand::Raw {
                 project,
@@ -8729,7 +8495,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 until,
                 first_parent,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8745,15 +8510,11 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.commit.list",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
-            GitlabCommitCommand::View {
-                project,
-                sha,
-                response,
-            } => {
+            GitlabCommitCommand::View { project, sha } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.commit.view",
@@ -8761,7 +8522,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "project": project,
                         "sha": sha,
                     }),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8805,7 +8566,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 updated_after,
                 updated_before,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8820,14 +8580,13 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.pipeline.list",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
             GitlabPipelineCommand::View {
                 project,
                 pipeline_id,
-                response,
             } => {
                 run_typed_invoke_value(
                     ctx,
@@ -8836,7 +8595,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "project": project,
                         "pipelineId": pipeline_id,
                     }),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -8886,7 +8645,6 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                 pipeline_id,
                 scope,
                 max_results,
-                response,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert("project".to_string(), serde_json::json!(project));
@@ -8899,15 +8657,11 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                     ctx,
                     "gitlab.job.list",
                     serde_json::Value::Object(inputs),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
-            GitlabJobCommand::View {
-                project,
-                job_id,
-                response,
-            } => {
+            GitlabJobCommand::View { project, job_id } => {
                 run_typed_invoke_value(
                     ctx,
                     "gitlab.job.view",
@@ -8915,7 +8669,7 @@ async fn run_gitlab_command(ctx: &CliContext<'_>, command: &GitlabCommand) -> Re
                         "project": project,
                         "jobId": job_id,
                     }),
-                    response.output_content_format,
+                    None,
                 )
                 .await
             }
@@ -15051,7 +14805,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     project,
                     include,
                     query,
-                    output_content_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -15070,20 +14823,13 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             if let Some(query) = query {
                 inputs.insert("query".to_string(), serde_json::json!(query));
             }
-            run_typed_invoke_value(
-                ctx,
-                "jira.project.view",
-                inputs.into(),
-                *output_content_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "jira.project.view", inputs.into(), None).await
         }
         JiraCommand::Project {
             command:
                 JiraProjectCommand::List {
                     max_results,
                     page_token,
-                    output_content_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -15093,13 +14839,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             if let Some(page_token) = page_token {
                 inputs.insert("pageToken".to_string(), serde_json::json!(page_token));
             }
-            run_typed_invoke_value(
-                ctx,
-                "jira.project.list",
-                inputs.into(),
-                *output_content_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "jira.project.list", inputs.into(), None).await
         }
         JiraCommand::IssueType {
             command:
@@ -15107,7 +14847,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                     project,
                     start_at,
                     max_results,
-                    output_content_format,
                 },
         } => {
             let mut inputs = serde_json::Map::new();
@@ -15118,13 +14857,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
             if let Some(max_results) = max_results {
                 inputs.insert("maxResults".to_string(), serde_json::json!(max_results));
             }
-            run_typed_invoke_value(
-                ctx,
-                "jira.issue_type.list",
-                inputs.into(),
-                *output_content_format,
-            )
-            .await
+            run_typed_invoke_value(ctx, "jira.issue_type.list", inputs.into(), None).await
         }
         JiraCommand::Issue { command } => match command {
             JiraIssueCommand::View {
@@ -15412,7 +15145,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 projects,
                 max_results,
                 next_page_token,
-                output_content_format,
             } => {
                 let mut inputs = serde_json::Map::new();
                 inputs.insert(
@@ -15431,13 +15163,8 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                         serde_json::json!(next_page_token),
                     );
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "jira.search",
-                    serde_json::Value::Object(inputs),
-                    *output_content_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "jira.search", serde_json::Value::Object(inputs), None)
+                    .await
             }
             JiraIssueCommand::Comment { command } => run_jira_comment_command(ctx, command).await,
             JiraIssueCommand::Attach {
@@ -15446,11 +15173,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 content_type,
             } => run_jira_attachment_add(ctx, issue, files, content_type.as_deref()).await,
             JiraIssueCommand::Attachment { command } => match command {
-                JiraAttachmentCommand::List {
-                    issue,
-                    issue_url,
-                    output_content_format,
-                } => {
+                JiraAttachmentCommand::List { issue, issue_url } => {
                     let inputs = match (issue.as_deref(), issue_url.as_deref()) {
                         (Some(issue), None) => serde_json::json!({ "issue": issue }),
                         (None, Some(url)) => serde_json::json!({ "url": url }),
@@ -15458,13 +15181,7 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                             "jira issue attachment list requires exactly one issue argument or --issue-url"
                         ))),
                     };
-                    run_typed_invoke_value(
-                        ctx,
-                        "jira.attachment.list",
-                        inputs,
-                        *output_content_format,
-                    )
-                    .await
+                    run_typed_invoke_value(ctx, "jira.attachment.list", inputs, None).await
                 }
                 JiraAttachmentCommand::Download {
                     issue,
@@ -15478,7 +15195,6 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                 issue,
                 expect_comment_id,
                 expect_attachment_id,
-                output_content_format,
             } => {
                 if expect_comment_id.is_none() && expect_attachment_id.is_none() {
                     require_cli_input::<()>(Err(anyhow::anyhow!(
@@ -15496,13 +15212,8 @@ async fn run_jira_command(ctx: &CliContext<'_>, command: &JiraCommand) -> Result
                         serde_json::json!(attachment_id),
                     );
                 }
-                run_typed_invoke_value(
-                    ctx,
-                    "jira.verify",
-                    serde_json::Value::Object(inputs),
-                    *output_content_format,
-                )
-                .await
+                run_typed_invoke_value(ctx, "jira.verify", serde_json::Value::Object(inputs), None)
+                    .await
             }
         },
     }
@@ -15709,7 +15420,6 @@ async fn run_jira_comment_property_command(
             comment_id,
             issue,
             issue_url,
-            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15721,7 +15431,7 @@ async fn run_jira_comment_property_command(
                 ctx,
                 "jira.comment.property.list",
                 serde_json::Value::Object(inputs),
-                *output_content_format,
+                None,
             )
             .await
         }
@@ -15730,7 +15440,6 @@ async fn run_jira_comment_property_command(
             property_key,
             issue,
             issue_url,
-            output_content_format,
         } => {
             let mut inputs = jira_issue_locator_inputs(
                 issue.as_deref(),
@@ -15743,7 +15452,7 @@ async fn run_jira_comment_property_command(
                 ctx,
                 "jira.comment.property.get",
                 serde_json::Value::Object(inputs),
-                *output_content_format,
+                None,
             )
             .await
         }
@@ -18370,17 +18079,12 @@ mod tests {
             let Command::CloudbeesCi { command } = cli.command else {
                 panic!("CloudBees CI command expected");
             };
-            let CloudbeesCiInvocation::Json {
-                action,
-                inputs,
-                format,
-            } = cloudbees_ci_invocation(&command)
+            let CloudbeesCiInvocation::Json { action, inputs } = cloudbees_ci_invocation(&command)
             else {
                 panic!("JSON CloudBees CI action expected");
             };
             assert_eq!(action, expected_action);
             assert_eq!(inputs, expected_inputs);
-            assert_eq!(format, None);
         }
 
         let cli = Cli::try_parse_from([
@@ -18479,7 +18183,7 @@ mod tests {
                 panic!("CloudBees CI command expected");
             };
             match cloudbees_ci_invocation(&command) {
-                CloudbeesCiInvocation::Json { action, inputs, .. }
+                CloudbeesCiInvocation::Json { action, inputs }
                 | CloudbeesCiInvocation::Download { action, inputs } => (action, inputs),
             }
         };
@@ -18753,15 +18457,10 @@ mod tests {
                 panic!("expected CloudBees command")
             };
             match cloudbees_ci_invocation(&command) {
-                CloudbeesCiInvocation::Json {
-                    action,
-                    inputs,
-                    format,
-                } => {
+                CloudbeesCiInvocation::Json { action, inputs } => {
                     assert!(!download);
                     assert_eq!(action, expected_action);
                     assert_eq!(inputs, expected_inputs);
-                    assert_eq!(format, None);
                 }
                 CloudbeesCiInvocation::Download { action, inputs } => {
                     assert!(download);
@@ -19643,15 +19342,11 @@ Details"}}});
         action.join(".")
     }
 
-    /// Presentation capabilities of a backend action, as a broker configured
-    /// with every content format enabled advertises them.
-    fn response_capabilities(
-        service: &str,
-        action: &str,
-    ) -> agent_access_provider::presentation::ResponseCapabilities {
+    /// Native descriptors with every optional content format enabled.
+    fn response_descriptors() -> &'static [agent_access_provider::ServiceDescriptor] {
         static DESCRIPTORS: std::sync::OnceLock<Vec<agent_access_provider::ServiceDescriptor>> =
             std::sync::OnceLock::new();
-        let descriptors = DESCRIPTORS.get_or_init(|| {
+        DESCRIPTORS.get_or_init(|| {
             agent_access_broker::composition()
                 .unwrap()
                 .configured_service_descriptors(
@@ -19679,22 +19374,73 @@ api_base_url = "https://gitlab.example.com/api/v4"
 web_base_url = "https://gitlab.example.com"
 allowed_upstream_hosts = ["https://gitlab.example.com/api/v4/**"]
 
+[providers.cloudbees_ci]
+allowed_upstream_hosts = ["https://ci.example.com/**"]
+[providers.cloudbees_ci.controllers.example]
+base_url = "https://ci.example.com/"
+
 [limits]
 upload_spool_dir = "upload-spool"
 "#,
                 )
                 .unwrap()
-        });
-        let descriptor = descriptors
+        })
+    }
+
+    fn response_capabilities(
+        service: &str,
+        action: &str,
+    ) -> agent_access_provider::presentation::ResponseCapabilities {
+        let descriptor = response_descriptors()
             .iter()
             .find(|descriptor| descriptor.service == service)
             .expect("backend is configured");
         agent_access_provider::presentation::response_capabilities(
             descriptor
                 .action(action)
-                .and_then(|action| action.presentation.as_ref()),
+                .expect("action is declared")
+                .presentation
+                .as_ref(),
             descriptor.preferred_output_content_format,
         )
+    }
+
+    #[test]
+    fn typed_content_format_help_matches_every_native_action_capability() {
+        for service in response_descriptors() {
+            for action in &service.actions {
+                let typed = action
+                    .documentation
+                    .as_ref()
+                    .and_then(|documentation| documentation.get("typedCommand"))
+                    .and_then(serde_json::Value::as_str)
+                    .expect("native action documents its typed command");
+                let help_command = typed
+                    .split_once("; run agent-access ")
+                    .and_then(|(_, command)| command.split_once(" --help"))
+                    .map(|(command, _)| command)
+                    .expect("native action documents a concrete help command");
+                let mut args = vec!["agent-access"];
+                args.extend(help_command.split_whitespace());
+                args.push("--help");
+                let help = Cli::try_parse_from(args).unwrap_err();
+                assert_eq!(
+                    help.kind(),
+                    clap::error::ErrorKind::DisplayHelp,
+                    "{}.{}: {help}",
+                    service.service,
+                    action.action,
+                );
+                assert_eq!(
+                    help.to_string().contains("--output-content-format"),
+                    action.presentation.is_some(),
+                    "{}.{}: {help_command}",
+                    service.service,
+                    action.action,
+                );
+            }
+        }
+        assert!(cli_help(&["invoke"]).contains("--output-content-format"));
     }
 
     #[test]
@@ -20097,8 +19843,6 @@ upload_spool_dir = "upload-spool"
                 "25",
                 "--page-token",
                 "next-page",
-                "--output-content-format",
-                "markdown",
             ])
             .unwrap_or_else(|error| panic!("{command} should parse: {error}"));
         }
@@ -20138,8 +19882,6 @@ upload_spool_dir = "upload-spool"
             "17",
             "9",
             "--unidiff",
-            "--output-content-format",
-            "markdown",
         ])
         .unwrap();
         assert!(matches!(
@@ -20301,8 +20043,6 @@ upload_spool_dir = "upload-spool"
                 "view-approval",
                 "group/project",
                 "17",
-                "--output-content-format",
-                "markdown",
             ],
             vec![
                 "agent-access",

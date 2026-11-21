@@ -1,4 +1,4 @@
-use super::{CliContext, OutputContentArgs, run_typed_invoke_value};
+use super::{CliContext, run_typed_invoke_value};
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{Value, json};
@@ -7,8 +7,6 @@ use serde_json::{Value, json};
 pub(super) struct ProjectListArgs {
     #[command(flatten)]
     page: SearchPageArgs,
-    #[command(flatten)]
-    response: OutputContentArgs,
 }
 
 impl ProjectListArgs {
@@ -32,8 +30,6 @@ pub(super) struct ProjectSearchArgs {
     archived: Option<bool>,
     #[command(flatten)]
     page: SearchPageArgs,
-    #[command(flatten)]
-    response: OutputContentArgs,
 }
 
 impl ProjectSearchArgs {
@@ -88,8 +84,6 @@ pub(super) struct ContentSearchArgs {
     engine: Option<SearchEngine>,
     #[command(flatten)]
     page: SearchPageArgs,
-    #[command(flatten)]
-    response: OutputContentArgs,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -131,7 +125,7 @@ impl SearchPageArgs {
 }
 
 impl SearchCommand {
-    fn invocation(&self) -> (&'static str, Value, &OutputContentArgs) {
+    fn invocation(&self) -> (&'static str, Value) {
         let (action, args, regex) = match self {
             Self::Issues(args) => ("gitlab.search.issues", args, false),
             Self::MergeRequests(args) => ("gitlab.search.merge_requests", args, false),
@@ -151,43 +145,31 @@ impl SearchCommand {
             inputs["regex"] = json!(true);
         }
         args.page.apply(&mut inputs);
-        (action, inputs, &args.response)
+        (action, inputs)
     }
 }
 
 pub(super) async fn run_project(ctx: &CliContext<'_>, args: &ProjectSearchArgs) -> Result<()> {
-    run_typed_invoke_value(
-        ctx,
-        "gitlab.project.search",
-        args.inputs(),
-        args.response.output_content_format,
-    )
-    .await
+    run_typed_invoke_value(ctx, "gitlab.project.search", args.inputs(), None).await
 }
 
 pub(super) async fn run_project_list(ctx: &CliContext<'_>, args: &ProjectListArgs) -> Result<()> {
-    run_typed_invoke_value(
-        ctx,
-        "gitlab.project.list",
-        args.inputs(),
-        args.response.output_content_format,
-    )
-    .await
+    run_typed_invoke_value(ctx, "gitlab.project.list", args.inputs(), None).await
 }
 
 pub(super) async fn run_content(ctx: &CliContext<'_>, command: &SearchCommand) -> Result<()> {
-    let (action, inputs, response) = command.invocation();
-    run_typed_invoke_value(ctx, action, inputs, response.output_content_format).await
+    let (action, inputs) = command.invocation();
+    run_typed_invoke_value(ctx, action, inputs, None).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cli, Command, GitlabCommand, GitlabProjectCommand, OutputContentFormatArg};
+    use crate::{Cli, Command, GitlabCommand, GitlabProjectCommand};
     use clap::Parser;
 
     #[test]
-    fn project_list_accepts_only_pagination_and_response_options() {
+    fn project_list_accepts_only_pagination_options() {
         let cli = Cli::try_parse_from([
             "agent-access",
             "gitlab",
@@ -197,8 +179,6 @@ mod tests {
             "20",
             "--page-token",
             "opaque",
-            "--output-content-format",
-            "markdown",
         ])
         .unwrap();
         let Command::Gitlab {
@@ -211,16 +191,13 @@ mod tests {
             panic!("expected project list command")
         };
         assert_eq!(args.inputs(), json!({"maxResults":20,"pageToken":"opaque"}));
-        assert_eq!(
-            args.response.output_content_format,
-            Some(OutputContentFormatArg::Markdown)
-        );
         for flag in [
             "--search",
             "--archived",
             "--include-namespaces",
             "--engine",
             "--project",
+            "--output-content-format",
         ] {
             assert!(
                 Cli::try_parse_from(["agent-access", "gitlab", "project", "list", flag, "value"])
@@ -273,8 +250,6 @@ mod tests {
             "20",
             "--page-token",
             "opaque",
-            "--output-content-format",
-            "markdown",
         ]);
         assert_eq!(
             args.inputs(),
@@ -282,10 +257,6 @@ mod tests {
                 "search": "dispatch", "includeNamespaces": false, "archived": false,
                 "maxResults": 20, "pageToken": "opaque",
             })
-        );
-        assert_eq!(
-            args.response.output_content_format,
-            Some(OutputContentFormatArg::Markdown)
         );
         let args = parse_project(&[
             "agent-access",
@@ -328,12 +299,10 @@ mod tests {
                 "20",
                 "--page-token",
                 "opaque",
-                "--output-content-format",
-                "text",
                 "--output",
                 "results.json",
             ]);
-            let (actual, inputs, response) = command.invocation();
+            let (actual, inputs) = command.invocation();
             assert_eq!(actual, action);
             assert_eq!(
                 inputs,
@@ -341,10 +310,6 @@ mod tests {
                     "search": "credential rotation", "project": "engineering/dispatch",
                     "engine": "advanced", "maxResults": 20, "pageToken": "opaque",
                 })
-            );
-            assert_eq!(
-                response.output_content_format,
-                Some(OutputContentFormatArg::Text)
             );
         }
     }

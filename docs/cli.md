@@ -1136,8 +1136,11 @@ bodies stay missing or null; body-free summaries do not gain content.
 Use `--output-content-format markdown|text|adf|storage` for an exact supported
 format. Jira body actions support Markdown, text and ADF; GitLab body actions
 support Markdown and text. Confluence supports Markdown, text and its configured
-native sources. Inspect `outputContentFormats` and `bodyFields` in action detail.
-An exact selector on an action without body support is an error.
+native sources. Typed commands offer this flag only for actions that can return
+declared body fields, including fields enabled by provider configuration. Inspect
+`outputContentFormats` and `bodyFields` in action detail for the current supported
+formats. Generic `invoke` and JSON `send` reject an exact selector on an action
+without body support.
 
 Without an exact selector, the Broker uses the client preference, service
 preference, then Markdown. An unsupported chosen preference uses the action's
