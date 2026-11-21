@@ -116,6 +116,11 @@ large. Provider pagination is action-specific: preserve the documented query
 settings, use returned continuation unchanged and stop at the user's scope or
 end. Saving the HTTP response does not fetch more pages or enlarge bounds.
 
+Policy selector values can be stable identities rather than callable URLs.
+Use the selected action's schema, documentation and input examples to map an
+identity to its ID or typed locator; do not pass it as a URL merely because it
+has URL syntax. Provided action `inputs` remain usable as supplied.
+
 ## Uploads, downloads and local output
 
 Use `/v1/spec/openapi.json` and the selected action's I/O declaration for exact

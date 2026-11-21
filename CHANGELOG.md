@@ -6,6 +6,24 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Confluence content grants add migrations `038_confluence_content_resources`
+  and `039_resource_browser_urls`.**
+  Back up first and upgrade Broker, CLI and portal together; rollback needs the
+  matching pre-migration database. Resolve existing drafts before upgrading to
+  typed-parent v5 handles. Page creation takes `parent: {kind, id}` or `parentUrl`,
+  and the CLI uses `--parent-kind` with `--parent-id`. Access previews/options now
+  distinguish unscoped, scalar and location authority; grant-selection previews
+  require `credentialMode`. Service scope metadata declares
+  `matching: "scalar"` or `"containment"`. SDK consumers must use the explicit scalar and
+  containment contracts. See [content access](docs/confluence-content-access.md).
+  Configure proof and scan limits under `[providers.confluence.content_access]`
+  and `[providers.confluence.content_search]`. The latter's
+  `max_encoded_request_target_bytes` defaults to 4096 for the complete composed
+  search request, so previously accepted large queries or grant sets may now
+  fail with `scope_unresolved`. Raise it only after qualifying the selected
+  upstream route; the independent absolute-URI ceiling still applies.
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
+
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
   matching pre-migration database and binary. The migration changes no existing
@@ -186,6 +204,28 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Confluence grants and token restrictions cover exact pages/blogs and page or
+  folder subtrees.** Content identities bind site, kind and ID and follow external
+  cross-space moves; subtree membership uses current ancestry. The portal infers
+  content type/service from a URL, defaults new page locations to page-and-descendant
+  coverage in a two-option dropdown and normalizes on Save. Cancel discards the
+  whole resource edit; existing resources retain their saved coverage. Folder URLs
+  accept their optional title suffix. Content resources
+  retain the browser URL as optional navigation metadata, linked beneath the name
+  and coverage in the grant builder and correctable offline without changing the
+  target. HTTP `browserUrl`, TOML
+  `browser_url` and CLI `--browser-url` preserve it; URLs stay out of audit
+  snapshots, agent discovery and token options. Standalone space-key
+  and all-spaces editing remain available. Bounded location checks apply across
+  reads, writes, creation, moves, drafts, comments,
+  attachments and content-constrained search. Such searches add current metadata
+  reads and can fail while a restricted/deleted index candidate remains visible;
+  pure scalar-space searches retain their indexed path. Search preserves every
+  policy exclusion upstream and checks results before release. Conditional
+  space/content mixed-mode overlap is resolved at invocation, and protected move
+  diagnostics identify the required configured root or proof-budget exhaustion. See [content access](docs/confluence-content-access.md).
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
 - **Jira issue workflow transitions.** Discover available transitions and apply
   one selected transition with independent project grants and typed CLI commands.
@@ -452,6 +492,13 @@ All notable changes to this project are documented in this file.
   ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
+
+- **Confluence page writes use the v2 API and validate typed placement.**
+  `page.update` accepts `baseVersion` from 1 through 2147483646; a measured stale
+  version remains `version_conflict`, while an upstream 409 returns
+  `confluence_update_conflict` without claiming a current version. See
+  [page writes](docs/providers-confluence.md#pagecreate-pageupdate-and-pagemove).
+  ([#122](https://github.com/kcosr/agent-access-broker/pull/122))
 
 - **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
   portal page makes no longer send the page's address.

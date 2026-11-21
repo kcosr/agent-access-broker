@@ -2939,14 +2939,23 @@ pub(crate) async fn admin_principal_agent_token_options(
     if context.principal_role == Some(PrincipalRole::Auditor) {
         options.mcp = None;
     }
-    let mut options = json!(options);
-    match super::common::agent_token_issuance_policy(&context, principal.clone()).await {
-        Ok(policy) => options["agentTokenIssuancePolicy"] = json!(policy),
+    let policy = match super::common::agent_token_issuance_policy(&context, principal.clone()).await
+    {
+        Ok(policy) => policy,
         Err(error) => {
             return management_store_error_response(&context, operation, target, error).await;
         }
-    }
-    management_success_response(&context, operation, target, options).await
+    };
+    management_success_response(
+        &context,
+        operation,
+        target,
+        super::common::TokenOptionsResponse {
+            options,
+            agent_token_issuance_policy: policy,
+        },
+    )
+    .await
 }
 
 pub(crate) async fn admin_principal_agent_token_issue(

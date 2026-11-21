@@ -114,6 +114,11 @@ summary is oversized. Provider paging uses each action's own documented fields:
 preserve the query, use returned continuation unchanged and stop at the user's
 scope or end. Saving a response does not fetch further pages or enlarge bounds.
 
+Policy selector values can be stable identities rather than callable URLs.
+Use the selected action's schema, documentation and input examples to map an
+identity to its ID or typed locator; do not pass it as a URL merely because it
+has URL syntax. Provided action `inputs` remain usable as supplied.
+
 ## Local files and sensitive output
 
 ```bash

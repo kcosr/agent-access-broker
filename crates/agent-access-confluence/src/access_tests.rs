@@ -22,6 +22,59 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+#[tokio::test]
+async fn content_metadata_budget_charges_delegated_recovery_attempts() {
+    for maximum in [1, 2] {
+        let server = MockServer::start().await;
+        let backend = gateway_backend(&server, site_config(&server));
+        let lease = Lease::new(CLOUD_ID);
+        let credential = AtlassianCredential::delegated(
+            delegated_credential(lease.clone()),
+            Some(Arc::from(CLOUD_ID)),
+        );
+        let route = format!("{GATEWAY}/api/v2/pages/123");
+        answer(&server, "GET", &route, "Bearer oauth-1", 401, json!({})).await;
+        answer(
+            &server,
+            "GET",
+            &route,
+            "Bearer oauth-2",
+            200,
+            json!({
+                "id":"123", "spaceId":"10", "status":"current", "parentId":null,
+                "parentType":null, "version":{"number":1}
+            }),
+        )
+        .await;
+        let budget = ConfluenceMetadataBudget::new(&ConfluenceContentAccessConfig {
+            max_metadata_requests: maximum,
+            max_metadata_bytes: 4096,
+        });
+        let result = backend
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                "123",
+                ConfluenceContentStatus::Current,
+                true,
+                &credential,
+                &budget,
+            )
+            .await;
+        if maximum == 1 {
+            assert_eq!(result, Err(ConfluenceBackendError::ScopeUnresolved));
+        } else {
+            assert_eq!(result.unwrap().value.id, "123");
+            assert!(budget.usage().unwrap().1 > 0);
+        }
+        assert_eq!(budget.usage().unwrap().0, maximum);
+        assert_eq!(
+            server.received_requests().await.unwrap().len(),
+            maximum as usize
+        );
+        assert_eq!(lease.rejected(), ["v1"]);
+    }
+}
+
 const CLOUD_ID: &str = "11111111-2222-4333-8444-555555555555";
 const OTHER_CLOUD_ID: &str = "99999999-8888-4777-8666-555555555555";
 const GATEWAY: &str = "/ex/confluence/11111111-2222-4333-8444-555555555555/wiki";
@@ -201,7 +254,107 @@ async fn invoke(
     provider: &ConfluenceProvider,
     request: ProviderInvocation,
 ) -> Result<ProviderResult, ProviderError> {
-    with_correlation_context(CorrelationContext::for_tests(), provider.invoke(request)).await
+    with_correlation_context(
+        CorrelationContext::for_tests(),
+        provider.invoke_fixture(request),
+    )
+    .await
+}
+
+fn content_search_authority(key: &str) -> ContainmentCollectionAuthorization {
+    let config: ConfluenceProviderConfig =
+        serde_json::from_value(json!({"tenant_host":"example.atlassian.net"})).unwrap();
+    let descriptor = confluence_descriptor(&config);
+    let contract = descriptor
+        .action_resource_scope("search")
+        .unwrap()
+        .1
+        .as_containment()
+        .unwrap()
+        .clone();
+    let registry =
+        ResourceTypeRegistry::new([&CONFLUENCE_SPACE_RESOURCE, &CONFLUENCE_CONTENT_RESOURCE])
+            .unwrap();
+    let selector = registry
+        .typed_selector(
+            CONFLUENCE_SPACE_RESOURCE.id(),
+            &ResourceSelector::Exact { value: key.into() },
+        )
+        .unwrap();
+    agent_access_provider::host::containment_collection_authorization(
+        "https://example.atlassian.net",
+        contract,
+        vec![ContainmentBoundary::new(vec![selector], vec![])],
+        None,
+        &registry,
+        ContainmentEvidenceLevel::ContainerOnly,
+        "a".repeat(64),
+    )
+    .unwrap()
+}
+
+fn assert_containment_space(resolution: &ScopeResolution, expected: &str) {
+    let ScopeEvidence::Containment(evidence) = resolution.evidence() else {
+        panic!("expected containment evidence")
+    };
+    assert!(evidence.obligations().iter().all(|obligation| {
+        let ContainmentObligation::Content(location) = obligation else {
+            return false;
+        };
+        location.containers.iter().any(|container| {
+            container.resource_type == *CONFLUENCE_SPACE_RESOURCE.id()
+                && container.value == expected
+        })
+    }));
+}
+
+fn expected_location_requests(prefix: &str, id: &str, authorization: &str) -> Vec<String> {
+    vec![
+        format!("GET {prefix}/api/v2/pages/{id} {authorization}"),
+        format!("GET {prefix}/api/v2/spaces/98765 {authorization}"),
+    ]
+}
+fn expected_page_read_requests(prefix: &str, id: &str, authorization: &str) -> Vec<String> {
+    let mut expected = expected_location_requests(prefix, id, authorization);
+    expected.push(format!(
+        "GET {prefix}/rest/api/content/{id} {authorization}"
+    ));
+    expected.extend(expected_location_requests(prefix, id, authorization));
+    expected
+}
+
+async fn mount_page_location(
+    server: &MockServer,
+    prefix: &str,
+    authorization: &str,
+    id: &str,
+    key: &str,
+    alias: Option<&str>,
+) {
+    answer(
+        server,
+        "GET",
+        &format!("{prefix}/api/v2/pages/{id}"),
+        authorization,
+        200,
+        json!({"id":id,"spaceId":"98765","type":"page","status":"current",
+            "parentId":null,"parentType":null,"version":{"number":7}}),
+    )
+    .await;
+    let mut space = json!({"id":"98765","key":key,"status":"current","homepageId":"55555"});
+    if let Some(alias) = alias {
+        space["currentActiveAlias"] = json!(alias);
+        space["_links"] = json!({"webui":format!("/spaces/{alias}")});
+    }
+    answer(
+        server,
+        "GET",
+        &format!("{prefix}/api/v2/spaces/98765"),
+        authorization,
+        200,
+        space,
+    )
+    .await;
 }
 
 /// A current page in space `key`, with its storage body.
@@ -222,6 +375,26 @@ async fn answer(
     status: u16,
     body: Value,
 ) {
+    if verb == "GET"
+        && status == 200
+        && body.get("type").and_then(Value::as_str) == Some("page")
+        && let Some((prefix, id)) = route.split_once("/rest/api/content/")
+        && let Some(key) = body.pointer("/space/key").and_then(Value::as_str)
+    {
+        let alias = body
+            .pointer("/space/_links/webui")
+            .and_then(Value::as_str)
+            .and_then(|value| value.strip_prefix("/spaces/"));
+        Box::pin(mount_page_location(
+            server,
+            prefix,
+            authorization,
+            id,
+            key,
+            alias,
+        ))
+        .await;
+    }
     Mock::given(method(verb))
         .and(path(route))
         .and(header("authorization", authorization))
@@ -311,7 +484,7 @@ async fn oauth_reads_a_personal_space_page_through_the_gateway() {
     let resolution = resolve(&provider, "page.view", inputs.clone(), &credential)
         .await
         .unwrap();
-    assert_eq!(resolution.scopes(), &space_scopes("~alice"));
+    assert_containment_space(&resolution, "~alice");
     let result = invoke(
         &provider,
         delegated_invocation("page.view", inputs.clone(), "~alice", &credential),
@@ -323,10 +496,15 @@ async fn oauth_reads_a_personal_space_page_through_the_gateway() {
         result.result["spaceUrl"],
         "https://example.atlassian.net/wiki/spaces/~alice"
     );
-    assert_eq!(
-        requests(&server).await,
-        vec![format!("GET {route} Bearer oauth-1"); 2]
-    );
+    assert_eq!(requests(&server).await, {
+        let mut expected = expected_location_requests(GATEWAY, "123456", "Bearer oauth-1");
+        expected.extend(expected_page_read_requests(
+            GATEWAY,
+            "123456",
+            "Bearer oauth-1",
+        ));
+        expected
+    });
     assert!(lease.rejected().is_empty());
 
     let elsewhere = delegated_credential(Lease::new(OTHER_CLOUD_ID));
@@ -334,7 +512,7 @@ async fn oauth_reads_a_personal_space_page_through_the_gateway() {
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::CredentialInvalid);
-    assert_eq!(requests(&server).await.len(), 2);
+    assert_eq!(requests(&server).await.len(), 7);
 }
 
 /// A CQL search limited to a personal space goes through the gateway with
@@ -345,7 +523,10 @@ async fn oauth_searches_a_personal_space_through_the_gateway() {
     let route = format!("{GATEWAY}/rest/api/content/search");
     Mock::given(method("GET"))
         .and(path(route.as_str()))
-        .and(query_param("cql", "type = page AND space IN (\"~alice\")"))
+        .and(query_param(
+            "cql",
+            "type = page AND ((((space = \"~alice\"))))",
+        ))
         .and(header("authorization", "Bearer oauth-1"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({ "results": [page("~alice")] })),
@@ -353,6 +534,7 @@ async fn oauth_searches_a_personal_space_through_the_gateway() {
         .expect(1)
         .mount(&server)
         .await;
+    mount_page_location(&server, GATEWAY, "Bearer oauth-1", "123456", "~alice", None).await;
     let credential = delegated_credential(Lease::new(CLOUD_ID));
     let request = InvocationBuilder::from(delegated_invocation(
         "search",
@@ -360,10 +542,7 @@ async fn oauth_searches_a_personal_space_through_the_gateway() {
         "~alice",
         &credential,
     ))
-    .search(SearchAuthorization::new(
-        "space".to_string(),
-        SearchAuthorizationScope::from_exact_values(vec!["~alice".to_string()]),
-    ))
+    .containment_collection(content_search_authority("~alice"))
     .build();
     let result = invoke(&provider(&server), request).await.unwrap();
     assert_eq!(
@@ -453,10 +632,12 @@ async fn static_tokens_route_by_token_type() {
         let probe = route.replace("content/123456", "user/current");
         assert_eq!(
             requests(&server).await[before..],
-            [
-                format!("GET {route} {authorization}"),
-                format!("GET {probe} {authorization}"),
-            ],
+            {
+                let prefix = route.split_once("/rest/api/").unwrap().0;
+                let mut expected = expected_page_read_requests(prefix, "123456", authorization);
+                expected.push(format!("GET {probe} {authorization}"));
+                expected
+            },
             "{credential:?}"
         );
     }
@@ -558,13 +739,15 @@ async fn static_tokens_keep_routing_by_kind() {
         .await
         .unwrap();
     }
-    assert_eq!(
-        requests(&server).await,
-        [
-            format!("GET {site} {basic}"),
-            format!("GET {gateway} Bearer service-token"),
-        ]
-    );
+    assert_eq!(requests(&server).await, {
+        let mut expected = expected_page_read_requests(SITE, "123456", basic);
+        expected.extend(expected_page_read_requests(
+            GATEWAY,
+            "123456",
+            "Bearer service-token",
+        ));
+        expected
+    });
 }
 
 /// A lookup's 401 spends the operation's one recovery, and execution
@@ -573,71 +756,61 @@ async fn static_tokens_keep_routing_by_kind() {
 /// recovery fails as `credential_invalid`, asking for reconnection.
 #[tokio::test]
 async fn one_recovery_spans_the_lookup_and_execution() {
-    let server = MockServer::start().await;
-    let route = format!("{GATEWAY}/rest/api/content/123456");
-    answer(&server, "GET", &route, "Bearer oauth-1", 401, json!({})).await;
-    answer(&server, "GET", &route, "Bearer oauth-2", 200, page("ENG")).await;
-    let lease = Lease::new(CLOUD_ID);
-    let credential = delegated_credential(lease.clone());
-    let provider = provider(&server);
-    let inputs = json!({ "pageId": "123456" });
-    resolve(&provider, "page.view", inputs.clone(), &credential)
-        .await
-        .unwrap();
-    invoke(
-        &provider,
-        delegated_invocation("page.view", inputs.clone(), "ENG", &credential),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        requests(&server).await,
-        [
-            format!("GET {route} Bearer oauth-1"),
-            format!("GET {route} Bearer oauth-2"),
-            format!("GET {route} Bearer oauth-2"),
-        ]
-    );
-    assert_eq!(lease.rejected(), ["v1"]);
-    assert_eq!(lease.recoveries.load(Ordering::SeqCst), 1);
-
-    // The lookup recovered; execution's 401 then exhausts the lease.
-    let server = MockServer::start().await;
-    answer(&server, "GET", &route, "Bearer oauth-1", 401, json!({})).await;
-    Mock::given(method("GET"))
-        .and(path(route.as_str()))
-        .and(header("authorization", "Bearer oauth-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(page("ENG")))
-        .up_to_n_times(1)
-        .with_priority(1)
-        .mount(&server)
+    let route = format!("{GATEWAY}/api/v2/pages/123456");
+    let content = format!("{GATEWAY}/rest/api/content/123456");
+    for reject_execution in [false, true] {
+        let server = MockServer::start().await;
+        answer(&server, "GET", &route, "Bearer oauth-1", 401, json!({})).await;
+        mount_page_location(&server, GATEWAY, "Bearer oauth-2", "123456", "ENG", None).await;
+        answer(
+            &server,
+            "GET",
+            &content,
+            "Bearer oauth-2",
+            if reject_execution { 401 } else { 200 },
+            page("ENG"),
+        )
         .await;
-    answer(&server, "GET", &route, "Bearer oauth-2", 401, json!({})).await;
-    let lease = Lease::new(CLOUD_ID);
-    let credential = delegated_credential(lease.clone());
-    let provider = self::provider(&server);
-    resolve(&provider, "page.view", inputs.clone(), &credential)
-        .await
-        .unwrap();
-    let error = invoke(
-        &provider,
-        delegated_invocation("page.view", inputs.clone(), "ENG", &credential),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(error, already_recovered());
-    assert_eq!(lease.rejected(), ["v1", "v2"]);
-    assert_eq!(lease.recoveries.load(Ordering::SeqCst), 1);
-
-    // Rejected before and after the recovery.
+        let lease = Lease::new(CLOUD_ID);
+        let credential = delegated_credential(lease.clone());
+        let result = invoke(
+            &provider(&server),
+            delegated_invocation("page.view", json!({"pageId":"123456"}), "ENG", &credential),
+        )
+        .await;
+        let mut expected = vec![format!("GET {route} Bearer oauth-1")];
+        expected.extend(expected_location_requests(
+            GATEWAY,
+            "123456",
+            "Bearer oauth-2",
+        ));
+        expected.push(format!("GET {content} Bearer oauth-2"));
+        if reject_execution {
+            assert_eq!(
+                result.unwrap_err().reason_code(),
+                already_recovered().reason_code()
+            );
+            assert_eq!(lease.rejected(), ["v1", "v2"]);
+        } else {
+            result.unwrap();
+            expected.extend(expected_location_requests(
+                GATEWAY,
+                "123456",
+                "Bearer oauth-2",
+            ));
+            assert_eq!(lease.rejected(), ["v1"]);
+        }
+        assert_eq!(requests(&server).await, expected);
+        assert_eq!(lease.recoveries.load(Ordering::SeqCst), 1);
+    }
     let server = MockServer::start().await;
     answer(&server, "GET", &route, "Bearer oauth-1", 401, json!({})).await;
     answer(&server, "GET", &route, "Bearer oauth-2", 401, json!({})).await;
     let lease = Lease::new(CLOUD_ID);
     let error = resolve(
-        &self::provider(&server),
+        &provider(&server),
         "page.view",
-        inputs,
+        json!({"pageId":"123456"}),
         &delegated_credential(lease.clone()),
     )
     .await
@@ -662,6 +835,7 @@ fn create_inputs() -> Value {
 }
 
 async fn mount_space(server: &MockServer) {
+    mount_page_location(server, GATEWAY, "Bearer oauth-1", "55555", "ENG", None).await;
     Mock::given(method("GET"))
         .and(path(format!("{GATEWAY}/api/v2/spaces")))
         .and(query_param("keys", "ENG"))
@@ -685,61 +859,73 @@ fn created_page() -> ResponseTemplate {
     }))
 }
 
-/// Confluence created the page, then the connection failed before the
-/// read-back could be sent: the write is reported applied but unverified,
-/// never as a plain credential error inviting a retry. Before the write, the
-/// connection's failure passes through unchanged.
+/// The typed accepted receipt determines create success; a later lease loss
+/// cannot turn it into a retryable failure. An invalid accepted receipt is
+/// applied but unverified, and lease loss before dispatch sends no write.
 #[tokio::test]
 async fn delegated_failures_report_writes_by_whether_they_applied() {
-    let locators = json!({ "pageId": "900001", "parentPageId": "55555" });
     for failure in lease_failures() {
+        for valid_receipt in [true, false] {
+            let server = MockServer::start().await;
+            mount_space(&server).await;
+            let lease = Lease::new(CLOUD_ID);
+            let response = if valid_receipt {
+                created_page()
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "id":"900001","type":"page","title":"Created","spaceId":"98765",
+                    "parentId":"99999","parentType":"page","status":"current","version":{"number":1}
+                }))
+            };
+            Mock::given(method("POST"))
+                .and(path(format!("{GATEWAY}/api/v2/pages")))
+                .respond_with(ThenLeaseFails {
+                    lease: lease.clone(),
+                    failure: failure.clone(),
+                    response,
+                })
+                .mount(&server)
+                .await;
+            let credential = delegated_credential(lease);
+            let result = invoke(
+                &provider(&server),
+                delegated_invocation("page.create", create_inputs(), "ENG", &credential),
+            )
+            .await;
+            if valid_receipt {
+                let result = result.unwrap();
+                assert_eq!(result.result["pageId"], "900001");
+                assert_eq!(result.result["verification"]["status"], "matched");
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+                let result = error.result.as_deref().unwrap();
+                assert_eq!(result["mutationStatus"], "applied_unverified");
+                assert_eq!(result["retrySafe"], false);
+                assert_eq!(result["verificationStage"], "mutation_response");
+                assert_eq!(
+                    result["safeLocators"],
+                    json!({"space":"ENG","parent":{"kind":"page","id":"55555"}})
+                );
+            }
+            assert_eq!(
+                requests(&server).await,
+                vec![
+                    format!("GET {GATEWAY}/api/v2/spaces Bearer oauth-1"),
+                    format!("GET {GATEWAY}/api/v2/pages/55555 Bearer oauth-1"),
+                    format!("GET {GATEWAY}/api/v2/spaces Bearer oauth-1"),
+                    format!("GET {GATEWAY}/api/v2/pages/55555 Bearer oauth-1"),
+                    format!("POST {GATEWAY}/api/v2/pages Bearer oauth-1"),
+                ]
+            );
+        }
         let server = MockServer::start().await;
         mount_space(&server).await;
         let lease = Lease::new(CLOUD_ID);
-        Mock::given(method("POST"))
-            .and(path(format!("{GATEWAY}/api/v2/pages")))
-            .respond_with(ThenLeaseFails {
-                lease: lease.clone(),
-                failure: failure.clone(),
-                response: created_page(),
-            })
-            .mount(&server)
-            .await;
-        let credential = delegated_credential(lease.clone());
-        let error = invoke(
-            &provider(&server),
-            delegated_invocation("page.create", create_inputs(), "ENG", &credential),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            error.reason_code(),
-            ReasonCode::MutationVerificationFailed,
-            "{failure:?}"
-        );
-        let result = error.result.as_deref().unwrap();
-        assert_eq!(result["mutationStatus"], "applied_unverified");
-        assert_eq!(result["retrySafe"], false);
-        assert_eq!(result["verificationStage"], "post_create_readback");
-        assert_eq!(result["safeLocators"], locators);
-        assert_eq!(requests(&server).await.len(), 2);
-
-        // The same failure before the write.
-        let server = MockServer::start().await;
-        mount_space(&server).await;
-        let lease = Lease::new(CLOUD_ID);
-        Mock::given(method("GET"))
-            .and(path(format!("{GATEWAY}/api/v2/spaces")))
-            .respond_with(ThenLeaseFails {
-                lease: lease.clone(),
-                failure: failure.clone(),
-                response: ResponseTemplate::new(200).set_body_json(json!({
-                    "results": [{"id": "98765", "key": "ENG", "status": "current", "homepageId": "55555"}]
-                })),
-            })
-            .with_priority(1)
-            .mount(&server)
-            .await;
+        Mock::given(method("GET")).and(path(format!("{GATEWAY}/api/v2/spaces")))
+            .respond_with(ThenLeaseFails{lease:lease.clone(),failure:failure.clone(),
+                response:ResponseTemplate::new(200).set_body_json(json!({"results":[{"id":"98765","key":"ENG","status":"current","homepageId":"55555"}]})),
+            }).with_priority(1).mount(&server).await;
         let credential = delegated_credential(lease);
         let error = invoke(
             &provider(&server),
@@ -747,8 +933,6 @@ async fn delegated_failures_report_writes_by_whether_they_applied() {
         )
         .await
         .unwrap_err();
-        // The outcome is the lease's own, with no receipt; the write's
-        // failure audit is added.
         assert_eq!(
             (
                 error.decision(),
@@ -762,10 +946,6 @@ async fn delegated_failures_report_writes_by_whether_they_applied() {
                 &failure.message,
                 &failure.result
             )
-        );
-        assert_eq!(
-            error.audit.as_deref().unwrap()["upstreamFailure"],
-            "delegated_access_failed"
         );
         assert_eq!(
             requests(&server).await,
@@ -1368,15 +1548,17 @@ async fn oauth_comment_list_pages_through_the_gateway() {
     assert_eq!(second.result["comments"][0]["commentId"], "5002");
     assert_eq!(second.result["hasMore"], false);
     assert_eq!(second.result["nextPageToken"], Value::Null);
-    assert_eq!(
-        requests(&server).await,
-        [
-            format!("GET {page_route} Bearer oauth-1"),
-            format!("GET {route} Bearer oauth-1"),
-            format!("GET {page_route} Bearer oauth-1"),
-            format!("GET {route} Bearer oauth-1"),
-        ]
-    );
+    assert_eq!(requests(&server).await, {
+        let mut one = expected_location_requests(GATEWAY, "123456", "Bearer oauth-1");
+        one.push(format!("GET {page_route} Bearer oauth-1"));
+        one.push(format!("GET {route} Bearer oauth-1"));
+        one.extend(expected_location_requests(
+            GATEWAY,
+            "123456",
+            "Bearer oauth-1",
+        ));
+        [one.clone(), one].concat()
+    });
 }
 
 const ALIASED_PAGE_ID: &str = "70000000046";
@@ -1432,7 +1614,7 @@ async fn oauth_reads_a_page_by_its_space_alias_through_the_gateway() {
     let resolution = resolve(&provider, "page.view", inputs.clone(), &credential)
         .await
         .unwrap();
-    assert_eq!(resolution.scopes(), &space_scopes("ROCKET"));
+    assert_containment_space(&resolution, "ROCKET");
     let result = invoke(
         &provider,
         delegated_invocation("page.view", inputs, "ROCKET", &credential),
@@ -1460,14 +1642,24 @@ async fn oauth_reads_a_page_by_its_space_alias_through_the_gateway() {
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.message,
-        "Confluence page URL space is neither the page's space key nor its URL alias"
+        "Confluence content location could not be confirmed"
     );
     // The lookup before policy, the read at execution and the refused
     // lookup, each with the connection's access on the gateway.
-    assert_eq!(
-        requests(&server).await,
-        vec![format!("GET {route} Bearer oauth-1"); 3]
-    );
+    assert_eq!(requests(&server).await, {
+        let mut expected = expected_location_requests(GATEWAY, ALIASED_PAGE_ID, "Bearer oauth-1");
+        expected.extend(expected_page_read_requests(
+            GATEWAY,
+            ALIASED_PAGE_ID,
+            "Bearer oauth-1",
+        ));
+        expected.extend(expected_location_requests(
+            GATEWAY,
+            ALIASED_PAGE_ID,
+            "Bearer oauth-1",
+        ));
+        expected
+    });
 }
 
 /// A search through the gateway with OAuth keeps an aliased page's browser
@@ -1494,6 +1686,24 @@ async fn oauth_search_keeps_aliased_links_on_the_site_through_the_gateway() {
         }),
     )
     .await;
+    mount_page_location(
+        &server,
+        GATEWAY,
+        "Bearer oauth-1",
+        ALIASED_PAGE_ID,
+        "ROCKET",
+        Some("VECTOR"),
+    )
+    .await;
+    mount_page_location(
+        &server,
+        GATEWAY,
+        "Bearer oauth-1",
+        "70000000047",
+        "ROCKET",
+        Some("VECTOR"),
+    )
+    .await;
     let credential = delegated_credential(Lease::new(CLOUD_ID));
     let request = InvocationBuilder::from(delegated_invocation(
         "search",
@@ -1501,10 +1711,7 @@ async fn oauth_search_keeps_aliased_links_on_the_site_through_the_gateway() {
         "ROCKET",
         &credential,
     ))
-    .search(SearchAuthorization::new(
-        "space".to_string(),
-        SearchAuthorizationScope::from_exact_values(vec!["ROCKET".to_string()]),
-    ))
+    .containment_collection(content_search_authority("ROCKET"))
     .build();
     let result = invoke(&provider(&server), request).await.unwrap();
 
@@ -1549,10 +1756,10 @@ fn space_listing_request(credential: &DelegatedCredential, input: Value) -> Prov
             "space",
             SearchAuthorizationScope::from_selectors(
                 vec![
-                    ResourceSelector::Exact {
+                    ScalarResourceSelector::Exact {
                         value: "ENG".into(),
                     },
-                    ResourceSelector::Exact {
+                    ScalarResourceSelector::Exact {
                         value: "OPS".into(),
                     },
                 ],

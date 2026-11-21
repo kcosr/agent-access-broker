@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 import type { PolicyServiceCatalog, ResourceCatalog, ResourceDefinition, ResourceSelection, ResourceType } from "../types";
 import { grantResourceChoices, type GrantResourceCatalog } from "../lib/grant-resources";
 import { resourceLabel } from "../lib/resource-labels";
+import { contentBrowserUrl, parseContentIdentity } from "../lib/resource-locations";
 import { resourceExclusionIssue, resourceTypeLabel, supportsResourceExclusions, useResourceTypes } from "../lib/resource-types";
 import { Banner, Checkbox, FilterInput } from "../workbench";
 
@@ -153,23 +154,53 @@ export function GrantResourcePicker({
   const matches = choices.resources.filter(
     (resource) =>
       selection.resourceIds.includes(resource.id) ||
-      `${resourceLabel(types, resource)} ${resourceTypeLabel(types, resource.resourceType)}`.toLowerCase().includes(query)
+      `${resourceLabel(types, resource)} ${name(resource)} ${description(resource)} ${resourceTypeLabel(types, resource.resourceType)} ${contentBrowserUrl(resource) ?? ""}`.toLowerCase().includes(query)
   );
   const toggleResource = (id: string, checked: boolean) =>
     onChange({ ...selection, resourceIds: checked ? [...selection.resourceIds, id] : selection.resourceIds.filter((value) => value !== id) });
   const toggleGroup = (id: string, checked: boolean) =>
     onChange({ ...selection, resourceGroupIds: checked ? [...selection.resourceGroupIds, id] : selection.resourceGroupIds.filter((value) => value !== id) });
 
-  function describe(resource: ResourceDefinition, exclusion = false) {
+  function contentIdentity(resource: ResourceDefinition) {
+    return resource.resourceType === "confluence_content" && resource.selector.kind !== "all"
+      ? parseContentIdentity(resource.selector.value) : null;
+  }
+
+  function contentKind(kind: string) {
+    return kind === "blog" ? "Blog post" : kind === "folder" ? "Folder" : "Page";
+  }
+
+  function name(resource: ResourceDefinition) {
+    const identity = contentIdentity(resource);
+    return identity
+      ? resource.displayName?.trim() || `${contentKind(identity.kind)} ${identity.id}`
+      : resourceLabel(types, resource);
+  }
+
+  function description(resource: ResourceDefinition, exclusion = false) {
+    const identity = contentIdentity(resource);
+    const browserUrl = contentBrowserUrl(resource);
     const unavailable = !exclusion && executionContexts.length > 0 && !executionContexts.some((context) => resource.allowedExecutionContexts.includes(context));
     const parts = [
-      resourceTypeLabel(types, resource.resourceType),
+      identity
+        ? resource.displayName?.trim() ? `${contentKind(identity.kind)}${browserUrl ? "" : ` ${identity.id}`}` : null
+        : resourceTypeLabel(types, resource.resourceType),
+      identity ? resource.selector.kind === "subtree" ? "Includes nested content" : identity.kind === "blog" ? "This blog post only" : "This page only" : null,
+      identity && !browserUrl ? identity.siteOrigin.slice("https://".length) : null,
       exclusion ? "Exclusion applies regardless of enabled state or execution context" : resource.allowedExecutionContexts.join(", "),
       !exclusion && !resource.enabled ? "Disabled" : null,
       unavailable ? "Not available in selected contexts" : null,
       service && !choices.compatible(resource) ? `Not used by ${service.service}` : null
     ];
     return parts.filter(Boolean).join(" · ");
+  }
+
+  function describe(resource: ResourceDefinition, exclusion = false) {
+    const browserUrl = contentBrowserUrl(resource);
+    return <>
+      <span className="block">{description(resource, exclusion)}</span>
+      {browserUrl ? <span className="block break-all mt-1"><a className="wb-link" href={browserUrl} target="_blank" rel="noopener noreferrer">{browserUrl}</a></span> : null}
+    </>;
   }
 
   function members(ids: string[], exclusion: boolean) {
@@ -180,7 +211,7 @@ export function GrantResourcePicker({
           const resource = choices.byId.get(id);
           return (
             <li key={id}>
-              {resource ? resourceLabel(types, resource) : id}
+              {resource ? name(resource) : id}
               <div className="pt-clause-note">{resource ? describe(resource, exclusion) : "Not in the current catalog"}</div>
             </li>
           );
@@ -198,7 +229,7 @@ export function GrantResourcePicker({
           <Checkbox
             key={resource.id}
             aria-label={resourceLabel(types, resource)}
-            label={resourceLabel(types, resource)}
+            label={name(resource)}
             description={describe(resource)}
             checked={selection.resourceIds.includes(resource.id)}
             disabled={disabled}

@@ -159,6 +159,7 @@ fn fixture_resources(contexts: &[&str]) -> Vec<ResourceDefinition> {
         .flat_map(|(scope, resource_type, values)| {
             values.iter().map(move |value| ResourceDefinition {
                 id: resource_id(scope, value),
+                browser_url: None,
                 display_name: None,
                 resource_type: resource_type.clone(),
                 selector: ResourceSelector::Exact {
@@ -249,6 +250,7 @@ fn seed_managed_fixture_resources(store: &agent_access_core::ManagedStore) {
             .create_resource(
                 agent_access_core::CreateResourceRequest {
                     id: Some(resource.id),
+                    browser_url: resource.browser_url,
                     display_name: resource.display_name,
                     resource_type: resource.resource_type,
                     selector: resource.selector,
@@ -958,17 +960,24 @@ async fn spec_openapi_and_send_schema_endpoints_are_hosted_and_filtered() {
         assert_confluence_normalized_content_schema(schema, action_name);
         if matches!(*action_name, "page.create" | "page.draft.create") {
             assert_eq!(action["lookupRequired"], true);
-            assert_eq!(schema["properties"]["parentPageId"]["type"], "string");
+            assert!(schema["properties"].get("parentPageId").is_none());
+            assert_eq!(schema["properties"]["parent"]["type"], "object");
+            assert_eq!(
+                schema["properties"]["parent"]["required"],
+                json!(["kind", "id"])
+            );
+            assert_eq!(
+                schema["properties"]["parent"]["properties"]["kind"]["enum"],
+                json!(["page", "folder"])
+            );
             assert_eq!(schema["properties"]["parentUrl"]["type"], "string");
             assert!(schema.get("not").is_none());
-            for (field, alternative) in
-                [("parentPageId", "parentUrl"), ("parentUrl", "parentPageId")]
-            {
+            for (field, alternative) in [("parent", "parentUrl"), ("parentUrl", "parent")] {
                 assert!(
                     schema["properties"][field]["description"]
                         .as_str()
                         .unwrap()
-                        .contains(&format!("Do not combine with {alternative}."))
+                        .contains(&format!("Do not combine with {alternative}"))
                 );
             }
         }
@@ -9955,6 +9964,8 @@ async fn scoped_service_policy_manager_is_confined_and_revocation_is_immediate()
         ("GET", "/v1/admin/policy/resource-groups"),
         ("GET", "/v1/admin/policy/resource-groups/{id}"),
         ("POST", "/v1/admin/policy/effective-access"),
+        ("GET", "/v1/admin/policy/resource-locations"),
+        ("POST", "/v1/admin/policy/resource-locations/normalize"),
         ("GET", "/v1/admin/policy/status"),
         ("GET", "/v1/admin/policy/catalog"),
         ("GET", "/v1/admin/policy/grants"),
@@ -10351,7 +10362,7 @@ async fn admin_policy_managed_grants_crud_validate_and_export() {
     assert_eq!(fake_service["actions"][0]["readOnly"], true);
     assert_eq!(
         fake_service["resourceScopes"]["project"],
-        json!({"resourceType": "fake_project", "selectors": ["exact", "all"]})
+        json!({"matching":"scalar", "resourceType": "fake_project", "selectors": ["exact", "all"]})
     );
     assert!(
         catalog_body["result"]["subjects"]["groups"]
@@ -14034,6 +14045,8 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
     config
         .providers
         .insert(agent_access_confluence::ConfluenceProviderConfig {
+            content_access: Default::default(),
+            content_search: Default::default(),
             listing: Default::default(),
             tenant_host: "example.atlassian.net".to_string(),
             cloud_id: None,
@@ -16997,6 +17010,8 @@ async fn spec_token_fixture_with_restrictions(
         config
             .providers
             .insert(agent_access_confluence::ConfluenceProviderConfig {
+                content_access: Default::default(),
+                content_search: Default::default(),
                 listing: Default::default(),
                 tenant_host: "example.atlassian.net".to_string(),
                 cloud_id: None,
@@ -18195,6 +18210,8 @@ fn jira_capabilities_omit_content_writes_without_a_native_comment_target() {
 #[test]
 fn confluence_capabilities_advertise_only_effective_content_write_formats() {
     let config = agent_access_confluence::ConfluenceProviderConfig {
+        content_access: Default::default(),
+        content_search: Default::default(),
         listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,

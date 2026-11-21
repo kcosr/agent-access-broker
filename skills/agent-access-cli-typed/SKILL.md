@@ -113,6 +113,11 @@ summary. Provider continuation uses the action's documentation and wrapper
 flags: preserve query settings, pass the returned token/page unchanged, and
 stop at the requested scope or end. Do not guess offsets or paging flag names.
 
+Policy selector values can be stable identities rather than callable URLs.
+Use the selected action's schema, documentation and input examples to map an
+identity to its ID or typed locator; do not pass it as a URL merely because it
+has URL syntax. Provided action `inputs` remain usable as supplied.
+
 ## Local files and sensitive values
 
 Use advertised upload file arguments; keep regular source files unchanged

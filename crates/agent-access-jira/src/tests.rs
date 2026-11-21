@@ -9679,14 +9679,14 @@ fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
     );
     for (included, excluded) in [
         (
-            vec![agent_access_provider::ResourceSelector::Namespace {
+            vec![agent_access_provider::ScalarResourceSelector::Namespace {
                 value: "engineering".into(),
             }],
             vec![],
         ),
         (
-            vec![agent_access_provider::ResourceSelector::All],
-            vec![agent_access_provider::ResourceSelector::Namespace {
+            vec![agent_access_provider::ScalarResourceSelector::All],
+            vec![agent_access_provider::ScalarResourceSelector::Namespace {
                 value: "engineering/private".into(),
             }],
         ),

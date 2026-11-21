@@ -112,6 +112,18 @@ impl InvocationBuilder {
         self
     }
 
+    pub fn containment(mut self, authority: crate::ContainmentAuthorization) -> Self {
+        self.authority = InvocationAuthority::Containment(authority);
+        self
+    }
+    pub fn containment_collection(
+        mut self,
+        authority: crate::ContainmentCollectionAuthorization,
+    ) -> Self {
+        self.authority = InvocationAuthority::ContainmentCollection(authority);
+        self
+    }
+
     pub fn authority(mut self, authority: InvocationAuthority) -> Self {
         self.authority = authority;
         self

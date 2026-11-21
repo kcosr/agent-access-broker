@@ -235,8 +235,10 @@ impl BrokerRuntime {
             return PreScopeLookupPlan::UsePerUserCredential;
         }
         let top_band = top_policy_band(candidates.clone());
+        let containment_scope = self.action_containment_scope(service, action);
         let top_band_has_per_user_wildcard = top_band.iter().any(|candidate| {
-            candidate.credential_mode == "per_user" && candidate.boundary.is_universe()
+            candidate.credential_mode == "per_user"
+                && candidate_is_universe(candidate, containment_scope.as_ref())
         });
         let top_band_has_service = top_band
             .iter()

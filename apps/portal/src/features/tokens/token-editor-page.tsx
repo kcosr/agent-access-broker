@@ -317,7 +317,7 @@ function TokenDetails({ draft, options, eligibleContexts, fixedSingle, ttlPolicy
 /** The resource types a service's actions use, or undefined when the service is no longer offered. */
 function serviceResourceTypes(options: AgentTokenOptions, service: string): ResourceType[] | undefined {
   const option = options.services.find((item) => item.service === service);
-  return option ? [...new Set(option.actions.flatMap((action) => action.resourceType === null ? [] : [action.resourceType]))] : undefined;
+  return option ? [...new Set(option.actions.flatMap((action) => action.scope === "unscoped" ? [] : action.scope === "location" ? action.resourceTypes : [action.resourceType]))] : undefined;
 }
 
 /** A selected service's action and resource counts for its card and the summary. */
@@ -403,6 +403,9 @@ function TokenServiceCard({ service, name, draft, options, disabled, update, ope
 }) {
   const bodyId = `${fieldElementId(`service:${service}`)}-body`;
   const { selected, actions, resourceScoped, selection, summary } = serviceSelection(draft, options, service);
+  const incomplete = options.services.find((item) => item.service === service)?.actions.some((action) =>
+    selected.includes(action.action) && action.scope === "location" && draft.selectedExecutionContexts.some((context) =>
+      action.effectiveAccessByExecutionContext[context]?.projectionStatus === "too_complex")) ?? false;
   return (
     <Card
       id={fieldElementId(`service:${service}`)}
@@ -422,9 +425,10 @@ function TokenServiceCard({ service, name, draft, options, disabled, update, ope
           {resourceScoped ? (
             <>
               <FieldGroup label="Resources" hint="Group membership stays live. Selections can only narrow current grants.">
-                <Seg label={`${service} resources`} value={selection === undefined ? "grants" : "selected"} onChange={(value) => update({ ...draft, resourceSelections: { ...draft.resourceSelections, [service]: value === "grants" ? undefined : { resourceIds: [], resourceGroupIds: [] } } })} options={[{ value: "grants", label: "Follow available grants", disabled }, { value: "selected", label: "Selected resources and groups", disabled }]} />
+                <Seg label={`${service} resources`} value={selection === undefined ? "grants" : "selected"} onChange={(value) => update({ ...draft, resourceSelections: { ...draft.resourceSelections, [service]: value === "grants" ? undefined : { resourceIds: [], resourceGroupIds: [] } } })} options={[{ value: "grants", label: "Follow available grants", disabled }, { value: "selected", label: "Selected resources and groups", disabled: disabled || incomplete }]} />
               </FieldGroup>
-              {selection !== undefined ? <ResourcePicker selection={selection} catalog={options} resourceTypes={serviceResourceTypes(options, service)} disabled={disabled} onChange={(resources) => update({ ...draft, resourceSelections: { ...draft.resourceSelections, [service]: resources } })} /> : null}
+              {incomplete ? <p className="pt-prose">Coverage preview unavailable. Existing resource selections are preserved. Choose Follow available grants explicitly or remove the affected action to change the restriction.</p> : null}
+              {selection !== undefined ? <ResourcePicker selection={selection} catalog={options} resourceTypes={serviceResourceTypes(options, service)} disabled={disabled || incomplete} onChange={(resources) => update({ ...draft, resourceSelections: { ...draft.resourceSelections, [service]: resources } })} /> : null}
             </>
           ) : <p className="pt-prose">Access is controlled by action grants; this service has no resource selections.</p>}
         </fieldset>

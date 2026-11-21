@@ -40,6 +40,59 @@ pub(super) fn result(value: Value, error: bool, limit: usize) -> Result<CallTool
     serialize(&result, limit.saturating_sub(WIRE_RESERVE))?;
     Ok(result)
 }
+/// Inspection failures are standard Broker errors, not partial resource lists.
+pub(super) fn resource_access_too_complex() -> CallToolResult {
+    CallToolResult::structured_error(json!({
+        "decision":"error", "reasonCode":"resource_access_too_complex", "result":null,
+        "error":{"message":"Resource access response exceeds the result size limit."}
+    }))
+}
+
+/// Preflight the structured value and its escaped text copy before the SDK
+/// allocates that copy. The final serializer still checks the complete wrapper.
+pub(super) fn resource_access_result(value: Value, limit: usize) -> CallToolResult {
+    struct Counter {
+        count: usize,
+        maximum: usize,
+    }
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let escapes = bytes
+                .iter()
+                .filter(|byte| matches!(**byte, b'"' | b'\\'))
+                .count();
+            self.count = bytes
+                .len()
+                .checked_mul(2)
+                .and_then(|size| size.checked_add(escapes))
+                .and_then(|size| self.count.checked_add(size))
+                .filter(|size| *size <= self.maximum)
+                .ok_or_else(|| io::Error::other("resource access MCP limit"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    // `null` contributes four bytes in both copies; the quote pair enclosing
+    // the text, resultType and any future SDK wrapper fields stay in overhead.
+    let overhead = serialize(&CallToolResult::structured(Value::Null), 1024)
+        .expect("fixed MCP wrapper fits")
+        .len()
+        - 8;
+    let maximum = limit
+        .min(agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES)
+        .saturating_sub(WIRE_RESERVE);
+    let mut counter = Counter {
+        count: overhead,
+        maximum,
+    };
+    if overhead > maximum || serde_json::to_writer(&mut counter, &value).is_err() {
+        return resource_access_too_complex();
+    }
+    result(value, false, limit).unwrap_or_else(|_| resource_access_too_complex())
+}
+
 /// The Broker's message for a `rate_limited` or `upstream_rate_limited`
 /// error envelope. It is complete on its own, naming the service and the
 /// wait, so it becomes the tool error's text: agents often see only text.
@@ -141,6 +194,27 @@ pub(super) fn broker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_access_preflight_counts_full_escaped_wrapper_and_preserves_markers() {
+        let value = json!({"access":[
+            {"action":"page.view","scope":"location","projectionStatus":"too_complex","reasonCode":"resource_access_too_complex"},
+            {"action":"space.list","scope":"resource","coverage":[{"selector":{"kind":"exact","value":"界\n\\\""},"restricted":false}]}
+        ]});
+        let expected = CallToolResult::structured(value.clone());
+        let exact = serde_json::to_vec(&expected).unwrap().len() + WIRE_RESERVE;
+        let result = resource_access_result(value.clone(), exact);
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.structured_content, Some(value.clone()));
+        let result = resource_access_result(value, exact - 1);
+        assert_eq!(result.is_error, Some(true));
+        let failure = result.structured_content.unwrap();
+        assert_eq!(failure["decision"], "error");
+        assert_eq!(failure["reasonCode"], "resource_access_too_complex");
+        assert!(failure["result"].is_null());
+        assert!(failure.get("access").is_none());
+    }
+
     #[test]
     fn counts_escaped_text_and_structured_copy() {
         // The core native-documentation matrix includes this framing allowance

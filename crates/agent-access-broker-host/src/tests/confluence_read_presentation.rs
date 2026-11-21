@@ -328,6 +328,8 @@ fn assert_response_option_enums(
 
 fn confluence_provider_config() -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
+        content_access: Default::default(),
+        content_search: Default::default(),
         listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,

@@ -194,6 +194,7 @@ impl OAuthFixture {
         self.runtime
             .create_managed_resource(CreateResourceRequest {
                 id: Some(id.into()),
+                browser_url: None,
                 display_name: None,
                 resource_type: OAUTH_COLLECTION_RESOURCE.id().clone(),
                 selector,

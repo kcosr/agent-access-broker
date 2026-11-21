@@ -2194,6 +2194,43 @@ tenant. If a tenant does not resolve blog IDs through that `viewpage.action` URL
 family, the smoke should fail and blog URL locator/fallback behavior must be
 revisited before release.
 
+## Confluence stable content identity checks
+
+Deterministic provider/SDK/core tests cover site/kind/ID selectors, observed
+ancestor/container consistency, cross-space relocation between invocations,
+whole-operation move exclusions and precise protected failed-root diagnostics.
+Search tests distinguish the scalar-only indexed path from content-participating
+fresh proofs, including content-only token/exclusion triggers, stale indexed space,
+initial/final failures without partial results, and proof-reservation progress.
+Action URL key-or-alias checks and signed draft/owner-cursor placement remain
+independent of the stable grant identity.
+
+The provider owns
+`crates/agent-access-confluence/tests/fixtures/location-normalization.json`.
+Rust normalizer tests assert the expected outcomes and export these vectors;
+portal unit tests consume the same file to check local recognition, invalid URL
+versus unsupported coverage, origin normalization and date/path boundaries.
+To regenerate the tracked fixture after updating its independently specified
+expected cases, run this exact test:
+
+```bash
+cargo test --locked -p agent-access-confluence --lib locations::tests::export_location_normalization_fixture -- --ignored --exact
+```
+
+The exporter writes the tracked JSON file; review and commit that change with
+the normalizer tests.
+
+Portal browser coverage exercises the normalize-then-save flow, stale-response and
+version protection, standalone space-key/all editing and saved-identity edits.
+Browser URL tests additionally cover saving the original content link, correcting
+or clearing it without changing identity or coverage, and rejecting a different
+target. Core and real management-route tests cover migration 039, persistence,
+version conflicts, unchanged metadata on rejection and omission of URL/title
+values from audit snapshots. CLI tests verify set, preserve and clear request
+bodies. These are offline checks; no saved-link test verifies a live redirect.
+These fixtures do not qualify live Confluence lifecycle, index convergence,
+request-length acceptance or throughput.
+
 ## Confluence CQL Conformance Smoke
 
 The Confluence CQL conformance smoke is read-only and manifest-driven. It proves

@@ -1206,11 +1206,13 @@ priority = 0                  # optional
 ### Resource catalog and selections
 
 `[[policy.resources]]` fields are `id`, `resource_type`, `selector`, optional
-`display_name`, nonempty `allowed_execution_contexts`, and `enabled`.
+`display_name`, optional `browser_url`, nonempty `allowed_execution_contexts`,
+and `enabled`.
 
 - `resource_type` must name a registered resource type (see
   [resources.md](resources.md#resource-entries)); this build registers
-  `git_repository`, `jira_project`, `confluence_space`, `cloudbees_ci_job`,
+  `git_repository`, `jira_project`, `confluence_space`, `confluence_content`,
+  `cloudbees_ci_job`,
   `fake_project`, `teams_notification_destination`, and the development
   `oauth_collection`.
 - Exact selectors are `{ kind = "exact", value = "engineering/payments" }`.
@@ -1218,10 +1220,20 @@ priority = 0                  # optional
   `{ kind = "namespace", value = "engineering/platform" }` for a repository group.
   Matching uses complete path segments. OAuth collections support exact/all only.
 - All selectors are `{ kind = "all" }`. They have no value and cover new,
-  unregistered upstream objects. All resource types support them.
+  unregistered upstream objects. Only types advertising `all` accept it;
+  `confluence_content` does not.
 - The type and selector combination must be unique, independent of name,
   contexts, and enabled state. Unknown fields and invalid combinations are
-  rejected. There is no Jira issue or Confluence page policy scope.
+  rejected. Confluence content uses strict identity values
+  `https://<site>/wiki/content/{page|folder|blog}/<ID>` with exact page/blog or
+  page/folder subtree coverage. These values have no space coordinate and are
+  not browser URLs; see [content access](confluence-content-access.md).
+  Jira issues have no separate policy scope.
+- `browser_url` is optional navigation metadata for Confluence content entries.
+  Supply a trimmed browser URL of at most 4096 UTF-8 bytes that normalizes to the
+  same site, content kind and ID as the selector. It does not change coverage,
+  verify upstream access or contact Confluence. Other resource types reject this
+  field when set. See [saved browser links](confluence-content-access.md#resources-and-url-entry).
 
 `[[policy.resource_groups]]` fields are `id`, `name`, `included_resource_ids`,
 and `excluded_resource_ids`. Groups can mix types, but cannot contain other
@@ -1599,6 +1611,17 @@ max_body_bytes = 2097152                          # 2 MiB; default
 [providers.confluence.search]
 max_results = 50                    # default
 
+[providers.confluence.content_access]
+max_metadata_requests = 1024       # default; 1..4096
+max_metadata_bytes = 33554432      # default; 1..268435456
+
+[providers.confluence.content_search]
+max_candidate_pages = 4            # default; 1..64
+max_candidates = 100               # default; 1..1000
+max_upstream_requests = 1024        # default; 1..4096
+max_scan_bytes = 33554432           # default; 1..268435456
+max_encoded_request_target_bytes = 4096 # default; 512..65534
+
 [providers.confluence.listing]
 max_results = 50                    # default
 max_candidate_pages = 4             # default
@@ -1658,6 +1681,15 @@ max_scan_bytes = 16777216            # default
   `[broker_tokens].hash_key_ref` to resolve to a valid 32-byte base64url key.
   The broker uses that stable key to sign draft handles so they survive process
   restarts and service-mode handoff.
+
+`content_access` budgets current location metadata across the whole operation.
+`content_search` separately bounds candidates, pages, requests and bytes including
+proofs and final checks. Neither budget resets per ancestor or retry. The encoded
+request-target limit includes path, authority, caller query, fixed parameters and
+cursor; the HTTP client absolute-URI cap also applies. The 4096-byte default is
+an operator ceiling, not a measurement of a particular tenant or gateway. Qualify
+the chosen setting on each deployed route; overflow or an upstream length rejection
+fails without dropping constraints. See [content access](confluence-content-access.md).
 
 `providers.confluence.listing` bounds live `space.list` scans: `max_results`
 (default 50, 1..100), `max_candidate_pages` (4), `max_upstream_requests` (8),

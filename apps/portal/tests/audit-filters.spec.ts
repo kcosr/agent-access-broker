@@ -124,7 +124,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       // Activity suggests the caller's granted services and actions from the token options.
       body = envelope({ policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["default"], services: [{
         service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["default"],
-        actions: [{ action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [], resourceType: null, executionContexts: ["default"], effectiveAccessByExecutionContext: { default: [] } }]
+        actions: [{ scope: "unscoped" as const, action: "issue.view", description: "View issue", readOnly: true, requiredScopeTypes: [],  executionContexts: ["default"],  }]
       }] });
     } else if (endpoint === "/v1/credentials") {
       body = envelope({ connections: [], retained: [] });

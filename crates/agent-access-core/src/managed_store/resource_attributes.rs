@@ -444,6 +444,7 @@ mod tests {
         CreateResourceRequest {
             id: Some(id.into()),
             display_name: None,
+            browser_url: None,
             resource_type: ResourceType::from_static("test_destination"),
             selector: ResourceSelector::Exact { value: id.into() },
             allowed_execution_contexts: vec!["internal".into()],
@@ -457,6 +458,7 @@ mod tests {
             id: "release".into(),
             expected_version: version,
             display_name: None,
+            browser_url: None,
             resource_type: None,
             selector: None,
             allowed_execution_contexts: None,
@@ -866,7 +868,7 @@ mod tests {
         )
         .unwrap();
         previous.connection.lock().unwrap().execute(
-            "INSERT INTO resources VALUES('saved','git_repository','exact','group/project',NULL,'[\"internal\"]',1,4,'t','admin','t','admin')", [],
+            "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES('saved','git_repository','exact','group/project',NULL,'[\"internal\"]',1,4,'t','admin','t','admin')", [],
         ).unwrap();
         drop(previous);
         assert!(matches!(

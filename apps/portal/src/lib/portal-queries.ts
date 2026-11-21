@@ -17,6 +17,7 @@ export const portalQueryKeys = {
   root,
   session: [...root, "session"] as const,
   resourceTypes: (viewer: string) => [...root, "resource-types", viewer] as const,
+  resourceLocations: (viewer: string) => [...policyRoot(viewer), "resource-locations"] as const,
   me: (viewer: string) => [...root, "me", viewer] as const,
   consoleRoot,
   consoleSelf: (viewer: string) => [...consoleRoot, "self", viewer] as const,

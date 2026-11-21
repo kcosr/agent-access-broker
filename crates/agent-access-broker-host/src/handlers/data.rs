@@ -769,7 +769,14 @@ async fn service_discovery_response(
                     limit,
                     cursor: fields.get("cursor").cloned(),
                 })
-                .map(|result| Json(result).into_response())
+                .map(|result| {
+                    bounded_resource_access_response(
+                        &result,
+                        &request_id,
+                        &service,
+                        agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES,
+                    )
+                })
         } else {
             discovery
                 .actions(
@@ -781,10 +788,45 @@ async fn service_discovery_response(
         };
         match result {
             Ok(response) => response,
+            Err("resource_access_too_complex") if resource_access => envelope_response(
+                crate::handlers::common::resource_access_too_complex_envelope(
+                    request_id.clone(),
+                    service.clone(),
+                ),
+            )
+            .into_response(),
             Err(message) => invalid(message),
         }
     })
     .await
+}
+
+fn bounded_resource_access_response(
+    result: &impl serde::Serialize,
+    request_id: &str,
+    service: &str,
+    limit: usize,
+) -> axum::response::Response {
+    match crate::bounded_json::serialize(result, limit) {
+        Ok(bytes) => (
+            [
+                (CONTENT_TYPE, "application/json"),
+                (CACHE_CONTROL, "no-store"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(crate::bounded_json::Error::TooLarge) => envelope_response(
+            crate::handlers::common::resource_access_too_complex_envelope(
+                request_id.into(),
+                service.into(),
+            ),
+        )
+        .into_response(),
+        Err(crate::bounded_json::Error::Serialization) => {
+            envelope_response(discovery_unavailable_envelope(request_id.into())).into_response()
+        }
+    }
 }
 
 /// File reads and credential decryption must not block async HTTP workers. The
@@ -2247,9 +2289,40 @@ mod download_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{action_exports_secrets, action_supports_raw_result};
+    use super::{
+        action_exports_secrets, action_supports_raw_result, bounded_resource_access_response,
+    };
     use agent_access_provider::ActionDescriptor;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn resource_access_aggregate_limit_preserves_complete_results_or_returns_no_partial_body()
+    {
+        async fn response_json(response: axum::response::Response) -> serde_json::Value {
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            serde_json::from_slice(&bytes).unwrap()
+        }
+        let value = json!({"access":[
+            {"action":"page.view","scope":"location","projectionStatus":"too_complex","reasonCode":"resource_access_too_complex"},
+            {"action":"space.list","scope":"resource","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}
+        ]});
+        let exact = serde_json::to_vec(&value).unwrap().len();
+        let response = bounded_resource_access_response(&value, "request", "confluence", exact);
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(response_json(response).await, value);
+        let response = bounded_resource_access_response(&value, "request", "confluence", exact - 1);
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let failure = response_json(response).await;
+        assert_eq!(failure["decision"], "error");
+        assert_eq!(failure["reasonCode"], "resource_access_too_complex");
+        assert!(failure.get("access").is_none());
+        assert!(failure["result"].is_null());
+    }
 
     #[test]
     fn raw_results_and_no_store_follow_the_action_descriptor() {

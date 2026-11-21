@@ -978,6 +978,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         );
         config.policy.resources.push(ResourceDefinition {
             id: "shelf-one".into(),
+            browser_url: None,
             display_name: None,
             resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
             selector: ResourceSelector::Namespace {
@@ -988,6 +989,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         });
         config.policy.resources.push(ResourceDefinition {
             id: "item-one".into(),
+            browser_url: None,
             display_name: None,
             resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {
@@ -1026,6 +1028,7 @@ async fn conformance_actions_are_mcp_tools_and_resource_types_are_published() {
         ] {
             config.policy.resources.push(ResourceDefinition {
                 id: id.into(),
+                browser_url: None,
                 display_name: None,
                 resource_type: CONFORMANCE_ITEM_RESOURCE.id().clone(),
                 selector,

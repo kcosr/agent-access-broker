@@ -745,7 +745,7 @@ export function GrantDrawer({
       </DrawerSection>
       <DrawerSection title="Effective access">
         {grant.status === "active" ? (
-          <EffectiveAccessPanel grant={{ service: grant.service, actions: grant.actions, executionContexts: grant.executionContexts, resources: grant.resources }} />
+          <EffectiveAccessPanel grant={{ service: grant.service, credentialMode: grant.credentialMode, actions: grant.actions, executionContexts: grant.executionContexts, resources: grant.resources }} />
         ) : (
           <p className="pt-prose">No access currently: this grant is {grant.status}.</p>
         )}

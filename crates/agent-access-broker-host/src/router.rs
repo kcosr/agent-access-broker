@@ -283,6 +283,14 @@ pub(crate) fn public_router(state: Arc<ReloadableState>) -> (Router, crate::mcp:
             post(admin_policy_effective_access),
         )
         .route(
+            "/v1/admin/policy/resource-locations",
+            get(admin_policy_resource_locations),
+        )
+        .route(
+            "/v1/admin/policy/resource-locations/normalize",
+            post(admin_policy_resource_locations_normalize),
+        )
+        .route(
             "/v1/admin/policy/resources",
             get(admin_policy_resources_list).post(admin_policy_resources_create),
         )

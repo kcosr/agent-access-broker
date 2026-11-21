@@ -165,13 +165,11 @@ impl Handler {
                         });
                     }
                     Ok(PreparedDiscovery::Helper(Ok(match self.helper(request, &catalog, &registry, helper.as_str(), arguments) {
+                        Ok(value) if *helper == mcp::HelperKind::ResourceAccessDescribe => output::resource_access_result(value, limit),
                         Ok(value) => output::result(value, false, limit).unwrap_or_else(|_| output::message(
-                            if *helper == mcp::HelperKind::ResourceAccessDescribe {
-                                "Resource access result exceeds MCP response limit; narrow action or resourceType filters, or check action availability for a known resource"
-                            } else {
-                                "Discovery result exceeds MCP response limit; use narrower discovery"
-                            },
+                            "Discovery result exceeds MCP response limit; use narrower discovery",
                         )),
+                        Err("resource_access_too_complex") if *helper == mcp::HelperKind::ResourceAccessDescribe => output::resource_access_too_complex(),
                         Err(message) => output::message(message),
                     })))
                 };
@@ -334,7 +332,18 @@ impl Handler {
                         .and_then(Value::as_str)
                         .map(str::to_owned),
                 })?;
-                serde_json::to_value(page).map_err(|_| "Cannot encode resource access discovery")
+                let bytes = crate::bounded_json::serialize(
+                    &page,
+                    agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES,
+                )
+                .map_err(|error| match error {
+                    crate::bounded_json::Error::TooLarge => "resource_access_too_complex",
+                    crate::bounded_json::Error::Serialization => {
+                        "Cannot encode resource access discovery"
+                    }
+                })?;
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| "Cannot encode resource access discovery")
             }
             "actions_list" => {
                 let discovery = runtime

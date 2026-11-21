@@ -304,7 +304,7 @@ mod admitted_authority {
         let namespace = SearchAuthorization::new(
             "project",
             SearchAuthorizationScope::from_selectors(
-                vec![ResourceSelector::Namespace {
+                vec![ScalarResourceSelector::Namespace {
                     value: "engineering".into(),
                 }],
                 vec![],

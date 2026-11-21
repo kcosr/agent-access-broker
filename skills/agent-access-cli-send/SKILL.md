@@ -115,6 +115,11 @@ uses each action's documented fields and unchanged query settings. Use returned
 continuation unchanged, stop at the user's scope or end, and remember a saved
 response contains only the requested page or bounded slice.
 
+Policy selector values can be stable identities rather than callable URLs.
+Use the selected action's schema, documentation and input examples to map an
+identity to its ID or typed locator; do not pass it as a URL merely because it
+has URL syntax. Provided action `inputs` remain usable as supplied.
+
 ## Local files and sensitive values
 
 - Uploads add sibling `files: [{"role":"ROLE","path":"./upload.bin"}]` with the

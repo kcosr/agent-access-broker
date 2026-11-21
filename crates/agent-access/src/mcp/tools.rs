@@ -1459,6 +1459,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resource_access_preserves_broker_complexity_errors_as_structured_results() {
+        let server = MockServer::start().await;
+        let envelope = json!({
+            "agentRequestId": "agent", "brokerRequestId": "broker", "decision": "error",
+            "reasonCode": "resource_access_too_complex", "result": null,
+            "error": {"message": "Resource access response exceeds the result size limit."}
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/confluence/resource-access"))
+            .respond_with(ResponseTemplate::new(422).set_body_json(&envelope))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            "resource_access_describe",
+            json!({"service":"confluence"}).as_object().unwrap().clone(),
+        )
+        .await
+        .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"], envelope);
+        assert_eq!(
+            serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(),
+            envelope
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn resource_access_local_mcp_wrapper_overflow_has_no_partial_result() {
+        let server = MockServer::start().await;
+        let result = json!({
+            "service": "confluence", "executionContext":"default",
+            "availability":{"state":"available","requirements":[],"message": "x".repeat(8 * 1024 * 1024)},
+            "coverageSemantics":"single_target", "access":[],
+            "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}, "liveListings":[]
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/confluence/resource-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(result))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result = call_tool(
+            &settings(&server),
+            &McpView::Aggregate,
+            "resource_access_describe",
+            json!({"service":"confluence"}).as_object().unwrap().clone(),
+        )
+        .await
+        .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["decision"], "error");
+        assert_eq!(
+            result["structuredContent"]["reasonCode"],
+            "resource_access_too_complex"
+        );
+        assert!(result["structuredContent"]["result"].is_null());
+        assert!(
+            result["structuredContent"]
+                .get("registeredResources")
+                .is_none()
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() < 1024);
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn scoped_helpers_restrict_forwarding_and_saved_results_and_require_readiness() {
         let server = MockServer::start().await;
         let mut value = catalog(action());

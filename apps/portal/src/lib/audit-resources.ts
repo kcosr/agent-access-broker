@@ -55,7 +55,7 @@ function strings(value: unknown): string[] {
 function selector(value: unknown): ResourceSelector | null {
   const item = object(value);
   if (item?.kind === "all") return { kind: "all" };
-  if ((item?.kind === "exact" || item?.kind === "namespace") && text(item.value)) return { kind: item.kind, value: item.value as string };
+  if ((item?.kind === "exact" || item?.kind === "namespace" || item?.kind === "subtree") && text(item.value)) return { kind: item.kind, value: item.value as string };
   return null;
 }
 
@@ -107,7 +107,7 @@ export function auditStoredDisplayName(entity: AuditEntity): string {
 
 const CHANGE_FIELD_LABELS: Record<string, string> = {
   displayName: "display name", name: "group name", resourceType: "resource type", selector: "coverage",
-  enabled: "enabled state", allowedExecutionContexts: "execution contexts", privateAttributes: "private attributes",
+  enabled: "enabled state", allowedExecutionContexts: "execution contexts", privateAttributes: "private attributes", browserUrl: "browser URL",
   includedResourceIds: "included resources", excludedResourceIds: "excluded resources"
 };
 

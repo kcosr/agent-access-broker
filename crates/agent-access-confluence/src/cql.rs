@@ -1,6 +1,13 @@
 //! Search inputs, scope-bounded query building, and the bounded CQL parser.
 use super::*;
 
+mod containment;
+pub(crate) use containment::*;
+#[cfg(test)]
+mod fixtures;
+#[cfg(test)]
+pub(crate) use fixtures::*;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SearchInputs {
@@ -78,9 +85,10 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
             "unsupported": ["IS EMPTY", "IS NOT EMPTY", "prefix NOT"],
             "textMatching": "Title and text accept ~ and !~ with a quoted string. Matching uses Confluence's text index, including phrase and wildcard semantics, not literal substring comparison. Empty and absent values retain upstream semantics; the broker does not add an empty-value alternative.",
             "orderBy": {"fields": cql_sort_names(), "directions": ["ASC", "DESC"], "defaultDirection": "ASC", "maxTerms": MAX_CONFLUENCE_ORDER_TERMS},
-            "emptyFilter": "Empty or whitespace-only CQL and ORDER BY alone search the effective authorized spaces; the broker always adds the action content type.",
-            "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it; wildcard space keys are unsupported. Space and content-ID exclusions are filters and never grant access. The broker emits the fixed content type, authorized space inclusion/exclusion, then the grouped caller filter. Returned content is checked against authorized space keys, not named spaces: Confluence may resolve a space URL alias to its key.",
+            "emptyFilter": "Empty or whitespace-only CQL and ORDER BY alone search effective authorized content; the broker always adds the action content type and complete authority constraints.",
+            "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it; wildcard space keys are unsupported. Space and content-ID exclusions are filters and never grant access. The broker emits the fixed content type, complete winning content boundaries with every exclusion and token intersection, then the grouped caller filter. Returned content is validated against current identity and required location evidence. Valid denied candidates are withheld; unknown evidence fails the request.",
             "contentType": kind.cql_type(),
+            "requestSize": "The caller query limit is independent of the complete percent-encoded request-target ceiling in providers.confluence.content_search.max_encoded_request_target_bytes (default 4096). Authority predicates and all query parameters count toward that ceiling; the HTTP client's absolute-URI cap also applies. An oversized composed request fails with scope_unresolved without dropping constraints. Operators should raise the ceiling only after qualifying the selected upstream route.",
             "limits": {
                 "queryBytes": MAX_CONFLUENCE_RAW_QUERY_BYTES,
                 "tokens": MAX_CONFLUENCE_QUERY_TOKENS,
@@ -128,43 +136,6 @@ pub(crate) fn requested_spaces(inputs: &SearchInputs) -> Result<BTreeSet<String>
     Ok(spaces)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EffectiveSearchScope {
-    Finite(BTreeSet<String>),
-    AllExcept(BTreeSet<String>),
-}
-
-impl EffectiveSearchScope {
-    pub(crate) fn values_for_backend(&self) -> Vec<String> {
-        match self {
-            Self::Finite(values) => values.iter().cloned().collect(),
-            Self::AllExcept(_) => Vec::new(),
-        }
-    }
-
-    pub(crate) fn authorizes_value(&self, value: &str) -> bool {
-        match self {
-            Self::Finite(values) => values.contains(value),
-            Self::AllExcept(excluded) => !excluded.contains(value),
-        }
-    }
-
-    pub(crate) fn audit_value(&self, scope_type: &str) -> Value {
-        match self {
-            Self::Finite(values) => json!({
-                "type": "finite",
-                "scopeType": scope_type,
-                "values": values,
-            }),
-            Self::AllExcept(excluded) => json!({
-                "type": "all_except",
-                "scopeType": scope_type,
-                "excludedValues": excluded,
-            }),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) struct BuiltConfluenceSearchQuery {
     pub(crate) cql: String,
@@ -187,152 +158,6 @@ pub(crate) fn search_authorization(
             ReasonCode::ServiceActionDenied,
             "search authorization is unavailable",
         )
-    })
-}
-
-/// The authorized space boundary: the finite space keys or the all-except
-/// exclusions the host admitted, with token restrictions already applied.
-/// Returned content is checked against it, never against the space names a
-/// caller wrote in `spaces` or CQL: Confluence may resolve a space's URL alias
-/// to the space, whose content carries its key.
-pub(crate) fn authorized_search_scope(
-    authorization: &SearchAuthorization,
-) -> Result<EffectiveSearchScope, ProviderError> {
-    if authorization.scope_type != "space" {
-        return Err(ProviderError::error(
-            ReasonCode::UpstreamProtocolFailed,
-            "Confluence search authorization used an invalid scope type",
-        ));
-    }
-    match authorization.scope.exact_projection()? {
-        agent_access_provider::ExactSearchProjection::Finite { values } => {
-            let allowed = values.iter().cloned().collect::<BTreeSet<_>>();
-            if allowed.is_empty() {
-                return Err(ProviderError::deny(
-                    ReasonCode::ServiceActionDenied,
-                    "Confluence search policy scope is empty",
-                ));
-            }
-            Ok(EffectiveSearchScope::Finite(allowed))
-        }
-        agent_access_provider::ExactSearchProjection::AllExcept { excluded_values } => Ok(
-            EffectiveSearchScope::AllExcept(excluded_values.iter().cloned().collect()),
-        ),
-        _ => Err(agent_access_provider::SearchProjectionError.into()),
-    }
-}
-
-/// The scope the upstream query is composed with: the authorized boundary,
-/// narrowed to explicit `spaces`, which must each be authorized.
-pub(crate) fn effective_search_scope(
-    authorization: &SearchAuthorization,
-    requested: &BTreeSet<String>,
-) -> Result<EffectiveSearchScope, ProviderError> {
-    let authorized = authorized_search_scope(authorization)?;
-    if requested.is_empty() {
-        return Ok(authorized);
-    }
-    if !requested
-        .iter()
-        .all(|space| authorized.authorizes_value(space))
-    {
-        return Err(ProviderError::deny(
-            ReasonCode::ServiceActionDenied,
-            "requested Confluence spaces are not authorized",
-        ));
-    }
-    Ok(EffectiveSearchScope::Finite(requested.clone()))
-}
-
-pub(crate) fn build_confluence_search_query(
-    query: &ConfluenceSearchQueryInput,
-    effective_scope: &EffectiveSearchScope,
-    limits: &SearchLimitsConfig,
-) -> Result<BuiltConfluenceSearchQuery, ProviderError> {
-    build_confluence_search_query_for_kind(
-        query,
-        effective_scope,
-        limits,
-        ConfluenceSearchContentKind::Page,
-    )
-}
-
-pub(crate) fn build_confluence_blog_search_query(
-    query: &ConfluenceSearchQueryInput,
-    effective_scope: &EffectiveSearchScope,
-    limits: &SearchLimitsConfig,
-) -> Result<BuiltConfluenceSearchQuery, ProviderError> {
-    build_confluence_search_query_for_kind(
-        query,
-        effective_scope,
-        limits,
-        ConfluenceSearchContentKind::BlogPost,
-    )
-}
-
-pub(crate) fn build_confluence_search_query_for_kind(
-    query: &ConfluenceSearchQueryInput,
-    effective_scope: &EffectiveSearchScope,
-    limits: &SearchLimitsConfig,
-    content_kind: ConfluenceSearchContentKind,
-) -> Result<BuiltConfluenceSearchQuery, ProviderError> {
-    let (ast, kind) = match query {
-        ConfluenceSearchQueryInput::Cql { value } => {
-            (parse_cql_query_for_kind(value, content_kind)?, "cql")
-        }
-        ConfluenceSearchQueryInput::Text { value } => {
-            (confluence_text_query(value, limits)?, "text")
-        }
-    };
-    let caller_cql = ast.emit();
-    let order_by_cql = ast.emit_order_by();
-    let (space_predicate, injected_space_predicate) = match effective_scope {
-        EffectiveSearchScope::Finite(spaces) => (
-            Some(confluence_space_predicate(
-                spaces.iter().map(String::as_str),
-            )),
-            "space_in",
-        ),
-        EffectiveSearchScope::AllExcept(excluded) if excluded.is_empty() => (None, "none"),
-        EffectiveSearchScope::AllExcept(excluded) => (
-            Some(
-                confluence_space_predicate(excluded.iter().map(String::as_str)).replacen(
-                    " IN (",
-                    " NOT IN (",
-                    1,
-                ),
-            ),
-            "space_not_in",
-        ),
-    };
-    // Keep a positive clause first: Confluence does not support a negative
-    // expression as the first CQL clause. Caller filters stay grouped so OR
-    // cannot escape either the action's content type or the authorized spaces.
-    let mut clauses = vec![format!("type = {}", content_kind.cql_type())];
-    if let Some(predicate) = space_predicate {
-        clauses.push(predicate);
-    }
-    if let Some(filter) = &ast.filter {
-        clauses.push(format!("({})", filter.emit()));
-    }
-    let mut cql = clauses.join(" AND ");
-    if !order_by_cql.is_empty() {
-        cql.push(' ');
-        cql.push_str(&order_by_cql);
-    }
-    let query_shape = ast.query_shape();
-    let text_operand_hashes = ast.text_operand_hashes();
-    let sort_fields = ast.sort_fields();
-    Ok(BuiltConfluenceSearchQuery {
-        cql,
-        kind,
-        injected_space_predicate,
-        canonical_caller_cql_hash: sha256_hex(caller_cql.as_bytes()),
-        canonical_caller_cql: caller_cql,
-        query_shape,
-        text_operand_hashes,
-        sort_fields,
-        injected_type_predicate: content_kind.injected_type_predicate(),
     })
 }
 
@@ -396,16 +221,6 @@ pub(crate) fn confluence_text_query(
         })),
         order_by: Vec::new(),
     })
-}
-
-pub(crate) fn confluence_space_predicate<'a>(spaces: impl Iterator<Item = &'a str>) -> String {
-    format!(
-        "space IN ({})",
-        spaces
-            .map(cql_bare_or_string_literal)
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
 }
 
 pub(crate) fn cql_string_literal(value: &str) -> String {

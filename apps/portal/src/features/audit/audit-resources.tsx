@@ -43,7 +43,7 @@ function EntityIdentity({ entity }: { entity: AuditEntity }) {
 
 const FIELD_LABELS: Record<string, string> = {
   displayName: "Display name", name: "Group name", resourceType: "Resource type", selector: "Coverage",
-  enabled: "Enabled", allowedExecutionContexts: "Execution contexts", privateAttributes: "Private attributes"
+  enabled: "Enabled", allowedExecutionContexts: "Execution contexts", privateAttributes: "Private attributes", browserUrl: "Browser URL"
 };
 function fieldValue(snapshot: AuditResourceSnapshot | null, field: string, types: ResourceTypes): string {
   if (!snapshot) return "Not present";
@@ -75,7 +75,7 @@ export function AuditResourceDetails({ record }: { record: AuditRecord }) {
         <DrawerSection title="Changes">
           {fields.length ? <KeyValue labelWidth={145} items={fields.map((field) => ({
             label: FIELD_LABELS[field],
-            value: field === "privateAttributes" ? "Changed; private values are not recorded." : <span className="pt-audit-change-value">{fieldValue(change.before, field, types)} → {fieldValue(change.after, field, types)}</span>
+            value: field === "privateAttributes" ? "Changed; private values are not recorded." : field === "browserUrl" ? "Changed; URL values are not recorded." : <span className="pt-audit-change-value">{fieldValue(change.before, field, types)} → {fieldValue(change.after, field, types)}</span>
           }))} /> : null}
           {membership.map(([key, list]) => (
             <div className="pt-audit-membership" key={key}>

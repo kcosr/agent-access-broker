@@ -4,11 +4,11 @@ import type { PolicyServiceCatalog, ResourceDefinition, ResourceGroupRecord, Res
 
 const gitlab: PolicyServiceCatalog = {
   service: "gitlab", displayName: "GitLab", surface: "rest", actions: [],
-  resourceScopes: { repository: { resourceType: "git_repository", selectors: ["all", "exact", "namespace"] } },
+  resourceScopes: { repository: { matching: "scalar" as const, resourceType: "git_repository", selectors: ["all", "exact", "namespace"] } },
   configuredCredentialModes: ["service"], lookupCredentialConfigured: false
 };
 const jira: PolicyServiceCatalog = {
-  ...gitlab, service: "jira", resourceScopes: { project: { resourceType: "jira_project", selectors: ["all", "exact"] } }
+  ...gitlab, service: "jira", resourceScopes: { project: { matching: "scalar" as const, resourceType: "jira_project", selectors: ["all", "exact"] } }
 };
 const resource = (id: string, resourceType: ResourceDefinition["resourceType"], overrides: Partial<ResourceDefinition> = {}): ResourceDefinition => ({
   id, resourceType, displayName: id, selector: { kind: "exact", value: id }, enabled: true, allowedExecutionContexts: ["internal"], ...overrides

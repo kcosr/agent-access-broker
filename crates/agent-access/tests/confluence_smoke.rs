@@ -1,3 +1,7 @@
+#[path = "confluence_smoke/content_access.rs"]
+mod content_access;
+#[path = "confluence_smoke/draft_publish_access.rs"]
+mod draft_publish_access;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "confluence_smoke/plain_inputs.rs"]
@@ -15,13 +19,15 @@ use agent_access_confluence::{
     CONFLUENCE_SPACE_RESOURCE, ConfluenceAttachment, ConfluenceAttachmentContent,
     ConfluenceAttachmentListPage, ConfluenceAttachmentUpload, ConfluenceBackend,
     ConfluenceBackendError, ConfluenceBackendResponse, ConfluenceBlog, ConfluenceBlogCreateRequest,
-    ConfluenceBlogUpdateRequest, ConfluenceComment, ConfluenceCommentAuthor,
-    ConfluenceCommentContainerType, ConfluenceCommentCreateRequest, ConfluenceCommentKind,
-    ConfluenceCommentListPage, ConfluenceCommentListRequest, ConfluenceCommentUpdateRequest,
-    ConfluenceDraftContent, ConfluenceDraftCreateRequest, ConfluenceDraftUpdateRequest,
-    ConfluencePage, ConfluencePageAncestor, ConfluencePageChild, ConfluencePageCreateRequest,
-    ConfluencePageHierarchy, ConfluencePageMovePosition, ConfluencePageUpdateRequest,
-    ConfluenceProvider, ConfluenceProviderConfig, ConfluenceSearchBlog, ConfluenceSearchPage,
+    ConfluenceBlogLocation, ConfluenceBlogUpdateRequest, ConfluenceComment,
+    ConfluenceCommentAuthor, ConfluenceCommentContainerType, ConfluenceCommentCreateRequest,
+    ConfluenceCommentKind, ConfluenceCommentListPage, ConfluenceCommentListRequest,
+    ConfluenceCommentUpdateRequest, ConfluenceContentStatus, ConfluenceDraftContent,
+    ConfluenceDraftCreateRequest, ConfluenceDraftUpdateRequest, ConfluenceMetadataBudget,
+    ConfluenceNode, ConfluenceNodeKind, ConfluencePage, ConfluencePageAncestor,
+    ConfluencePageChild, ConfluencePageCreateRequest, ConfluencePageHierarchy,
+    ConfluencePageMovePosition, ConfluencePageUpdateRequest, ConfluenceParent, ConfluenceProvider,
+    ConfluenceProviderConfig, ConfluenceRegularPage, ConfluenceSearchBlog, ConfluenceSearchPage,
     ConfluenceSearchRequest, ConfluenceSpace,
 };
 use agent_access_provider::SearchLimitsConfig;
@@ -174,7 +180,10 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     );
     let page_by_url_json: serde_json::Value = serde_json::from_slice(&page_by_url.stdout).unwrap();
     assert_eq!(page_by_url_json["result"]["id"], "123456");
-    assert_eq!(page_by_url_json["resourceScopes"]["space"][0], "ENG");
+    assert_eq!(
+        page_by_url_json["resourceScopes"],
+        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/content/page/123456"]})
+    );
 
     let search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -233,14 +242,21 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         .clone();
     assert_eq!(
         last_search.cql,
-        r#"type = page AND space IN (ENG) AND (title ~ "runbook")"#
+        r#"type = page AND ((((space = "ENG")))) AND (title ~ "runbook")"#
     );
-    assert_eq!(last_search.spaces, vec!["ENG"]);
     assert_eq!(last_search.max_results, 2);
     assert_eq!(last_search.next_page_token, None);
 
     // The same search continues with the continuation, and Confluence
-    // receives only its own cursor.
+    // receives only its own cursor. The fixture's next page terminates;
+    // repeating cursor-2 would correctly fail the cursor-cycle check.
+    backend
+        .search_page
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .next_page_token = None;
     let next_search = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
             "--url",
@@ -272,6 +288,9 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         .unwrap()
         .clone();
     assert_eq!(last_search.next_page_token.as_deref(), Some("cursor-2"));
+    let next_search_json: serde_json::Value = serde_json::from_slice(&next_search.stdout).unwrap();
+    assert!(next_search_json["result"]["nextPageToken"].is_null());
+    assert_eq!(next_search_json["result"]["scanStatus"], "exhausted");
 
     let mismatch = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -295,8 +314,8 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         0
     );
 
-    // The supplied page ID, URL or search query is recorded; returned URLs
-    // and page content are not.
+    // Supplied inputs and the canonical operated location are recorded;
+    // returned presentation URLs and page content are not.
     let page_url = |url: &str| serde_json::json!([audit_input("url", "URL", url)]);
     assert_eq!(
         audited_inputs(&broker, "page.view"),
@@ -318,7 +337,9 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
     let outside_inputs = audit_text_without_inputs(&broker);
     assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG"));
+    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/content/page/123456"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
+    assert!(!outside_inputs.contains("\"spaceUrl\":\"https://"));
     assert!(!audit.contains("private deploy steps"));
     assert!(!audit.contains("<p>"));
 
@@ -372,8 +393,21 @@ async fn cli_invokes_confluence_read_actions_against_stubbed_backend() {
         "resource scope is not authorized or unavailable"
     );
     assert_eq!(denied_json["resourceScopes"].as_object().unwrap().len(), 0);
-    let denied_audit = denied_broker.audit().unwrap().text();
-    assert!(denied_audit.contains("\"space\":[\"OPS\"]"));
+    let denied_audit = denied_broker
+        .audit()
+        .unwrap()
+        .require_action("confluence", "page.view");
+    assert_eq!(denied_audit.len(), 1);
+    assert_eq!(
+        denied_audit[0]["resourceScopes"],
+        serde_json::json!({"page_location":["https://example.atlassian.net/wiki/content/page/654321"]})
+    );
+    assert!(
+        denied_audit[0]["providerAudit"]
+            .get("locationProof")
+            .is_none(),
+        "unadmitted denials must not emit detailed location proof summaries"
+    );
     stop(denied_broker).await;
 
     let no_grant_backend = Arc::new(StubConfluenceBackend {
@@ -759,7 +793,9 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
             "ENG",
             "--title",
             "Created Page",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "123456",
             "--content-file",
             storage_body_path.to_str().unwrap(),
@@ -777,7 +813,10 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     let create_json: serde_json::Value = serde_json::from_slice(&create.stdout).unwrap();
     assert_eq!(create_json["decision"], "allow");
     assert_eq!(create_json["result"]["pageId"], "900001");
-    assert_eq!(create_json["result"]["parentPageId"], "123456");
+    assert_eq!(
+        create_json["result"]["parent"],
+        serde_json::json!({"kind":"page","id":"123456"})
+    );
     assert_eq!(create_json["result"]["placement"], "requested_parent");
     assert_eq!(create_json["result"]["verification"]["status"], "matched");
     assert_eq!(
@@ -2039,9 +2078,12 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
         .as_str()
         .unwrap()
         .to_string();
-    assert!(page_draft_handle.starts_with("aab_confluence_draft_v4_"));
+    assert!(page_draft_handle.starts_with("aab_confluence_draft_v5_"));
     assert_eq!(page_draft_create_json["result"]["status"], "draft");
-    assert_eq!(page_draft_create_json["result"]["parentPageId"], "654321");
+    assert_eq!(
+        page_draft_create_json["result"]["parent"],
+        serde_json::json!({"kind":"page","id":"654321"})
+    );
 
     let page_draft_view = Command::new(env!("CARGO_BIN_EXE_agent-access"))
         .args([
@@ -2608,14 +2650,18 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert!(audit.contains("\"action\":\"blog.inline_comment.reply.add\""));
     assert!(audit.contains("\"action\":\"blog.verify\""));
     assert!(audit.contains("\"returnedUrlFields\":[\"webUrl\",\"spaceUrl\"]"));
-    // Creation records its space, title and parent; bodies, returned URLs
-    // and draft handles are never recorded.
+    // Creation records its space, title, parent and canonical operated location;
+    // bodies, returned presentation URLs and draft handles are never recorded.
     assert_eq!(
         audited_inputs(&broker, "page.create"),
         [serde_json::json!([
             audit_input("space", "Space", "ENG"),
             audit_input("title", "Title", "Created Page"),
-            audit_input("parentPageId", "Parent page ID", "123456")
+            audit_input(
+                "parent",
+                "Parent",
+                serde_json::json!({"kind":"page","id":"123456"})
+            )
         ])]
     );
     assert_eq!(
@@ -2632,7 +2678,9 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     );
     let outside_inputs = audit_text_without_inputs(&broker);
     assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/pages/viewpage.action"));
-    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG"));
+    assert!(outside_inputs.contains("https://example.atlassian.net/wiki/content/page/123456"));
+    assert!(!outside_inputs.contains("https://example.atlassian.net/wiki/spaces/ENG/pages/123456"));
+    assert!(!outside_inputs.contains("\"spaceUrl\":\"https://"));
     assert!(!audit.contains("create secret body"));
     assert!(!audit.contains("updated secret body"));
     assert!(!audit.contains("comment secret body"));
@@ -2647,7 +2695,7 @@ async fn cli_invokes_confluence_write_stream_and_verify_actions_against_stubbed_
     assert!(!audit.contains("blog inline reply"));
     assert!(!audit.contains("blog secret body"));
     assert!(!audit.contains("diagram secret bytes"));
-    assert!(!audit.contains("aab_confluence_draft_v4_"));
+    assert!(!audit.contains("aab_confluence_draft_v5_"));
     for sentinel in [
         "normalized markdown sentinel 6f74d1",
         "native atlas sentinel 29ca81",
@@ -2786,8 +2834,72 @@ struct StubConfluenceBackend {
     metadata_calls: Mutex<u32>,
 }
 
+fn read_fixture_node(page: &ConfluencePage) -> ConfluenceNode {
+    assert_eq!(page.status.as_deref(), Some("current"));
+    ConfluenceNode {
+        id: page.id.clone(),
+        kind: ConfluenceNodeKind::Page,
+        space_id: "98765".into(),
+        parent: None,
+        status: ConfluenceContentStatus::Current,
+        version: Some(page.version),
+    }
+}
+
+fn read_fixture_space(
+    id: &str,
+    page: &ConfluencePage,
+) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+    if id != "98765" {
+        return Err(ConfluenceBackendError::NotFound);
+    }
+    Ok(ConfluenceBackendResponse {
+        value: ConfluenceSpace {
+            id: id.into(),
+            key: page.space.clone(),
+            web_url: None,
+            alias: None,
+            status: Some("current".into()),
+            homepage_id: Some(page.id.clone()),
+        },
+        status: 200,
+        duration_ms: 1,
+    })
+}
+
 #[async_trait]
 impl ConfluenceBackend for StubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        if kind != ConfluenceNodeKind::Page || status != ConfluenceContentStatus::Current {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        let page = self.page_metadata(id, credential).await?;
+        Ok(ConfluenceBackendResponse {
+            value: read_fixture_node(&page.value),
+            status: page.status,
+            duration_ms: page.duration_ms,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        read_fixture_space(id, &self.page)
+    }
+
     async fn space_list(
         &self,
         _request: agent_access_confluence::ConfluenceSpaceListRequest,
@@ -2965,7 +3077,10 @@ impl WriteStubConfluenceBackend {
             space: space.key.clone(),
             space_id: space.id.clone(),
             space_alias: None,
-            parent_page_id,
+            parent: parent_page_id.map(|id| ConfluenceParent {
+                kind: ConfluenceNodeKind::Page,
+                id,
+            }),
             web_url: None,
             space_web_url: None,
             status: Some(status.to_string()),
@@ -2981,6 +3096,119 @@ impl WriteStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for WriteStubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        self.credentials
+            .lock()
+            .unwrap()
+            .push(credential.static_credential().unwrap().clone());
+        let response = self
+            .page_hierarchy(id, status == ConfluenceContentStatus::Draft, credential)
+            .await?;
+        if response.value.status != status.as_str() {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceNode {
+                id: response.value.id,
+                kind,
+                space_id: response.value.space_id,
+                parent: response.value.parent_page_id.map(|id| ConfluenceParent {
+                    kind: ConfluenceNodeKind::Page,
+                    id,
+                }),
+                status,
+                version: Some(response.value.version),
+            },
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let response = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?;
+        let page = self.page_metadata(id, credential).await?;
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceRegularPage {
+                node: response.value,
+                title: page.value.title,
+            },
+            status: response.status,
+            duration_ms: response.duration_ms,
+        })
+    }
+
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        let (space_id, version, actual_status) = match status {
+            ConfluenceContentStatus::Current => {
+                let blogs = self.blogs.lock().unwrap();
+                let blog = blogs.get(id).ok_or(ConfluenceBackendError::NotFound)?;
+                (blog.space_id.clone(), blog.version, blog.status.clone())
+            }
+            ConfluenceContentStatus::Draft => {
+                let drafts = self.blog_drafts.lock().unwrap();
+                let draft = drafts.get(id).ok_or(ConfluenceBackendError::NotFound)?;
+                (draft.space_id.clone(), draft.version, draft.status.clone())
+            }
+        };
+        if actual_status.as_deref() != Some(status.as_str()) {
+            return Err(ConfluenceBackendError::ScopeUnresolved);
+        }
+        Ok(ConfluenceBackendResponse {
+            value: ConfluenceBlogLocation {
+                id: id.into(),
+                space_id,
+                version,
+                status,
+            },
+            status: 200,
+            duration_ms: 2,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        self.space_by_id(id, credential).await
+    }
+
     async fn space_list(
         &self,
         _request: agent_access_confluence::ConfluenceSpaceListRequest,
@@ -3345,8 +3573,11 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
             ));
         }
         let parent_page_id = request
-            .parent_page_id
-            .clone()
+            .parent
+            .map(|parent| {
+                assert_eq!(parent.kind, ConfluenceNodeKind::Page);
+                parent.id
+            })
             .or_else(|| space.homepage_id.clone())
             .ok_or_else(|| {
                 ConfluenceBackendError::Protocol("space homepage missing".to_string())
@@ -3425,7 +3656,11 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
         let id = next.to_string();
         *next += 1;
         let parent_page_id = request
-            .parent_page_id
+            .parent
+            .map(|parent| {
+                assert_eq!(parent.kind, ConfluenceNodeKind::Page);
+                parent.id
+            })
             .or_else(|| space.homepage_id.clone())
             .ok_or_else(|| {
                 ConfluenceBackendError::Protocol("space homepage missing".to_string())
@@ -3566,7 +3801,10 @@ impl ConfluenceBackend for WriteStubConfluenceBackend {
                 request.content_id,
                 request.title,
                 &space,
-                draft.parent_page_id,
+                draft.parent.map(|parent| {
+                    assert_eq!(parent.kind, ConfluenceNodeKind::Page);
+                    parent.id
+                }),
                 "current",
                 request.body,
             );
@@ -4693,6 +4931,8 @@ path = {audit}
 fn confluence_provider_config(max_results: u32) -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
         listing: Default::default(),
+        content_access: Default::default(),
+        content_search: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,
         egress_proxy: None,

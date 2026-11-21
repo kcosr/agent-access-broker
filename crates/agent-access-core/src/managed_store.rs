@@ -3,6 +3,7 @@ pub use agent_token_issuance::*;
 mod application_access;
 pub use application_access::*;
 mod connection_credentials;
+mod content_resources;
 mod identity_access;
 mod identity_tokens;
 pub use identity_access::{
@@ -43,6 +44,7 @@ pub use oidc_membership_renewal::{
 };
 mod principal_service_limits;
 mod resource_attributes;
+mod resource_browser_urls;
 pub(crate) use resource_attributes::{AdmittedResourceEntry, CommandResourceAttributes};
 mod resources;
 use crate::fs_permissions;
@@ -91,7 +93,9 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_APPLICATION_ACCESS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION;
+const MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION: &str = "039_resource_browser_urls";
+const MANAGED_STORE_CONTENT_RESOURCES_VERSION: &str = "038_confluence_content_resources";
 const MANAGED_STORE_APPLICATION_ACCESS_VERSION: &str = "037_application_access";
 const MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION: &str = "036_microsoft_enrollments";
 const MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION: &str = "035_imported_gateway_routes";
@@ -325,6 +329,20 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/application_access.sql"),
         seed: None,
         structural_validation: application_access::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_CONTENT_RESOURCES_VERSION,
+        checksum: "1290ac0b9f06ec75888448e961003bd0ed0132739b809207c56b6540878494c9",
+        sql: include_str!("managed_store/confluence_content_resources.sql"),
+        seed: None,
+        structural_validation: content_resources::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_RESOURCE_BROWSER_URLS_VERSION,
+        checksum: "ef3b8d471234aafc7fcfdfc59113042199923c45469d61c2c1d12ae313264bf6",
+        sql: include_str!("managed_store/resource_browser_urls.sql"),
+        seed: None,
+        structural_validation: resource_browser_urls::validate_structure,
     },
 ];
 
@@ -10696,7 +10714,7 @@ mod tests {
         conn.execute_batch(MANAGED_STORE_BASELINE_SQL).unwrap();
         conn.execute_batch(IDENTITY_TOKENS_SQL).unwrap();
         conn.execute_batch(
-            "INSERT INTO resources VALUES
+            "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES
              ('repo', 'git_repository', 'namespace', 'team', NULL, '[\"default\"]', 1, 1,
               '2026-01-01', 'admin', '2026-01-01', 'admin');
              INSERT INTO resource_groups VALUES
@@ -10706,7 +10724,7 @@ mod tests {
         .unwrap();
         conn.execute_batch(CLOUDBEES_CI_JOB_NAMESPACE_SQL).unwrap();
         conn.execute_batch(
-            "INSERT INTO resources VALUES
+            "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES
              ('ci', 'cloudbees_ci_job', 'namespace', 'team-ci/payments', NULL, '[\"default\"]',
               1, 1, '2026-01-01', 'admin', '2026-01-01', 'admin');",
         )
@@ -10755,7 +10773,7 @@ mod tests {
               updated_at, disabled_at, created_by)
              VALUES ('agent', 'service_account', NULL, NULL, NULL, 'active',
                      '2026-01-01', '2026-01-01', NULL, 'admin');
-             INSERT INTO resources VALUES
+             INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES
              ('repo', 'git_repository', 'exact', 'team/repo', NULL, '[\"default\"]', 1, 1,
               '2026-01-01', 'admin', '2026-01-01', 'admin'),
              ('excluded', 'git_repository', 'exact', 'team/secret', NULL, '[\"default\"]', 1, 1,
@@ -11016,8 +11034,8 @@ mod tests {
         {
             let conn = previous.connection.lock().unwrap();
             conn.execute_batch(
-                "INSERT INTO resources VALUES ('jobs', 'cloudbees_ci_job', 'namespace', 'team-ci/payments', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin');
-                 INSERT INTO resources VALUES ('eng', 'jira_project', 'exact', 'ENG', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin');
+                "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('jobs', 'cloudbees_ci_job', 'namespace', 'team-ci/payments', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin');
+                 INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('eng', 'jira_project', 'exact', 'ENG', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin');
                  INSERT INTO resource_groups VALUES ('group', 'Group', 1, 't', 'admin', 't', 'admin');
                  INSERT INTO resource_group_members VALUES ('group', 'jobs', 'include');
                  INSERT INTO resource_group_members VALUES ('group', 'eng', 'exclude');",
@@ -11026,7 +11044,7 @@ mod tests {
             // Schema 18 still hard-codes which types may use namespace selectors.
             assert!(
                 conn.execute(
-                    "INSERT INTO resources VALUES ('spaces', 'confluence_space', 'namespace', 'ENG', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin')",
+                    "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('spaces', 'confluence_space', 'namespace', 'ENG', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin')",
                     [],
                 )
                 .is_err()
@@ -11055,13 +11073,13 @@ mod tests {
         let conn = store.connection.lock().unwrap();
         // Selector support is a registry rule now; storage only checks shape.
         conn.execute(
-            "INSERT INTO resources VALUES ('future', 'future_type', 'namespace', 'a', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin')",
+            "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('future', 'future_type', 'namespace', 'a', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin')",
             [],
         )
         .unwrap();
         assert!(
             conn.execute(
-                "INSERT INTO resources VALUES ('bad', 'Bad-Type', 'exact', 'a', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin')",
+                "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('bad', 'Bad-Type', 'exact', 'a', NULL, '[\"default\"]', 1, 1, 't', 'admin', 't', 'admin')",
                 [],
             )
             .is_err()
