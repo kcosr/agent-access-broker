@@ -21,6 +21,7 @@ All notable changes to this project are documented in this file.
   and `spec --output-format json` retain their behavior. See the
   [upgrade instructions](docs/operator-guide.md#upgrade-and-rollback) and
   [response formats](docs/http-api.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
 
 - **Confluence content grants add migrations `038_confluence_content_resources`
   and `039_resource_browser_urls`.**
@@ -226,6 +227,7 @@ All notable changes to this project are documented in this file.
   is strict. HTTP MCP accepts `preferredOutputContentFormat` on each request,
   and stdio accepts `--preferred-output-content-format`. See
   [configuration](docs/configuration.md) and [MCP](docs/mcp.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
 
 - **Confluence grants and token restrictions cover exact pages/blogs and page or
   folder subtrees.** Content identities bind site, kind and ID and follow external
@@ -644,6 +646,7 @@ All notable changes to this project are documented in this file.
   `retrySafe: false`. Invalid successful content received by CLI or stdio
   produces a bounded `response_content_invalid` receipt without returning the
   rejected body or replaying the operation. See [output handling](docs/cli.md).
+  ([#123](https://github.com/kcosr/agent-access-broker/pull/123))
 
 - A browser session that expires while a portal page is open now shows the
   sign-in choices again, instead of "No browser sign-in method is enabled" until
