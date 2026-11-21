@@ -10,7 +10,7 @@ test("authenticated CLI and MCP examples match the shipped Broker identity heade
   const client = read("agent-access.sample.toml").match(/^\[identity\]\n([^]*?)(?=^\[|$(?![^]))/m)?.[1];
   assert.ok(client, "CLI sample has an identity block");
   assert.deepEqual(fields(client), expectedIdentity);
-  assert.match(client, /^disabled = true$/m, "default local sample remains anonymous");
+  assert.match(client, /^disabled = false$/m, "default client sample enables identity for authenticated catalog access");
   const mcpBlocks = [...read("docs/mcp.md").matchAll(/```toml\n([^]*?)\n```/g)]
     .map((match) => match[1]).filter((block) => /^\[identity\]$/m.test(block));
   assert.ok(mcpBlocks.length > 0, "MCP documentation includes authenticated client configuration");
