@@ -225,6 +225,8 @@ All notable changes to this project are documented in this file.
   `includeTextCopy=false` or stdio `mcp serve --include-text-copy=false`.
   Both default to `true`. Tool results retain complete `structuredContent`,
   error flags and metadata, including helpers, failures and file receipts.
+  Stdio local tool errors now also report their message at
+  `structuredContent.error.message` in both modes.
   HTTP combines the option with `preferredOutputContentFormat` per request;
   response limits count only the content emitted. See
   [MCP text copies](docs/mcp.md#tool-result-text-copies).

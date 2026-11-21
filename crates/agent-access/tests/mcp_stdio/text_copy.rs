@@ -160,3 +160,108 @@ async fn startup_copy_mode_preserves_results_errors_files_and_discovery_in_each_
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn save_failure_without_text_copy_preserves_completed_mutation_receipt_without_replay() {
+    for (mutation_status, operation_status, message) in [
+        (
+            "applied_verified",
+            "succeeded",
+            "Operation succeeded; writing the response output failed. Do not repeat the operation to retry saving.",
+        ),
+        (
+            "applied_unverified",
+            "applied_unverified",
+            "Mutation was applied but remains unverified; writing the response output failed. Do not repeat the operation to retry saving.",
+        ),
+    ] {
+        let broker = MockServer::start().await;
+        let mut catalog = catalog();
+        catalog["services"][0]["actions"][0]["readOnly"] = json!(false);
+        catalog["services"][0]["actions"][0]["sensitiveOutputPointers"] = json!(["/result/secret"]);
+        Mock::given(method("GET"))
+            .and(path("/v1/spec/catalog"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(catalog))
+            .mount(&broker)
+            .await;
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path().join("client.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[service]\nurl={:?}\n[identity]\ndisabled=true\n",
+                broker.uri()
+            ),
+        )
+        .unwrap();
+        let destination = directory.path().join("response.json");
+        let race_destination = destination.clone();
+        Mock::given(method("POST"))
+            .and(path("/v1/invoke/example/read"))
+            .respond_with(move |_: &wiremock::Request| {
+                // The destination was validated and its sibling temporary file
+                // reserved before invocation. Make only the final persist fail,
+                // after the Broker has completed the mutation.
+                assert!(!race_destination.exists());
+                let entries = std::fs::read_dir(race_destination.parent().unwrap())
+                    .unwrap()
+                    .map(|entry| entry.unwrap())
+                    .collect::<Vec<_>>();
+                assert_eq!(entries.len(), 2);
+                assert!(
+                    entries
+                        .iter()
+                        .any(|entry| entry.file_name() != "client.toml"
+                            && entry.metadata().unwrap().len() == 0)
+                );
+                std::fs::create_dir(&race_destination).unwrap();
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow",
+                    "service":"example","action":"read","reasonCode":"mutation_complete",
+                    "result":{"mutationStatus":mutation_status,"retrySafe":false,
+                        "verificationStage":"mutation_response","safeLocators":{"item":"42"},
+                        "secret":"PRIVATE COMPLETED BODY"}
+                }))
+            })
+            .expect(1)
+            .mount(&broker)
+            .await;
+        let mut process = McpProcess::start_with_text_copy(&config, None, Some(false));
+        process.initialize().await;
+        let response = process
+            .request(
+                "tools/call",
+                json!({
+                    "name":"example_read","arguments":{"inputs":{},"outputPath":destination}
+                }),
+            )
+            .await;
+        assert!(response.get("error").is_none(), "{response}");
+        let result = &response["result"];
+        assert_eq!(result["content"], json!([]));
+        assert_eq!(result["isError"], true);
+        assert!(result.get("_meta").is_none());
+        let receipt = &result["structuredContent"];
+        let output_error = receipt["output"]["error"].as_str().unwrap();
+        assert!(
+            output_error.starts_with(&format!("failed to replace {}:", destination.display())),
+            "{output_error}"
+        );
+        assert_eq!(
+            receipt,
+            &json!({
+                "agentRequestId":"agent","brokerRequestId":"broker","decision":"allow",
+                "service":"example","action":"read","reasonCode":"mutation_complete",
+                "operationStatus":operation_status,"mutationStatus":mutation_status,"retrySafe":false,
+                "verificationStage":"mutation_response","safeLocators":{"item":"42"},"message":message,
+                "output":{"status":"failed","path":destination,"destinationReplaced":false,"error":output_error}
+            })
+        );
+        assert!(!response.to_string().contains("PRIVATE COMPLETED BODY"));
+        assert!(destination.is_dir());
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+        process.finish().await;
+        broker.verify().await;
+    }
+}

@@ -1836,8 +1836,8 @@ allow_disable_ssl_verification = false
   remain available for files above every content-transfer cap. The ceiling must
   be non-zero, and six times the ceiling plus a 64 KiB metadata/envelope
   allowance must fit `limits.max_upstream_response_bytes`. Actual JSON and
-  MCP serialization limits also apply: HTTP MCP includes text and
-  structured result copies, and JSON escaping adds bytes. Raising the inline
+  MCP serialization limits also apply: HTTP MCP includes structured content and
+  any emitted text copy, and JSON escaping adds bytes. Raising the inline
   ceiling or lowering `mcp.max_response_bytes` can produce a delivery-limit
   error even when the file fits its byte budget. See
   [repository file reads](providers-gitlab-rest.md#repository-file-reads).

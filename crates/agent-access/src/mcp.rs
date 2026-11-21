@@ -287,6 +287,48 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn cancelled_handler_preserves_structured_warning_without_text_copy() {
+        let config = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(config.path(), "[identity]\ndisabled=true\n").unwrap();
+        let server = BrokerMcp {
+            cli: crate::Cli::try_parse_from([
+                "agent-access",
+                "--url",
+                "http://127.0.0.1:9",
+                "mcp",
+                "serve",
+                "--include-text-copy=false",
+            ])
+            .unwrap(),
+            config: config.path().to_path_buf(),
+            view: McpView::Aggregate,
+            include_text_copy: false,
+        };
+        // rmcp suppresses wire replies after notifications/cancelled. Call the
+        // actual handler with its cancelled request context to inspect the
+        // result it constructs before the SDK discards it.
+        let (transport, _remote) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly(server, transport, None);
+        let context = RequestContext::new(1.into(), running.peer().clone());
+        context.ct.cancel();
+        let result = running
+            .service()
+            .call_tool(CallToolRequestParams::new("services_list"), context)
+            .await
+            .unwrap();
+        let result = serde_json::to_value(result).unwrap();
+        assert_eq!(result["content"], json!([]));
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"],
+            json!({
+                "error":{"message":"Request cancelled. An upstream mutation may already have completed; inspect its state before retrying."}
+            })
+        );
+        running.cancel().await.unwrap();
+    }
+
     #[test]
     fn instructions_put_the_calling_rule_first_in_every_view() {
         for service in [None, Some("synthetic-service")] {
