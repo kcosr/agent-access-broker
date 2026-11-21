@@ -30,8 +30,8 @@ async fn status_requires_normal_identity_and_returns_exact_uncached_metadata() {
     assert_eq!(value["assembly"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(value["host"]["crate"], "agent-access-broker-host");
     assert_eq!(value["sdk"]["crate"], "agent-access-provider");
-    assert_eq!(value["catalogVersion"], "agent-access.catalog.v2");
-    assert_eq!(value["sendSchemaVersion"], "agent-access.send.v1");
+    assert_eq!(value["catalogVersion"], "agent-access.catalog.v3");
+    assert_eq!(value["sendSchemaVersion"], "agent-access.send.v2");
     // The inventory lists what is compiled in, although this configuration
     // enables no provider.
     let jira = value["modules"]

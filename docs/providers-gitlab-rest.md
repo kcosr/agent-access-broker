@@ -283,7 +283,7 @@ agent-access invoke gitlab.search.code --input-json '{"search":"verify_token","p
 ```
 
 ```json
-{"version":"agent-access.send.v1","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"release","maxResults":20}}
+{"version":"agent-access.send.v2","kind":"invoke","service":"gitlab","action":"project.search","inputs":{"search":"release","maxResults":20}}
 ```
 
 For MCP, call the discovered action tool with `{"inputs":{"search":"release"}}`.
@@ -547,8 +547,8 @@ JSON `send` request files use the same service/action/input vocabulary:
 ```
 
 `send` keeps the standard JSON response envelope. Extract
-`result.issue.description.format = "markdown"` and its `value`; CLI presentation
-defaults are never injected into a request file.
+`result.issue.description.format = "markdown"` and its `value`. This example's
+exact `outputContentFormat` takes precedence over any output preference.
 
 Direct HTTP uses the same action path and wraps inputs under `inputs`. The
 example assumes `$AAB_CURL_AUTH` points to a curl config containing the broker
@@ -1493,8 +1493,10 @@ then Markdown. An unsupported preference selects native Markdown without trying
 lower-priority preferences. Exact unsupported formats fail before provider work.
 Write `inputs.contentFormat` remains independent. The CLI flag is
 `--output-content-format`; its configured preference is
-`[defaults].preferred_output_content_format`. `send` uses only its explicit
-request fields. Inspect `outputContentFormats`, `nativeOutputContentFormat`,
+`[defaults].preferred_output_content_format`. `send` inherits the ambient client
+preference unless its envelope includes `preferredOutputContentFormat`; an exact
+`outputContentFormat` takes precedence over either preference.
+Inspect `outputContentFormats`, `nativeOutputContentFormat`,
 `defaultOutputContentFormat`, and `bodyFields` in the caller-filtered catalog.
 
 Every declared body is validated and bounded by

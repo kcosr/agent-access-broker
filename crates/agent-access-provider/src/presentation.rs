@@ -556,18 +556,17 @@ pub fn validate_body_fields(fields: &[BodyField]) -> Result<(), RenderError> {
                 }
             }
         }
-        if let Some(predicates) = &field.owner_equals {
-            if predicates.is_empty()
+        if let Some(predicates) = &field.owner_equals
+            && (predicates.is_empty()
                 || predicates.len() > 4
                 || predicates.iter().any(|(key, value)| {
                     key.is_empty()
                         || key.len() > MAX_FIELD_BYTES
                         || value.len() > MAX_FIELD_BYTES
                         || key.chars().chain(value.chars()).any(char::is_control)
-                })
-            {
-                return Err(RenderError);
-            }
+                }))
+        {
+            return Err(RenderError);
         }
     }
     Ok(())

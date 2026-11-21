@@ -248,7 +248,7 @@ async fn gitlab_plain_inputs_project_through_stdio_http_send_and_openapi() {
 
     let validator = jsonschema::validator_for(&send).unwrap();
     for action in ["project.view", "issue.view", "merge_request.view"] {
-        let mut request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "gitlab", "action": action});
+        let mut request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "gitlab", "action": action});
         assert!(validator.is_valid(&request));
         request["inputs"] = json!({});
         assert!(validator.is_valid(&request));
@@ -256,7 +256,7 @@ async fn gitlab_plain_inputs_project_through_stdio_http_send_and_openapi() {
         assert!(!validator.is_valid(&request));
     }
     for action in ["issue.create", "merge_request.update"] {
-        let request = json!({"version": "agent-access.send.v1", "kind": "invoke", "service": "gitlab", "action": action});
+        let request = json!({"version": "agent-access.send.v2", "kind": "invoke", "service": "gitlab", "action": action});
         assert!(!validator.is_valid(&request));
     }
 }

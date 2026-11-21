@@ -23,7 +23,7 @@ Release preparation stamps these notes as the release notes. See the
 ## Select the release
 
 - Select a clean, reviewed commit and the intended workspace version. Ship the
-  broker, CLI, and portal from the same revision. Catalog v2 requires a coordinated
+  broker, CLI, and portal from the same revision. Catalog v3 requires a coordinated
   broker/CLI upgrade; do not reuse an older CLI or portal asset directory.
 - Review the [release notes](../CHANGELOG.md), the current
   [database migration contract](database.md), and the installed configuration.

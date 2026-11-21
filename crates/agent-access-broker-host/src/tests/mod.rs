@@ -757,8 +757,8 @@ async fn spec_catalog_requires_auth_and_sets_no_store_headers() {
     assert!(vary.contains("authorization"));
     assert!(vary.contains("cookie"));
     let body = response_json(allowed).await;
-    assert_eq!(body["version"], "agent-access.catalog.v2");
-    assert_eq!(body["send"]["version"], "agent-access.send.v1");
+    assert_eq!(body["version"], "agent-access.catalog.v3");
+    assert_eq!(body["send"]["version"], "agent-access.send.v2");
 }
 
 #[tokio::test]

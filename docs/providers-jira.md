@@ -266,7 +266,7 @@ JSON `send` request files use the same service/action/input vocabulary:
 
 ```json
 {
-  "version": "agent-access.send.v1",
+  "version": "agent-access.send.v2",
   "kind": "invoke",
   "service": "jira",
   "action": "comment.add",

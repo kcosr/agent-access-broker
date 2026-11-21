@@ -73,10 +73,10 @@ fn invocation(
         }
         _ => unreachable!(),
     }
-    if surface != "send" {
-        if let Some(exact) = exact {
-            command.args(["--output-content-format", exact]);
-        }
+    if surface != "send"
+        && let Some(exact) = exact
+    {
+        command.args(["--output-content-format", exact]);
     }
     if let Some(output) = output {
         command.arg("--output").arg(output);

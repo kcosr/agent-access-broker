@@ -11309,10 +11309,12 @@ async fn run_send_download(
         &service,
         &action,
         inputs,
-        &output_path,
-        prepared.body.take().map(output::ResponseOutput::into_file),
-        sensitive_outputs,
-        response_options,
+        DownloadResponseOptions {
+            output: &output_path,
+            reserved: prepared.body.take().map(output::ResponseOutput::into_file),
+            sensitive_outputs,
+            response_options,
+        },
     )
     .await
     .map_err(DownloadResponseError::into_error)?;
@@ -16625,10 +16627,15 @@ async fn send_download_value(
         &service,
         &action,
         inputs,
-        output,
-        None,
-        &spec.sensitive_output_pointers,
-        ResponseOptions::new(None, ctx.settings.preferred_output_content_format),
+        DownloadResponseOptions {
+            output,
+            reserved: None,
+            sensitive_outputs: &spec.sensitive_output_pointers,
+            response_options: ResponseOptions::new(
+                None,
+                ctx.settings.preferred_output_content_format,
+            ),
+        },
     )
     .await
 }
@@ -16670,7 +16677,16 @@ async fn run_invoke_parts_with_options(
         }
         if matches!(spec.io, ActionIo::RawDownload { .. }) {
             let (status, metadata) = send_download_parts(
-                ctx, service, action, inputs, output, None, sensitive, options,
+                ctx,
+                service,
+                action,
+                inputs,
+                DownloadResponseOptions {
+                    output,
+                    reserved: None,
+                    sensitive_outputs: sensitive,
+                    response_options: options,
+                },
             )
             .await
             .map_err(DownloadResponseError::into_error)?;
@@ -16734,16 +16750,26 @@ async fn send_invoke_parts_with_options(
     invocation_response_value(response).await
 }
 
+struct DownloadResponseOptions<'a> {
+    output: &'a Path,
+    reserved: Option<output::AtomicOutput>,
+    sensitive_outputs: &'a [String],
+    response_options: ResponseOptions,
+}
+
 async fn send_download_parts(
     ctx: &CliContext<'_>,
     service: &str,
     action: &str,
     inputs: serde_json::Value,
-    output: &Path,
-    reserved: Option<output::AtomicOutput>,
-    sensitive_outputs: &[String],
-    response_options: ResponseOptions,
+    options: DownloadResponseOptions<'_>,
 ) -> DownloadResponseResult<(u16, serde_json::Value)> {
+    let DownloadResponseOptions {
+        output,
+        reserved,
+        sensitive_outputs,
+        response_options,
+    } = options;
     let reserved = DownloadOutput::prepare(output, reserved)
         .map_err(DeferredCliError::input)
         .map_err(|error| DownloadResponseError::Local(error.into()))?;
