@@ -154,7 +154,7 @@ export function GrantResourcePicker({
   const matches = choices.resources.filter(
     (resource) =>
       selection.resourceIds.includes(resource.id) ||
-      `${resourceLabel(types, resource)} ${resourceTypeLabel(types, resource.resourceType)} ${contentBrowserUrl(resource) ?? ""}`.toLowerCase().includes(query)
+      `${resourceLabel(types, resource)} ${name(resource)} ${description(resource)} ${resourceTypeLabel(types, resource.resourceType)} ${contentBrowserUrl(resource) ?? ""}`.toLowerCase().includes(query)
   );
   const toggleResource = (id: string, checked: boolean) =>
     onChange({ ...selection, resourceIds: checked ? [...selection.resourceIds, id] : selection.resourceIds.filter((value) => value !== id) });
@@ -177,12 +177,14 @@ export function GrantResourcePicker({
       : resourceLabel(types, resource);
   }
 
-  function describe(resource: ResourceDefinition, exclusion = false) {
+  function description(resource: ResourceDefinition, exclusion = false) {
     const identity = contentIdentity(resource);
     const browserUrl = contentBrowserUrl(resource);
     const unavailable = !exclusion && executionContexts.length > 0 && !executionContexts.some((context) => resource.allowedExecutionContexts.includes(context));
     const parts = [
-      identity ? `${contentKind(identity.kind)}${browserUrl ? "" : ` ${identity.id}`}` : resourceTypeLabel(types, resource.resourceType),
+      identity
+        ? resource.displayName?.trim() ? `${contentKind(identity.kind)}${browserUrl ? "" : ` ${identity.id}`}` : null
+        : resourceTypeLabel(types, resource.resourceType),
       identity ? resource.selector.kind === "subtree" ? "Includes nested content" : identity.kind === "blog" ? "This blog post only" : "This page only" : null,
       identity && !browserUrl ? identity.siteOrigin.slice("https://".length) : null,
       exclusion ? "Exclusion applies regardless of enabled state or execution context" : resource.allowedExecutionContexts.join(", "),
@@ -190,8 +192,13 @@ export function GrantResourcePicker({
       unavailable ? "Not available in selected contexts" : null,
       service && !choices.compatible(resource) ? `Not used by ${service.service}` : null
     ];
+    return parts.filter(Boolean).join(" · ");
+  }
+
+  function describe(resource: ResourceDefinition, exclusion = false) {
+    const browserUrl = contentBrowserUrl(resource);
     return <>
-      <span className="block">{parts.filter(Boolean).join(" · ")}</span>
+      <span className="block">{description(resource, exclusion)}</span>
       {browserUrl ? <span className="block break-all mt-1"><a className="wb-link" href={browserUrl} target="_blank" rel="noopener noreferrer">{browserUrl}</a></span> : null}
     </>;
   }
