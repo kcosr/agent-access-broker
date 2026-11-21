@@ -115,7 +115,7 @@ for (const coverage of ["exact", "subtree"] as const) {
     await save(editor);
     await expect.poll(() => model.api.createdResources.length).toBe(1);
     expect(model.order).toEqual(["normalize", "mutation"]);
-    expect(model.api.createdResources[0]).toMatchObject({ resourceType: "confluence_content", displayName: "Runbooks", selector: { kind: coverage, value: pageIdentity }, allowedExecutionContexts: ["internal"], enabled: true });
+    expect(model.api.createdResources[0]).toMatchObject({ resourceType: "confluence_content", displayName: "Runbooks", browserUrl: pageUrl, selector: { kind: coverage, value: pageIdentity }, allowedExecutionContexts: ["internal"], enabled: true });
     expect(model.requests).toEqual([{ service: "confluence", url: pageUrl, coverage, csrf: "fixture" }]);
     expect(model.api.errors).toEqual([]);
   });
@@ -147,7 +147,7 @@ for (const [path, label, coverage, type, id] of [
   });
 }
 
-test("folder URL with a title saves only the immutable folder identity", async ({ page }) => {
+test("folder URL retains its title separately from the immutable folder identity", async ({ page }) => {
   const model = await fixture(page);
   const editor = await open(page);
   const url = "https://example.atlassian.net/wiki/spaces/ENG/folder/67890/Operations+Runbooks";
@@ -162,6 +162,7 @@ test("folder URL with a title saves only the immutable folder identity", async (
   expect(model.requests).toEqual([{ service: "confluence", url, coverage: "subtree", csrf: "fixture" }]);
   expect(model.api.createdResources[0]).toMatchObject({
     resourceType: "confluence_content",
+    browserUrl: url,
     selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/content/folder/67890" }
   });
   expect(model.api.errors).toEqual([]);
@@ -450,6 +451,55 @@ test("existing content metadata and page coverage edit without URL or configured
   await expect.poll(() => model.mutations.length).toBe(1);
   expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, displayName: "Renamed", selector: { kind: "subtree", value: pageIdentity } });
   expect(model.requests).toEqual([]);
+});
+
+test("saved browser links can be added, corrected and cleared without changing identity", async ({ page }) => {
+  const model = await fixture(page, []);
+  model.api.resources = [existing()];
+  let editor = await editExisting(page);
+  await editor.getByLabel("Browser URL (optional)", { exact: true }).fill(`  ${pageUrl}  `);
+  await save(editor);
+  await expect.poll(() => model.mutations.length).toBe(1);
+  expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, browserUrl: pageUrl, selector: { kind: "exact", value: pageIdentity } });
+  const details = page.getByRole("complementary", { name: "Resource Existing", exact: true });
+  await expect(details).toContainText(pageUrl);
+  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveAttribute("href", pageUrl);
+  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveAttribute("rel", "noopener noreferrer");
+  editor = await editExisting(page);
+  const corrected = pageUrl.replace("browser-alias", "NEWSPACE").replace("Runbooks", "Current+Title");
+  await editor.getByLabel("Browser URL (optional)", { exact: true }).fill(corrected);
+  await save(editor);
+  await expect.poll(() => model.mutations.length).toBe(2);
+  expect(model.mutations[1]).toMatchObject({ expectedVersion: 8, browserUrl: corrected, selector: { kind: "exact", value: pageIdentity } });
+  editor = await editExisting(page);
+  await editor.getByLabel("Browser URL (optional)", { exact: true }).fill("");
+  await save(editor);
+  await expect.poll(() => model.mutations.length).toBe(3);
+  expect(model.mutations[2]).toMatchObject({ expectedVersion: 9, browserUrl: null, selector: { kind: "exact", value: pageIdentity } });
+  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveCount(0);
+  expect(model.requests).toEqual([]);
+});
+
+for (const invalid of [pageUrl.replace("example", "different"), pageUrl.replace("12345", "999"), pageUrl.replace("pages", "folder"), "javascript:alert(1)"]) {
+  test(`a saved browser link cannot point to another target: ${invalid}`, async ({ page }) => {
+    const model = await fixture(page, []);
+    model.api.resources = [{ ...existing(), browserUrl: pageUrl }];
+    const editor = await editExisting(page);
+    await editor.getByLabel("Browser URL (optional)", { exact: true }).fill(invalid);
+    await expect(editor.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveCount(0);
+    await save(editor);
+    await expect(editor).toContainText("same site, content type and ID");
+    expect(model.mutations).toEqual([]);
+  });
+}
+
+test("enabling a saved resource preserves its browser link and version", async ({ page }) => {
+  const model = await fixture(page);
+  model.api.resources = [{ ...existing(), browserUrl: pageUrl, enabled: false }];
+  await page.goto(`${assets.baseUrl}/ui/admin/catalog/resources?item=existing`);
+  await page.getByRole("complementary", { name: "Resource Existing", exact: true }).getByRole("button", { name: "Enable", exact: true }).click();
+  await expect.poll(() => model.mutations.length).toBe(1);
+  expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, browserUrl: pageUrl, enabled: true });
 });
 
 test("explicit content replacement starts empty and can restore the saved identity", async ({ page }) => {

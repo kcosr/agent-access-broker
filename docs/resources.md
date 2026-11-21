@@ -14,6 +14,14 @@ label from the selector when no name is supplied and shows coverage alongside
 custom labels. Resource and group IDs cannot be `.` or `..`, because each ID
 must be addressable as an HTTP path segment.
 
+Confluence content entries can also store an optional `browserUrl` for
+navigation. It must identify the same site, content kind and ID as the selector,
+and it does not participate in grant matching or resource uniqueness. The portal
+saves it with content URL entry and lets administrators add, correct or clear
+it in the editor. An old title or space path can be retained after a move;
+access follows the immutable identity. See
+[saved browser links](confluence-content-access.md#resources-and-url-entry).
+
 Resource types are registered, not hard-coded in policy. Each registered type
 defines its canonical target grammar, the selector forms it supports, and the
 labels clients show. Scalar service scopes bind one registered type; typed

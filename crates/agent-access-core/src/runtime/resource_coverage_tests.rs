@@ -153,6 +153,7 @@ fn resource(id: &str, selector: ResourceSelector) -> ResourceDefinition {
     ResourceDefinition {
         id: id.into(),
         display_name: None,
+        browser_url: None,
         resource_type: JOB.id().clone(),
         selector,
         allowed_execution_contexts: vec!["default".into()],

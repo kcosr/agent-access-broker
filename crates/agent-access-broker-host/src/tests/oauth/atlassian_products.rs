@@ -193,6 +193,7 @@ async fn products_fixture(atlassian: &MockServer, token_profile: bool) -> OAuthF
             .runtime
             .create_managed_resource(CreateResourceRequest {
                 id: Some(id.into()),
+                browser_url: None,
                 display_name: None,
                 resource_type,
                 selector: ResourceSelector::Exact {
@@ -674,6 +675,7 @@ async fn jira_project_listing_honors_token_resource_and_action_ceilings() {
         .runtime
         .create_managed_resource(CreateResourceRequest {
             id: Some("jira-ops".into()),
+            browser_url: None,
             display_name: None,
             resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {
@@ -819,6 +821,7 @@ async fn confluence_space_listing_honors_token_resource_and_action_ceilings() {
         .runtime
         .create_managed_resource(CreateResourceRequest {
             id: Some("confluence-ops".into()),
+            browser_url: None,
             display_name: None,
             resource_type: agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
                 .id()

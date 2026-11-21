@@ -148,6 +148,7 @@ fn config() -> BrokerConfig {
     .map(|(id, selector)| ResourceDefinition {
         id: id.into(),
         display_name: None,
+        browser_url: None,
         resource_type: PROJECT.id().clone(),
         selector,
         allowed_execution_contexts: vec!["default".into()],

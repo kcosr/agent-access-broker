@@ -1035,7 +1035,11 @@ the same effective group.
   Create accepts optional `--id`, `--resource-type TYPE` (a registered type ID),
   `--selector-kind exact|namespace|subtree|all`, `--selector-value` for
   exact/namespace/subtree,
-  optional `--display-name`, and repeatable `--execution-context`. Update and
+  optional `--display-name` and `--browser-url`, and repeatable
+  `--execution-context`. `--browser-url` stores a navigation link for Confluence
+  content; it must identify the same site, kind and ID as the canonical selector.
+  Update omission preserves the link; `--clear-browser-url` clears it and cannot
+  be combined with `--browser-url`. URL validation is offline. Update and
   delete require `--expected-version`. The broker validates the type and whether
   it supports the selector form; in this build namespace selectors apply only to
   Git repositories and CloudBees CI jobs, and subtree selectors apply to

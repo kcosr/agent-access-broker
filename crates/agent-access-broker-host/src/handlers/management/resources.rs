@@ -100,6 +100,7 @@ where
 struct ResourceCreateBody {
     id: Option<String>,
     display_name: Option<String>,
+    browser_url: Option<String>,
     resource_type: ResourceType,
     selector: ResourceSelector,
     allowed_execution_contexts: Vec<String>,
@@ -114,6 +115,8 @@ struct ResourcePatchBody {
     expected_version: i64,
     #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
     display_name: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_nullable_string_patch")]
+    browser_url: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_patch")]
     resource_type: Option<ResourceType>,
     #[serde(default, deserialize_with = "deserialize_patch")]
@@ -384,6 +387,7 @@ pub(crate) async fn admin_policy_resources_create(
     let request = CreateResourceRequest {
         id: body.id,
         display_name: body.display_name,
+        browser_url: body.browser_url,
         resource_type: body.resource_type,
         selector: body.selector,
         allowed_execution_contexts: body.allowed_execution_contexts,
@@ -441,6 +445,7 @@ pub(crate) async fn admin_policy_resources_patch(
     let request = PatchResourceRequest {
         id,
         display_name: body.display_name,
+        browser_url: body.browser_url,
         resource_type: body.resource_type,
         selector: body.selector,
         allowed_execution_contexts: body.allowed_execution_contexts,

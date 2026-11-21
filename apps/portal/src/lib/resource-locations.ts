@@ -1,4 +1,4 @@
-import type { NormalizedResourceLocation, ResourceLocationRequest, ResourceLocationService, ResourceType } from "../types";
+import type { NormalizedResourceLocation, ResourceDefinition, ResourceLocationRequest, ResourceLocationService, ResourceType } from "../types";
 
 export type LocationKind = "space" | "page" | "folder" | "blog";
 export type LocationHints = { siteOrigin: string; kind: LocationKind; rootId: string | null; spaceKey?: string };
@@ -68,6 +68,15 @@ export function parseContentIdentity(value: string): ContentIdentity | null {
   const match = /^\/wiki\/content\/(page|folder|blog)\/([1-9][0-9]{0,19})$/.exec(parsed.url.pathname);
   if (!match || value !== `${parsed.siteOrigin}${parsed.url.pathname}`) return null;
   return { siteOrigin: parsed.siteOrigin, kind: match[1] as ContentIdentity["kind"], id: match[2] };
+}
+
+/** Only link a saved browser URL when it identifies this exact content resource. */
+export function contentBrowserUrl(resource: Pick<ResourceDefinition, "resourceType" | "selector" | "browserUrl">): string | null {
+  if (resource.resourceType !== "confluence_content" || resource.selector.kind === "all" || !resource.browserUrl) return null;
+  const identity = parseContentIdentity(resource.selector.value);
+  const hints = locationInputHints(resource.browserUrl);
+  return identity && hints && identity.siteOrigin === hints.siteOrigin && identity.kind === hints.kind && identity.id === hints.rootId
+    ? trimLocationInput(resource.browserUrl) : null;
 }
 
 export function locationResourceType(kind: LocationKind): ResourceType {

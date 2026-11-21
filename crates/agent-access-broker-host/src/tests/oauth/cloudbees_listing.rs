@@ -17,6 +17,7 @@ async fn cloudbees_job_listing_honors_token_resource_and_action_ceilings() {
             .runtime
             .create_managed_resource(CreateResourceRequest {
                 id: Some(format!("ci-{name}")),
+                browser_url: None,
                 display_name: None,
                 resource_type: agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE
                     .id()

@@ -64,7 +64,8 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `031_oidc_membership_renewal`, `032_imported_source_documents`,
 `033_agent_token_issuance`, `034_agent_token_issuance_contexts`,
 `035_imported_gateway_routes`, `036_microsoft_enrollments`, and
-`037_application_access`, and `038_confluence_content_resources` in order. The
+`037_application_access`, `038_confluence_content_resources`, and
+`039_resource_browser_urls` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
@@ -74,6 +75,12 @@ kind. It preserves resource rows, memberships and private attribute ciphertext
 without changing policy revision. Registered types still enforce which selector
 kinds are valid. Older binaries reject the advanced ledger; rollback requires
 a matched pre-migration backup. See [content access](confluence-content-access.md#upgrade-and-qualification).
+
+Migration `039_resource_browser_urls` adds nullable `resources.browser_url`
+navigation metadata without changing existing selectors, membership or policy
+revision. Existing rows have no saved URL. Browser links are ordinary resource
+metadata, preserved in catalog export, with the same optimistic version check
+as other resource edits. Their values are excluded from audit snapshots.
 
 A new empty database can be initialized, and the supported resource-policy
 baseline can be upgraded with `auto_migrate`. Databases predating that baseline
@@ -141,7 +148,7 @@ erDiagram
 | `application_authorization_codes` | One-use authorization codes bound to client, redirect URI and PKCE challenge; cascade with their access. | `code_hash`, `access_id`, `application_id`, `redirect_uri`, `code_challenge`, `expires_at`, `consumed_at` |
 | `local_password_failures` | Failed local-password verifications and lockouts per principal and client source. | `principal_id`, `source`, `failed_attempts`, `last_failed_at`, `locked_until` |
 | `browser_sessions` | Browser cookie sessions backed by `user_manage` broker tokens. | `token_id`, `principal_id`, `login_method`, `login_method_id`, `auth_time` |
-| `resources` | Typed selector entries shared by grants and tokens. | `resource_id`, `resource_type`, `selector_kind`, `selector_value`, `display_name`, `allowed_execution_contexts_json`, `enabled`, `version`, actor metadata |
+| `resources` | Typed selector entries shared by grants and tokens. | `resource_id`, `resource_type`, `selector_kind`, `selector_value`, `display_name`, `browser_url`, `allowed_execution_contexts_json`, `enabled`, `version`, actor metadata |
 | `resource_groups` | Flat named collections of included/excluded resources. | `resource_group_id`, `name`, `version`, actor metadata |
 | `resource_group_members` | Membership with explicit include/exclude effect. | `resource_group_id`, `resource_id`, `effect` |
 | `policy_revisions` | Singleton durable generation for resources, groups, and grants. | `id = 1`, `generation`, `updated_at`, `updated_by` |

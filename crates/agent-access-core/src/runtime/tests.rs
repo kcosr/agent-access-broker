@@ -274,6 +274,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
             resources.push(ResourceDefinition {
                 id: format!("{prefix}-{}", value.replace('/', "-")),
                 display_name: None,
+                browser_url: None,
                 resource_type: resource_type.clone(),
                 selector: ResourceSelector::Exact {
                     value: (*value).into(),
@@ -285,6 +286,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
         resources.push(ResourceDefinition {
             id: format!("{prefix}-all"),
             display_name: None,
+            browser_url: None,
             resource_type: resource_type.clone(),
             selector: ResourceSelector::All,
             allowed_execution_contexts: vec![DEFAULT_EXECUTION_CONTEXT.into()],
@@ -295,6 +297,7 @@ fn test_resources() -> Vec<ResourceDefinition> {
         resources.push(ResourceDefinition {
             id: format!("repository-namespace-{value}"),
             display_name: None,
+            browser_url: None,
             resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
             selector: ResourceSelector::Namespace {
                 value: value.into(),
@@ -9971,6 +9974,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
     config.policy.resources.push(crate::ResourceDefinition {
         id: "foreign-repo".into(),
         display_name: None,
+        browser_url: None,
         resource_type: agent_access_provider::GIT_REPOSITORY_RESOURCE.id().clone(),
         selector: ResourceSelector::Exact {
             value: "foreign/repo".into(),

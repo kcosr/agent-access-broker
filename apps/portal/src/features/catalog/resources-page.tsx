@@ -22,7 +22,7 @@ import { CatalogFrame } from "./catalog-frame";
 import { ResourceAttributeField, ResourceAttributeValue } from "./resource-attributes";
 import { useResourceActions } from "./resource-actions";
 import { ResourceLocationEntry } from "./resource-location-entry";
-import { configuredLocationService, locationCoverage, locationInputHints, locationResourceType, normalizedLocationMatches, parseContentIdentity, trimLocationInput, type PageCoverage } from "../../lib/resource-locations";
+import { configuredLocationService, contentBrowserUrl, locationCoverage, locationInputHints, locationResourceType, normalizedLocationMatches, parseContentIdentity, trimLocationInput, type PageCoverage } from "../../lib/resource-locations";
 import { UsedBySection } from "./used-by";
 
 const STATUSES = ["all", "active", "disabled"] as const;
@@ -380,6 +380,7 @@ function ResourceDetailDrawer({ model, resource, onEdit }: { model: ResourcesMod
   const usedBy = useResourceUsedBy("resources", resource.id);
   const [pending, setPending] = useState(false);
   const title = resourceTitle(types, resource);
+  const browserLink = contentBrowserUrl(resource);
   const fields = resource.selector.kind === "exact" ? types.get(resource.resourceType)?.attributes ?? [] : [];
   const configured = resource.configuredAttributes ?? [];
   const member = memberships(groups, resource.id);
@@ -456,6 +457,10 @@ function ResourceDetailDrawer({ model, resource, onEdit }: { model: ResourcesMod
         />
         {!resource.enabled ? <p className="pt-prose wb-small">Disabled resources grant nothing{types.get(resource.resourceType)?.supportsExclusions ? ", but still apply when excluded by a group" : ""}.</p> : null}
       </DrawerSection>
+      {resource.resourceType === "confluence_content" ? <DrawerSection title="Confluence link">
+        {resource.browserUrl ? <p className="pt-prose break-all">{resource.browserUrl}</p> : <p className="pt-prose wb-small">No browser URL saved. Add a link in Edit.</p>}
+        {browserLink ? <Button href={browserLink} external icon="external">Open in Confluence</Button> : null}
+      </DrawerSection> : null}
       {fields.length ? (
         <DrawerSection title="Private attributes" count={`${configured.length}/${fields.length}`}>
           <div className="wb-form-stack">
@@ -515,6 +520,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
   const locations = useResourceLocations();
   const [entryMode, setEntryMode] = useState<LocationEntryMode>(record?.resourceType === "confluence_content" ? "saved" : record?.selector.kind === "all" ? "all" : "key");
   const [url, setUrl] = useState("");
+  const [browserUrl, setBrowserUrl] = useState(record?.browserUrl ?? "");
   const [choice, setChoice] = useState<PageCoverage>("");
   const contentType = type === "confluence_content";
   const spaceType = type === "confluence_space";
@@ -550,6 +556,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
   const configured = record?.configuredAttributes ?? [];
   const fields = kind === "exact" ? types.get(type)?.attributes ?? [] : [];
   const savedContent = record?.resourceType === "confluence_content" && record.selector.kind !== "all" ? parseContentIdentity(record.selector.value) : null;
+  const browserLink = record ? contentBrowserUrl({ ...record, browserUrl }) : null;
   const serviceIssue = !urlMode ? null : locations.isError ? "Location services are unavailable. Retry to save a URL."
     : !locations.isSuccess ? "Loading configured location services…"
     : selectedService.issue === "absent" ? "No applicable Confluence service is configured. URL entry is unavailable."
@@ -564,6 +571,8 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
     else if (!hints) issues.location = "Enter a supported Confluence space, page, folder or blog URL.";
     else if (!coverage) issues.location = "Choose whether to include this page only or its descendants.";
     if (serviceIssue) issues.service = serviceIssue;
+  } else if (contentType && trimLocationInput(browserUrl) && !browserLink) {
+    issues.browserUrl = "Enter a Confluence browser URL for the same site, content type and ID. Use Change location to select different content.";
   } else if (!contentType) {
     const selectedKind = spaceType ? entryMode === "all" ? "all" : "exact" : kind;
     if (!selectorKinds.includes(selectedKind)) issues.value = "Choose supported coverage.";
@@ -655,7 +664,9 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
         const selectedKind = spaceType ? entryMode === "all" ? "all" : "exact" : kind;
         selector = selectedKind === "all" ? { kind: "all" } : { kind: selectedKind, value: value.trim() };
       }
-      const body: ResourceWriteBody = { resourceType, selector, ...ordinary, ...(Object.keys(privateValues).length ? { attributes: privateValues } : {}) };
+      const body: ResourceWriteBody = { resourceType, selector, ...ordinary,
+        browserUrl: resourceType === "confluence_content" ? trimLocationInput(urlMode ? url : browserUrl) || null : null,
+        ...(Object.keys(privateValues).length ? { attributes: privateValues } : {}) };
       const saved = await actions.saveResource(body, record?.id, isCurrent);
       if (!isCurrent()) return;
       setAttributes(new Map());
@@ -715,6 +726,10 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
           {savedContent?.kind === "page" ? <Field label="Location coverage"><Select value={kind} disabled={pending} onChange={(event) => change(() => setKind(event.target.value as "exact" | "subtree"))}>
             <option value="exact">This page only</option><option value="subtree">This page and descendants</option>
           </Select></Field> : <p>{savedContent?.kind === "folder" ? "This folder and descendants" : savedContent?.kind === "blog" ? "This blog post only" : selectorLabel(types, record.resourceType, record.selector)}</p>}
+          <Field label="Browser URL" optional hint="Link to this content in Confluence. You can update the title or space path, or leave it empty to remove the saved link." error={shown.browserUrl}>
+            <Input value={browserUrl} disabled={pending} spellCheck={false} onChange={(event) => change(() => setBrowserUrl(event.target.value))} placeholder="Paste a Confluence browser URL" />
+          </Field>
+          {browserLink ? <Button href={browserLink} external icon="external">Open in Confluence</Button> : null}
           <Button disabled={pending} onClick={() => changeMode("url")}>Change location</Button>
         </> : spaceType ? entryMode === "all" ? <p>All Confluence spaces</p> : <Field label="Space key" hint="Enter the canonical, case-sensitive key. A browser alias may differ." error={shown.value}>
           <Input value={value} disabled={pending} onChange={(event) => change(() => setValue(event.target.value))} placeholder="ENG" spellCheck={false} />

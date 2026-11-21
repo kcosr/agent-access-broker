@@ -2059,6 +2059,7 @@ fn resource_mutation_schema(
     } else {
         json!({
             "displayName":{"type":["string","null"]},
+            "browserUrl":{"type":["string","null"],"minLength":1,"maxLength":4096,"description":"Optional navigation URL, at most 4096 UTF-8 bytes, for a resource type with stable location identity. It must normalize to this resource's exact site, content kind and ID with the same coverage. It does not change access. Omission preserves the stored URL on update; null clears it."},
             "resourceType":{"type":"string","enum":type_ids},
             "selector":{"oneOf":[
                 {"type":"object","additionalProperties":false,"required":["kind","value"],"properties":{"kind":{"enum":["exact","namespace","subtree"]},"value":{"type":"string","minLength":1}}},

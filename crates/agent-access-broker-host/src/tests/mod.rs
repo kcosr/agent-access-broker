@@ -159,6 +159,7 @@ fn fixture_resources(contexts: &[&str]) -> Vec<ResourceDefinition> {
         .flat_map(|(scope, resource_type, values)| {
             values.iter().map(move |value| ResourceDefinition {
                 id: resource_id(scope, value),
+                browser_url: None,
                 display_name: None,
                 resource_type: resource_type.clone(),
                 selector: ResourceSelector::Exact {
@@ -249,6 +250,7 @@ fn seed_managed_fixture_resources(store: &agent_access_core::ManagedStore) {
             .create_resource(
                 agent_access_core::CreateResourceRequest {
                     id: Some(resource.id),
+                    browser_url: resource.browser_url,
                     display_name: resource.display_name,
                     resource_type: resource.resource_type,
                     selector: resource.selector,

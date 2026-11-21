@@ -52,6 +52,27 @@ resource fields. Existing content resources can keep their identity while editin
 those fields, and a saved page can switch exact/subtree coverage without a URL.
 **Change location** starts a new URL entry.
 
+Content URL entry also saves the pasted browser URL as optional navigation
+metadata. Resource details and the editor show the link and let you open it in
+Confluence. The editor can add, correct or clear a saved link without replacing
+the resource. A replacement link must normalize to the same site, content kind
+and immutable ID; changing the target requires **Change location** instead.
+An existing resource without a saved browser URL has no link until one is added.
+
+The link can become stale after a rename or move. Paste the current browser URL
+into the editor to correct it. Saving and correcting links are offline: they do
+not contact Confluence, verify accessibility or automatically follow redirects.
+The link's title and space path do not control authorization, so a stale or
+cleared link does not alter grant coverage. The browser uses your own Confluence
+session when you open it.
+
+HTTP resource writes use optional `browserUrl`; TOML uses `browser_url`. The
+value is a trimmed browser URL of at most 4096 UTF-8 bytes. PATCH omission keeps
+the current link and `null` clears it. The CLI accepts `--browser-url` on create
+or update and `--clear-browser-url` on update. This metadata is supported for
+Confluence content resources, not whole-space resources. Audit records identify
+`browserUrl` as a changed field without recording its URL or title.
+
 For content URL normalization, the browser space segment, title and date do not
 enter identity. Folder URLs accept an optional title segment, such as
 `/wiki/spaces/ENG/folder/67890/Operations+Runbooks`, including for nested folders.
@@ -288,9 +309,12 @@ replaying the query with fewer constraints.
 
 ## Upgrade and qualification
 
-Back up the managed database and keys before migration
-`038_confluence_content_resources`. It adds stored subtree selectors while
-preserving existing resources, memberships and encrypted attributes. Upgrade
+Back up the managed database and keys before migrations
+`038_confluence_content_resources` and `039_resource_browser_urls`. They add
+stored subtree selectors and optional browser links while preserving existing
+resources, memberships and encrypted attributes. Existing resources start with
+no browser link; the canonical identity alone cannot reconstruct the original
+URL. Upgrade
 Broker, CLI and portal together, and restart searches without an old continuation
 token after upgrading. A rollback needs the matching pre-upgrade database and
 binaries. Provider SDK consumers must adopt the explicit scalar or

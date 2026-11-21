@@ -107,7 +107,7 @@ export function auditStoredDisplayName(entity: AuditEntity): string {
 
 const CHANGE_FIELD_LABELS: Record<string, string> = {
   displayName: "display name", name: "group name", resourceType: "resource type", selector: "coverage",
-  enabled: "enabled state", allowedExecutionContexts: "execution contexts", privateAttributes: "private attributes",
+  enabled: "enabled state", allowedExecutionContexts: "execution contexts", privateAttributes: "private attributes", browserUrl: "browser URL",
   includedResourceIds: "included resources", excludedResourceIds: "excluded resources"
 };
 

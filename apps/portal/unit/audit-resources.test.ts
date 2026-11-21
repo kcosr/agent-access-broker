@@ -1,6 +1,9 @@
 import { describe, expect, test } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { AuditRecord, Session } from "../src/types";
 import { auditEntity, auditEntityCurrentPath, auditEntityName, auditResourceChange, auditResourceCompletionMissing, auditResourcePresentation, auditStoredDisplayName } from "../src/lib/audit-resources";
+import { AuditResourceDetails } from "../src/features/audit/audit-resources";
 import { indexResourceTypes } from "../src/lib/resource-types";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
 
@@ -60,6 +63,19 @@ describe("recorded resource audit names", () => {
     const after = { ...before, displayName: "Platform API", resourceType: "cloudbees_ci_job", enabled: false, allowedExecutionContexts: ["external"] };
     const changed = record("success", after, { before, after, changedFields: ["displayName", "enabled", "allowedExecutionContexts", "privateAttributes", "resourceType"] }, { action: "admin.policy.resources.patch" });
     expect(auditResourcePresentation(changed, types)?.summary).toBe("Renamed CloudBees CI job “Payments API” to “Platform API” — changed enabled state, execution contexts, private attributes, resource type");
+  });
+
+  test("browser URL changes are named without claiming or displaying recorded URL values", () => {
+    const browserUrl = "https://example.atlassian.net/wiki/spaces/ENG/pages/12345/Private+Title";
+    const after = { ...repository, browserUrl };
+    const changed = record("success", null, { before: repository, after, changedFields: ["browserUrl"] }, { action: "admin.policy.resources.patch" });
+    expect(auditResourcePresentation(changed, types)?.summary).toBe("Updated resource — changed browser URL");
+    expect(auditResourceChange(changed)?.after).not.toHaveProperty("browserUrl");
+    const markup = renderToStaticMarkup(createElement(AuditResourceDetails, { record: changed }));
+    expect(markup).toContain("Browser URL");
+    expect(markup).toContain("Changed; URL values are not recorded.");
+    expect(markup).not.toContain("Private+Title");
+    expect(markup).not.toContain("→");
   });
 
   test("group rename plus membership retains both the rename and member change", () => {

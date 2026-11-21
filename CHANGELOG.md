@@ -6,7 +6,8 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
-- **Confluence content grants add migration `038_confluence_content_resources`.**
+- **Confluence content grants add migrations `038_confluence_content_resources`
+  and `039_resource_browser_urls`.**
   Back up first and upgrade Broker, CLI and portal together; rollback needs the
   matching pre-migration database. Resolve existing drafts before upgrading to
   typed-parent v5 handles. Page creation takes `parent: {kind, id}` or `parentUrl`,
@@ -208,7 +209,11 @@ All notable changes to this project are documented in this file.
   folder subtrees.** Content identities bind site, kind and ID and follow external
   cross-space moves; subtree membership uses current ancestry. The portal infers
   content type/service from a URL, shows page coverage immediately and normalizes
-  on Save; folder URLs accept their optional title suffix. Standalone space-key
+  on Save; folder URLs accept their optional title suffix. Content resources
+  retain the browser URL as optional navigation metadata, shown in the portal
+  and correctable offline without changing the target. HTTP `browserUrl`, TOML
+  `browser_url` and CLI `--browser-url` preserve it; URLs stay out of audit
+  snapshots. Standalone space-key
   and all-spaces editing remain available. Bounded location checks apply across
   reads, writes, creation, moves, drafts, comments,
   attachments and content-constrained search. Such searches add current metadata

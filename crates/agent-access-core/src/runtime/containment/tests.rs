@@ -377,6 +377,7 @@ fn resource(id: &str, kind: ResourceType, selector: ResourceSelector) -> Resourc
     ResourceDefinition {
         id: id.into(),
         display_name: None,
+        browser_url: None,
         resource_type: kind,
         selector,
         allowed_execution_contexts: vec!["default".into()],

@@ -502,6 +502,14 @@ default_decision = "deny"
 
 # Resource selectors are shared by grants and token restrictions.
 # Labels are optional. All and namespace entries include new upstream resources.
+# Confluence content can also retain an optional navigation URL:
+# [[policy.resources]]
+# id = "confluence-runbooks"
+# resource_type = "confluence_content"
+# selector = { kind = "subtree", value = "https://example.atlassian.net/wiki/content/folder/67890" }
+# browser_url = "https://example.atlassian.net/wiki/spaces/ENG/folder/67890/Operations+Runbooks"
+# allowed_execution_contexts = ["internal"]
+# enabled = true
 
 [[policy.resources]]
 id = "jira-proj"

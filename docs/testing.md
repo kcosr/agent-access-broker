@@ -2222,6 +2222,12 @@ the normalizer tests.
 
 Portal browser coverage exercises the normalize-then-save flow, stale-response and
 version protection, standalone space-key/all editing and saved-identity edits.
+Browser URL tests additionally cover saving the original content link, correcting
+or clearing it without changing identity or coverage, and rejecting a different
+target. Core and real management-route tests cover migration 039, persistence,
+version conflicts, unchanged metadata on rejection and omission of URL/title
+values from audit snapshots. CLI tests verify set, preserve and clear request
+bodies. These are offline checks; no saved-link test verifies a live redirect.
 These fixtures do not qualify live Confluence lifecycle, index convergence,
 request-length acceptance or throughput.
 

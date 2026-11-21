@@ -1842,7 +1842,7 @@ Resource catalog administration uses these routes:
   private attribute to a global administrator.
 - The same routes under `/v1/admin/policy/resource-groups` manage resource groups.
 
-Resource creation accepts optional `id` and `displayName`, required
+Resource creation accepts optional `id`, `displayName` and `browserUrl`, required
 `resourceType`, `selector`, and `allowedExecutionContexts`, and optional
 `enabled` (default true). Group creation accepts optional `id`, required `name`,
 and `includedResourceIds` / `excludedResourceIds`. PATCH uses `expectedVersion`
@@ -1852,6 +1852,14 @@ rows contain `kind`, `id`, and applicable `service`, `principalId`, `viaGroupId`
 and `effect` fields. Catalog mutation and full reference inspection require
 global administrator authority for changes and administrative read access
 (admin or auditor) for full reference inspection.
+
+`browserUrl` is navigation metadata for Confluence content resources. It must be
+a trimmed browser URL of at most 4096 UTF-8 bytes that normalizes to the same
+site, kind and immutable ID as the resource selector. It grants no access and
+is validated offline. PATCH omission preserves the current URL; explicit `null`
+clears it. Changing a resource's target requires a matching replacement URL or
+clearing the previous URL in the same mutation. Unsupported resource types
+reject non-null browser URLs. See [content URL entry](confluence-content-access.md#resources-and-url-entry).
 
 Resource uniqueness is the pair of resource type and selector, independent of
 display name, execution contexts, or enabled state. A create or PATCH that
@@ -3061,12 +3069,14 @@ selector. `displayName` remains null and the snapshot's name field shows
 | `membership` | Group changes only: `includedAdded`, `includedRemoved`, `excludedAdded`, and `excludedRemoved` |
 
 Each revision is `{generation, updatedAt, updatedBy}`. `changedFields` uses
-`displayName`, `resourceType`, `selector`, `enabled`,
+`displayName`, `browserUrl`, `resourceType`, `selector`, `enabled`,
 `allowedExecutionContexts`, `privateAttributes`, `name`, `includedResourceIds`,
 and `excludedResourceIds` as applicable. `privateAttributes` indicates that
 private configuration changed; no attribute values are included. The HTTP
 success `result` remains `{record, previousRevision, revision}`; `change` is
 audit metadata, not a new mutation-response field.
+`browserUrl` changes record only the field name; browser URLs and their title
+segments are omitted from audit entities and snapshots.
 
 Snapshots include the entity-reference fields above. Resource snapshots add
 `enabled`, `allowedExecutionContexts`, `allowedExecutionContextsCount`, and

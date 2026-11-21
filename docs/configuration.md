@@ -1206,7 +1206,8 @@ priority = 0                  # optional
 ### Resource catalog and selections
 
 `[[policy.resources]]` fields are `id`, `resource_type`, `selector`, optional
-`display_name`, nonempty `allowed_execution_contexts`, and `enabled`.
+`display_name`, optional `browser_url`, nonempty `allowed_execution_contexts`,
+and `enabled`.
 
 - `resource_type` must name a registered resource type (see
   [resources.md](resources.md#resource-entries)); this build registers
@@ -1228,6 +1229,11 @@ priority = 0                  # optional
   page/folder subtree coverage. These values have no space coordinate and are
   not browser URLs; see [content access](confluence-content-access.md).
   Jira issues have no separate policy scope.
+- `browser_url` is optional navigation metadata for Confluence content entries.
+  Supply a trimmed browser URL of at most 4096 UTF-8 bytes that normalizes to the
+  same site, content kind and ID as the selector. It does not change coverage,
+  verify upstream access or contact Confluence. Other resource types reject this
+  field when set. See [saved browser links](confluence-content-access.md#resources-and-url-entry).
 
 `[[policy.resource_groups]]` fields are `id`, `name`, `included_resource_ids`,
 and `excluded_resource_ids`. Groups can mix types, but cannot contain other

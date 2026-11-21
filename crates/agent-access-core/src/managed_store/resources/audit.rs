@@ -182,6 +182,13 @@ pub(super) fn resource_change(
         };
     }
     field!(display_name, "displayName");
+    // Browser links can contain human-readable titles. Record that the field
+    // changed without adding its value to either event-time snapshot.
+    if before.and_then(|r| r.definition.browser_url.as_ref())
+        != after.and_then(|r| r.definition.browser_url.as_ref())
+    {
+        fields.push("browserUrl".into());
+    }
     field!(resource_type, "resourceType");
     field!(selector, "selector");
     field!(enabled, "enabled");
@@ -289,6 +296,7 @@ mod tests {
             id: id.into(),
             expected_version: version,
             display_name: None,
+            browser_url: None,
             resource_type: None,
             selector: None,
             allowed_execution_contexts: None,

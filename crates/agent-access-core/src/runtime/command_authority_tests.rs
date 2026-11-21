@@ -241,6 +241,7 @@ fn project(
     ResourceDefinition {
         id: id.into(),
         display_name: None,
+        browser_url: None,
         resource_type: project_type(),
         selector,
         allowed_execution_contexts: contexts.iter().map(|context| (*context).into()).collect(),

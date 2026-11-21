@@ -70,6 +70,7 @@ fn select_resources(
             config.policy.resources.push(ResourceDefinition {
                 id: id.clone(),
                 display_name: None,
+                browser_url: None,
                 resource_type: resource_type.clone(),
                 selector: selector.clone(),
                 allowed_execution_contexts: contexts.clone(),

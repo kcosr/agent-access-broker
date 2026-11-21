@@ -51,6 +51,7 @@ export function useResourceActions() {
             resourceType: resource.resourceType,
             selector: resource.selector,
             displayName: resource.displayName,
+            browserUrl: resource.browserUrl ?? null,
             allowedExecutionContexts: resource.allowedExecutionContexts,
             expectedVersion: resource.version,
             enabled

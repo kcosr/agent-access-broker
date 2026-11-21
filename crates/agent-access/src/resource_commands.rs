@@ -45,6 +45,9 @@ pub(crate) enum ResourcesCommand {
         selector_value: Option<String>,
         #[arg(long)]
         display_name: Option<String>,
+        /// Optional browser link to this same resource; does not change access.
+        #[arg(long)]
+        browser_url: Option<String>,
         /// JSON object of private string attributes; values remain redacted in the response.
         #[arg(long)]
         attributes_file: Option<PathBuf>,
@@ -67,6 +70,11 @@ pub(crate) enum ResourcesCommand {
         display_name: Option<String>,
         #[arg(long)]
         clear_display_name: bool,
+        /// Replace the browser link while retaining this resource's identity.
+        #[arg(long, conflicts_with = "clear_browser_url")]
+        browser_url: Option<String>,
+        #[arg(long)]
+        clear_browser_url: bool,
         /// Replace supplied private attributes; omission preserves stored values.
         #[arg(long)]
         attributes_file: Option<PathBuf>,
@@ -248,6 +256,7 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             selector_kind,
             selector_value: value,
             display_name,
+            browser_url,
             attributes_file,
             execution_contexts,
             enabled,
@@ -258,6 +267,9 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             }
             if let Some(name) = display_name {
                 body["displayName"] = serde_json::json!(name);
+            }
+            if let Some(url) = browser_url {
+                body["browserUrl"] = serde_json::json!(url);
             }
             if let Some(path) = attributes_file {
                 body["attributes"] = read_attributes_file(path)?;
@@ -275,6 +287,8 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
             selector_value: value,
             display_name,
             clear_display_name,
+            browser_url,
+            clear_browser_url,
             attributes_file,
             execution_contexts,
             enabled,
@@ -293,6 +307,11 @@ pub(crate) async fn run_resources(ctx: &CliContext<'_>, command: &ResourcesComma
                 body["displayName"] = serde_json::Value::Null;
             } else if let Some(name) = display_name {
                 body["displayName"] = serde_json::json!(name);
+            }
+            if *clear_browser_url {
+                body["browserUrl"] = serde_json::Value::Null;
+            } else if let Some(url) = browser_url {
+                body["browserUrl"] = serde_json::json!(url);
             }
             if !execution_contexts.is_empty() {
                 body["allowedExecutionContexts"] = serde_json::json!(execution_contexts);
@@ -400,6 +419,61 @@ pub(crate) async fn run_resource_groups(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_url_flags_keep_replacement_and_clearing_distinct() {
+        let base = [
+            "agent-access",
+            "admin",
+            "policy",
+            "resources",
+            "update",
+            "folder",
+            "--expected-version",
+            "2",
+        ];
+        for (extra, expected_url, expected_clear) in [
+            (
+                vec![
+                    "--browser-url",
+                    "https://example.atlassian.net/wiki/spaces/ENG/folder/12/Runbooks",
+                ],
+                Some("https://example.atlassian.net/wiki/spaces/ENG/folder/12/Runbooks"),
+                false,
+            ),
+            (vec!["--clear-browser-url"], None, true),
+            (vec!["--display-name", "Runbooks"], None, false),
+        ] {
+            let cli = Cli::try_parse_from(base.into_iter().chain(extra)).unwrap();
+            let Command::Admin {
+                command:
+                    AdminCommand::Policy {
+                        command:
+                            AdminPolicyCommand::Resources {
+                                command:
+                                    ResourcesCommand::Update {
+                                        browser_url,
+                                        clear_browser_url,
+                                        ..
+                                    },
+                            },
+                    },
+            } = cli.command
+            else {
+                panic!("resource update expected")
+            };
+            assert_eq!(browser_url.as_deref(), expected_url);
+            assert_eq!(clear_browser_url, expected_clear);
+        }
+        assert!(
+            Cli::try_parse_from(base.into_iter().chain([
+                "--browser-url",
+                "https://example.atlassian.net/wiki/spaces/ENG/folder/12",
+                "--clear-browser-url",
+            ]))
+            .is_err()
+        );
+    }
 
     #[test]
     fn location_normalization_and_content_subtree_commands_parse() {

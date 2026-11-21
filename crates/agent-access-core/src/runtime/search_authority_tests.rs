@@ -99,6 +99,7 @@ fn resource(id: &str, selector: ResourceSelector) -> ResourceDefinition {
     ResourceDefinition {
         id: id.into(),
         display_name: None,
+        browser_url: None,
         resource_type: GIT_REPOSITORY_RESOURCE.id().clone(),
         selector,
         allowed_execution_contexts: vec!["default".into()],

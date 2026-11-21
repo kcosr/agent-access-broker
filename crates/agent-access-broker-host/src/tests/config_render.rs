@@ -822,6 +822,7 @@ pub(super) fn resource_value(resource: &ResourceDefinition) -> Value {
     let ResourceDefinition {
         id,
         display_name,
+        browser_url,
         resource_type,
         selector,
         allowed_execution_contexts,
@@ -830,6 +831,7 @@ pub(super) fn resource_value(resource: &ResourceDefinition) -> Value {
     Fields::default()
         .put("id", id.as_str())
         .opt("display_name", display_name.clone())
+        .opt("browser_url", browser_url.clone())
         .put("resource_type", resource_type.as_str())
         .put(
             "selector",

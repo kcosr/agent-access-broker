@@ -587,6 +587,7 @@ async fn gateway_fixture(gitlab: &FakeGitlab) -> OAuthFixture {
         .runtime
         .create_managed_resource(CreateResourceRequest {
             id: Some("project".into()),
+            browser_url: None,
             display_name: None,
             resource_type: GIT_REPOSITORY_RESOURCE.id().clone(),
             selector: ResourceSelector::Exact {

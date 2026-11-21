@@ -3509,6 +3509,53 @@ fn resource_location_routes_project_management_schemas_and_required_preview_mode
 }
 
 #[test]
+fn resource_browser_urls_project_through_http_and_send_mutation_schemas() {
+    let mut catalog = empty_catalog(json!({}));
+    catalog.routes = http_route_specs(&crate::tests::test_resource_types());
+    let document = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
+    let send = send_schema_from_catalog(&catalog);
+    for (method, path, mut body) in [
+        (
+            "POST",
+            "/v1/admin/policy/resources",
+            json!({"resourceType":"git_repository","selector":{"kind":"exact","value":"team/docs"},"allowedExecutionContexts":["default"]}),
+        ),
+        (
+            "PATCH",
+            "/v1/admin/policy/resources/{id}",
+            json!({"expectedVersion":1}),
+        ),
+    ] {
+        let schema = &document["paths"][path][method.to_ascii_lowercase()]["requestBody"]["content"]
+            ["application/json"]["schema"];
+        let validator = jsonschema::validator_for(schema).unwrap();
+        assert!(validator.is_valid(&body));
+        body["browserUrl"] =
+            json!("https://example.atlassian.net/wiki/spaces/ENG/folder/67890/Runbooks");
+        assert!(
+            validator.is_valid(&body),
+            "Type-specific identity matching belongs to runtime validation"
+        );
+        body["browserUrl"] = Value::Null;
+        assert!(validator.is_valid(&body));
+        for invalid in [json!(""), json!("x".repeat(4097)), json!(123)] {
+            body["browserUrl"] = invalid;
+            assert!(!validator.is_valid(&body));
+        }
+        let variant = send["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|variant| {
+                variant["properties"]["method"]["const"] == method
+                    && variant["properties"]["route"]["const"] == path
+            })
+            .unwrap();
+        assert_eq!(&variant["properties"]["body"], schema);
+    }
+}
+
+#[test]
 fn resource_access_location_response_schema_preserves_conditions_without_private_boundaries() {
     let registry = crate::tests::test_resource_types();
     let ids = registry

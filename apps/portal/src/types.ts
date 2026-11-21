@@ -116,7 +116,7 @@ export type ResourceSelector = ScalarResourceSelector | { kind: "subtree"; value
 export type ResourceSelection = { resourceIds: string[]; resourceGroupIds: string[] };
 export type ResourceDefinition = {
   id: string; resourceType: ResourceType; selector: ResourceSelector;
-  displayName?: string | null; allowedExecutionContexts: string[]; enabled: boolean;
+  displayName?: string | null; browserUrl?: string | null; allowedExecutionContexts: string[]; enabled: boolean;
 };
 export type ResourceAttributeMetadata = { name: string; label: string; description: string; required: boolean; secret: boolean };
 /** Who created and last changed a managed catalog entry (catalog management reads; absent from policy catalogs). */

@@ -31,7 +31,7 @@ mod tests {
             conn.execute_batch(migration.sql).unwrap();
         }
         conn.execute_batch(
-            "INSERT INTO resources VALUES
+            "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES
              ('existing', 'teams_destination', 'exact', 'release', 'Release',
               '[\"default\"]', 0, 7, '2026-01-01', 'creator', '2026-02-01', 'editor'),
              ('space', 'confluence_space', 'exact', '~Alex', 'Personal space',
@@ -67,14 +67,17 @@ mod tests {
             "resource_secret_material",
         ];
         let before = tables.map(snapshot);
-        let migration = MANAGED_STORE_MIGRATIONS.last().unwrap();
+        let migration = MANAGED_STORE_MIGRATIONS
+            .iter()
+            .find(|migration| migration.version == MANAGED_STORE_CONTENT_RESOURCES_VERSION)
+            .unwrap();
         assert_eq!(migration.version, MANAGED_STORE_CONTENT_RESOURCES_VERSION);
         conn.execute_batch(migration.sql).unwrap();
         let after = tables.map(snapshot);
         assert_eq!(before, after);
         run_foreign_key_check(&conn).unwrap();
         conn.execute_batch(
-            "INSERT INTO resources VALUES
+            "INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES
              ('folder', 'confluence_content', 'subtree',
               'https://example.atlassian.net/wiki/content/folder/123', NULL,
               '[\"default\"]', 1, 1, '2026-01-01', 'admin', '2026-01-01', 'admin');",
@@ -193,16 +196,16 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             assert_eq!(&ledger[..old_ledger.len()], old_ledger.as_slice());
-            assert_eq!(ledger.len(), old_ledger.len() + 1);
+            assert_eq!(ledger.len(), MANAGED_STORE_MIGRATIONS.len());
             assert_eq!(
-                ledger.last().unwrap().0,
+                ledger[old_ledger.len()].0,
                 MANAGED_STORE_CONTENT_RESOURCES_VERSION
             );
             assert_eq!(
-                ledger.last().unwrap().1,
+                ledger[old_ledger.len()].1,
                 sha256_hex(include_str!("confluence_content_resources.sql").as_bytes())
             );
-            conn.execute_batch("INSERT INTO resources VALUES ('page-tree','confluence_content','subtree','https://example.atlassian.net/wiki/content/page/123',NULL,'[\"default\"]',1,1,'2026-01-01','admin','2026-01-01','admin');").unwrap();
+            conn.execute_batch("INSERT INTO resources(resource_id,resource_type,selector_kind,selector_value,display_name,allowed_execution_contexts_json,enabled,version,created_at,created_by,updated_at,updated_by) VALUES ('page-tree','confluence_content','subtree','https://example.atlassian.net/wiki/content/page/123',NULL,'[\"default\"]',1,1,'2026-01-01','admin','2026-01-01','admin');").unwrap();
         }
         let expected = upgraded.resource("page-tree").unwrap();
         assert!(matches!(

@@ -782,3 +782,181 @@ async fn resource_location_normalization_errors_never_echo_pasted_values() {
     assert!(!audit.contains("private-marker"));
     assert!(!audit.contains("secret"));
 }
+
+#[tokio::test]
+async fn resource_browser_urls_persist_as_versioned_navigation_metadata() {
+    let fixture = resource_location_fixture().await;
+    let original = "https://docs.example.test/wiki/spaces/ENG/folder/67890/Private-title-fixture";
+    let moved = "https://docs.example.test/wiki/spaces/OPS/folder/67890/Private-renamed-fixture";
+    let selector =
+        json!({"kind":"subtree","value":"https://docs.example.test/wiki/content/folder/67890"});
+    let path = "/v1/admin/policy/resources/browser-link";
+    let created = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(
+            json!({"id":"browser-link", "resourceType":"confluence_content",
+            "selector":selector, "browserUrl":original,
+            "allowedExecutionContexts":["internal"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    let created = response_json(created).await;
+    assert_eq!(created["result"]["record"]["browserUrl"], original);
+    assert_eq!(created["result"]["record"]["selector"], selector);
+    assert_eq!(created["result"]["record"]["version"], 1);
+
+    let read = location_request(&fixture, &fixture.auditor_token, Method::GET, path, None).await;
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(response_json(read).await["result"]["browserUrl"], original);
+
+    for (version, patch, expected_url) in [
+        (
+            1,
+            json!({"displayName":"Operations documentation"}),
+            Some(original),
+        ),
+        (2, json!({"browserUrl":moved}), Some(moved)),
+        (3, json!({"browserUrl":null}), None),
+        (4, json!({"browserUrl":original}), Some(original)),
+    ] {
+        let mut body = patch;
+        body["expectedVersion"] = json!(version);
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::PATCH,
+            path,
+            Some(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        let record = &body["result"]["record"];
+        assert_eq!(record["version"], version + 1);
+        assert_eq!(record["selector"], selector);
+        assert_eq!(
+            record.get("browserUrl").and_then(Value::as_str),
+            expected_url
+        );
+        let read = location_request(&fixture, &fixture.admin_token, Method::GET, path, None).await;
+        assert_eq!(read.status(), StatusCode::OK);
+        assert_eq!(
+            response_json(read).await["result"]
+                .get("browserUrl")
+                .and_then(Value::as_str),
+            expected_url
+        );
+    }
+
+    let stale = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::PATCH,
+        path,
+        Some(json!({"expectedVersion":4,"browserUrl":moved})),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    assert!(!response_json(stale).await.to_string().contains("Private-"));
+    let read = location_request(&fixture, &fixture.admin_token, Method::GET, path, None).await;
+    let read = response_json(read).await;
+    assert_eq!(read["result"]["version"], 5);
+    assert_eq!(read["result"]["browserUrl"], original);
+
+    let runtime = fixture._broker.runtime();
+    let stored = runtime
+        .managed_store()
+        .unwrap()
+        .resource("browser-link")
+        .unwrap();
+    assert_eq!(stored.definition.browser_url.as_deref(), Some(original));
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(audit.contains("browserUrl"));
+    assert!(!audit.contains("Private-title-fixture"));
+    assert!(!audit.contains("Private-renamed-fixture"));
+    assert!(!audit.contains("/wiki/spaces/"));
+}
+
+#[tokio::test]
+async fn resource_browser_url_validation_rejects_retargeting_and_does_not_echo_values() {
+    let fixture = resource_location_fixture().await;
+    let selector =
+        json!({"kind":"subtree","value":"https://docs.example.test/wiki/content/folder/67890"});
+    let original = "https://docs.example.test/wiki/spaces/ENG/folder/67890/Private-title-fixture";
+    let created = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(
+            json!({"id":"fixed-target", "resourceType":"confluence_content",
+            "selector":selector,"browserUrl":original,"allowedExecutionContexts":["internal"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::OK);
+    for browser_url in [
+        json!("https://else.example.test/wiki/spaces/ENG/folder/67890/Private-title-fixture"),
+        json!("https://docs.example.test/wiki/spaces/ENG/folder/67891/Private-title-fixture"),
+        json!("https://docs.example.test/wiki/spaces/ENG/pages/67890/Private-title-fixture"),
+        json!("https://docs.example.test/wiki/spaces/ENG/folder/67890?private-marker=secret"),
+        json!("https://private-marker:secret@docs.example.test/wiki/spaces/ENG/folder/67890"),
+        json!(format!("{original}/{}", "x".repeat(4096))),
+        json!(""),
+        json!({"private-marker":"secret"}),
+    ] {
+        let response = location_request(
+            &fixture,
+            &fixture.admin_token,
+            Method::PATCH,
+            "/v1/admin/policy/resources/fixed-target",
+            Some(json!({"expectedVersion":1,"browserUrl":browser_url})),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response_json(response).await.to_string();
+        assert!(!body.contains("Private-title-fixture"));
+        assert!(!body.contains("private-marker"));
+        assert!(!body.contains("secret"));
+    }
+    let retarget = location_request(
+        &fixture, &fixture.admin_token, Method::PATCH,
+        "/v1/admin/policy/resources/fixed-target",
+        Some(json!({"expectedVersion":1,"selector":{"kind":"subtree","value":"https://docs.example.test/wiki/content/folder/67891"}})),
+    ).await;
+    assert_eq!(retarget.status(), StatusCode::BAD_REQUEST);
+    let unsupported = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::POST,
+        "/v1/admin/policy/resources",
+        Some(
+            json!({"id":"unsupported-link", "resourceType":"git_repository",
+            "selector":{"kind":"exact","value":"engineering/runbooks"},
+            "browserUrl":original,"allowedExecutionContexts":["internal"]}),
+        ),
+    )
+    .await;
+    assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+    let read = location_request(
+        &fixture,
+        &fixture.admin_token,
+        Method::GET,
+        "/v1/admin/policy/resources/fixed-target",
+        None,
+    )
+    .await;
+    let body = response_json(read).await;
+    assert_eq!(body["result"]["version"], 1);
+    assert_eq!(body["result"]["browserUrl"], original);
+    assert_eq!(body["result"]["selector"], selector);
+    let runtime = fixture._broker.runtime();
+    let audit = read_audit_text(Path::new(&runtime.config().audit.as_ref().unwrap().path));
+    assert!(!audit.contains("Private-title-fixture"));
+    assert!(!audit.contains("private-marker"));
+    assert!(!audit.contains("secret"));
+}

@@ -55,6 +55,11 @@ actions and exposes typed wrappers for supported services.
   uses the registered exact/subtree containment type, not freeform page scopes. Group exclusions apply
   across selections within one grant/token boundary, including when their
   resource entry is disabled or context-ineligible; they are not global denies.
+  Optional resource `browserUrl` is navigation metadata: validate it through the
+  type's stable selector projection and offline normalizer against the same
+  selector. Never use it for authorization, silently retarget it, or include the
+  original URL/title in audit snapshots. Keep URL edits separate from target
+  replacement and preserve omission/null semantics on resource PATCH.
   Resource types may opt out with `supportsExclusions: false`: validate every
   excluded group membership at catalog validation and publication, including
   unused groups. Never silently drop an unsupported exclusion. Imported-type
@@ -697,6 +702,8 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   Keep protected exclusions and competing roots out of ordinary agent projections.
   `managed_store/confluence_content_resources.sql` (migration 038) adds stored
   subtree selectors without changing existing membership or encrypted attributes.
+  `managed_store/resource_browser_urls.sql` (migration 039) adds nullable
+  navigation URLs; prior resource identities and policy revisions are preserved.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
