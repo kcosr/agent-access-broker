@@ -521,7 +521,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
   const [entryMode, setEntryMode] = useState<LocationEntryMode>(record?.resourceType === "confluence_content" ? "saved" : record?.selector.kind === "all" ? "all" : "key");
   const [url, setUrl] = useState("");
   const [browserUrl, setBrowserUrl] = useState(record?.browserUrl ?? "");
-  const [choice, setChoice] = useState<PageCoverage>("");
+  const [choice, setChoice] = useState<PageCoverage>("subtree");
   const contentType = type === "confluence_content";
   const spaceType = type === "confluence_space";
   const urlMode = contentType && entryMode !== "saved" || spaceType && entryMode === "url";
@@ -569,7 +569,6 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
   if (urlMode) {
     if (!trimLocationInput(url)) issues.location = "Enter a location URL.";
     else if (!hints) issues.location = "Enter a supported Confluence space, page, folder or blog URL.";
-    else if (!coverage) issues.location = "Choose whether to include this page only or its descendants.";
     if (serviceIssue) issues.service = serviceIssue;
   } else if (contentType && trimLocationInput(browserUrl) && !browserLink) {
     issues.browserUrl = "Enter a Confluence browser URL for the same site, content type and ID. Use Change location to select different content.";
@@ -604,7 +603,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
       else {
         setType(next);
         setEntryMode(next === "confluence_content" ? "url" : "key");
-        setUrl(""); setChoice(""); setValue("");
+        setUrl(""); setChoice("subtree"); setValue("");
       }
       if (!types.get(next)?.selectors.includes(kind)) setKind("exact");
     });
@@ -614,7 +613,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
     change(() => {
       setEntryMode(mode);
       setUrl("");
-      setChoice("");
+      setChoice("subtree");
       setValue("");
       setKind(mode === "all" ? "all" : "exact");
     });
@@ -713,11 +712,10 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
         ]} /> : null}
         {urlMode ? <>
           <ResourceLocationEntry url={url} choice={choice} hints={hints} service={service} disabled={pending} issue={shown.location}
-            onUrl={(next) => change(() => { setUrl(next); setChoice(""); const nextHints = locationInputHints(next); if (nextHints) setType(locationResourceType(nextHints.kind)); setEntryMode("url"); })}
+            onUrl={(next) => change(() => { setUrl(next); const nextHints = locationInputHints(next); if (nextHints) setType(locationResourceType(nextHints.kind)); setEntryMode("url"); })}
             onChoice={(next) => change(() => setChoice(next))} />
           {locations.isError ? <ErrorState compact title="Location services unavailable" error={locations.error} onRetry={() => void locations.refetch()} />
             : serviceIssue ? <p className="pt-prose" role="status">{serviceIssue}</p> : null}
-          {record?.resourceType === "confluence_content" ? <Button disabled={pending} onClick={() => change(() => { setType(record.resourceType); setEntryMode("saved"); setUrl(""); setChoice(""); setKind(record.selector.kind); })}>Keep saved location</Button> : null}
         </> : contentType && record?.resourceType === "confluence_content" ? <>
           <KeyValue items={savedContent ? [
             { label: "Location", value: `${savedContent.kind === "blog" ? "Blog post" : savedContent.kind === "folder" ? "Folder" : "Page"} ${savedContent.id}` },

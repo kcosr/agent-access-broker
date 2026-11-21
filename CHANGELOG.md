@@ -208,8 +208,10 @@ All notable changes to this project are documented in this file.
 - **Confluence grants and token restrictions cover exact pages/blogs and page or
   folder subtrees.** Content identities bind site, kind and ID and follow external
   cross-space moves; subtree membership uses current ancestry. The portal infers
-  content type/service from a URL, shows page coverage immediately and normalizes
-  on Save; folder URLs accept their optional title suffix. Content resources
+  content type/service from a URL, defaults new page locations to page-and-descendant
+  coverage in a two-option dropdown and normalizes on Save. Cancel discards the
+  whole resource edit; existing resources retain their saved coverage. Folder URLs
+  accept their optional title suffix. Content resources
   retain the browser URL as optional navigation metadata, linked beneath the name
   and coverage in the grant builder and correctable offline without changing the
   target. HTTP `browserUrl`, TOML

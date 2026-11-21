@@ -22,7 +22,7 @@ describe("Rust location normalizer parity", () => {
     const hints = rawHints?.siteOrigin === item.declaredSite ? rawHints : null;
     const parsed = hints ? hints.kind === "space" ? { kind: hints.kind, spaceKey: hints.spaceKey } : { kind: hints.kind, id: hints.rootId } : null;
     expect(parsed).toEqual(item.expectedParsed);
-    const choice = item.coverage === "exact" || item.coverage === "subtree" ? item.coverage : "";
+    const choice = item.coverage === "exact" ? "exact" : "subtree";
     const coverage = locationCoverage(hints?.kind, choice);
     const locallyAvailable = Boolean(hints && coverage === item.coverage);
     expect(locallyAvailable).toBe(Boolean(item.expectedResult.accepted));
@@ -50,7 +50,7 @@ describe("location entry boundaries", () => {
     expect(locationInputHints(url.replace("old-alias", "new-alias"))).toEqual(locationInputHints(url));
     expect(locationInputHints("https://example.atlassian.net/wiki/spaces/VECTOR/overview")).toEqual({ siteOrigin: "https://example.atlassian.net", kind: "space", rootId: null, spaceKey: "VECTOR" });
     expect(locationCoverage(undefined, "subtree")).toBeNull();
-    expect(locationCoverage("page", "")).toBeNull();
+    expect(locationCoverage("page", "subtree")).toBe("subtree");
   });
 
   test("stored identity parsing is strict and cannot reinterpret a browser URL", () => {

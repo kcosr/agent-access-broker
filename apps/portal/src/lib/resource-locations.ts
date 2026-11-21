@@ -3,7 +3,7 @@ import type { NormalizedResourceLocation, ResourceDefinition, ResourceLocationRe
 export type LocationKind = "space" | "page" | "folder" | "blog";
 export type LocationHints = { siteOrigin: string; kind: LocationKind; rootId: string | null; spaceKey?: string };
 export type ContentIdentity = { siteOrigin: string; kind: Exclude<LocationKind, "space">; id: string };
-export type PageCoverage = "" | "exact" | "subtree";
+export type PageCoverage = "exact" | "subtree";
 
 const SPACE_SEGMENT = /^(?:[A-Za-z0-9][A-Za-z0-9_-]{0,254}|~[A-Za-z0-9][A-Za-z0-9._@:+-]{0,253})$/;
 const CONTENT_ID = /^[1-9][0-9]{0,19}$/;
@@ -87,7 +87,7 @@ export function locationCoverage(kind: LocationKind | undefined, choice: PageCov
   if (kind === "space") return "space";
   if (kind === "folder") return "subtree";
   if (kind === "blog") return "exact";
-  return kind === "page" ? choice || null : null;
+  return kind === "page" ? choice : null;
 }
 
 export function configuredLocationService(services: ResourceLocationService[], type: ResourceType, hints: LocationHints | null): {

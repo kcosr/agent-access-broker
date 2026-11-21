@@ -20,7 +20,6 @@ export function ResourceLocationEntry({ url, choice, hints, service, disabled, i
     {service ? <p className="pt-prose wb-small">Site: {service.siteHost}</p> : null}
     {hints?.kind === "page" ? <Field label="Location coverage">
       <Select value={choice} disabled={disabled} onChange={(event) => onChoice(event.target.value as PageCoverage)}>
-        <option value="">Choose coverage</option>
         <option value="exact">This page only</option>
         <option value="subtree">This page and descendants</option>
       </Select>

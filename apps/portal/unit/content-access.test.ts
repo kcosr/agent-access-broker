@@ -128,8 +128,7 @@ describe("offline location editor", () => {
     expect(locationInputHints(url)).toEqual({ siteOrigin: "https://example.atlassian.net", kind, rootId, ...(kind === "space" ? { spaceKey: "ENG" } : {}) });
   });
 
-  test("requires an explicit page coverage choice and fixes the other location kinds", () => {
-    expect(locationCoverage("page", "")).toBeNull();
+  test("uses the page coverage selection and fixes the other location kinds", () => {
     expect(locationCoverage("page", "exact")).toBe("exact");
     expect(locationCoverage("page", "subtree")).toBe("subtree");
     expect(locationCoverage("space", "subtree")).toBe("space");
