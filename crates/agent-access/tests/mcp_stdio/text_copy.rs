@@ -41,11 +41,11 @@ async fn startup_copy_mode_preserves_results_errors_files_and_discovery_in_each_
         .mount(&broker)
         .await;
     let success = json!({
-        "decision":"allow","service":"example","action":"read","brokerRequestId":"success",
+        "agentRequestId":"agent","decision":"allow","service":"example","action":"read","brokerRequestId":"success",
         "result":{"upstreamMcp":{"content":[{"type":"text","text":"nested text must remain"}],"structuredContent":{"answer":42}},"description":{"format":"markdown","value":"**complete body**"}}
     });
     let failure = json!({
-        "decision":"error","service":"example","action":"read","brokerRequestId":"failure",
+        "agentRequestId":"agent","decision":"error","service":"example","action":"read","brokerRequestId":"failure",
         "reasonCode":"upstream_rate_limited","reason":"Retry after 12s.","error":{"message":"Retry after 12s."},
         "result":{"retryAfterSeconds":12,"mutationStatus":"not_applied","retrySafe":true}
     });

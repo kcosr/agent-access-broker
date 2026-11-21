@@ -236,6 +236,15 @@ async fn http_mcp_preferences_are_per_request_with_exact_override_and_native_fal
     );
 }
 
+// No-copy assertions inspect structured content independently of the shared
+// default-mode helper, which deliberately requires an equivalent text mirror.
+fn tool_envelope(result: &Value) -> &Value {
+    assert!(result.get("error").is_none(), "{result}");
+    let value = &result["result"]["structuredContent"];
+    assert!(value.is_object(), "{result}");
+    value
+}
+
 #[tokio::test]
 async fn http_mcp_text_copy_is_per_request_and_composes_with_content_preferences() {
     let provider = ContentProvider::default();
@@ -273,7 +282,7 @@ async fn http_mcp_text_copy_is_per_request_and_composes_with_content_preferences
             )
             .await;
             assert_eq!(result["result"]["isError"], false, "{result}");
-            let envelope = structured(&result);
+            let envelope = tool_envelope(&result);
             assert_eq!(
                 envelope["result"]["body"],
                 json!({"format":format,"value":"synthetic rich content"})
@@ -389,7 +398,7 @@ async fn http_mcp_no_text_copy_preserves_rate_charging_and_admission_errors() {
             invoke("fake_echo", None),
         )
         .await;
-        assert_eq!(structured(&result)["decision"], "allow", "{result}");
+        assert_eq!(tool_envelope(&result)["decision"], "allow", "{result}");
         assert_eq!(result["result"]["content"], json!([]));
     }
     let limited = rpc(
@@ -403,9 +412,9 @@ async fn http_mcp_no_text_copy_preserves_rate_charging_and_admission_errors() {
     .await;
     assert_eq!(limited["result"]["content"], json!([]));
     assert_eq!(limited["result"]["isError"], true);
-    assert_eq!(structured(&limited)["reasonCode"], "rate_limited");
+    assert_eq!(tool_envelope(&limited)["reasonCode"], "rate_limited");
     assert!(
-        structured(&limited)["error"]["message"]
+        tool_envelope(&limited)["error"]["message"]
             .as_str()
             .unwrap()
             .contains("Retry after ")
