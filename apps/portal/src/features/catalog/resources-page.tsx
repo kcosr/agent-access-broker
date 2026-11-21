@@ -458,8 +458,8 @@ function ResourceDetailDrawer({ model, resource, onEdit }: { model: ResourcesMod
         {!resource.enabled ? <p className="pt-prose wb-small">Disabled resources grant nothing{types.get(resource.resourceType)?.supportsExclusions ? ", but still apply when excluded by a group" : ""}.</p> : null}
       </DrawerSection>
       {resource.resourceType === "confluence_content" ? <DrawerSection title="Confluence link">
-        {resource.browserUrl ? <p className="pt-prose break-all">{resource.browserUrl}</p> : <p className="pt-prose wb-small">No browser URL saved. Add a link in Edit.</p>}
-        {browserLink ? <Button href={browserLink} external icon="external">Open in Confluence</Button> : null}
+        {browserLink ? <p className="pt-prose break-all"><a className="wb-link" href={browserLink} target="_blank" rel="noopener noreferrer">{browserLink}</a></p>
+          : resource.browserUrl ? <p className="pt-prose break-all">{resource.browserUrl}</p> : <p className="pt-prose wb-small">No browser URL saved. Add a link in Edit.</p>}
       </DrawerSection> : null}
       {fields.length ? (
         <DrawerSection title="Private attributes" count={`${configured.length}/${fields.length}`}>
@@ -521,7 +521,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
   const [entryMode, setEntryMode] = useState<LocationEntryMode>(record?.resourceType === "confluence_content" ? "saved" : record?.selector.kind === "all" ? "all" : "key");
   const [url, setUrl] = useState("");
   const [browserUrl, setBrowserUrl] = useState(record?.browserUrl ?? "");
-  const [choice, setChoice] = useState<PageCoverage>("");
+  const [choice, setChoice] = useState<PageCoverage>("subtree");
   const contentType = type === "confluence_content";
   const spaceType = type === "confluence_space";
   const urlMode = contentType && entryMode !== "saved" || spaceType && entryMode === "url";
@@ -569,7 +569,6 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
   if (urlMode) {
     if (!trimLocationInput(url)) issues.location = "Enter a location URL.";
     else if (!hints) issues.location = "Enter a supported Confluence space, page, folder or blog URL.";
-    else if (!coverage) issues.location = "Choose whether to include this page only or its descendants.";
     if (serviceIssue) issues.service = serviceIssue;
   } else if (contentType && trimLocationInput(browserUrl) && !browserLink) {
     issues.browserUrl = "Enter a Confluence browser URL for the same site, content type and ID. Use Change location to select different content.";
@@ -604,7 +603,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
       else {
         setType(next);
         setEntryMode(next === "confluence_content" ? "url" : "key");
-        setUrl(""); setChoice(""); setValue("");
+        setUrl(""); setChoice("subtree"); setValue("");
       }
       if (!types.get(next)?.selectors.includes(kind)) setKind("exact");
     });
@@ -614,7 +613,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
     change(() => {
       setEntryMode(mode);
       setUrl("");
-      setChoice("");
+      setChoice("subtree");
       setValue("");
       setKind(mode === "all" ? "all" : "exact");
     });
@@ -713,11 +712,10 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
         ]} /> : null}
         {urlMode ? <>
           <ResourceLocationEntry url={url} choice={choice} hints={hints} service={service} disabled={pending} issue={shown.location}
-            onUrl={(next) => change(() => { setUrl(next); setChoice(""); const nextHints = locationInputHints(next); if (nextHints) setType(locationResourceType(nextHints.kind)); setEntryMode("url"); })}
+            onUrl={(next) => change(() => { setUrl(next); const nextHints = locationInputHints(next); if (nextHints) setType(locationResourceType(nextHints.kind)); setEntryMode("url"); })}
             onChoice={(next) => change(() => setChoice(next))} />
           {locations.isError ? <ErrorState compact title="Location services unavailable" error={locations.error} onRetry={() => void locations.refetch()} />
             : serviceIssue ? <p className="pt-prose" role="status">{serviceIssue}</p> : null}
-          {record?.resourceType === "confluence_content" ? <Button disabled={pending} onClick={() => change(() => { setType(record.resourceType); setEntryMode("saved"); setUrl(""); setChoice(""); setKind(record.selector.kind); })}>Keep saved location</Button> : null}
         </> : contentType && record?.resourceType === "confluence_content" ? <>
           <KeyValue items={savedContent ? [
             { label: "Location", value: `${savedContent.kind === "blog" ? "Blog post" : savedContent.kind === "folder" ? "Folder" : "Page"} ${savedContent.id}` },
@@ -729,7 +727,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
           <Field label="Browser URL" optional hint="Link to this content in Confluence. You can update the title or space path, or leave it empty to remove the saved link." error={shown.browserUrl}>
             <Input value={browserUrl} disabled={pending} spellCheck={false} onChange={(event) => change(() => setBrowserUrl(event.target.value))} placeholder="Paste a Confluence browser URL" />
           </Field>
-          {browserLink ? <Button href={browserLink} external icon="external">Open in Confluence</Button> : null}
+          {browserLink ? <span><a className="wb-link" href={browserLink} target="_blank" rel="noopener noreferrer">Open in Confluence</a></span> : null}
           <Button disabled={pending} onClick={() => changeMode("url")}>Change location</Button>
         </> : spaceType ? entryMode === "all" ? <p>All Confluence spaces</p> : <Field label="Space key" hint="Enter the canonical, case-sensitive key. A browser alias may differ." error={shown.value}>
           <Input value={value} disabled={pending} onChange={(event) => change(() => setValue(event.target.value))} placeholder="ENG" spellCheck={false} />

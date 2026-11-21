@@ -168,18 +168,34 @@ test("folder URL retains its title separately from the immutable folder identity
   expect(model.api.errors).toEqual([]);
 });
 
-test("page choice is explicit and resets with a changed URL", async ({ page }) => {
+test("a page URL defaults to descendants with only the two coverage options", async ({ page }) => {
   const model = await fixture(page);
   const editor = await open(page);
-  await prepare(editor);
-  await editor.getByLabel("Location URL", { exact: true }).fill(pageUrl.replace("12345", "67890"));
-  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("");
+  await editor.getByLabel("Location URL", { exact: true }).fill(pageUrl);
+  const coverage = editor.getByLabel("Location coverage", { exact: true });
+  await expect(coverage.locator("option")).toHaveText(["This page only", "This page and descendants"]);
+  await expect(coverage).toHaveValue("subtree");
+  await editor.getByLabel(/^Display name/).fill("Runbooks");
+  await editor.getByRole("checkbox", { name: "internal", exact: true }).check();
   await save(editor);
-  await expect(editor).toContainText("Choose whether to include this page only or its descendants");
-  expect(model.requests).toEqual([]);
-  expect(model.mutations).toEqual([]);
+  await expect.poll(() => model.mutations.length).toBe(1);
+  expect(model.requests).toEqual([{ service: "confluence", url: pageUrl, coverage: "subtree", csrf: "fixture" }]);
+  expect(model.mutations[0]).toMatchObject({ selector: { kind: "subtree", value: pageIdentity } });
+});
+
+test("an explicit page-only selection stays selected while editing the URL", async ({ page }) => {
+  const model = await fixture(page);
+  const editor = await open(page);
+  await prepare(editor, pageUrl, "exact");
   await editor.getByLabel("Location URL", { exact: true }).fill("not a URL");
   await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveCount(0);
+  const replacementUrl = pageUrl.replace("12345", "67890");
+  await editor.getByLabel("Location URL", { exact: true }).fill(replacementUrl);
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("exact");
+  await save(editor);
+  await expect.poll(() => model.mutations.length).toBe(1);
+  expect(model.requests).toEqual([{ service: "confluence", url: replacementUrl, coverage: "exact", csrf: "fixture" }]);
+  expect(model.mutations[0]).toMatchObject({ selector: { kind: "exact", value: pageIdentity.replace("12345", "67890") } });
 });
 
 test("URL kind changes keep ordinary fields and the displayed and saved types agree", async ({ page }) => {
@@ -463,8 +479,8 @@ test("saved browser links can be added, corrected and cleared without changing i
   expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, browserUrl: pageUrl, selector: { kind: "exact", value: pageIdentity } });
   const details = page.getByRole("complementary", { name: "Resource Existing", exact: true });
   await expect(details).toContainText(pageUrl);
-  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveAttribute("href", pageUrl);
-  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(details.getByRole("link", { name: pageUrl, exact: true })).toHaveAttribute("href", pageUrl);
+  await expect(details.getByRole("link", { name: pageUrl, exact: true })).toHaveAttribute("rel", "noopener noreferrer");
   editor = await editExisting(page);
   const corrected = pageUrl.replace("browser-alias", "NEWSPACE").replace("Runbooks", "Current+Title");
   await editor.getByLabel("Browser URL (optional)", { exact: true }).fill(corrected);
@@ -476,7 +492,7 @@ test("saved browser links can be added, corrected and cleared without changing i
   await save(editor);
   await expect.poll(() => model.mutations.length).toBe(3);
   expect(model.mutations[2]).toMatchObject({ expectedVersion: 9, browserUrl: null, selector: { kind: "exact", value: pageIdentity } });
-  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveCount(0);
+  await expect(details.getByRole("link", { name: corrected, exact: true })).toHaveCount(0);
   expect(model.requests).toEqual([]);
 });
 
@@ -502,20 +518,37 @@ test("enabling a saved resource preserves its browser link and version", async (
   expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, browserUrl: pageUrl, enabled: true });
 });
 
-test("explicit content replacement starts empty and can restore the saved identity", async ({ page }) => {
+test("Cancel discards the whole location edit and preserves the saved resource", async ({ page }) => {
   const model = await fixture(page);
   model.api.resources = [existing()];
-  const editor = await editExisting(page);
+  let editor = await editExisting(page);
   await editor.getByRole("button", { name: "Change location", exact: true }).click();
   await expect(editor.getByLabel("Location URL", { exact: true })).toHaveValue("");
   await editor.getByLabel("Location URL", { exact: true }).fill(pageUrl.replace("12345", "67890"));
-  await editor.getByRole("button", { name: "Keep saved location", exact: true }).click();
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("subtree");
+  await editor.getByLabel("Location coverage", { exact: true }).selectOption("exact");
+  await editor.getByLabel(/^Display name/).fill("Unsaved name");
+  await expect(editor.getByRole("button", { name: "Keep saved location", exact: true })).toHaveCount(0);
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  expect(model.requests).toEqual([]);
+  expect(model.mutations).toEqual([]);
+  expect(model.api.resources).toEqual([existing()]);
+  const details = page.getByRole("complementary", { name: "Resource Existing", exact: true });
+  await expect(details).toBeVisible();
+  await details.getByRole("button", { name: "Edit", exact: true }).click();
+  editor = page.getByRole("complementary", { name: "Edit resource Existing", exact: true });
   await expect(editor).toContainText("Page 12345");
+  await expect(editor.getByLabel(/^Display name/)).toHaveValue("Existing");
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("exact");
   await editor.getByRole("button", { name: "Change location", exact: true }).click();
-  await prepare(editor, "https://example.atlassian.net/wiki/spaces/other/folder/88");
+  const replacementUrl = pageUrl.replace("12345", "67890");
+  await editor.getByLabel("Location URL", { exact: true }).fill(replacementUrl);
+  await expect(editor.getByLabel("Location coverage", { exact: true })).toHaveValue("subtree");
   await save(editor);
   await expect.poll(() => model.mutations.length).toBe(1);
-  expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/content/folder/88" } });
+  expect(model.requests).toEqual([{ service: "confluence", url: replacementUrl, coverage: "subtree", csrf: "fixture" }]);
+  expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, selector: { kind: "subtree", value: pageIdentity.replace("12345", "67890") } });
 });
 
 test("a catalog refetch does not advance an open draft's optimistic version", async ({ page }) => {

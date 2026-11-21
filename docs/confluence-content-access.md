@@ -44,20 +44,28 @@ browser URL can fail even though its saved content grant still applies.
 
 In the Resources editor, paste a page, folder or blog browser URL. The configured
 service and resource kind are inferred. A page immediately offers **This page
-only** or **This page and descendants**; choose explicitly. Folder and blog
+only** or **This page and descendants**, defaulting to **This page and descendants**
+for a new location entry. A selected coverage stays selected while editing the
+URL. Folder and blog
 coverage is fixed. **Save** normalizes the current entry and creates or updates
 the resource; no separate preview is needed. A failed normalization keeps the
 draft and saves nothing. Name, execution contexts and enabled state remain ordinary
 resource fields. Existing content resources can keep their identity while editing
 those fields, and a saved page can switch exact/subtree coverage without a URL.
-**Change location** starts a new URL entry.
+**Change location** starts a new URL entry. **Save resource** applies the draft;
+**Cancel** discards the whole edit. Editing an existing resource otherwise keeps
+its saved coverage unless you change it.
 
 Content URL entry also saves the pasted browser URL as optional navigation
-metadata. Resource details and the editor show the link and let you open it in
-Confluence. The editor can add, correct or clear a saved link without replacing
-the resource. A replacement link must normalize to the same site, content kind
+metadata. Resource details show the URL as a hyperlink; the editor offers an
+**Open in Confluence** text link. Both open Confluence in a new tab. The editor
+can add, correct or clear a saved link without replacing the resource. A
+replacement link must normalize to the same site, content kind
 and immutable ID; changing the target requires **Change location** instead.
 An existing resource without a saved browser URL has no link until one is added.
+The grant builder shows the resource name and coverage, with its saved browser
+URL on a separate line. The link opens Confluence in a new tab without changing
+the resource selection. Its resource filter also matches saved URLs.
 
 The link can become stale after a rename or move. Paste the current browser URL
 into the editor to correct it. Saving and correcting links are offline: they do
