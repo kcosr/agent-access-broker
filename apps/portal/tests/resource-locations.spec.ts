@@ -463,8 +463,8 @@ test("saved browser links can be added, corrected and cleared without changing i
   expect(model.mutations[0]).toMatchObject({ expectedVersion: 7, browserUrl: pageUrl, selector: { kind: "exact", value: pageIdentity } });
   const details = page.getByRole("complementary", { name: "Resource Existing", exact: true });
   await expect(details).toContainText(pageUrl);
-  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveAttribute("href", pageUrl);
-  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(details.getByRole("link", { name: pageUrl, exact: true })).toHaveAttribute("href", pageUrl);
+  await expect(details.getByRole("link", { name: pageUrl, exact: true })).toHaveAttribute("rel", "noopener noreferrer");
   editor = await editExisting(page);
   const corrected = pageUrl.replace("browser-alias", "NEWSPACE").replace("Runbooks", "Current+Title");
   await editor.getByLabel("Browser URL (optional)", { exact: true }).fill(corrected);
@@ -476,7 +476,7 @@ test("saved browser links can be added, corrected and cleared without changing i
   await save(editor);
   await expect.poll(() => model.mutations.length).toBe(3);
   expect(model.mutations[2]).toMatchObject({ expectedVersion: 9, browserUrl: null, selector: { kind: "exact", value: pageIdentity } });
-  await expect(details.getByRole("link", { name: "Open in Confluence", exact: true })).toHaveCount(0);
+  await expect(details.getByRole("link", { name: corrected, exact: true })).toHaveCount(0);
   expect(model.requests).toEqual([]);
 });
 

@@ -53,9 +53,10 @@ those fields, and a saved page can switch exact/subtree coverage without a URL.
 **Change location** starts a new URL entry.
 
 Content URL entry also saves the pasted browser URL as optional navigation
-metadata. Resource details and the editor show the link and let you open it in
-Confluence. The editor can add, correct or clear a saved link without replacing
-the resource. A replacement link must normalize to the same site, content kind
+metadata. Resource details show the URL as a hyperlink; the editor offers an
+**Open in Confluence** text link. Both open Confluence in a new tab. The editor
+can add, correct or clear a saved link without replacing the resource. A
+replacement link must normalize to the same site, content kind
 and immutable ID; changing the target requires **Change location** instead.
 An existing resource without a saved browser URL has no link until one is added.
 The grant builder shows the resource name and coverage, with its saved browser
