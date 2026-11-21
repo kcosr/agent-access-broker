@@ -210,7 +210,7 @@ All notable changes to this project are documented in this file.
   cross-space moves; subtree membership uses current ancestry. The portal infers
   content type/service from a URL, shows page coverage immediately and normalizes
   on Save; folder URLs accept their optional title suffix. Content resources
-  retain the browser URL as optional navigation metadata, shown beneath the name
+  retain the browser URL as optional navigation metadata, linked beneath the name
   and coverage in the grant builder and correctable offline without changing the
   target. HTTP `browserUrl`, TOML
   `browser_url` and CLI `--browser-url` preserve it; URLs stay out of audit
