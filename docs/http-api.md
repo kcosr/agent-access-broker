@@ -104,9 +104,14 @@ uploads, downloads and environment/file secret sources.
 `/mcp/{service}` selects one canonical service ID and exposes raw provider names.
 All routes share the same endpoint, quotas and admission machinery. Paths must
 use the exact canonical spelling: encoded aliases, trailing slashes and extra
-segments are rejected without redirects. The only supported query parameter is
-one literal `preferredOutputContentFormat=markdown|text|adf|storage`; malformed,
-repeated or other query parameters return HTTP 400. Unknown, hidden,
+segments are rejected without redirects. Supported query parameters are literal
+`preferredOutputContentFormat=markdown|text|adf|storage` and
+`includeTextCopy=true|false`, each at most once and in either order. Empty values
+or segments, malformed values, encoded aliases, repeated keys and unknown keys
+return HTTP 400. `includeTextCopy` defaults to `true`; `false` returns tool results
+with `content: []` and complete `structuredContent`, preserving `isError` and
+`_meta`. Both settings apply per request, independently of the session. See
+[MCP text copies](mcp.md#tool-result-text-copies). Unknown, hidden,
 disabled, unready and gateway targets receive the same unavailable diagnostic
 after authentication. Session bindings include the selected view; cross-view
 POST/cancellation/DELETE cannot use or close the original session. Existing

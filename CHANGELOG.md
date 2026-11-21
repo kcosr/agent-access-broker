@@ -221,6 +221,14 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **MCP clients can omit the duplicate text copy** with HTTP
+  `includeTextCopy=false` or stdio `mcp serve --include-text-copy=false`.
+  Both default to `true`. Tool results retain complete `structuredContent`,
+  error flags and metadata, including helpers, failures and file receipts.
+  HTTP combines the option with `preferredOutputContentFormat` per request;
+  response limits count only the content emitted. See
+  [MCP text copies](docs/mcp.md#tool-result-text-copies).
+
 - **Output-content preferences** can be set per native service, client or MCP
   connection. The first applicable preference selects a supported concrete
   format or the action's declared native format; an explicit per-call selector

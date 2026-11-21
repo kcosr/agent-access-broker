@@ -17,7 +17,7 @@ use rmcp::{
     },
     service::{QuitReason, RequestContext},
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const PAGE_SIZE: usize = 100;
@@ -28,6 +28,7 @@ struct BrokerMcp {
     cli: crate::Cli,
     config: PathBuf,
     view: McpView,
+    include_text_copy: bool,
 }
 
 impl BrokerMcp {
@@ -105,14 +106,15 @@ impl ServerHandler for BrokerMcp {
     ) -> Result<CallToolResponse, ErrorData> {
         let settings = match self.settings() {
             Ok(settings) => settings,
-            Err(error) => return Ok(tool_error(error.to_string()).into()),
+            Err(error) => return Ok(tool_error(error.to_string(), self.include_text_copy).into()),
         };
         let result = tokio::select! {
             biased;
             _ = context.ct.cancelled() => tool_error(
-                "Request cancelled. An upstream mutation may already have completed; inspect its state before retrying."
+                "Request cancelled. An upstream mutation may already have completed; inspect its state before retrying.",
+                self.include_text_copy,
             ),
-            result = tools::call_tool(&settings, &self.view, &request.name, request.arguments.unwrap_or_default()) => {
+            result = tools::call_tool(&settings, &self.view, &request.name, request.arguments.unwrap_or_default(), self.include_text_copy) => {
                 match result {
                     Ok(result) => result,
                     Err(error) if error.is::<tools::UnknownToolError>() => {
@@ -120,15 +122,15 @@ impl ServerHandler for BrokerMcp {
                     }
                     Err(error) if error.is::<crate::output::ResponseContentFailure>() => {
                         let failure = error.downcast_ref::<crate::output::ResponseContentFailure>().expect("matched content failure");
-                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true).expect("content failure is serializable")).expect("content failure is a tool result")
+                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true, self.include_text_copy).expect("content failure is serializable")).expect("content failure is a tool result")
                     }
                     Err(error) if error.is::<crate::output::LocalOutputFailure>() => {
                         let failure = error.downcast_ref::<crate::output::LocalOutputFailure>().expect("matched local output failure");
-                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true)
+                        serde_json::from_value(tools::envelope_result(200, failure.details.clone(), true, self.include_text_copy)
                             .expect("local failure is serializable"))
                             .expect("local failure is a tool result")
                     }
-                    Err(error) => tool_error(error.to_string()),
+                    Err(error) => tool_error(error.to_string(), self.include_text_copy),
                 }
             }
         };
@@ -136,8 +138,16 @@ impl ServerHandler for BrokerMcp {
     }
 }
 
-fn tool_error(message: impl Into<String>) -> CallToolResult {
-    CallToolResult::error(vec![ContentBlock::text(message)])
+fn tool_error(message: impl Into<String>, include_text_copy: bool) -> CallToolResult {
+    let message = message.into();
+    let content = if include_text_copy {
+        vec![ContentBlock::text(message.clone())]
+    } else {
+        Vec::new()
+    };
+    let mut result = CallToolResult::error(content);
+    result.structured_content = Some(json!({"error":{"message":message}}));
+    result
 }
 
 fn paginate(
@@ -180,8 +190,18 @@ fn paginate(
     Ok(result)
 }
 
-pub async fn serve(cli: crate::Cli, config: PathBuf, view: McpView) -> Result<()> {
-    let server = BrokerMcp { cli, config, view };
+pub async fn serve(
+    cli: crate::Cli,
+    config: PathBuf,
+    view: McpView,
+    include_text_copy: bool,
+) -> Result<()> {
+    let server = BrokerMcp {
+        cli,
+        config,
+        view,
+        include_text_copy,
+    };
     crate::require_cli_input(server.settings());
     // No CLI rendering or stdout logging is allowed here: stdout is exclusively
     // newline-delimited MCP JSON-RPC, including during authentication failures.
@@ -210,6 +230,64 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn include_text_copy_is_an_explicit_strict_startup_boolean() {
+        for (extra, expected) in [
+            (vec![], true),
+            (vec!["--include-text-copy=true"], true),
+            (vec!["--include-text-copy=false"], false),
+            (
+                vec![
+                    "--include-text-copy",
+                    "false",
+                    "--preferred-output-content-format",
+                    "text",
+                ],
+                false,
+            ),
+        ] {
+            let mut args = vec!["agent-access", "mcp", "serve"];
+            args.extend(extra);
+            let cli = crate::Cli::try_parse_from(args).unwrap();
+            assert!(matches!(cli.command,
+                crate::Command::Mcp { command: crate::McpCommand::Serve { include_text_copy, .. } }
+                    if include_text_copy == expected));
+        }
+        for extra in [
+            vec!["--include-text-copy"],
+            vec!["--include-text-copy="],
+            vec!["--include-text-copy=TRUE"],
+            vec!["--include-text-copy=0"],
+            vec!["--include-text-copy=yes"],
+            vec!["--include-text-copy=false", "--include-text-copy=true"],
+        ] {
+            let mut args = vec!["agent-access", "mcp", "serve"];
+            args.extend(extra);
+            assert!(crate::Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn local_tool_errors_preserve_the_complete_message_without_a_text_copy() {
+        let message = "Request cancelled. A mutation may already have completed.";
+        for include_text_copy in [true, false] {
+            let result = serde_json::to_value(tool_error(message, include_text_copy)).unwrap();
+            assert_eq!(result["isError"], true);
+            assert_eq!(
+                result["structuredContent"],
+                json!({"error":{"message":message}})
+            );
+            assert_eq!(
+                result["content"],
+                if include_text_copy {
+                    json!([{"type":"text","text":message}])
+                } else {
+                    json!([])
+                }
+            );
+        }
+    }
+
+    #[test]
     fn instructions_put_the_calling_rule_first_in_every_view() {
         for service in [None, Some("synthetic-service")] {
             let server = BrokerMcp {
@@ -218,6 +296,7 @@ mod tests {
                 view: service.map_or(McpView::Aggregate, |service| {
                     McpView::Service(service.into())
                 }),
+                include_text_copy: true,
             };
             let info = server.get_info();
             let instructions = info.instructions.unwrap();
@@ -390,6 +469,7 @@ mod tests {
             cli,
             config: file.path().to_path_buf(),
             view: McpView::Aggregate,
+            include_text_copy: true,
         };
         let error = server.settings().unwrap_err();
         assert_eq!(format!("{error:#}"), CONFIG_ERROR);
@@ -442,6 +522,7 @@ mod tests {
                 cli: crate::Cli::try_parse_from(args).unwrap(),
                 config: path.clone(),
                 view: McpView::Aggregate,
+                include_text_copy: true,
             }
         };
         let ambient = make(&[]);

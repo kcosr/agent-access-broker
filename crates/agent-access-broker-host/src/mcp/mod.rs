@@ -121,6 +121,7 @@ struct EndpointState {
 struct Admitted {
     view: McpView,
     preferred_output_content_format: Option<OutputContentFormat>,
+    include_text_copy: bool,
     snapshot: Arc<RuntimeSnapshot>,
     http_span: tracing::Span,
     cancellation: Arc<ExplicitCancellation>,
@@ -390,7 +391,7 @@ fn security_headers(
             ));
         }
     }
-    query_preference(uri.query()).map_err(|()| invalid_preference())?;
+    query_options(uri.query()).map_err(|()| invalid_query_options())?;
     if headers.contains_key("content-encoding") || headers.contains_key("last-event-id") {
         return Err(failure(
             StatusCode::BAD_REQUEST,
@@ -443,27 +444,50 @@ fn security_headers(
     Ok(Some(token.to_owned()))
 }
 
-// Match the literal query, without percent/form decoding. There is one optional
-// control, so aliases, duplicate keys, extra fields and empty values are errors.
-fn query_preference(query: Option<&str>) -> Result<Option<OutputContentFormat>, ()> {
-    match query {
-        None => Ok(None),
-        Some("preferredOutputContentFormat=markdown") => Ok(Some(OutputContentFormat::Markdown)),
-        Some("preferredOutputContentFormat=text") => Ok(Some(OutputContentFormat::Text)),
-        Some("preferredOutputContentFormat=adf") => Ok(Some(OutputContentFormat::Adf)),
-        Some("preferredOutputContentFormat=storage") => Ok(Some(OutputContentFormat::Storage)),
-        Some(_) => Err(()),
+// Match literal query keys and values without percent/form decoding. The two
+// independent controls may appear in either order, exactly once each.
+struct QueryOptions {
+    preferred_output_content_format: Option<OutputContentFormat>,
+    include_text_copy: bool,
+}
+fn query_options(query: Option<&str>) -> Result<QueryOptions, ()> {
+    let mut preference = None;
+    let mut include_text_copy = None;
+    if let Some(query) = query {
+        for field in query.split('&') {
+            let (key, value) = field.split_once('=').ok_or(())?;
+            match key {
+                "preferredOutputContentFormat" if preference.is_none() => {
+                    preference = Some(match value {
+                        "markdown" => OutputContentFormat::Markdown,
+                        "text" => OutputContentFormat::Text,
+                        "adf" => OutputContentFormat::Adf,
+                        "storage" => OutputContentFormat::Storage,
+                        _ => return Err(()),
+                    });
+                }
+                "includeTextCopy" if include_text_copy.is_none() => {
+                    include_text_copy = Some(match value {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err(()),
+                    });
+                }
+                _ => return Err(()),
+            }
+        }
     }
+    Ok(QueryOptions {
+        preferred_output_content_format: preference,
+        include_text_copy: include_text_copy.unwrap_or(true),
+    })
 }
 
-fn invalid_preference() -> Response {
-    failure(
-        StatusCode::BAD_REQUEST,
-        "Invalid MCP output content preference",
-    )
+fn invalid_query_options() -> Response {
+    failure(StatusCode::BAD_REQUEST, "Invalid MCP query options")
 }
 
-fn request_preference(request: &Request<Body>) -> Result<Option<OutputContentFormat>, ()> {
+fn request_query_options(request: &Request<Body>) -> Result<QueryOptions, ()> {
     let original = request
         .extensions()
         .get::<OriginalUri>()
@@ -472,7 +496,7 @@ fn request_preference(request: &Request<Body>) -> Result<Option<OutputContentFor
     if original.query() != request.uri().query() {
         return Err(());
     }
-    query_preference(original.query())
+    query_options(original.query())
 }
 
 // Parse the original, undecoded path. Axum's path parameters are intentionally
@@ -527,8 +551,8 @@ pub(crate) async fn handle(
         }
         return failure(StatusCode::BAD_REQUEST, "Invalid MCP endpoint path");
     };
-    let preferred_output_content_format = match request_preference(&request) {
-        Ok(preference) => preference,
+    let options = match request_query_options(&request) {
+        Ok(options) => options,
         Err(()) if ingress.is_username() => {
             return crate::router::admission_failure_response(
                 &state,
@@ -539,7 +563,7 @@ pub(crate) async fn handle(
             )
             .await;
         }
-        Err(()) => return invalid_preference(),
+        Err(()) => return invalid_query_options(),
     };
     if request.headers().contains_key("trailer") {
         return if ingress.is_username() {
@@ -995,7 +1019,8 @@ pub(crate) async fn handle(
     );
     let mut admitted = Admitted {
         view,
-        preferred_output_content_format,
+        preferred_output_content_format: options.preferred_output_content_format,
+        include_text_copy: options.include_text_copy,
         snapshot: snapshot.clone(),
         http_span: tracing::Span::current(),
         cancellation: Arc::new(ExplicitCancellation::default()),
@@ -1208,10 +1233,19 @@ pub(crate) async fn handle(
             Ok(Ok(Ok(detail))) if tokio::time::Instant::now() < discovery_deadline => {
                 serde_json::to_value(detail)
                     .ok()
-                    .and_then(|value| output::result(value, false, config.max_response_bytes).ok())
+                    .and_then(|value| {
+                        output::result(
+                            value,
+                            false,
+                            config.max_response_bytes,
+                            admitted.include_text_copy,
+                        )
+                        .ok()
+                    })
                     .unwrap_or_else(|| {
                         output::message(
                             "Discovery result exceeds MCP response limit; use narrower discovery",
+                            admitted.include_text_copy,
                         )
                     })
             }

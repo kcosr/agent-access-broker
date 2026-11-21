@@ -292,9 +292,9 @@ requests that supply it. This is Origin validation, not a browser CORS or OAuth
 onboarding implementation. Host and session checks also apply to native clients.
 
 The request cap cannot exceed `limits.max_http_body_bytes`. Response size counts
-the serialized MCP result, including escaped text and structured copies, with
-space reserved for protocol framing. It must be at least 64 KiB. Catalog work
-must allow at least one response cap. Tool pages contain at most 100 definitions
+the serialized MCP result, including structured content and any emitted escaped
+text copy, with space reserved for protocol framing. It must be at least 64 KiB.
+Catalog work must allow at least one response cap. Tool pages contain at most 100 definitions
 and may be shorter to stay within the response cap.
 
 Aggregate and service connections share session and control pools. Two clients
@@ -328,13 +328,20 @@ Memory planning must account for concurrent work, not only a single wire cap.
 At most `max_control_requests` incoming bodies and control operations can be
 admitted globally, with separate native response leases capped by
 `limits.max_concurrent_requests`. Each admitted discovery may project up to
-`max_catalog_bytes`; each response has structured JSON, escaped text, capped
-serialization buffers, and bounded SDK queues. Provider work retains its own
-upstream/result allocation limits. These byte budgets bound serialized work;
+`max_catalog_bytes`; each response has structured JSON, an optional escaped text
+copy, capped serialization buffers, and bounded SDK queues. Provider work retains
+its own upstream/result allocation limits. These byte budgets bound serialized work;
 Rust JSON object overhead and provider allocations mean they are not a resident
 memory limit. Size concurrency and byte budgets together. Expired sessions and
 completed SDK response caches are discarded; there is no result retention.
-See [MCP client setup](mcp.md#http-endpoint).
+
+Clients may append `includeTextCopy=false` to `/mcp` or `/mcp/<service>` to omit
+the top-level text copy while retaining the complete structured result. This
+per-request URL option defaults to `true` and composes with
+`preferredOutputContentFormat`; keep `public_url` query-free. Local stdio uses
+`mcp serve --include-text-copy=false` for the process. There is no TOML or
+environment setting for this control. See [MCP text copies](mcp.md#tool-result-text-copies)
+and [MCP client setup](mcp.md#http-endpoint).
 
 ## `[identity]`
 
@@ -1525,8 +1532,8 @@ allowed_field_ids = [] # default: no writable custom fields
   guards and `limits.max_upstream_response_bytes` (default 512 MiB) still apply
   to the complete response. HTTP MCP has the separate configurable
   `mcp.max_response_bytes` limit (default 16 MiB), counting structured content
-  and its text copy; the local stdio MCP adapter caps Broker-JSON receipt at
-  16 MiB. There is no additional custom-field count or aggregate byte cap. See
+  and any emitted text copy; the local stdio MCP adapter caps Broker-JSON receipt
+  at 16 MiB. There is no additional custom-field count or aggregate byte cap. See
   [Jira custom fields](providers-jira.md#custom-fields).
 - Normalized write format remains explicit caller input with no write default.
   Read response defaults are separate client presentation settings under

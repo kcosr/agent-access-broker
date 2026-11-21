@@ -9,6 +9,7 @@ pub(super) async fn call(
     view: &McpView,
     name: &str,
     arguments: Map<String, Value>,
+    include_text_copy: bool,
 ) -> Result<CallToolResult> {
     agent_access_core::mcp::validate_helper_arguments_for_view(
         name,
@@ -94,6 +95,7 @@ pub(super) async fn call(
         && !resource_access_result_fits(
             &value,
             agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES,
+            include_text_copy,
         )
     {
         return Ok(serde_json::from_value(super::tools::envelope_result(
@@ -103,29 +105,38 @@ pub(super) async fn call(
                 "error": { "message": "Resource access response exceeds the result size limit." }
             }),
             true,
+            include_text_copy,
         )?)?);
     }
     Ok(serde_json::from_value(super::tools::envelope_result(
-        status, value, is_error,
+        status,
+        value,
+        is_error,
+        include_text_copy,
     )?)?)
 }
 
-/// Count both the structured value and its escaped JSON text before allocating
-/// the duplicated MCP result. A compact JSON stream contains no literal controls.
-fn resource_access_result_fits(value: &Value, maximum: usize) -> bool {
+/// Count the selected MCP representation before allocating its optional JSON
+/// text copy. A compact JSON stream contains no literal controls.
+fn resource_access_result_fits(value: &Value, maximum: usize, include_text_copy: bool) -> bool {
     struct SizeCounter {
         bytes: usize,
         maximum: usize,
+        include_text_copy: bool,
     }
     impl std::io::Write for SizeCounter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            let extra = bytes
-                .iter()
-                .filter(|byte| matches!(**byte, b'"' | b'\\'))
-                .count();
+            let extra = if self.include_text_copy {
+                bytes
+                    .iter()
+                    .filter(|byte| matches!(**byte, b'"' | b'\\'))
+                    .count()
+            } else {
+                0
+            };
             self.bytes = bytes
                 .len()
-                .checked_mul(2)
+                .checked_mul(if self.include_text_copy { 2 } else { 1 })
                 .and_then(|amount| amount.checked_add(extra))
                 .and_then(|amount| self.bytes.checked_add(amount))
                 .filter(|size| *size <= self.maximum)
@@ -136,7 +147,12 @@ fn resource_access_result_fits(value: &Value, maximum: usize) -> bool {
             Ok(())
         }
     }
-    let shell = serde_json::json!({"content":[{"type":"text","text":""}],"structuredContent":null,"isError":false});
+    let content = if include_text_copy {
+        serde_json::json!([{"type":"text","text":""}])
+    } else {
+        serde_json::json!([])
+    };
+    let shell = serde_json::json!({"content":content,"structuredContent":null,"isError":false});
     let base = serde_json::to_vec(&shell).expect("fixed MCP shell").len() - 4;
     if base > maximum {
         return false;
@@ -145,6 +161,7 @@ fn resource_access_result_fits(value: &Value, maximum: usize) -> bool {
         SizeCounter {
             bytes: base,
             maximum,
+            include_text_copy,
         },
         value,
     )
@@ -187,17 +204,43 @@ mod tests {
             serde_json::json!({"url": "https://example.test/quote\"/backslash\\/é/\n"}),
             serde_json::json!([null, true, 12, {}]),
         ] {
-            let result = super::super::tools::envelope_result(200, value.clone(), false).unwrap();
-            let bytes = serde_json::to_vec(&result).unwrap().len();
-            assert!(resource_access_result_fits(&value, bytes));
-            assert!(resource_access_result_fits(&value, bytes + 1));
-            assert!(!resource_access_result_fits(&value, bytes - 1));
+            for include_text_copy in [true, false] {
+                let result = super::super::tools::envelope_result(
+                    200,
+                    value.clone(),
+                    false,
+                    include_text_copy,
+                )
+                .unwrap();
+                let bytes = serde_json::to_vec(&result).unwrap().len();
+                assert!(resource_access_result_fits(
+                    &value,
+                    bytes,
+                    include_text_copy
+                ));
+                assert!(resource_access_result_fits(
+                    &value,
+                    bytes + 1,
+                    include_text_copy
+                ));
+                assert!(!resource_access_result_fits(
+                    &value,
+                    bytes - 1,
+                    include_text_copy
+                ));
+            }
         }
     }
 
     #[test]
     fn resource_access_wrapper_preflight_bounds_large_nested_results() {
         let value = serde_json::json!({"access": [ {"coverage": "x".repeat(1024 * 1024)} ]});
-        assert!(!resource_access_result_fits(&value, 1024));
+        for include_text_copy in [true, false] {
+            assert!(!resource_access_result_fits(
+                &value,
+                1024,
+                include_text_copy
+            ));
+        }
     }
 }

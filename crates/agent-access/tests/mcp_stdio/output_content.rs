@@ -44,7 +44,7 @@ async fn serve_catalog(broker: &MockServer) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invalid_selected_content_returns_structured_completion_receipt_without_file_or_replay() {
-    for file in [false, true] {
+    for (file, include_text_copy) in [(false, true), (true, true), (false, false), (true, false)] {
         let broker = MockServer::start().await;
         serve_catalog(&broker).await;
         Mock::given(method("POST"))
@@ -61,7 +61,7 @@ async fn invalid_selected_content_returns_structured_completion_receipt_without_
         configure(&config, &broker, "");
         let destination = directory.path().join("result.json");
         std::fs::write(&destination, "original").unwrap();
-        let mut process = McpProcess::start(&config);
+        let mut process = McpProcess::start_with_text_copy(&config, None, Some(include_text_copy));
         process.initialize().await;
         let mut arguments = json!({"inputs":{},"outputContentFormat":"markdown"});
         if file {
@@ -84,10 +84,15 @@ async fn invalid_selected_content_returns_structured_completion_receipt_without_
         assert_eq!(receipt["brokerRequestId"], "broker");
         assert!(receipt.get("output").is_none());
         assert!(!response.to_string().contains("PRIVATE BODY"));
-        assert_eq!(
-            serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(),
-            *receipt
-        );
+        if include_text_copy {
+            assert_eq!(
+                serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap())
+                    .unwrap(),
+                *receipt
+            );
+        } else {
+            assert_eq!(result["content"], json!([]));
+        }
         assert_eq!(std::fs::read_to_string(&destination).unwrap(), "original");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
         process.finish().await;

@@ -12,6 +12,8 @@ mod names;
 mod output_content;
 #[path = "mcp_stdio/rate_wait.rs"]
 mod rate_wait;
+#[path = "mcp_stdio/text_copy.rs"]
+mod text_copy;
 
 use agent_access_broker_host::test_support::{FixtureDir, IsolatedBroker, RunningBroker};
 use agent_access_fake::FAKE_PROJECT_RESOURCE;
@@ -45,6 +47,14 @@ impl McpProcess {
     }
 
     fn start_view(config: &Path, service: Option<&str>) -> Self {
+        Self::start_with_text_copy(config, service, None)
+    }
+
+    fn start_with_text_copy(
+        config: &Path,
+        service: Option<&str>,
+        include_text_copy: Option<bool>,
+    ) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_agent-access"));
         // A developer's ambient broker/token configuration must never change
         // the broker or identity exercised by this subprocess test.
@@ -56,6 +66,9 @@ impl McpProcess {
         command.arg("--config").arg(config).args(["mcp", "serve"]);
         if let Some(service) = service {
             command.args(["--service", service]);
+        }
+        if let Some(include_text_copy) = include_text_copy {
+            command.arg(format!("--include-text-copy={include_text_copy}"));
         }
         let mut child = command
             .stdin(Stdio::piped())

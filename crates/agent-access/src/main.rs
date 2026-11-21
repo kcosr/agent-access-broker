@@ -4903,6 +4903,9 @@ enum McpCommand {
         /// Soft preference for returned rich-text fields.
         #[arg(long, value_enum)]
         preferred_output_content_format: Option<OutputContentFormatArg>,
+        /// Include a readable text copy beside each structured tool result.
+        #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
+        include_text_copy: bool,
     },
 }
 
@@ -4913,14 +4916,20 @@ async fn main() -> Result<()> {
     require_cli_input(validate_output_command(&cli));
     let config = cli.config.clone().unwrap_or_else(default_config_path);
     if let Command::Mcp {
-        command: McpCommand::Serve { service, .. },
+        command:
+            McpCommand::Serve {
+                service,
+                include_text_copy,
+                ..
+            },
     } = &cli.command
     {
         let view = service
             .clone()
             .map(agent_access_core::mcp::McpView::Service)
             .unwrap_or_default();
-        return mcp::serve(cli, config, view).await;
+        let include_text_copy = *include_text_copy;
+        return mcp::serve(cli, config, view, include_text_copy).await;
     }
     let result = match &cli.command {
         Command::Auth {

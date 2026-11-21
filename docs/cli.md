@@ -32,6 +32,13 @@ comma-separated lists and display names are rejected. Initialization does not
 probe the broker; listing and calls require current visibility and readiness.
 The full caller catalog must fit the existing 16 MiB decode limit, even for a
 small selected service; the complete tool projection is bounded at 64 MiB.
+
+Add `--include-text-copy=false` for clients that read `structuredContent`:
+all tool results then return `content: []` with the complete structured result,
+error flag and metadata. The startup option accepts literal `true` or `false`,
+defaults to `true`, and stays fixed for the process. It has no TOML or environment
+setting and is independent of `--preferred-output-content-format`.
+
 Running the HTTP broker service is the job of the separate
 `agent-access-broker` binary. See [local MCP](mcp.md) for client configuration,
 individual action tools, and local file inputs and transfers.
