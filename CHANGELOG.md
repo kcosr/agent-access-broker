@@ -14,6 +14,12 @@ All notable changes to this project are documented in this file.
   distinguish unscoped, scalar and location authority; grant-selection previews
   require `credentialMode`. SDK consumers must use the explicit scalar and
   containment contracts. See [content access](docs/confluence-content-access.md).
+  Configure proof and scan limits under `[providers.confluence.content_access]`
+  and `[providers.confluence.content_search]`. The latter's
+  `max_encoded_request_target_bytes` defaults to 4096 for the complete composed
+  search request, so previously accepted large queries or grant sets may now
+  fail with `scope_unresolved`. Raise it only after qualifying the selected
+  upstream route; the independent absolute-URI ceiling still applies.
 
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
@@ -467,6 +473,12 @@ All notable changes to this project are documented in this file.
   ([#85](https://github.com/kcosr/agent-access-broker/pull/85))
 
 ### Changed
+
+- **Confluence page writes use the v2 API and validate typed placement.**
+  `page.update` accepts `baseVersion` from 1 through 2147483646; a measured stale
+  version remains `version_conflict`, while an upstream 409 returns
+  `confluence_update_conflict` without claiming a current version. See
+  [page writes](docs/providers-confluence.md#pagecreate-pageupdate-and-pagemove).
 
 - **Portal pages are served with `Referrer-Policy: no-referrer`.** Requests a
   portal page makes no longer send the page's address.

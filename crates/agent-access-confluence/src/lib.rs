@@ -29,8 +29,7 @@ use validation::*;
 
 pub use agent_access_atlassian::AtlassianCredential;
 use agent_access_atlassian::{
-    AtlassianWriteVerification, bind_atlassian_access, is_delegated_access_failure,
-    validate_atlassian_routes,
+    AtlassianWriteVerification, bind_atlassian_access, validate_atlassian_routes,
 };
 use agent_access_content::{
     ContentWriteError, markdown_to_confluence_storage_bounded,
@@ -53,6 +52,11 @@ use thiserror::Error;
 use url::Url;
 
 const MAX_COMMENT_PARENT_DEPTH: usize = 16;
+const MAX_PAGE_UPDATE_BASE_VERSION: u64 = i32::MAX as u64 - 1;
+static UPDATE_CONFLICT: ProviderReasonDefinition = ProviderReasonDefinition::error(
+    "confluence_update_conflict",
+    ProviderFailureStatus::Conflict,
+);
 const DRAFT_ATTACHMENT_LOOKUP_PAGE_SIZE: u32 = 200;
 const MAX_DRAFT_ATTACHMENT_LOOKUP_PAGES: usize = 100;
 const MAX_PAGE_ANCESTOR_LOOKUP_PAGES: usize = 100;
@@ -733,7 +737,7 @@ fn confluence_content_actions(config: &ConfluenceProviderConfig) -> Vec<ActionDe
                     "required": ["pageId", "baseVersion"],
                     "properties": {
                         "pageId": { "type": "string" },
-                        "baseVersion": { "type": "integer", "minimum": 1 },
+                        "baseVersion": { "type": "integer", "minimum": 1, "maximum": MAX_PAGE_UPDATE_BASE_VERSION },
                         "title": { "type": "string" }
                     },
                     "additionalProperties": false
@@ -1795,10 +1799,7 @@ impl Provider for ConfluenceProvider {
                 Ok(result) => {
                     result.audit.get_or_insert_with(|| json!({}))["locationProof"] = state.audit()
                 }
-                Err(error) => {
-                    error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] =
-                        state.audit()
-                }
+                Err(error) => state.record_failure_audit(error),
             }
         }
         outcome
@@ -3520,7 +3521,7 @@ impl ConfluenceProvider {
         {
             Ok(response) => response,
             Err(ConfluenceBackendError::Conflict) => {
-                return Err(upstream_version_conflict_error(
+                return Err(upstream_page_update_conflict_error(
                     &request,
                     &metadata,
                     inputs.base_version,
@@ -3705,7 +3706,8 @@ impl ConfluenceProvider {
         match self
             .content_metadata(
                 &request,
-                self.draft_page_response_with_space(
+                self.optional_draft_response_with_space(
+                    ConfluenceDraftContentType::Page,
                     &inputs.page_id,
                     Some("storage"),
                     lookup_credential,
@@ -3713,7 +3715,8 @@ impl ConfluenceProvider {
             )
             .await
         {
-            Ok(response) if response.value.status.as_deref() == Some("draft") => {
+            Ok(Some(response)) => {
+                require_draft_content(&response.value, ConfluenceDraftContentType::Page)?;
                 return Err(draft_version_conflict_error(
                     &request,
                     &response.value,
@@ -3722,8 +3725,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(lookup_credential),
                 ));
             }
-            Ok(_) => {}
-            Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {}
+            Ok(None) => {}
             Err(error) => return Err(error),
         }
         let space_response = self
@@ -3971,6 +3973,7 @@ impl ConfluenceProvider {
         let draft = draft_response.value;
         ensure_draft_content_matches_handle(&draft, &handle)?;
         require_draft_version_one(&draft)?;
+        let publish_version = draft_publish_version(&handle)?;
         let body = draft_body_for_publish(&draft, &inputs.body_format)?;
         let draft_attachments = if handle.origin == ConfluenceDraftOrigin::New {
             self.content_metadata(
@@ -3991,6 +3994,7 @@ impl ConfluenceProvider {
             }
         }
         self.recheck_content_location(&request).await?;
+        self.check_staged_publish_version(&request, &handle).await?;
         let write = ConfluenceWrite::new(json!({ "pageId": inputs.page_id }));
         let response = self
             .backend
@@ -4001,7 +4005,7 @@ impl ConfluenceProvider {
                     space_id: draft.space_id.clone(),
                     title: draft.title.clone(),
                     status: "current".to_string(),
-                    version_number: draft_publish_version(&handle)?,
+                    version_number: publish_version,
                     body,
                 },
                 credential,
@@ -4014,6 +4018,12 @@ impl ConfluenceProvider {
             published.space_web_url = draft.space_web_url.clone();
             published.space_alias = draft.space_alias.clone();
             require_current_draft_content(&published, ConfluenceDraftContentType::Page)?;
+            if published.version != publish_version {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "Confluence published version did not match the requested draft publication",
+                ));
+            }
             if published.id != draft.id
                 || published.space_id != draft.space_id
                 || published.parent != handle.parent
@@ -4145,8 +4155,7 @@ impl ConfluenceProvider {
                         "Confluence page draft still exists after discard",
                     ));
                 }
-                Err(error)
-                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(ConfluenceBackendError::NotFound) => {}
                 Err(error) => {
                     return Err(
                         confluence_backend_error(error).unverified_after_atlassian_write(
@@ -4169,8 +4178,7 @@ impl ConfluenceProvider {
                         "Confluence page draft discard created current content",
                     ));
                 }
-                Err(error)
-                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(ConfluenceBackendError::NotFound) => {}
                 Err(error) => {
                     return Err(
                         confluence_backend_error(error).unverified_after_atlassian_write(
@@ -4368,8 +4376,9 @@ impl ConfluenceProvider {
         let mut stopped_unsent = false;
         // Set when the upload that stopped the batch may have applied.
         let mut stopped_uncertain = false;
-        // Set when Confluence throttled the verification of an applied upload.
+        // Preserve every applied file when verification of an upload fails.
         let mut unverified_attachment_id = None;
+        let mut verification_error = None;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             if let Err(error) = self.recheck_content_location(&request).await {
                 if successes.is_empty() {
@@ -4410,46 +4419,19 @@ impl ConfluenceProvider {
                         )
                         .await
                     {
-                        if is_delegated_access_failure(&error) {
-                            // The upload applied, but the connected
-                            // account's access failed before it could be
-                            // verified: report it applied and unverified,
-                            // never as a failure whose retry would upload
-                            // the attachments again.
-                            let attachment_ids = successes
-                                .iter()
-                                .filter_map(|success: &Value| success.get("attachmentId").cloned())
-                                .chain([json!(attachment.id)])
-                                .collect::<Vec<_>>();
-                            return Err(error.unverified_after_atlassian_write(
-                                "post_upload_readback",
-                                json!({
-                                    "pageId": metadata_response.value.id,
-                                    "attachmentIds": attachment_ids,
-                                }),
-                            ));
-                        }
-                        if error.reason_code() != ReasonCode::UpstreamRateLimited {
-                            // The upload applied: repeating the batch would
-                            // upload it again.
-                            return Err(error.or_mutation_receipt(MutationReceipt::unknown()));
-                        }
-                        // The upload applied but its verification was
-                        // throttled: keep the batch and report it unverified,
-                        // never as a rate limit whose retry would upload the
-                        // attachments again.
+                        let reason = error.reason_code().as_str().to_string();
                         audit_attachments.push(json!({
                             "status": "unverified",
                             "attachmentId": attachment.id,
                             "size": attachment.size,
                             "contentType": attachment.content_type,
-                            "reason": "upstream_rate_limited",
+                            "reason": reason,
                         }));
                         failures.push(json!({
                             "status": "unverified",
                             "attachmentId": attachment.id,
                             "filename": attachment.filename,
-                            "reason": "upstream_rate_limited",
+                            "reason": reason,
                         }));
                         for skipped in uploads.iter().skip(index + 1) {
                             audit_attachments.push(json!({
@@ -4464,6 +4446,7 @@ impl ConfluenceProvider {
                             }));
                         }
                         unverified_attachment_id = Some(attachment.id);
+                        verification_error = Some(error);
                         break;
                     }
                     successes.push(json!({
@@ -4577,6 +4560,21 @@ impl ConfluenceProvider {
             "pageId": metadata_response.value.id,
             "attachmentIds": attachment_ids,
         });
+        if let Some(error) = verification_error {
+            let status = error.upstream_status.or(upstream_status);
+            let duration =
+                upstream_duration_ms.saturating_add(error.upstream_duration_ms.unwrap_or(0));
+            return Err(error
+                .unverified_after_atlassian_write("post_upload_readback", object_ids.clone())
+                .with_result(result)
+                .with_mutation_receipt(MutationReceipt::applied_unverified(
+                    "post_upload_readback",
+                    object_ids.clone(),
+                ))
+                .with_audit(audit)
+                .with_upstream(status, Some(duration))
+                .with_object_ids(object_ids));
+        }
         if !failures.is_empty() {
             let mut error = ProviderError::error(
                 ReasonCode::UpstreamFailed,
@@ -4600,13 +4598,6 @@ impl ConfluenceProvider {
                 // The first upload never reached Confluence and the rest
                 // were skipped, so nothing was applied.
                 error = error.with_mutation_receipt(MutationReceipt::not_applied());
-            }
-            if unverified_attachment_id.is_some() {
-                error = error.unverified_after_throttling(
-                    "confluence",
-                    "post_upload_readback",
-                    object_ids.clone(),
-                );
             }
             if !attachment_ids.is_empty() || stopped_uncertain {
                 // An upload may have applied: repeating the batch could
@@ -4767,6 +4758,7 @@ impl ConfluenceProvider {
             .await?
             .value;
         validate_download_attachment(&attachment, &self.config)?;
+        self.recheck_content_location(&request).await?;
         let response = self
             .backend
             .page_draft_attachment_content(&draft.value.id, &inputs.attachment_id, credential)
@@ -5035,6 +5027,7 @@ impl ConfluenceProvider {
             )
             .await?;
         validate_download_attachment(&attachment, &self.config)?;
+        self.recheck_content_location(&request).await?;
         let response = self
             .backend
             .attachment_content(&page.id, &inputs.attachment_id, credential)
@@ -5420,7 +5413,7 @@ impl ConfluenceProvider {
             .await
             .map_err(confluence_backend_error)?;
         let space = space_response.value;
-        if space.key != inputs.space {
+        if space.key != inputs.space || space.status.as_deref() != Some("current") {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
                 "Confluence space lookup did not match the authorized space",
@@ -5652,6 +5645,11 @@ impl ConfluenceProvider {
             )
             .await
             .map_err(confluence_backend_error)?;
+        if space_response.value.key != inputs.space
+            || space_response.value.status.as_deref() != Some("current")
+        {
+            return Err(location_unresolved());
+        }
         let write = ConfluenceWrite::new(json!({ "space": inputs.space }));
         let response = self
             .backend
@@ -5755,7 +5753,8 @@ impl ConfluenceProvider {
         match self
             .content_metadata(
                 &request,
-                self.draft_blog_response_with_space(
+                self.optional_draft_response_with_space(
+                    ConfluenceDraftContentType::Blog,
                     &inputs.blog_id,
                     Some("storage"),
                     lookup_credential,
@@ -5763,7 +5762,8 @@ impl ConfluenceProvider {
             )
             .await
         {
-            Ok(response) if response.value.status.as_deref() == Some("draft") => {
+            Ok(Some(response)) => {
+                require_draft_content(&response.value, ConfluenceDraftContentType::Blog)?;
                 return Err(draft_version_conflict_error(
                     &request,
                     &response.value,
@@ -5772,8 +5772,7 @@ impl ConfluenceProvider {
                     self.backend.egress_proxy_audit(lookup_credential),
                 ));
             }
-            Ok(_) => {}
-            Err(error) if error.reason_code() == ReasonCode::ScopeUnresolved => {}
+            Ok(None) => {}
             Err(error) => return Err(error),
         }
         self.recheck_content_location(&request).await?;
@@ -6009,6 +6008,7 @@ impl ConfluenceProvider {
         let draft = draft_response.value;
         ensure_draft_content_matches_handle(&draft, &handle)?;
         require_draft_version_one(&draft)?;
+        let publish_version = draft_publish_version(&handle)?;
         let body = draft_body_for_publish(&draft, &inputs.body_format)?;
         let draft_attachments = if handle.origin == ConfluenceDraftOrigin::New {
             self.content_metadata(
@@ -6029,6 +6029,7 @@ impl ConfluenceProvider {
             }
         }
         self.recheck_content_location(&request).await?;
+        self.check_staged_publish_version(&request, &handle).await?;
         let write = ConfluenceWrite::new(json!({ "blogId": inputs.blog_id }));
         let response = self
             .backend
@@ -6039,7 +6040,7 @@ impl ConfluenceProvider {
                     space_id: draft.space_id.clone(),
                     title: draft.title.clone(),
                     status: "current".to_string(),
-                    version_number: draft_publish_version(&handle)?,
+                    version_number: publish_version,
                     body,
                 },
                 credential,
@@ -6052,7 +6053,16 @@ impl ConfluenceProvider {
             published.space_web_url = draft.space_web_url.clone();
             published.space_alias = draft.space_alias.clone();
             require_current_draft_content(&published, ConfluenceDraftContentType::Blog)?;
-            if published.id != draft.id || published.space_id != draft.space_id {
+            if published.version != publish_version {
+                return Err(ProviderError::error(
+                    ReasonCode::UpstreamProtocolFailed,
+                    "Confluence published version did not match the requested draft publication",
+                ));
+            }
+            if published.id != draft.id
+                || published.space_id != draft.space_id
+                || published.parent != handle.parent
+            {
                 return Err(ProviderError::error(
                     ReasonCode::UpstreamProtocolFailed,
                     "Confluence published blog did not match the draft",
@@ -6180,8 +6190,7 @@ impl ConfluenceProvider {
                         "Confluence blog draft still exists after discard",
                     ));
                 }
-                Err(error)
-                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(ConfluenceBackendError::NotFound) => {}
                 Err(error) => {
                     return Err(
                         confluence_backend_error(error).unverified_after_atlassian_write(
@@ -6204,8 +6213,7 @@ impl ConfluenceProvider {
                         "Confluence blog draft discard created current content",
                     ));
                 }
-                Err(error)
-                    if confluence_backend_reason_code(&error) == ReasonCode::ScopeUnresolved => {}
+                Err(ConfluenceBackendError::NotFound) => {}
                 Err(error) => {
                     return Err(
                         confluence_backend_error(error).unverified_after_atlassian_write(
@@ -6403,8 +6411,9 @@ impl ConfluenceProvider {
         let mut stopped_unsent = false;
         // Set when the upload that stopped the batch may have applied.
         let mut stopped_uncertain = false;
-        // Set when Confluence throttled the verification of an applied upload.
+        // Preserve every applied file when verification of an upload fails.
         let mut unverified_attachment_id = None;
+        let mut verification_error = None;
         for (index, upload) in uploads.iter().cloned().enumerate() {
             if let Err(error) = self.recheck_content_location(&request).await {
                 if successes.is_empty() {
@@ -6445,46 +6454,19 @@ impl ConfluenceProvider {
                         )
                         .await
                     {
-                        if is_delegated_access_failure(&error) {
-                            // The upload applied, but the connected
-                            // account's access failed before it could be
-                            // verified: report it applied and unverified,
-                            // never as a failure whose retry would upload
-                            // the attachments again.
-                            let attachment_ids = successes
-                                .iter()
-                                .filter_map(|success: &Value| success.get("attachmentId").cloned())
-                                .chain([json!(attachment.id)])
-                                .collect::<Vec<_>>();
-                            return Err(error.unverified_after_atlassian_write(
-                                "post_upload_readback",
-                                json!({
-                                    "blogId": metadata_response.value.id,
-                                    "attachmentIds": attachment_ids,
-                                }),
-                            ));
-                        }
-                        if error.reason_code() != ReasonCode::UpstreamRateLimited {
-                            // The upload applied: repeating the batch would
-                            // upload it again.
-                            return Err(error.or_mutation_receipt(MutationReceipt::unknown()));
-                        }
-                        // The upload applied but its verification was
-                        // throttled: keep the batch and report it unverified,
-                        // never as a rate limit whose retry would upload the
-                        // attachments again.
+                        let reason = error.reason_code().as_str().to_string();
                         audit_attachments.push(json!({
                             "status": "unverified",
                             "attachmentId": attachment.id,
                             "size": attachment.size,
                             "contentType": attachment.content_type,
-                            "reason": "upstream_rate_limited",
+                            "reason": reason,
                         }));
                         failures.push(json!({
                             "status": "unverified",
                             "attachmentId": attachment.id,
                             "filename": attachment.filename,
-                            "reason": "upstream_rate_limited",
+                            "reason": reason,
                         }));
                         for skipped in uploads.iter().skip(index + 1) {
                             audit_attachments.push(json!({
@@ -6499,6 +6481,7 @@ impl ConfluenceProvider {
                             }));
                         }
                         unverified_attachment_id = Some(attachment.id);
+                        verification_error = Some(error);
                         break;
                     }
                     successes.push(json!({
@@ -6612,6 +6595,21 @@ impl ConfluenceProvider {
             "blogId": metadata_response.value.id,
             "attachmentIds": attachment_ids,
         });
+        if let Some(error) = verification_error {
+            let status = error.upstream_status.or(upstream_status);
+            let duration =
+                upstream_duration_ms.saturating_add(error.upstream_duration_ms.unwrap_or(0));
+            return Err(error
+                .unverified_after_atlassian_write("post_upload_readback", object_ids.clone())
+                .with_result(result)
+                .with_mutation_receipt(MutationReceipt::applied_unverified(
+                    "post_upload_readback",
+                    object_ids.clone(),
+                ))
+                .with_audit(audit)
+                .with_upstream(status, Some(duration))
+                .with_object_ids(object_ids));
+        }
         if !failures.is_empty() {
             let mut error = ProviderError::error(
                 ReasonCode::UpstreamFailed,
@@ -6635,13 +6633,6 @@ impl ConfluenceProvider {
                 // The first upload never reached Confluence and the rest
                 // were skipped, so nothing was applied.
                 error = error.with_mutation_receipt(MutationReceipt::not_applied());
-            }
-            if unverified_attachment_id.is_some() {
-                error = error.unverified_after_throttling(
-                    "confluence",
-                    "post_upload_readback",
-                    object_ids.clone(),
-                );
             }
             if !attachment_ids.is_empty() || stopped_uncertain {
                 // An upload may have applied: repeating the batch could
@@ -6802,6 +6793,7 @@ impl ConfluenceProvider {
             .await?
             .value;
         validate_download_attachment(&attachment, &self.config)?;
+        self.recheck_content_location(&request).await?;
         let response = self
             .backend
             .blog_draft_attachment_content(&draft.value.id, &inputs.attachment_id, credential)
@@ -7080,6 +7072,7 @@ impl ConfluenceProvider {
             )
             .await?;
         validate_download_attachment(&attachment, &self.config)?;
+        self.recheck_content_location(&request).await?;
         let response = self
             .backend
             .blog_attachment_content(&blog.id, &inputs.attachment_id, credential)
@@ -7397,6 +7390,33 @@ impl ConfluenceProvider {
         let handle = ConfluenceDraftHandle::new(content_type, content, origin, base_version);
         self.continuations
             .seal_draft_handle(request.context(), request.execution(), &handle)
+    }
+
+    /// Only an upstream missing draft is absence. Parsing, space resolution and
+    /// shared proof-budget failures must stop the competing-draft guard.
+    async fn optional_draft_response_with_space(
+        &self,
+        kind: ConfluenceDraftContentType,
+        id: &str,
+        body_format: Option<&str>,
+        credential: &AtlassianCredential,
+    ) -> Result<Option<ConfluenceBackendResponse<ConfluenceDraftContent>>, ProviderError> {
+        let response = match kind {
+            ConfluenceDraftContentType::Page => {
+                self.backend.draft_page(id, body_format, credential).await
+            }
+            ConfluenceDraftContentType::Blog => {
+                self.backend.draft_blog(id, body_format, credential).await
+            }
+        };
+        match response {
+            Ok(response) => self
+                .draft_response_with_resolved_space(response, credential)
+                .await
+                .map(Some),
+            Err(ConfluenceBackendError::NotFound) => Ok(None),
+            Err(error) => Err(confluence_backend_error(error)),
+        }
     }
 
     async fn draft_page_response_with_space(
@@ -8441,10 +8461,10 @@ fn parse_page_update_inputs(inputs: &Value) -> Result<PageUpdateInputs, Provider
         )
     })?;
     validate_page_id(&parsed.page_id)?;
-    if parsed.base_version == 0 {
+    if !(1..=MAX_PAGE_UPDATE_BASE_VERSION).contains(&parsed.base_version) {
         return Err(ProviderError::deny(
             ReasonCode::InputInvalid,
-            "confluence.page.update baseVersion must be greater than zero",
+            "confluence.page.update baseVersion must be between 1 and 2147483646",
         ));
     }
     if let Some(title) = &parsed.title {
@@ -11993,35 +12013,32 @@ fn version_conflict_error(
     }))
 }
 
-fn upstream_version_conflict_error(
+fn upstream_page_update_conflict_error(
     request: &ProviderInvocation,
     page: &ConfluencePage,
     expected_base_version: u64,
     egress_proxy: Value,
 ) -> ProviderError {
-    ProviderError::error(
-        ReasonCode::VersionConflict,
-        "Confluence page version conflicted with the supplied base version",
-    )
-    .with_result(json!({
-        "pageId": page.id,
-        "space": page.space,
-        "expectedBaseVersion": expected_base_version,
-    }))
-    .with_audit(json!({
-        "provider": "confluence",
-        "operation": "page.update",
-        "pageId": page.id,
-        "space": page.space,
-        "expectedBaseVersion": expected_base_version,
-        "status": "upstream_conflict",
-        "credentialMode": request.credential_mode(),
-        "egressProxy": egress_proxy,
-    }))
-    .with_upstream(Some(409), None)
-    .with_object_ids(json!({
-        "pageId": page.id,
-    }))
+    ProviderError::domain(&UPDATE_CONFLICT, "Confluence rejected the page update")
+        .with_result(json!({
+            "pageId": page.id,
+            "space": page.space,
+            "expectedBaseVersion": expected_base_version,
+        }))
+        .with_audit(json!({
+            "provider": "confluence",
+            "operation": "page.update",
+            "pageId": page.id,
+            "space": page.space,
+            "expectedBaseVersion": expected_base_version,
+            "status": "upstream_conflict",
+            "credentialMode": request.credential_mode(),
+            "egressProxy": egress_proxy,
+        }))
+        .with_upstream(Some(409), None)
+        .with_object_ids(json!({
+            "pageId": page.id,
+        }))
 }
 
 fn confluence_blog_verification_mismatch_result(

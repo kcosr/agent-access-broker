@@ -12,8 +12,10 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod documentation;
 mod download_media_policy;
+mod execution_matrix;
 mod personal_spaces;
 mod plain_inputs;
+mod review_locations;
 mod search_exclusions;
 mod space_aliases;
 mod space_keys;
@@ -7402,27 +7404,6 @@ impl ConfluenceBackend for BlogViewBackend {
             duration_ms: 3,
         })
     }
-
-    async fn blog_scope_evidence(
-        &self,
-        blog_id: &str,
-        _credential: &AtlassianCredential,
-    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
-    {
-        if blog_id != self.blog.id {
-            return Err(ConfluenceBackendError::NotFound);
-        }
-        Ok(ConfluenceBackendResponse {
-            value: ConfluenceBlogScopeEvidence {
-                id: self.blog.id.clone(),
-                space: String::new(),
-                space_id: self.blog.space_id.clone(),
-                space_alias: None,
-            },
-            status: 200,
-            duration_ms: 2,
-        })
-    }
 }
 
 #[async_trait]
@@ -10355,6 +10336,16 @@ fn http_confluence_v2_backend_for_server(server: &MockServer) -> HttpConfluenceB
 /// Page and blog drafts whose post-write reads are throttled: the draft
 /// attachment list once `throttle_attachment_reads_after_uploads` uploads have
 /// applied, and every read after a publish or discard.
+#[derive(Clone, Copy)]
+enum DraftVerificationFailure {
+    Throttled,
+    Unresolved,
+    ExhaustBudget,
+    Unauthorized,
+    Delegated,
+    Missing,
+}
+
 struct DraftThrottleBackend {
     content_type: ConfluenceDraftContentType,
     existing_attachments: Vec<ConfluenceAttachment>,
@@ -10362,6 +10353,9 @@ struct DraftThrottleBackend {
     throttle_uploads_after: usize,
     throttle_attachment_reads_after_uploads: usize,
     published_or_discarded: std::sync::atomic::AtomicBool,
+    verification_failure: DraftVerificationFailure,
+    proof_budget: std::sync::Mutex<Option<ConfluenceMetadataBudget>>,
+    draft_after_finish_missing: bool,
 }
 
 impl DraftThrottleBackend {
@@ -10373,6 +10367,9 @@ impl DraftThrottleBackend {
             throttle_uploads_after: usize::MAX,
             throttle_attachment_reads_after_uploads: usize::MAX,
             published_or_discarded: std::sync::atomic::AtomicBool::new(false),
+            verification_failure: DraftVerificationFailure::Throttled,
+            proof_budget: std::sync::Mutex::new(None),
+            draft_after_finish_missing: false,
         }
     }
 
@@ -10387,14 +10384,41 @@ impl DraftThrottleBackend {
         ConfluenceBackendError::RateLimited(Some(UpstreamRetryAfter::after_seconds(30)))
     }
 
+    fn verification_error(&self) -> ConfluenceBackendError {
+        match self.verification_failure {
+            DraftVerificationFailure::Throttled => Self::throttled(),
+            DraftVerificationFailure::Unresolved => ConfluenceBackendError::ScopeUnresolved,
+            DraftVerificationFailure::Unauthorized => ConfluenceBackendError::Unauthorized,
+            DraftVerificationFailure::Delegated => ConfluenceBackendError::Credential(
+                ProviderError::deny(
+                    ReasonCode::CredentialInvalid,
+                    "synthetic delegated rejection",
+                )
+                .with_upstream(Some(401), Some(5)),
+            ),
+            DraftVerificationFailure::Missing => ConfluenceBackendError::NotFound,
+            DraftVerificationFailure::ExhaustBudget => self
+                .proof_budget
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .charge_bytes(u64::MAX)
+                .unwrap_err(),
+        }
+    }
+
     fn finished(&self) -> bool {
         self.published_or_discarded
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn draft(&self, id: &str) -> Result<ConfluenceDraftContent, ConfluenceBackendError> {
+        if self.finished() && self.draft_after_finish_missing {
+            return Err(ConfluenceBackendError::NotFound);
+        }
         if self.finished() {
-            return Err(Self::throttled());
+            return Err(self.verification_error());
         }
         if id != self.id() {
             return Err(ConfluenceBackendError::NotFound);
@@ -10425,7 +10449,7 @@ impl DraftThrottleBackend {
     {
         let uploads = self.uploads.lock().unwrap();
         if uploads.len() >= self.throttle_attachment_reads_after_uploads {
-            return Err(Self::throttled());
+            return Err(self.verification_error());
         }
         let mut attachments = self.existing_attachments.clone();
         attachments.extend(uploads.iter().cloned());
@@ -10467,7 +10491,7 @@ impl DraftThrottleBackend {
 
     fn after_finish(&self) -> Result<(), ConfluenceBackendError> {
         if self.finished() {
-            return Err(Self::throttled());
+            return Err(self.verification_error());
         }
         Ok(())
     }
@@ -10590,6 +10614,7 @@ impl ConfluenceBackend for DraftThrottleBackend {
         _credential: &AtlassianCredential,
         _budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        *self.proof_budget.lock().unwrap() = Some(_budget.clone());
         self.space_by_id(id, _credential).await
     }
 
@@ -11155,5 +11180,106 @@ fn fixture_space(key: &str) -> ConfluenceSpace {
         alias: None,
         status: Some("current".into()),
         homepage_id: Some("55555".into()),
+    }
+}
+
+#[tokio::test]
+async fn draft_discard_requires_raw_not_found_in_each_verification_read() {
+    for (content_type, prefix, id_key) in [
+        (ConfluenceDraftContentType::Page, "page", "pageId"),
+        (ConfluenceDraftContentType::Blog, "blog", "blogId"),
+    ] {
+        for failure in [
+            DraftVerificationFailure::Unresolved,
+            DraftVerificationFailure::ExhaustBudget,
+            DraftVerificationFailure::Missing,
+        ] {
+            for draft_missing in [false, true] {
+                let mut raw = DraftThrottleBackend::new(content_type);
+                raw.verification_failure = failure;
+                raw.draft_after_finish_missing = draft_missing;
+                let (provider, backend, handle) = draft_throttle_provider(raw);
+                let outcome = provider
+                    .invoke_fixture(draft_invocation(
+                        &format!("{prefix}.draft.discard"),
+                        json!({id_key:backend.id(),"draftHandle":handle}),
+                    ))
+                    .await;
+                assert!(backend.finished());
+                if matches!(failure, DraftVerificationFailure::Missing) {
+                    let result = outcome.unwrap().result;
+                    assert_eq!(result["status"], "discarded");
+                    assert_eq!(result["discarded"], true);
+                } else {
+                    let error = outcome.unwrap_err();
+                    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+                    let result = error.result.as_deref().unwrap();
+                    assert_eq!(result["mutationStatus"], "applied_unverified");
+                    assert_eq!(result["verificationStage"], "post_discard_readback");
+                    assert_eq!(result["retrySafe"], false);
+                    assert!(result.get("discarded").is_none());
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn draft_attachment_verification_failures_preserve_every_applied_file() {
+    for (content_type, prefix, id_key) in [
+        (ConfluenceDraftContentType::Page, "page", "pageId"),
+        (ConfluenceDraftContentType::Blog, "blog", "blogId"),
+    ] {
+        for failure in [
+            DraftVerificationFailure::Unresolved,
+            DraftVerificationFailure::ExhaustBudget,
+            DraftVerificationFailure::Unauthorized,
+            DraftVerificationFailure::Delegated,
+        ] {
+            let mut raw = DraftThrottleBackend::new(content_type);
+            raw.throttle_attachment_reads_after_uploads = 2;
+            raw.verification_failure = failure;
+            let (provider, backend, handle) = draft_throttle_provider(raw);
+            let error = provider
+                .invoke_fixture(draft_attachment_add_invocation(
+                    prefix,
+                    id_key,
+                    backend.id(),
+                    &handle,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.reason_code(),
+                match failure {
+                    DraftVerificationFailure::Delegated => ReasonCode::MutationVerificationFailed,
+                    DraftVerificationFailure::Unauthorized => ReasonCode::UpstreamUnauthorized,
+                    _ => ReasonCode::ScopeUnresolved,
+                }
+            );
+            if matches!(failure, DraftVerificationFailure::Delegated) {
+                assert_eq!(error.upstream_status, Some(401));
+            }
+            let result = error.result.as_deref().unwrap();
+            assert_eq!(result["mutationStatus"], "applied_unverified");
+            assert_eq!(result["verificationStage"], "post_upload_readback");
+            assert_eq!(result["retrySafe"], false);
+            assert_eq!(
+                result["safeLocators"],
+                json!({id_key:backend.id(),"attachmentIds":["att1","att2"]})
+            );
+            assert_eq!(result["status"], "partial");
+            assert_eq!(result["attachments"].as_array().unwrap().len(), 1);
+            assert_eq!(result["attachments"][0]["attachmentId"], "att1");
+            assert_eq!(result["failures"].as_array().unwrap().len(), 2);
+            assert_eq!(result["failures"][0]["status"], "unverified");
+            assert_eq!(result["failures"][0]["attachmentId"], "att2");
+            assert_eq!(result["failures"][1]["status"], "skipped");
+            assert_eq!(backend.uploads.lock().unwrap().len(), 2);
+            assert_eq!(
+                error.audit.as_deref().unwrap()["attachmentIds"],
+                json!(["att1", "att2"])
+            );
+        }
     }
 }

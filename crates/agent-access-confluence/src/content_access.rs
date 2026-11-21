@@ -6,6 +6,7 @@ const MAX_LINEAGE_NODES: usize = 64;
 const POINT_PASS_READS: u32 = 65;
 const MOVE_PASS_READS: u32 = 256;
 const MAX_MOVE_ROOTS: usize = 64;
+const MOVE_RELATION_DIAGNOSTIC: &str = "confluence_move_relation_unresolved";
 
 #[derive(Clone, Debug)]
 pub(crate) struct CreationParentLocator {
@@ -113,6 +114,20 @@ fn location_provider_error(error: ProviderError) -> ProviderError {
     }
 }
 
+/// Only the protected audit identifies failure to resolve a policy root. The
+/// caller keeps the original value-free location denial or upstream failure.
+fn move_relation_failure(mut error: ProviderError) -> ProviderError {
+    let category = if error.reason_code() == ReasonCode::ScopeUnresolved {
+        "not_visible_or_absent"
+    } else {
+        "unconfirmed"
+    };
+    error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] = json!({
+        "finalCheck":"unresolved", "diagnostic":MOVE_RELATION_DIAGNOSTIC, "category":category,
+    });
+    error
+}
+
 fn malformed_location() -> ProviderError {
     ProviderError::error(
         ReasonCode::UpstreamProtocolFailed,
@@ -200,7 +215,7 @@ impl<'a> LocationPass<'a> {
         if space.id != id || !locations::is_canonical_content_id(id) || !is_space_key(&space.key) {
             return Err(malformed_location());
         }
-        if space.status.as_deref() != Some("current") {
+        if !matches!(space.status.as_deref(), Some("current" | "archived")) {
             return Err(location_unresolved());
         }
         self.spaces.insert(id.to_owned(), space.clone());
@@ -555,7 +570,7 @@ impl ConfluenceProvider {
                 regular,
             } => {
                 let (location, space) = pass.page(id, *regular).await?;
-                validate_input_space(url_space.as_deref(), &space)?;
+                validate_input_space(url_space.as_deref(), &space, &self.config)?;
                 (
                     "page",
                     vec![ContainmentObligation::Content(location)],
@@ -564,7 +579,7 @@ impl ConfluenceProvider {
             }
             ContentPlan::Blog { id, url_space } => {
                 let (location, space) = pass.blog(id, ConfluenceContentStatus::Current).await?;
-                validate_input_space(url_space.as_deref(), &space)?;
+                validate_input_space(url_space.as_deref(), &space, &self.config)?;
                 (
                     "blog",
                     vec![ContainmentObligation::Content(location)],
@@ -615,7 +630,7 @@ impl ConfluenceProvider {
                     return Err(location_unresolved());
                 }
                 if let Some(parent) = parent {
-                    validate_input_space(parent.url_space.as_deref(), &space)?;
+                    validate_input_space(parent.url_space.as_deref(), &space, &self.config)?;
                 }
                 let (location, _) = pass.location(node, ContainmentProvenance::Observed).await?;
                 destination = Some(selected);
@@ -738,7 +753,7 @@ impl ConfluenceProvider {
                 let (current, space) = pass
                     .location(source.clone(), ContainmentProvenance::Observed)
                     .await?;
-                validate_input_space(inputs.page.url_space.as_deref(), &space)?;
+                validate_input_space(inputs.page.url_space.as_deref(), &space, &self.config)?;
                 let target_node = pass
                     .node(
                         ConfluenceNodeKind::Page,
@@ -750,7 +765,7 @@ impl ConfluenceProvider {
                 if source.id == target_node.id || target_node.space_id != space.id {
                     return Err(location_unresolved());
                 }
-                validate_input_space(inputs.target.url_space.as_deref(), &space)?;
+                validate_input_space(inputs.target.url_space.as_deref(), &space, &self.config)?;
                 let selected = match inputs.position {
                     ConfluencePageMovePosition::Append => ConfluenceParent {
                         kind: ConfluenceNodeKind::Page,
@@ -839,13 +854,15 @@ impl ConfluenceProvider {
                         ConfluenceContentStatus::Current,
                         false,
                     )
-                    .await?;
+                    .await
+                    .map_err(move_relation_failure)?;
                 if node.space_id != space.id {
-                    return Err(location_unresolved());
+                    return Err(move_relation_failure(location_unresolved()));
                 }
                 related.push(
                     pass.location(node, ContainmentProvenance::Observed)
-                        .await?
+                        .await
+                        .map_err(move_relation_failure)?
                         .0,
                 );
             }
@@ -860,6 +877,101 @@ impl ConfluenceProvider {
             blogs: pass.blogs,
             comment_chain,
         })
+    }
+
+    /// A staged draft belongs to an existing current object. Observe that
+    /// object's bound base version under execution access after initial location
+    /// verification, then recheck the draft location immediately before publish.
+    pub(crate) async fn check_staged_publish_version(
+        &self,
+        request: &ProviderInvocation,
+        handle: &ConfluenceDraftHandle,
+    ) -> Result<(), ProviderError> {
+        if handle.origin != ConfluenceDraftOrigin::Staged {
+            return Ok(());
+        }
+        let expected = handle.base_version.ok_or_else(invalid_draft_handle_error)?;
+        let credential = self.execution_credential(request.admitted())?;
+        let state = ProviderState::require::<ContentOperationState>(request.state())?;
+        state
+            .final_check
+            .store(3, std::sync::atomic::Ordering::Relaxed);
+        let (version, status, duration_ms) = match handle.content_type {
+            ConfluenceDraftContentType::Page => {
+                let response = self
+                    .backend
+                    .hierarchy_node(
+                        ConfluenceNodeKind::Page,
+                        &handle.content_id,
+                        ConfluenceContentStatus::Current,
+                        true,
+                        &credential,
+                        &state.budget,
+                    )
+                    .await
+                    .map_err(location_backend_error)?;
+                let current = response.value;
+                if current.id != handle.content_id
+                    || current.kind != ConfluenceNodeKind::Page
+                    || current.space_id != handle.space_id
+                    || current.parent != handle.parent
+                    || current.status != ConfluenceContentStatus::Current
+                {
+                    return Err(location_unresolved());
+                }
+                (
+                    current
+                        .version
+                        .filter(|version| *version > 0)
+                        .ok_or_else(location_unresolved)?,
+                    response.status,
+                    response.duration_ms,
+                )
+            }
+            ConfluenceDraftContentType::Blog => {
+                let response = self
+                    .backend
+                    .blog_location_metadata(
+                        &handle.content_id,
+                        ConfluenceContentStatus::Current,
+                        &credential,
+                        &state.budget,
+                    )
+                    .await
+                    .map_err(location_backend_error)?;
+                let current = response.value;
+                if current.id != handle.content_id
+                    || current.space_id != handle.space_id
+                    || current.status != ConfluenceContentStatus::Current
+                    || current.version == 0
+                {
+                    return Err(location_unresolved());
+                }
+                (current.version, response.status, response.duration_ms)
+            }
+        };
+        if version != expected {
+            let mut facts = json!({"space":handle.space,"spaceId":handle.space_id,
+                "expectedBaseVersion":expected,"currentVersion":version});
+            facts[handle.content_type.id_field()] = json!(handle.content_id);
+            let mut audit = facts.clone();
+            audit["provider"] = json!("confluence");
+            audit["operation"] = json!(request.action());
+            audit["credentialMode"] = json!(request.credential_mode());
+            audit["egressProxy"] = self.backend.egress_proxy_audit(&credential);
+            let mut ids = json!({});
+            ids[handle.content_type.id_field()] = json!(handle.content_id);
+            return Err(ProviderError::error(
+                ReasonCode::VersionConflict,
+                "Confluence published version changed after the draft was staged",
+            )
+            .with_result(facts)
+            .with_audit(audit)
+            .with_upstream(Some(status), Some(duration_ms))
+            .with_object_ids(ids));
+        }
+        self.recheck_content_location(request).await?;
+        Ok(())
     }
 
     pub(crate) async fn recheck_content_location(
@@ -930,8 +1042,18 @@ impl ConfluenceProvider {
     }
 }
 
-fn validate_input_space(claim: Option<&str>, space: &ConfluenceSpace) -> Result<(), ProviderError> {
-    if claim.is_some_and(|claim| claim != space.key && space.alias.as_deref() != Some(claim)) {
+fn validate_input_space(
+    claim: Option<&str>,
+    space: &ConfluenceSpace,
+    config: &ConfluenceProviderConfig,
+) -> Result<(), ProviderError> {
+    let names = ConfluenceSpaceUrlNames::new(
+        &space.key,
+        space.alias.as_deref(),
+        space.web_url.as_deref(),
+        config,
+    );
+    if claim.is_some_and(|claim| !names.names(claim)) {
         return Err(location_unresolved());
     }
     Ok(())
@@ -964,8 +1086,28 @@ pub(crate) fn admitted_space(request: &AdmittedRequest) -> Result<&str, Provider
 
 impl ContentOperationState {
     fn with_failure_audit(&self, mut error: ProviderError) -> ProviderError {
-        error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] = self.audit();
+        self.record_failure_audit(&mut error);
         error
+    }
+
+    pub(crate) fn record_failure_audit(&self, error: &mut ProviderError) {
+        let mut proof = self.audit();
+        let previous = error
+            .audit
+            .as_deref()
+            .and_then(|audit| audit.get("locationProof"));
+        if previous
+            .and_then(|proof| proof.get("diagnostic"))
+            .and_then(Value::as_str)
+            == Some(MOVE_RELATION_DIAGNOSTIC)
+            && let Some(category @ ("not_visible_or_absent" | "unconfirmed")) = previous
+                .and_then(|proof| proof.get("category"))
+                .and_then(Value::as_str)
+        {
+            proof["diagnostic"] = json!(MOVE_RELATION_DIAGNOSTIC);
+            proof["category"] = json!(category);
+        }
+        error.audit.get_or_insert_with(|| Box::new(json!({})))["locationProof"] = proof;
     }
     pub(crate) fn audit(&self) -> Value {
         let (requests, bytes) = self.budget.usage().unwrap_or_default();

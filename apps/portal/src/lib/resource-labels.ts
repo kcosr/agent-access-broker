@@ -7,7 +7,7 @@ export function selectorLabel(types: ResourceTypes, type: ResourceType, selector
   if (selector.kind === "all") return `All ${resourceTypePluralLabel(types, type)}`;
   if (selector.kind === "namespace") return `${types.get(type)?.namespace?.membersLabel ?? type} under ${selector.value}`;
   if (selector.kind === "subtree") return `${selector.value} · root and descendants`;
-  if (type === "confluence_content") return `${selector.value} · this ${selector.value.includes("/blog/") ? "blog post" : "page"} only`;
+  if (type === "confluence_content") return `${selector.value} · this ${/\/wiki\/spaces\/[^/]+\/blog\/\d+$/.test(selector.value) ? "blog post" : "page"} only`;
   return selector.value;
 }
 

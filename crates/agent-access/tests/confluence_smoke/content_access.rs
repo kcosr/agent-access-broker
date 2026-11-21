@@ -8,7 +8,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path_regex};
 const CLOUD: &str = "11111111-2222-4333-8444-555555555555";
 const PREFIX: &str = "/ex/confluence/11111111-2222-4333-8444-555555555555/wiki";
 const FOLDER: &str = "https://example.atlassian.net/wiki/spaces/ENG/folder/10";
-const ACTIONS: &[&str] = &["page.view", "page.update", "page.create", "search"];
+const ACTIONS: &[&str] = &[
+    "page.view",
+    "page.update",
+    "page.create",
+    "attachment.list",
+    "search",
+];
 
 async fn start(server: &MockServer, grant_folder: bool) -> (RunningBroker, Tokens) {
     let application = IsolatedBroker::new(
@@ -97,6 +103,22 @@ struct Upstream {
     corrupt_creation_parent: bool,
     move_root_for_execution: bool,
     hide_root_for_execution: bool,
+    update_conflict: bool,
+    owner_parent: Option<&'static str>,
+    attachment_pages: Vec<(String, bool)>,
+}
+
+impl Upstream {
+    fn node(&self, id: &str) -> Value {
+        let mut value = node(id, *self.versions.get(id).unwrap_or(&1));
+        if id == "103"
+            && let Some(parent) = self.owner_parent
+        {
+            value["parentId"] = json!(parent);
+            value["parentType"] = json!("folder");
+        }
+        value
+    }
 }
 
 fn node(id: &str, version: u64) -> Value {
@@ -153,17 +175,39 @@ async fn mount(server: &MockServer) -> Arc<Mutex<Upstream>> {
                         .unwrap()
                         .1
                         .into_owned();
-                    let value = node(&id, *state.versions.get(&id).unwrap_or(&1));
+                    let value = state.node(&id);
                     return ResponseTemplate::new(200).set_body_json(json!({"results":[value]}));
                 }
                 if path == "/rest/api/content/search" {
                     let results = ["101", "102"].map(|id| {
-                        let mut value = node(id, *state.versions.get(id).unwrap_or(&1));
+                        let mut value = state.node(id);
                         value["space"] = json!({"id":"1","key":"ENG"});
                         value.as_object_mut().unwrap().remove("body");
                         value
                     });
                     return ResponseTemplate::new(200).set_body_json(json!({"results":results}));
+                }
+                if let Some(id) = path
+                    .strip_prefix("/rest/api/content/")
+                    .and_then(|path| path.strip_suffix("/child/attachment"))
+                {
+                    let continued = request
+                        .url
+                        .query_pairs()
+                        .any(|(key, value)| key == "start" && value == "1");
+                    state.attachment_pages.push((id.to_string(), continued));
+                    let mut value = json!({"results":[{
+                        "id":if continued {"att202"} else {"att201"},
+                        "title":if continued {"continued.txt"} else {"first.txt"},
+                        "pageId":id,"container":{"id":id},
+                        "metadata":{"mediaType":"text/plain"},"extensions":{"fileSize":12}
+                    }]});
+                    if !continued {
+                        value["_links"] = json!({"next":format!(
+                            "{PREFIX}/rest/api/content/{id}/child/attachment?start=1"
+                        )});
+                    }
+                    return ResponseTemplate::new(200).set_body_json(value);
                 }
                 for prefix in ["/api/v2/pages/", "/api/v2/folders/", "/rest/api/content/"] {
                     if let Some(id) = path.strip_prefix(prefix) {
@@ -173,7 +217,7 @@ async fn mount(server: &MockServer) -> Arc<Mutex<Upstream>> {
                         if id == "10" && execution && state.hide_root_for_execution {
                             return ResponseTemplate::new(403);
                         }
-                        let mut value = node(id, *state.versions.get(id).unwrap_or(&1));
+                        let mut value = state.node(id);
                         if id == "10" && execution && state.move_root_for_execution {
                             value["parentId"] = json!("20");
                             value["parentType"] = json!("folder");
@@ -203,6 +247,11 @@ async fn mount(server: &MockServer) -> Arc<Mutex<Upstream>> {
             }
             if request.method == "PUT" && path.starts_with("/api/v2/pages/") {
                 let body: Value = serde_json::from_slice(&request.body).unwrap();
+                if state.update_conflict {
+                    return ResponseTemplate::new(409).set_body_json(json!({
+                        "message":"synthetic approval required"
+                    }));
+                }
                 let id = body["id"].as_str().unwrap();
                 let version = body["version"]["number"].as_u64().unwrap();
                 state.versions.insert(id.into(), version);
@@ -622,4 +671,169 @@ async fn content_grant_denies_sibling_and_execution_move_or_hidden_ancestor_befo
         }
         stop(broker).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn content_page_update_distinguishes_local_version_mismatch_from_upstream_conflict() {
+    let server = MockServer::start().await;
+    let state = mount(&server).await;
+    let (broker, tokens) = start(&server, true).await;
+    let token = &tokens.unrestricted;
+    let local = access::http(&broker, token, "confluence", "page.update", &json!({
+        "pageId":"101", "baseVersion":2, "contentFormat":"storage", "content":"<p>Approved update</p>"
+    })).await;
+    assert_eq!(local["reasonCode"], "version_conflict", "{local}");
+    assert_eq!(local["result"]["currentVersion"], 1, "{local}");
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|request| request.method == "PUT")
+    );
+
+    state.lock().unwrap().update_conflict = true;
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/invoke/confluence/page.update", broker.public_url()))
+        .bearer_auth(token)
+        .header(agent_access_provider::REQUEST_ID_HEADER, "confluence-upstream-conflict")
+        .json(&json!({"inputs":{
+            "pageId":"101", "baseVersion":1, "contentFormat":"storage", "content":"<p>Approved update</p>"
+        }}))
+        .send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
+    let conflict: Value = response.json().await.unwrap();
+    assert_eq!(conflict["decision"], "error", "{conflict}");
+    assert_eq!(
+        conflict["reasonCode"], "confluence_update_conflict",
+        "{conflict}"
+    );
+    assert_eq!(
+        conflict["result"],
+        json!({"pageId":"101","space":"ENG","expectedBaseVersion":1})
+    );
+    assert!(!conflict.to_string().contains("currentVersion"));
+    assert!(!conflict.to_string().contains("mutationStatus"));
+    assert!(!conflict.to_string().contains("synthetic approval required"));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "PUT")
+            .count(),
+        1,
+        "a completed upstream conflict must never be replayed"
+    );
+    assert!(state.lock().unwrap().writes.is_empty());
+    stop(broker).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn content_owner_list_cursor_survives_unrelated_publication_and_authorized_movement() {
+    let server = MockServer::start().await;
+    let state = mount(&server).await;
+    let (broker, tokens) = start(&server, true).await;
+    let token = &tokens.unrestricted;
+    let first = access::http(
+        &broker,
+        token,
+        "confluence",
+        "attachment.list",
+        &json!({"pageId":"103","maxResults":1}),
+    )
+    .await;
+    assert_eq!(first["decision"], "allow", "{first}");
+    assert_eq!(first["result"]["attachments"][0]["attachmentId"], "att201");
+    let cursor = first["result"]["nextPageToken"].as_str().unwrap();
+    assert!(!cursor.contains("start=1"));
+    let inputs = json!({"pageId":"103","maxResults":1,"nextPageToken":cursor});
+
+    // The owner remains independently bound even when another page has the
+    // same current authority. This is not a cursor for any page in the grant.
+    let wrong_owner = access::http(
+        &broker,
+        token,
+        "confluence",
+        "attachment.list",
+        &json!({"pageId":"101","maxResults":1,"nextPageToken":cursor}),
+    )
+    .await;
+    assert_eq!(wrong_owner["reasonCode"], "input_invalid", "{wrong_owner}");
+    assert_eq!(state.lock().unwrap().attachment_pages.len(), 1);
+
+    let mut document: toml::Value =
+        toml::from_str(&std::fs::read_to_string(broker.config_path()).unwrap()).unwrap();
+    document["policy"]["resources"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            toml::Value::try_from(json!({
+                "id":"unrelated-publication","resource_type":"confluence_space",
+                "selector":{"kind":"exact","value":"UNRELATED"},
+                "allowed_execution_contexts":["default"]
+            }))
+            .unwrap(),
+        );
+    let generation = broker.config_generation();
+    broker
+        .rewrite_config(toml::to_string(&document).unwrap())
+        .unwrap();
+    let reload = broker.reload().await.unwrap();
+    assert!(reload.is_success(), "{:?}", reload.message());
+    assert!(broker.config_generation() > generation);
+
+    // Reauthorize this same owner after a policy publication, then after a
+    // move from page101 to folder10: its lineage changes inside the same space
+    // and the same subtree grant still covers it. Neither event expires a
+    // valid owner-list cursor or binds it to the old policy/lineage digest.
+    for parent in [None, Some("10")] {
+        state.lock().unwrap().owner_parent = parent;
+        let resumed = access::http(&broker, token, "confluence", "attachment.list", &inputs).await;
+        assert_eq!(resumed["decision"], "allow", "{resumed}");
+        assert_eq!(resumed["result"]["page"]["id"], "103");
+        assert_eq!(
+            resumed["result"]["attachments"][0]["attachmentId"],
+            "att202"
+        );
+        assert_eq!(resumed["result"]["nextPageToken"], Value::Null);
+        assert_eq!(resumed["result"]["hasMore"], false);
+    }
+    assert_eq!(
+        state.lock().unwrap().attachment_pages,
+        [
+            ("103".into(), false),
+            ("103".into(), true),
+            ("103".into(), true)
+        ]
+    );
+    let records = broker
+        .audit()
+        .unwrap()
+        .require_action("confluence", "attachment.list");
+    let initial_policy = records[0]["policyGeneration"].as_u64().unwrap();
+    let continued_policy = records[2]["policyGeneration"].as_u64().unwrap();
+    assert!(continued_policy > initial_policy, "{records:?}");
+
+    // Current containment is checked again before fetching the next page.
+    state.lock().unwrap().owner_parent = Some("20");
+    let outside = access::http(&broker, token, "confluence", "attachment.list", &inputs).await;
+    denied(&outside);
+    assert_eq!(state.lock().unwrap().attachment_pages.len(), 3);
+
+    // Restoring the location cannot recover an action removed from policy.
+    state.lock().unwrap().owner_parent = Some("10");
+    document["policy"]["grants"][0]["actions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|action| action.as_str() != Some("attachment.list"));
+    broker
+        .rewrite_config(toml::to_string(&document).unwrap())
+        .unwrap();
+    let reload = broker.reload().await.unwrap();
+    assert!(reload.is_success(), "{:?}", reload.message());
+    let revoked = access::http(&broker, token, "confluence", "attachment.list", &inputs).await;
+    denied(&revoked);
+    assert_eq!(state.lock().unwrap().attachment_pages.len(), 3);
+    stop(broker).await;
 }

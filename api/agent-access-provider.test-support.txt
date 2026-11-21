@@ -182,10 +182,10 @@ pub agent_access_provider::host::ScopeRequestParts::inputs: &'a serde_json::valu
 pub agent_access_provider::host::ScopeRequestParts::locator_state: core::option::Option<&'a agent_access_provider::ProviderState>
 pub agent_access_provider::host::ScopeRequestParts::lookup_access: core::option::Option<&'a agent_access_provider::LookupAccess>
 pub agent_access_provider::host::ScopeRequestParts::service: &'a str
+impl core::fmt::Debug for agent_access_provider::host::ScopeRequestParts<'_>
+pub fn agent_access_provider::host::ScopeRequestParts<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::clone::Clone for agent_access_provider::host::ScopeRequestParts<'a>
 pub fn agent_access_provider::host::ScopeRequestParts<'a>::clone(&self) -> agent_access_provider::host::ScopeRequestParts<'a>
-impl<'a> core::fmt::Debug for agent_access_provider::host::ScopeRequestParts<'a>
-pub fn agent_access_provider::host::ScopeRequestParts<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> core::marker::Freeze for agent_access_provider::host::ScopeRequestParts<'a>
 impl<'a> core::marker::Send for agent_access_provider::host::ScopeRequestParts<'a>
@@ -4909,10 +4909,10 @@ pub fn agent_access_provider::ScopeRequest<'a>::inputs(&self) -> &'a serde_json:
 pub fn agent_access_provider::ScopeRequest<'a>::locator_state(&self) -> core::option::Option<&'a agent_access_provider::ProviderState>
 pub fn agent_access_provider::ScopeRequest<'a>::lookup_access(&self) -> core::option::Option<&'a agent_access_provider::LookupAccess>
 pub fn agent_access_provider::ScopeRequest<'a>::service(&self) -> &'a str
+impl core::fmt::Debug for agent_access_provider::ScopeRequest<'_>
+pub fn agent_access_provider::ScopeRequest<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::clone::Clone for agent_access_provider::ScopeRequest<'a>
 pub fn agent_access_provider::ScopeRequest<'a>::clone(&self) -> agent_access_provider::ScopeRequest<'a>
-impl<'a> core::fmt::Debug for agent_access_provider::ScopeRequest<'a>
-pub fn agent_access_provider::ScopeRequest<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Freeze for agent_access_provider::ScopeRequest<'a>
 impl<'a> core::marker::Send for agent_access_provider::ScopeRequest<'a>

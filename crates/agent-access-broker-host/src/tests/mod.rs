@@ -958,17 +958,24 @@ async fn spec_openapi_and_send_schema_endpoints_are_hosted_and_filtered() {
         assert_confluence_normalized_content_schema(schema, action_name);
         if matches!(*action_name, "page.create" | "page.draft.create") {
             assert_eq!(action["lookupRequired"], true);
-            assert_eq!(schema["properties"]["parentPageId"]["type"], "string");
+            assert!(schema["properties"].get("parentPageId").is_none());
+            assert_eq!(schema["properties"]["parent"]["type"], "object");
+            assert_eq!(
+                schema["properties"]["parent"]["required"],
+                json!(["kind", "id"])
+            );
+            assert_eq!(
+                schema["properties"]["parent"]["properties"]["kind"]["enum"],
+                json!(["page", "folder"])
+            );
             assert_eq!(schema["properties"]["parentUrl"]["type"], "string");
             assert!(schema.get("not").is_none());
-            for (field, alternative) in
-                [("parentPageId", "parentUrl"), ("parentUrl", "parentPageId")]
-            {
+            for (field, alternative) in [("parent", "parentUrl"), ("parentUrl", "parent")] {
                 assert!(
                     schema["properties"][field]["description"]
                         .as_str()
                         .unwrap()
-                        .contains(&format!("Do not combine with {alternative}."))
+                        .contains(&format!("Do not combine with {alternative}"))
                 );
             }
         }

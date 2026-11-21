@@ -648,6 +648,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   the third-party types and macros supported signatures name. The SDK resolves
   no secrets, loads no TLS files and reads no process environment.
   `docs/provider-sdk.md` documents its supported surface for provider authors.
+  `containment.rs` owns typed locations, whole-operation obligations, boundary
+  proofs and opaque invocation authority; `scope.rs` keeps scalar and containment
+  contracts distinct. Providers report current evidence, while the host selects
+  grants and credentials. Never convert subtree authority to scalar scopes.
 - `crates/agent-access-core`: shared config, policy, identity, envelope, and
   runtime, host secret-reference resolution, and host network construction
   (`network.rs`: outbound TLS trust, egress proxy selection and the per-caller
@@ -687,6 +691,12 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   definitions, bounded import schemas) and the opaque
   `ImportedAdapterRegistration`. Crates that use backend-contract items import
   them from `agent_access_provider` directly, not through core.
+  `runtime/containment.rs` owns complete-operation grant matching, collection
+  bands, token intersections and bounded location previews;
+  `runtime/resource_access.rs` owns caller disclosure and registered references.
+  Keep protected exclusions and competing roots out of ordinary agent projections.
+  `managed_store/confluence_content_resources.sql` (migration 038) adds stored
+  subtree selectors without changing existing membership or encrypted attributes.
 - `crates/agent-access-content`: rich-content formats (ADF, Confluence storage,
   GitLab Markdown) rendering and conversion, plus attribution footers.
 - `crates/agent-access-jira`: the Jira backend (`project_list.rs` live project collection,
@@ -723,7 +733,10 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
   Its `test-support` feature serves the production provider with its gateway
   route at a stub origin, for host tests of OAuth connections.
 - `crates/agent-access-confluence`: the Confluence backend (`space_list.rs` live space collection, `backend.rs` wire
-  seam and HTTP client, `cql.rs` search and CQL parser, `continuation.rs`
+  seam and HTTP client, `hierarchy_backend.rs` strict current metadata,
+  `content_access.rs` offline URL entry and current location proofs,
+  `content_search.rs` bounded result-filtered search, `cql.rs` caller CQL parser
+  and `cql/containment.rs` trusted authority composition, `continuation.rs`
   page-token and draft-handle families, `config.rs`, `present.rs`), with the
   same `test-support` provider fixture as Jira.
   Space keys preserve exact upstream case, including ordinary keys with mixed
@@ -996,6 +1009,9 @@ stdio MCP subprocess; keep those file, receipt and transport boundaries covered.
 - `docs/providers-confluence.md`: Confluence live spaces, page, blog, draft, comment,
   attachment, CQL, URL locator, and attribution behavior, and OAuth
   connections with each action's Atlassian scopes.
+- `docs/confluence-content-access.md`: offline URL entry, exact/subtree resources,
+  precedence and exclusions, whole-operation authorization, current evidence,
+  search/discovery, limits, and upgrade/qualification requirements.
 - `docs/providers-cloudbees-ci.md`: CloudBees CI job resources and
   job/build/Pipeline/test reads, log/report/artifact downloads, queue inspection,
   and trigger actions.

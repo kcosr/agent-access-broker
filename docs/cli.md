@@ -310,8 +310,13 @@ explicit query applies the same caller authority and local credential checks.
 {"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
 ```
 
-Scoped `access` entries contain `coverage` of `exact`, `namespace`, or `all`
-selectors and optional action `inputs`. Their `enforcement` is `request` for
+Scalar `access` entries use `scope: "resource"`, one `resourceType`,
+and `coverage` of `exact`, `namespace`, or `all` selectors with optional action
+`inputs`. Location entries use `scope: "location"`, `resourceTypes`, `domain`,
+and `containmentVerification: "at_invocation"`. Their safe positive coverage
+includes each selector's `resourceType`, `restricted` and `conditional` flags;
+Confluence content supports `exact` and `subtree` selectors. Excluded and competing
+private roots are withheld. Their `enforcement` is `request` for
 Broker request checks, `results` for native query/result containment, or `command`
 for grants passed to a command that must enforce them. `restricted: true` means
 some values inside are withheld. Useful exact or narrower entries remain under restricted
@@ -1009,19 +1014,29 @@ the same effective group.
   must reference typed resource entries or resource groups.
   The CLI percent-encodes grant refs in paths, so refs such as `toml:0` can be
   passed directly.
-- `admin policy resources list | types | get <id> | create | update <id> | delete <id> | used-by <id> | reveal <id> <attribute>`.
+- `admin policy resources list | types | locations | normalize-location --service SERVICE --url URL --coverage space|exact|subtree [--space-key KEY] | get <id> | create | update <id> | delete <id> | used-by <id> | reveal <id> <attribute>`.
   Create/update accept `--attributes-file PATH`, a JSON object of private string
   attributes. Ordinary responses remain redacted; omission on update preserves
   values. Explicit admin `reveal` returns the secret in `result.value`. Keep this
   output private. The attributes file must be a regular file of at most 64 KiB.
   `types` prints the broker's registered resource types (`GET /v1/resource-types`)
   with labels, examples, and supported selector forms.
+  `locations` lists services offering offline resource URL entry.
+  `normalize-location` previews a canonical selector without contacting the
+  upstream or reading credentials; `verification: "not_checked"` means no
+  existence or permission check occurred. An optional `--space-key` is an
+  administrator assertion checked against current facts when the resource is
+  used. These commands need policy-read access to the selected service, not
+  resource-write permission. Save the selector through `create` separately.
+  See [Confluence URL entry](confluence-content-access.md#resources-and-url-entry).
   Create accepts optional `--id`, `--resource-type TYPE` (a registered type ID),
-  `--selector-kind exact|namespace|all`, `--selector-value` for exact/namespace,
+  `--selector-kind exact|namespace|subtree|all`, `--selector-value` for
+  exact/namespace/subtree,
   optional `--display-name`, and repeatable `--execution-context`. Update and
   delete require `--expected-version`. The broker validates the type and whether
   it supports the selector form; in this build namespace selectors apply only to
-  Git repositories and CloudBees CI jobs. Disable an entry with update
+  Git repositories and CloudBees CI jobs, and subtree selectors apply to
+  Confluence page/folder content. Disable an entry with update
   `--enabled false`; its exclusion references remain effective.
 - `admin policy resource-groups list | get <id> | create | update <id> | delete <id> | used-by <id>`.
   Create accepts optional `--id`, `--name`, and repeatable
@@ -1029,7 +1044,8 @@ the same effective group.
   `--expected-version`; update can use `--clear-included` or `--clear-excluded`
   to replace a membership list with an empty list. Groups do not nest.
 - `admin policy effective-access --request-file <PATH>` previews a grant
-  selection with `service`, `actions`, `executionContexts`, and `resources`.
+  selection with `service`, `actions`, `executionContexts`, `credentialMode`,
+  and `resources`.
 - `tokens effective-access --request-file <PATH>` previews token caveats for
   the caller. `admin tokens effective-access <principal> --request-file <PATH>`
   previews the same caveats for an administered principal. Requests use the

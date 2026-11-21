@@ -27,6 +27,12 @@ export type AccessActionSummary = {
 };
 export type AccessServiceSummary = { service: string; actions: AccessActionSummary[] };
 
+function hasCoverage(coverage: EffectiveAccessScope): boolean {
+  return coverage.scope === "unscoped" ||
+    (coverage.scope === "location" && coverage.projectionStatus === "too_complex") ||
+    coverage.clauses.length > 0;
+}
+
 /** Presentation-only grouping of the broker's compiled effective boundaries. */
 export function buildAccessSummary(options: AgentTokenOptions, executionContext: string | null = null): AccessServiceSummary[] {
   return options.services.flatMap((service) => {
@@ -40,7 +46,7 @@ export function buildAccessSummary(options: AgentTokenOptions, executionContext:
           ? { scope: "unscoped" }
           : action.scope === "location" ? location ? { scope: "location", ...location } : undefined
           : { scope: "resource", resourceType: action.resourceType, clauses: action.effectiveAccessByExecutionContext[context] ?? [] };
-        if (!coverage || (coverage.scope === "resource" && coverage.clauses.length === 0)) continue;
+        if (!coverage || !hasCoverage(coverage)) continue;
         const key = JSON.stringify(coverage);
         const existing = grouped.get(key);
         if (existing) existing.contexts.push(context);
@@ -78,6 +84,7 @@ export function mergeEffectiveAccess(items: EffectiveAccessItem[]): EffectiveAcc
   // service -> action -> clause signature -> contexts (insertion-ordered maps)
   const services = new Map<string, Map<string, Map<string, { contexts: string[]; item: EffectiveAccessItem }>>>();
   for (const item of items) {
+    if (!hasCoverage(item)) continue;
     const actions = services.get(item.service) ?? new Map<string, Map<string, { contexts: string[]; item: EffectiveAccessItem }>>();
     services.set(item.service, actions);
     const bySignature = actions.get(item.action) ?? new Map<string, { contexts: string[]; item: EffectiveAccessItem }>();

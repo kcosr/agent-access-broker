@@ -3880,6 +3880,9 @@ impl BrokerRuntime {
                         None,
                     )
                     .expect("containment action");
+                if projection.is_empty() {
+                    continue;
+                }
                 location_access.insert(context.clone(), projection);
             } else if resource_type.is_some() {
                 scalar_access.insert(
@@ -5051,6 +5054,15 @@ impl BrokerRuntime {
             &action,
             token_caveats.as_ref(),
         );
+        let containment_root_provenance = self.containment_root_provenance(
+            &policy_snapshot,
+            &identity,
+            &execution_context,
+            &service,
+            &action,
+            token_caveats.as_ref(),
+            &containment_roots,
+        );
         let initial_context = FinalizeContext {
             admission: admission_audit,
             search_authorization: None,
@@ -5077,12 +5089,8 @@ impl BrokerRuntime {
         // expose local handle diagnostics until the action has a viable grant.
         let scope_identity =
             InvocationIdentity::new(identity.principal.clone(), identity.authenticated);
-        if containment_roots.len() > 64 {
-            return Err(Box::new(owned::PreparationFailure::new(
-                initial_context.clone(),
-                Err(lookup_scope_denial()),
-            )));
-        }
+        // The provider applies its related-root bound after resolving the
+        // operation's actual container; unrelated-space exclusions stay disjoint.
         let locator_state = if action_descriptor.requires_scope_locator_validation {
             if self.plan_pre_scope_lookup(
                 &policy_snapshot,
@@ -5091,15 +5099,13 @@ impl BrokerRuntime {
                 &service,
                 &action,
             ) == PreScopeLookupPlan::UsePerUserCredential
-            {
-                if let Err(error) = self
+                && let Err(error) = self
                     .check_action_credential_eligibility(&service, &action, "per_user", &identity)
-                {
-                    return Err(Box::new(owned::PreparationFailure::new(
-                        initial_context.clone(),
-                        Err(error),
-                    )));
-                }
+            {
+                return Err(Box::new(owned::PreparationFailure::new(
+                    initial_context.clone(),
+                    Err(error),
+                )));
             }
             if self
                 .policy_candidates_for_action(
@@ -5279,7 +5285,10 @@ impl BrokerRuntime {
             ) {
                 Ok(admission) => {
                     containment_authority = Some(admission.authority);
-                    audit_location_authorization = Some(admission.audit);
+                    audit_location_authorization = Some(containment::with_root_provenance(
+                        admission.audit,
+                        containment_root_provenance.as_ref(),
+                    ));
                     audit_search_authorization = admission.search_audit;
                     (admission.scopes, admission.policy, None, None)
                 }
@@ -5419,6 +5428,22 @@ impl BrokerRuntime {
                             error,
                         )
                         .await;
+                    let root_diagnostic = containment::root_visibility_diagnostic(
+                        error.audit.as_deref(),
+                        containment_root_provenance.as_ref(),
+                    );
+                    let mut error = if lookup_scopes_before_policy {
+                        public_lookup_scope_error(error)
+                    } else {
+                        error
+                    };
+                    if let Some(diagnostic) = root_diagnostic {
+                        // Preserve only the bounded host-authored diagnostic across
+                        // pre-policy concealment; all provider details stay hidden.
+                        error.audit = Some(Box::new(json!({"locationAuthorization": {
+                            "finalCheck": "unresolved", "rootVisibility": diagnostic,
+                        }})));
+                    }
                     return Err(Box::new(owned::PreparationFailure::new(
                         FinalizeContext {
                             admission: admission_audit,
@@ -5442,11 +5467,7 @@ impl BrokerRuntime {
                             audit_inputs: audit_inputs.clone(),
                             started,
                         },
-                        Err(if lookup_scopes_before_policy {
-                            public_lookup_scope_error(error)
-                        } else {
-                            error
-                        }),
+                        Err(error),
                     )));
                 }
             };
@@ -5491,7 +5512,10 @@ impl BrokerRuntime {
                     ) {
                         Ok(admission) => {
                             containment_authority = Some(admission.authority);
-                            audit_location_authorization = Some(admission.audit);
+                            audit_location_authorization = Some(containment::with_root_provenance(
+                                admission.audit,
+                                containment_root_provenance.as_ref(),
+                            ));
                             (admission.scopes, admission.policy, provider_state, None)
                         }
                         Err(error) => {

@@ -643,6 +643,141 @@ async fn repeated_upstream_cursor_is_rejected_across_invocations() {
 }
 
 #[tokio::test]
+async fn cursor_history_stays_fixed_after_filtered_pages_and_ring_wraps() {
+    let kind = ConfluenceSearchContentKind::Page;
+    let cursors = (1..=20)
+        .map(|index| format!("upstream-{index:04}"))
+        .collect::<Vec<_>>();
+    let mut pages = cursors
+        .iter()
+        .enumerate()
+        .map(|(index, cursor)| {
+            results(
+                vec![page(
+                    &(101 + index).to_string(),
+                    if index % 2 == 0 { "OPS" } else { "ENG" },
+                )],
+                Some(cursor),
+            )
+        })
+        .collect::<Vec<_>>();
+    pages.push(results(vec![page("999", "ENG")], Some(&cursors[17])));
+    let backend = Backend::new(pages);
+    let mut config = config();
+    config.content_search.max_candidate_pages = 1;
+    let provider = provider(backend.clone(), config);
+    let mut next_inputs = inputs();
+    let mut token_lengths = BTreeSet::new();
+    for index in 0..20 {
+        let result = provider
+            .invoke_content_search(invocation(kind, space_authority(kind), next_inputs), kind)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.result["pages"].as_array().unwrap().len(),
+            usize::from(index % 2 != 0)
+        );
+        token_lengths.insert(result.result["nextPageToken"].as_str().unwrap().len());
+        next_inputs = resume(inputs(), &result);
+    }
+    assert_eq!(
+        token_lengths.len(),
+        1,
+        "history must not disclose page count"
+    );
+    let error = provider
+        .invoke_content_search(invocation(kind, space_authority(kind), next_inputs), kind)
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+    assert!(error.result.is_none());
+    assert_eq!(backend.requests.lock().unwrap().len(), 21);
+}
+
+#[test]
+fn traversal_count_and_ring_have_fixed_serialized_size_through_the_cap() {
+    let mut position = Position::first(3);
+    let mut payload_lengths = BTreeSet::new();
+    for index in 1..=MAX_CURSOR_TRAVERSALS {
+        position
+            .follow_cursor(format!("upstream-{index:04}"))
+            .unwrap();
+        let payload = serde_json::to_vec(&position).unwrap();
+        payload_lengths.insert(payload.len());
+        let opened = Position::open(&payload, 3).unwrap();
+        assert_eq!(opened.traversals, index);
+        assert!(opened.has_cursor(&format!("upstream-{index:04}")));
+    }
+    assert_eq!(payload_lengths.len(), 1);
+    assert!(position.has_cursor("upstream-4089"));
+    assert!(!position.has_cursor("upstream-4088"));
+    let payload = serde_json::to_vec(&position).unwrap();
+    let error = position.follow_cursor("upstream-4097".into()).unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert_eq!(serde_json::to_vec(&position).unwrap(), payload);
+}
+
+#[tokio::test]
+async fn traversal_cap_allows_exhaustion_but_refuses_further_work_as_broker_budget() {
+    let kind = ConfluenceSearchContentKind::Page;
+    for has_next in [false, true] {
+        let backend = Backend::new(vec![results(
+            vec![page("101", "ENG")],
+            has_next.then_some("beyond-broker-budget"),
+        )]);
+        let provider = provider(backend.clone(), config());
+        let authority = space_authority(kind);
+        let request = invocation(kind, authority.clone(), inputs());
+        let query = build_containment_search_query(
+            &parse_search_inputs(&inputs()).unwrap().query,
+            &authority,
+            &BTreeSet::new(),
+            &config().search,
+            kind,
+            SITE,
+        )
+        .unwrap();
+        let binding =
+            binding(&provider, &request, &authority, &query, &BTreeSet::new(), 3).unwrap();
+        let mut position = Position::first(3);
+        for index in 1..=MAX_CURSOR_TRAVERSALS {
+            position
+                .follow_cursor(format!("upstream-{index:04}"))
+                .unwrap();
+        }
+        let token = provider
+            .listing_signer
+            .seal_until(
+                &binding,
+                &serde_json::to_vec(&position).unwrap(),
+                provider.listing_signer.deadline(&binding).unwrap(),
+            )
+            .unwrap();
+        let request = InvocationBuilder::from(request)
+            .input("nextPageToken", json!(token))
+            .build();
+        let result = provider.invoke_content_search(request, kind).await;
+        if has_next {
+            let error = result.unwrap_err();
+            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+            assert!(error.result.is_none());
+            assert!(!error.message.contains("beyond-broker-budget"));
+        } else {
+            let result = result.unwrap();
+            assert_eq!(result.result["scanStatus"], "exhausted");
+            assert_eq!(result.result["pages"][0]["id"], "101");
+            assert!(result.result["nextPageToken"].is_null());
+        }
+        let requests = backend.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "never dispatch the over-budget cursor");
+        assert_eq!(
+            requests[0].next_page_token.as_deref(),
+            Some("upstream-4096")
+        );
+    }
+}
+
+#[tokio::test]
 async fn complete_lineage_filters_current_and_final_moves_before_release() {
     let kind = ConfluenceSearchContentKind::Page;
     for final_move in [false, true] {
@@ -768,6 +903,11 @@ fn malformed_resume_positions_fail_closed() {
         ("cursor", json!("")),
         ("page_commitment", json!("a".repeat(64))),
         ("history", json!(["a".repeat(64)])),
+        ("traversals", json!(1)),
+        ("traversals", json!("1")),
+        ("traversals", json!("0000000A")),
+        ("traversals", json!("00001001")),
+        ("traversals", json!("00000001")),
         ("unrecognized", json!(true)),
     ] {
         let mut changed = valid.clone();
@@ -988,6 +1128,29 @@ fn confidential_cursor_payload_cannot_exceed_the_response_budget() {
         signer.seal_until(&binding, &[0; 512], expiry),
         Err(ContinuationError::PayloadTooLarge { .. })
     ));
+}
+
+#[tokio::test]
+async fn broker_cursor_payload_limit_is_a_value_free_budget_refusal() {
+    let kind = ConfluenceSearchContentKind::Page;
+    let backend = Backend::new(vec![results(
+        vec![page("101", "ENG")],
+        Some("private-upstream-cursor"),
+    )]);
+    let provider = ConfluenceProvider::with_backend_and_signing_key(
+        config(),
+        ProviderLimits::default().with_max_upstream_response_bytes(512),
+        backend.clone(),
+        test_signing_key(9),
+    );
+    let error = provider
+        .invoke_content_search(invocation(kind, space_authority(kind), inputs()), kind)
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert!(error.result.is_none());
+    assert!(!error.message.contains("private-upstream-cursor"));
+    assert_eq!(backend.requests.lock().unwrap().len(), 1);
 }
 
 // Decode the public wire envelope independently to ensure the cursor is not

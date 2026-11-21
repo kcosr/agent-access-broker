@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgentTokenOptions, LocationAccess, NormalizedResourceLocation, PolicyServiceCatalog } from "../src/types";
-import { AccessCoverage } from "../src/components/effective-access";
+import { AccessCoverage, EffectiveAccessSummary } from "../src/components/effective-access";
 import { buildAccessSummary, mergeEffectiveAccess } from "../src/lib/access";
 import { buildAgentTokenServiceRestrictions } from "../src/lib/helpers";
 import { coverageLabels, selectorLabel } from "../src/lib/resource-labels";
@@ -60,10 +60,48 @@ describe("content location presentation", () => {
     expect(rows.map((row) => row.contexts)).toEqual([["default"], ["internal"]]);
   });
 
+  test("empty complete location coverage is no access while unavailable coverage remains visible", () => {
+    const empty: LocationAccess = { ...complete, projectionStatus: "complete", boundaries: [], clauses: [] };
+    const { scope: _emptyScope, ...emptyDetails } = empty;
+    const emptyOptions = structuredClone(options);
+    const action = emptyOptions.services[0].actions[0];
+    if (action.scope !== "location") throw new Error("location fixture required");
+    action.effectiveAccessByExecutionContext.default = emptyDetails;
+    expect(buildAccessSummary(emptyOptions)).toEqual([]);
+    expect(buildAccessSummary(options)[0].actions[0].coverage).toEqual(unavailable);
+
+    const entry = { ...empty, service: "confluence", action: "page.view", executionContext: "default" };
+    expect(mergeEffectiveAccess([entry])).toEqual([]);
+    const markup = renderToStaticMarkup(createElement(EffectiveAccessSummary, { result: { policyGeneration: 1, access: [entry] } }));
+    expect(markup).toContain("No access currently");
+    expect(markup).not.toContain("pt-access-table");
+    expect(renderToStaticMarkup(createElement(AccessCoverage, { coverage: empty }))).toBe("<span>No access currently</span>");
+    expect(mergeEffectiveAccess([entry, { ...unavailable, service: "confluence", action: "page.view", executionContext: "internal" }])).toEqual([
+      { service: "confluence", actions: ["page.view"], contexts: ["internal"], coverage: unavailable }
+    ]);
+  });
+
+  test.each([complete, unavailable])("preserves offline move warnings with $projectionStatus coverage", (coverage) => {
+    const conditional = { ...coverage, domain: "page_move", requiresRuntimeRootVisibility: true };
+    const rows = mergeEffectiveAccess([
+      { ...conditional, service: "confluence", action: "page.move", executionContext: "default" },
+      { ...coverage, domain: "page_move", service: "confluence", action: "page.move", executionContext: "internal" }
+    ]);
+    expect(rows).toHaveLength(2);
+    const markup = renderToStaticMarkup(createElement(AccessCoverage, { coverage: rows[0].coverage }));
+    expect(markup).toContain("Moves require runtime visibility of relevant excluded roots");
+    expect(markup).toContain("This offline preview does not check whether those roots are current or readable");
+    expect(markup).toContain("can block moves throughout its space");
+    expect(markup).toContain("administrator can inspect the configured exclusion and correct or remove it");
+    expect(renderToStaticMarkup(createElement(AccessCoverage, { coverage: rows[1].coverage }))).not.toContain("This offline preview");
+  });
+
   test("distinguishes exact content from subtree coverage in selector and audit labels", () => {
     expect(selectorLabel(types, "confluence_content", { kind: "exact", value: point })).toContain("this page only");
     expect(selectorLabel(types, "confluence_content", { kind: "subtree", value: point })).toContain("root and descendants");
     expect(selectorLabel(types, "confluence_content", { kind: "exact", value: point.replace("/pages/", "/blog/") })).toContain("this blog post only");
+    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: "https://example.atlassian.net/wiki/spaces/blog/pages/1" })).toBe("https://example.atlassian.net/wiki/spaces/blog/pages/1 · this page only");
+    expect(selectorLabel(types, "confluence_content", { kind: "exact", value: "https://example.atlassian.net/wiki/spaces/blog/blog/1" })).toBe("https://example.atlassian.net/wiki/spaces/blog/blog/1 · this blog post only");
   });
 
   test("offers both space and content resources for containment services", () => {

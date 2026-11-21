@@ -2568,6 +2568,7 @@ enum ConfluencePageCommand {
     },
     Update {
         page_id: String,
+        /// Current page version, from 1 through 2147483646.
         #[arg(long)]
         base_version: u64,
         #[arg(long)]
@@ -23492,6 +23493,16 @@ upload_spool_dir = "upload-spool"
         .unwrap()
         .unwrap();
         assert_eq!(storage.0, "<p>literal</p>");
+    }
+
+    #[test]
+    fn confluence_page_update_help_bounds_only_page_base_version() {
+        let page = cli_help(&["confluence", "page", "update"]);
+        assert!(page.contains("from 1 through 2147483646"));
+        let blog = cli_help(&["confluence", "blog", "update"]);
+        assert!(!blog.contains("2147483646"));
+        let comment = cli_help(&["confluence", "page", "footer-comment", "update"]);
+        assert!(!comment.contains("2147483646"));
     }
 
     #[test]

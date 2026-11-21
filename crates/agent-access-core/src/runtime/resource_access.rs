@@ -402,20 +402,22 @@ impl BrokerRuntime {
                     .action_descriptor(service, action)
                     .is_some_and(|action| action.native_search.is_some());
                 for context in execution_contexts {
+                    let location = self.containment_selection_projection(
+                        &snapshot,
+                        context,
+                        &scope,
+                        resources,
+                        credential_mode,
+                        collection,
+                    );
+                    if location.is_empty() {
+                        continue;
+                    }
                     access.push(EffectiveAccessEntry {
                         service: service.into(),
                         action: action.clone(),
                         execution_context: context.clone(),
-                        scope: EffectiveAccessScope::Location(
-                            self.containment_selection_projection(
-                                &snapshot,
-                                context,
-                                &scope,
-                                resources,
-                                credential_mode,
-                                collection,
-                            ),
-                        ),
+                        scope: EffectiveAccessScope::Location(location),
                     });
                 }
                 continue;
@@ -516,8 +518,7 @@ impl BrokerRuntime {
                                 Some(&token),
                             )
                             .expect("containment action");
-                        if matches!(&location.projection, LocationProjection::Complete { clauses, .. } if clauses.is_empty())
-                        {
+                        if location.is_empty() {
                             continue;
                         }
                         access.push(EffectiveAccessEntry {
@@ -851,23 +852,48 @@ impl BrokerRuntime {
                     resource_group_ids: vec![group.id.clone()],
                 };
                 let visible = authored_groups.contains(&group.id)
-                    || services
-                        .iter()
-                        .flat_map(|service| &service.actions)
-                        .any(|action| {
-                            action.scalar_access().is_some_and(|access| {
-                                access.iter().any(|(context, clauses)| {
-                                    let Some(resource_type) = action.resource_type() else {
-                                        return false;
-                                    };
+                    || services.iter().any(|service| {
+                        service.actions.iter().any(|action| match &action.scope {
+                            AgentTokenActionScope::Unscoped => false,
+                            AgentTokenActionScope::Resource {
+                                resource_type,
+                                effective_access_by_execution_context,
+                            } => effective_access_by_execution_context.iter().any(
+                                |(context, clauses)| {
                                     let boundary = snapshot
                                         .resources
                                         .resolve(&selection, resource_type, context.as_str())
                                         .expect("published scalar selectors remain valid");
                                     clauses.iter().any(|clause| clause.intersects(&boundary))
-                                })
-                            })
-                        });
+                                },
+                            ),
+                            AgentTokenActionScope::Location { resource_types, .. } => group
+                                .included_resource_ids
+                                .iter()
+                                .filter_map(|id| snapshot.resources.resources.get(id))
+                                .any(|resource| {
+                                    resource.enabled
+                                        && resource_types.contains(&resource.resource_type)
+                                        && action.execution_contexts.iter().any(|context| {
+                                            resource
+                                                .allowed_execution_contexts
+                                                .iter()
+                                                .any(|allowed| allowed == context.as_str())
+                                                && self.containment_reference_visible(
+                                                    snapshot,
+                                                    identity,
+                                                    context,
+                                                    &service.service,
+                                                    &action.action,
+                                                    None,
+                                                    &resource.resource_type,
+                                                    &resource.selector,
+                                                    |_| true,
+                                                )
+                                        })
+                                }),
+                        })
+                    });
                 visible.then(|| ResourceGroupOption {
                     id: group.id.clone(),
                     name: group.name.clone(),

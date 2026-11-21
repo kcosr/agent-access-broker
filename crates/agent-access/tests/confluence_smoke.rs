@@ -1,5 +1,7 @@
 #[path = "confluence_smoke/content_access.rs"]
 mod content_access;
+#[path = "confluence_smoke/draft_publish_access.rs"]
+mod draft_publish_access;
 #[path = "common/list_mcp.rs"]
 mod list_mcp;
 #[path = "confluence_smoke/plain_inputs.rs"]

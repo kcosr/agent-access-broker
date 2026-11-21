@@ -108,25 +108,6 @@ pub trait ConfluenceBackend: Send + Sync {
         ))
     }
 
-    async fn blog_scope_evidence(
-        &self,
-        blog_id: &str,
-        credential: &AtlassianCredential,
-    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
-    {
-        let response = self.blog_metadata(blog_id, credential).await?;
-        Ok(ConfluenceBackendResponse {
-            value: ConfluenceBlogScopeEvidence {
-                id: response.value.id,
-                space: response.value.space,
-                space_id: response.value.space_id,
-                space_alias: response.value.space_alias,
-            },
-            status: response.status,
-            duration_ms: response.duration_ms,
-        })
-    }
-
     async fn blog(
         &self,
         _blog_id: &str,
@@ -637,16 +618,6 @@ pub struct ConfluenceBlogSummary {
     pub updated_at: Option<String>,
     pub created_by: Option<ConfluenceCommentAuthor>,
     pub updated_by: Option<ConfluenceCommentAuthor>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfluenceBlogScopeEvidence {
-    pub id: String,
-    pub space: String,
-    pub space_id: String,
-    /// The URL alias of `space`, which only checks a URL locator's space
-    /// segment; see [`ConfluenceSpace::alias`].
-    pub space_alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1434,7 +1405,7 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             .location_json(url, credential, budget, "space.location")
             .await?;
         let space = space_from_value(response.value)?;
-        if space.id != id || space.status.as_deref() != Some("current") {
+        if space.id != id || !matches!(space.status.as_deref(), Some("current" | "archived")) {
             return Err(ConfluenceBackendError::ScopeUnresolved);
         }
         Ok(ConfluenceBackendResponse {
@@ -1892,37 +1863,6 @@ impl ConfluenceBackend for HttpConfluenceBackend {
             confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
         Ok(ConfluenceBackendResponse {
             value: blog_from_value(value)?,
-            status,
-            duration_ms: elapsed_ms(started),
-        })
-    }
-
-    async fn blog_scope_evidence(
-        &self,
-        blog_id: &str,
-        credential: &AtlassianCredential,
-    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogScopeEvidence>, ConfluenceBackendError>
-    {
-        let url = self
-            .api_v2_base(credential)?
-            .join(&format!("blogposts/{blog_id}"))
-            .map_err(|error| ConfluenceBackendError::Protocol(error.to_string()))?;
-        let started = Instant::now();
-        let client = self.request_client(credential)?;
-        let response = send_confluence_request(
-            client,
-            credential,
-            client
-                .request(Method::GET, url.clone())
-                .header("Accept", "application/json"),
-            UpstreamCall::new("blog.scope"),
-        )
-        .await?;
-        let status = response.status().as_u16();
-        let value =
-            confluence_response_value(response, self.limits.max_upstream_response_bytes).await?;
-        Ok(ConfluenceBackendResponse {
-            value: blog_scope_evidence_from_value(value)?,
             status,
             duration_ms: elapsed_ms(started),
         })
@@ -4357,13 +4297,16 @@ pub(crate) fn page_update_response(
     request: &ConfluencePageUpdateRequest,
 ) -> Result<ConfluencePage, ConfluenceBackendError> {
     hierarchy_backend::check_optional_type(&value, "page")?;
+    let version = request
+        .base_version
+        .checked_add(1)
+        .ok_or_else(hierarchy_backend::malformed_metadata)?;
     if value.get("id").and_then(Value::as_str) != Some(&request.page_id)
         || value.get("spaceId").and_then(Value::as_str) != Some(&request.space_id)
         || value.get("status").and_then(Value::as_str) != Some("current")
-        || value.pointer("/version/number").and_then(Value::as_u64)
-            != request.base_version.checked_add(1)
+        || value.pointer("/version/number").and_then(Value::as_u64) != Some(version)
     {
-        return Err(ConfluenceBackendError::ScopeUnresolved);
+        return Err(hierarchy_backend::malformed_metadata());
     }
     let optional_string = |path: &str| -> Result<Option<String>, ConfluenceBackendError> {
         match value.pointer(path) {
@@ -4393,10 +4336,7 @@ pub(crate) fn page_update_response(
         space_web_url: None,
         space_alias: None,
         status: Some("current".to_string()),
-        version: request
-            .base_version
-            .checked_add(1)
-            .ok_or(ConfluenceBackendError::ScopeUnresolved)?,
+        version,
         created_at: optional_string("/createdAt")?,
         updated_at: optional_string("/version/createdAt")?,
         created_by,
@@ -4934,9 +4874,12 @@ pub(crate) fn space_from_value(value: Value) -> Result<ConfluenceSpace, Confluen
             })
         })
         .transpose()?;
-    if status.as_deref().is_some_and(|value| value != "current") {
+    if status
+        .as_deref()
+        .is_some_and(|value| !matches!(value, "current" | "archived"))
+    {
         return Err(ConfluenceBackendError::Protocol(
-            "space status is not current".to_string(),
+            "space status is unsupported".to_string(),
         ));
     }
     Ok(ConfluenceSpace {
@@ -5124,38 +5067,6 @@ pub(crate) fn draft_content_from_value(
         created_by: confluence_created_by(&value),
         updated_by: confluence_updated_by(&value),
         bodies,
-    })
-}
-
-pub(crate) fn blog_scope_evidence_from_value(
-    value: Value,
-) -> Result<ConfluenceBlogScopeEvidence, ConfluenceBackendError> {
-    if value
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|content_type| content_type != "blogpost")
-    {
-        return Err(ConfluenceBackendError::Protocol(
-            "Confluence content is not a blog post".to_string(),
-        ));
-    }
-    let id = value
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| is_blog_id(id))
-        .ok_or_else(|| ConfluenceBackendError::Protocol("blog id missing".to_string()))?
-        .to_string();
-    let space_id = value
-        .get("spaceId")
-        .and_then(Value::as_str)
-        .filter(|id| is_page_id(id))
-        .ok_or_else(|| ConfluenceBackendError::Protocol("blog space id missing".to_string()))?
-        .to_string();
-    Ok(ConfluenceBlogScopeEvidence {
-        id,
-        space: String::new(),
-        space_id,
-        space_alias: None,
     })
 }
 

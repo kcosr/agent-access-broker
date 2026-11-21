@@ -88,6 +88,7 @@ pub(crate) fn cql_documentation(kind: ConfluenceSearchContentKind) -> Value {
             "emptyFilter": "Empty or whitespace-only CQL and ORDER BY alone search effective authorized content; the broker always adds the action content type and complete authority constraints.",
             "scope": "Omit spaces to use effective broker authorization after grant, token and execution-context restrictions. Supply spaces only to narrow it; wildcard space keys are unsupported. Space and content-ID exclusions are filters and never grant access. The broker emits the fixed content type, complete winning content boundaries with every exclusion and token intersection, then the grouped caller filter. Returned content is validated against current identity and required location evidence. Valid denied candidates are withheld; unknown evidence fails the request.",
             "contentType": kind.cql_type(),
+            "requestSize": "The caller query limit is independent of the complete percent-encoded request-target ceiling in providers.confluence.content_search.max_encoded_request_target_bytes (default 4096). Authority predicates and all query parameters count toward that ceiling; the HTTP client's absolute-URI cap also applies. An oversized composed request fails with scope_unresolved without dropping constraints. Operators should raise the ceiling only after qualifying the selected upstream route.",
             "limits": {
                 "queryBytes": MAX_CONFLUENCE_RAW_QUERY_BYTES,
                 "tokens": MAX_CONFLUENCE_QUERY_TOKENS,

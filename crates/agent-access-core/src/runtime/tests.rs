@@ -3236,22 +3236,22 @@ async fn token_action_denies_before_lookup_and_resource_denies_before_execution(
 #[test]
 fn token_search_boundary_intersects_policy_before_provider_dispatch() {
     let mut config = base_fake_config();
-    configure_lookup_trace_confluence(&mut config);
+    configure_lookup_trace_jira(&mut config);
     config.policy.grants.clear();
     let runtime = BrokerRuntime::new(config).unwrap();
     let identity = shell_token_identity(
         json!({"readOnly": false, "allowedExecutionContexts": ["default"],
-            "allowedServices": ["confluence"],
+            "allowedServices": ["jira"],
             "serviceRestrictions": {
-                "confluence": {
+                "jira": {
                     "actions": ["search"],
-                    "resources": {"resourceIds": ["space-ENG", "space-RESEARCH"]}
+                    "resources": {"resourceIds": ["project-ENG", "project-RESEARCH"]}
                 }
             }
         }),
     );
     let mut authorization = SearchAuthorizationPlan {
-        scope_type: "space".to_string(),
+        scope_type: "project".to_string(),
         scope: SearchAuthorizationScope::from_exact_values(vec![
             "ENG".to_string(),
             "OPS".to_string(),
@@ -3263,7 +3263,7 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
     runtime
         .intersect_agent_invoke_token_search_authorization(
             &identity,
-            "confluence",
+            "jira",
             "search",
             &mut authorization,
         )
@@ -3276,7 +3276,7 @@ fn token_search_boundary_intersects_policy_before_provider_dispatch() {
     runtime
         .enforce_agent_invoke_token_resource_caveats(
             &identity,
-            "confluence",
+            "jira",
             "search",
             &authorization.resource_scope_summary(),
         )

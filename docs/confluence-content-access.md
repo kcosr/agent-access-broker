@@ -109,6 +109,9 @@ narrower grant by itself does not narrow a broader one.
 Point reads, updates and verification use the current location of the page or
 blog. Comments, replies and attachments use their verified owner and membership;
 an exact owner grant can cover them when their actions are separately granted.
+Existing-content proofs accept current or archived spaces; creation and
+`space.list` require current spaces. The content's own required lifecycle and
+upstream permissions still apply.
 Folder grants confer no `space.list` permission. Blog creation needs a space
 resource; an exact existing blog cannot authorize a new blog.
 
@@ -124,6 +127,14 @@ ordering anchor. It retains its page-only, same-space target contract. An exact
 page does not prove subtree authority. Relevant exclusions need current readable
 root evidence; a permission-filtered child list cannot prove an excluded
 descendant absent. Missing, stale or unreadable evidence prevents the move.
+
+For an unresolved move-exclusion relation, protected audit records
+`confluence_move_relation_unresolved`, a bounded category such as
+`not_visible_or_absent`, and configured resource/group IDs. A missing response
+does not distinguish deletion from lack of visibility. Authorized policy readers
+can inspect those entries and explicitly correct or remove them. Management
+previews warn that runtime root visibility is required; offline previews do not
+check whether a root still exists or is readable.
 
 Draft handles preserve identity and placement facts; they grant no lasting
 permission. Every handle action checks current grants, current parent/location

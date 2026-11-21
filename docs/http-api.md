@@ -269,21 +269,38 @@ terminal audit record reports `upstream_rate_limited`.
 
 After search authorization succeeds, broker audit records include
 `searchAuthorization`, even when credential resolution fails before upstream
-dispatch. This object contains `scopeType`, `credentialMode`, `matchedGrants`, and
-`scope`. The scope is a union of clauses, each with `included` and `excluded`
-resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
+dispatch. Scalar search records contain `scopeType`, `credentialMode`,
+`matchedGrants`, and `scope`. The scope is a union of clauses, each with
+`included` and `excluded` resource selectors. For example, `{"clauses":[{"included":[{"kind":"all"}],
 "excluded":[{"kind":"namespace","value":"engineering/private"}]}]}` permits
 all repositories except descendants of that namespace. Exclusions apply only to
 their own clause; a separate clause can restore an exact repository. An empty
 clause list denies all resources. Selectors use `exact`, `namespace`, or `all`;
 exact and namespace selectors carry `value`.
 
-The envelope's descriptive `resourceScopes` summary is `["*"]` if any normalized
-clause has an all or namespace positive selector. Otherwise it contains sorted,
+Location search records use `scope: "location"`, `scopeType`, `resourceTypes`,
+`domain`, `evidenceLevel`, `credentialMode`, `matchedGrants`, `authorityDigest`,
+`grantBoundaries`, and `tokenBoundary` (null when unrestricted).
+Each boundary has `included` and `excluded` arrays of
+`{resourceType, selector}`. Grant boundaries form the winning band's union;
+the token boundary independently intersects that union. The protected audit
+retains complete authored boundaries, including exclusions. The digest binds
+canonical current authority, not an unrelated policy generation. Evidence level
+is `container_only` or `complete_lineage`; these fields describe authorization
+and never grant it independently. Ordinary agent discovery does not expose this
+protected audit shape.
+
+For scalar searches, the envelope's descriptive `resourceScopes` summary is
+`["*"]` if any normalized clause has an all or namespace positive selector.
+Otherwise it contains sorted,
 deduplicated exact values accepted by the complete predicate. A wildcard summary
 can still have exclusions and never authorizes a resource. Audit retains the
 complete clauses. Historical audit records remain their original stored JSON.
 Command audit authority retains its separate exact resources/any-except shape.
+Confluence location searches report positive space coverage in `space` and
+disclosable canonical content roots in `page_location` or `blog_location`,
+omitting roots provably disjoint from the token. These summaries are not a complete authorization
+predicate and do not name exclusions or hidden competing roots.
 
 Health and discovery:
 
@@ -1917,6 +1934,11 @@ bounded to 16 MiB and fail as a whole with HTTP 422 rather than omit actions;
 MCP additionally observes its configured response limit. Invocation and token
 issuance evaluate policy independently of preview serialization.
 
+Authorized management location previews can also report
+`requiresRuntimeRootVisibility: true`, including on `too_complex` entries. This
+means the operation needs current, readable configured-root evidence at runtime;
+it is an offline warning, not an existence or permission check.
+
 An empty access array describes no current access. Symbolic all-except coverage
 is preserved. Grant previews describe the proposed resource selection; token
 previews additionally evaluate the target principal's current grants and caveats.
@@ -2856,7 +2878,7 @@ so missing credentials are explained when `access` is empty:
 {"service":"jira","executionContext":"default","availability":{"state":"available","requirements":[],"message":"Required credentials are locally available; upstream access has not been verified."},"coverageSemantics":"single_target","access":[{"action":"issue.view","scope":"resource","enforcement":"request","resourceType":"jira_project","coverage":[{"selector":{"kind":"exact","value":"ENG"},"restricted":false}]}],"registeredResources":{"source":"broker_configuration","items":[{"id":"jira-eng","type":"jira_project","value":"ENG","displayName":"Engineering"}],"nextCursor":null}}
 ```
 
-A scoped `access` entry has `action`, `scope: "resource"`, `resourceType`,
+A scalar `access` entry has `action`, `scope: "resource"`, `resourceType`,
 `enforcement`, and `coverage`. `enforcement` is `request` for Broker checks of
 resolved request targets, `results` for native query/result containment, or
 `command` for grants handed to the approved command, which must check and filter
@@ -2866,7 +2888,17 @@ optional `inputs`, and `restricted`. Exact and namespace selectors carry `value`
 identities are never named. Restricted broad entries retain useful exact/narrower
 granted entries; containment removes an entry only under unrestricted coverage.
 Unscoped entries are `{action,scope:"unscoped"}`.
-MCP and OpenAPI imports currently use this form. Local credential checks filter
+Location entries instead have `action`, `scope: "location"`, `resourceTypes`,
+`domain`, `enforcement`, `containmentVerification: "at_invocation"`, and
+`coverage`. Each positive coverage entry carries `resourceType`, `selector`,
+`restricted`, and `conditional`; Confluence content selectors are `exact` or
+`subtree`. Conditional coverage needs current location evidence at invocation.
+Excluded and competing private roots are withheld; useful token roots can appear
+under broader grant coverage. Authorized management projections separately
+retain full conditions, as described under
+[admin policy management](#admin-policy-management).
+MCP and OpenAPI imports currently use the scalar or unscoped forms. Local
+credential checks filter
 all access; discovery does not contact the backend or refresh OAuth. This is a
 single-target summary, not full-request authorization. A compound-only action
 can have empty singleton coverage while a complete request is permitted. Native
@@ -3380,12 +3412,14 @@ whose kind leaves no room for a name within 64 bytes, or whose prefix starts
 | --- | --- | --- | --- |
 | `cloudbees_ci_log_chunk_exceeded` | CloudBees CI | deny | 413 |
 | `cloudbees_ci_log_scan_exceeded` | CloudBees CI | deny | 413 |
+| `confluence_update_conflict` | Confluence | error | 409 |
 | `jira_custom_field_not_allowed` | Jira | deny | 403 |
 | `jira_custom_field_rejected` | Jira | deny | 400 |
 | `jira_transition_unavailable` | Jira | deny | 409 |
 | `jira_transition_rejected` | Jira | deny | 400 |
 
-See [CloudBees CI errors](providers-cloudbees-ci.md#errors),
+See [Confluence page updates](providers-confluence.md#pagecreate-pageupdate-and-pagemove),
+[CloudBees CI errors](providers-cloudbees-ci.md#errors),
 [Jira custom-field updates](providers-jira.md#issuecustom_fieldset), and
 [Jira workflow transitions](providers-jira.md#issue-workflow-transitions) for when
 they occur.

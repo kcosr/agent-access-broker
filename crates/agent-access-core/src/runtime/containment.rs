@@ -115,12 +115,10 @@ impl BrokerRuntime {
             .filter_map(|candidate| candidate.containment.as_ref())
             .chain(token.iter());
         let mut roots = Vec::new();
-        let mut lineage = scope.contract.effects.iter().any(|effect| {
-            matches!(
-                effect,
-                ContainmentEffect::ChildPlacement | ContainmentEffect::SubtreeImpact
-            )
-        });
+        let mut lineage = scope
+            .contract
+            .effects
+            .contains(&ContainmentEffect::SubtreeImpact);
         for boundary in boundaries {
             for selector in boundary.included().iter().chain(boundary.excluded()) {
                 if matches!(selector.selector(), ResourceSelector::Subtree { .. }) {
@@ -151,6 +149,65 @@ impl BrokerRuntime {
         )
     }
 
+    /// Resolve only policy-authored provenance for the roots the provider must
+    /// observe. No upstream identity or URL enters this bounded diagnostic.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn containment_root_provenance(
+        &self,
+        snapshot: &PolicySnapshot,
+        identity: &IdentityContext,
+        context: &ExecutionContext,
+        service: &str,
+        action: &str,
+        token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
+        roots: &[TypedResourceSelector],
+    ) -> Option<Value> {
+        if roots.is_empty() {
+            return None;
+        }
+        let candidates =
+            self.policy_candidates_for_action(snapshot, identity, context, service, action);
+        let token_selection = token
+            .and_then(|token| token.caveats.service_restrictions.as_ref())
+            .and_then(|restrictions| restrictions.get(service))
+            .and_then(|restriction| restriction.resources.as_ref());
+        let mut resources = BTreeSet::new();
+        let mut groups = BTreeSet::new();
+        for selection in candidates
+            .iter()
+            .map(|candidate| &candidate.resources)
+            .chain(token_selection)
+        {
+            for group_id in &selection.resource_group_ids {
+                let Some(group) = snapshot.resources.resource_groups.get(group_id) else {
+                    continue;
+                };
+                for resource_id in &group.excluded_resource_ids {
+                    let Some(resource) = snapshot.resources.resources.get(resource_id) else {
+                        continue;
+                    };
+                    let Ok(selector) = self
+                        .resource_types
+                        .registry()
+                        .typed_selector(&resource.resource_type, &resource.selector)
+                    else {
+                        continue;
+                    };
+                    if roots.contains(&selector) {
+                        resources.insert(resource_id);
+                        groups.insert(group_id);
+                    }
+                }
+            }
+        }
+        let resource_ids: Vec<_> = resources.iter().take(16).collect();
+        let group_ids: Vec<_> = groups.iter().take(16).collect();
+        Some(json!({
+            "resourceIds": resource_ids, "resourceGroupIds": group_ids,
+            "additionalProvenanceCount": resources.len() + groups.len() - resource_ids.len() - group_ids.len(),
+        }))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn admit_containment_evidence(
         &self,
@@ -178,18 +235,17 @@ impl BrokerRuntime {
             .map_err(|_| containment_contract_error())?;
         let token_boundary =
             self.token_containment_boundary(snapshot, context, &scope, token, service);
-        if let Some(boundary) = &token_boundary {
-            if !boundary
+        if let Some(boundary) = &token_boundary
+            && !boundary
                 .matches_evidence(&evidence)
                 .map_err(containment_matching_error)?
-            {
-                return Err(token_caveat_denial(
-                    token.and_then(|token| token.token_id),
-                    service,
-                    action,
-                    "broker token is not allowed to invoke the resolved content location",
-                ));
-            }
+        {
+            return Err(token_caveat_denial(
+                token.and_then(|token| token.token_id),
+                service,
+                action,
+                "broker token is not allowed to invoke the resolved content location",
+            ));
         }
         let mut matches = Vec::new();
         for candidate in
@@ -216,7 +272,6 @@ impl BrokerRuntime {
         let policy =
             self.containment_policy_decision(snapshot, identity, service, action, &band)?;
         let digest = containment_digest(
-            snapshot,
             identity,
             context,
             service,
@@ -279,8 +334,8 @@ impl BrokerRuntime {
             self.containment_policy_decision(snapshot, identity, service, action, &band)?;
         let token_boundary =
             self.token_containment_boundary(snapshot, context, &scope, token, service);
-        if let Some(boundary) = &token_boundary {
-            if boundary.prove_nonempty(&scope.contract, &scope.site_origin)
+        if let Some(boundary) = &token_boundary
+            && (boundary.prove_nonempty(&scope.contract, &scope.site_origin)
                 == OfflineContainmentProof::Empty
                 || band.iter().all(|candidate| {
                     candidate
@@ -289,15 +344,14 @@ impl BrokerRuntime {
                         .expect("containment candidate")
                         .prove_intersection(boundary, &scope.contract, &scope.site_origin)
                         == OfflineContainmentProof::Empty
-                })
-            {
-                return Err(token_caveat_denial(
-                    token.and_then(|token| token.token_id),
-                    service,
-                    action,
-                    "broker token content boundary has no currently authorized resources",
-                ));
-            }
+                }))
+        {
+            return Err(token_caveat_denial(
+                token.and_then(|token| token.token_id),
+                service,
+                action,
+                "broker token content boundary has no currently authorized resources",
+            ));
         }
         let boundaries: Vec<_> = band
             .iter()
@@ -323,7 +377,6 @@ impl BrokerRuntime {
             ContainmentEvidenceLevel::ContainerOnly
         };
         let digest = containment_digest(
-            snapshot,
             identity,
             context,
             service,
@@ -351,26 +404,61 @@ impl BrokerRuntime {
                     .collect(),
             },
         ));
-        let roots: BTreeSet<_> = boundaries
-            .iter()
-            .flat_map(|boundary| boundary.included())
-            .filter_map(|selector| {
-                selector.projection()?;
+        let mut summary = BTreeMap::<String, BTreeSet<String>>::new();
+        for boundary in &boundaries {
+            for selector in boundary.included() {
                 let only = ContainmentBoundary::new(vec![selector.clone()], Vec::new());
-                if token_boundary.as_ref().is_some_and(|token| {
-                    token.prove_intersection(&only, &scope.contract, &scope.site_origin)
-                        == OfflineContainmentProof::Empty
-                }) {
-                    return None;
+                if only.prove_intersection(boundary, &scope.contract, &scope.site_origin)
+                    == OfflineContainmentProof::Empty
+                    || token_boundary.as_ref().is_some_and(|token| {
+                        token.prove_intersection(&only, &scope.contract, &scope.site_origin)
+                            == OfflineContainmentProof::Empty
+                    })
+                {
+                    continue;
                 }
-                selector.selector().value().map(str::to_owned)
+                if selector.projection().is_some() {
+                    if let Some(value) = selector.selector().value() {
+                        summary
+                            .entry(scope.scope.clone())
+                            .or_default()
+                            .insert(value.to_owned());
+                    }
+                } else if scope
+                    .contract
+                    .container_types
+                    .contains(selector.resource_type())
+                {
+                    // Scalar containers keep their provider-declared summary key;
+                    // canonical content URLs remain under the location scope key.
+                    for (name, binding) in &self.services[service].resource_scopes {
+                        if binding.as_scalar().is_some_and(|(resource_type, _)| {
+                            resource_type == selector.resource_type()
+                        }) {
+                            let value = match selector.selector() {
+                                ResourceSelector::Exact { value } => value.clone(),
+                                ResourceSelector::All | ResourceSelector::Namespace { .. } => {
+                                    "*".into()
+                                }
+                                _ => continue,
+                            };
+                            summary.entry(name.clone()).or_default().insert(value);
+                        }
+                    }
+                }
+            }
+        }
+        let scopes = summary
+            .into_iter()
+            .map(|(scope, values)| {
+                let values = if values.contains("*") {
+                    vec!["*".into()]
+                } else {
+                    values.into_iter().collect()
+                };
+                (scope, values)
             })
             .collect();
-        let scopes = if roots.is_empty() {
-            ResourceScopes::new()
-        } else {
-            BTreeMap::from([(scope.scope.clone(), roots.into_iter().collect())])
-        };
         let authority = agent_access_provider::host::containment_collection_authorization(
             &scope.site_origin,
             scope.contract,
@@ -461,6 +549,36 @@ fn point_authorization_audit(
     })
 }
 
+/// The temporary provenance stays in the host finalization context, never in
+/// a provider request or a caller response. Only an unresolved-root marker
+/// releases these configured IDs into the protected audit.
+pub(super) fn with_root_provenance(mut summary: Value, provenance: Option<&Value>) -> Value {
+    if let Some(provenance) = provenance {
+        summary["_rootVisibilityProvenance"] = provenance.clone();
+    }
+    summary
+}
+
+pub(super) fn root_visibility_diagnostic(
+    provider: Option<&Value>,
+    provenance: Option<&Value>,
+) -> Option<Value> {
+    let proof = provider?.get("locationProof")?;
+    if proof.get("finalCheck")?.as_str()? != "unresolved"
+        || proof.get("diagnostic")?.as_str()? != "confluence_move_relation_unresolved"
+    {
+        return None;
+    }
+    let category = proof.get("category")?.as_str()?;
+    if !matches!(category, "not_visible_or_absent" | "unconfirmed") {
+        return None;
+    }
+    let mut diagnostic = provenance?.clone();
+    diagnostic["diagnostic"] = json!("confluence_move_relation_unresolved");
+    diagnostic["category"] = json!(category);
+    Some(diagnostic)
+}
+
 pub(super) fn attach_containment_audit(
     provider: Option<Value>,
     summary: Option<Value>,
@@ -469,6 +587,12 @@ pub(super) fn attach_containment_audit(
         return provider;
     };
     let mut provider = provider.unwrap_or_else(|| json!({}));
+    let provenance = summary
+        .as_object_mut()
+        .and_then(|summary| summary.remove("_rootVisibilityProvenance"));
+    if let Some(diagnostic) = root_visibility_diagnostic(Some(&provider), provenance.as_ref()) {
+        summary["rootVisibility"] = diagnostic;
+    }
     let final_check = provider
         .pointer("/locationProof/finalCheck")
         .and_then(Value::as_str)
@@ -487,7 +611,6 @@ pub(super) fn attach_containment_audit(
 
 #[allow(clippy::too_many_arguments)]
 fn containment_digest(
-    snapshot: &PolicySnapshot,
     identity: &IdentityContext,
     context: &ExecutionContext,
     service: &str,
@@ -497,12 +620,20 @@ fn containment_digest(
     token: Option<&ContainmentBoundary>,
     evidence: Option<&ContainmentEvidence>,
 ) -> String {
-    let boundaries: Vec<_> = candidates
+    let mut boundaries: Vec<_> = candidates
         .iter()
         .filter_map(|candidate| candidate.containment.as_ref())
         .collect();
+    // The union is independent of policy publication, grant order and duplicate
+    // same-mode grants. The actual selected boundaries and token are the fence.
+    boundaries.sort_by(|left, right| {
+        left.included()
+            .cmp(right.included())
+            .then_with(|| left.excluded().cmp(right.excluded()))
+    });
+    boundaries.dedup();
     let binding = serde_json::to_vec(&json!({
-        "generation": snapshot.generation(), "principal": identity.principal,
+        "principal": identity.principal,
         "context": context, "service": service, "action": action,
         "credentialMode": mode, "boundaries": boundaries, "token": token,
         "evidence": evidence.map(evidence_digest_value),
@@ -633,8 +764,16 @@ pub struct LocationAccess {
     pub domain: String,
     pub enforcement: ResourceAccessEnforcement,
     pub containment_verification: ContainmentVerification,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_runtime_root_visibility: bool,
     #[serde(flatten)]
     pub projection: LocationProjection,
+}
+
+impl LocationAccess {
+    pub(super) fn is_empty(&self) -> bool {
+        matches!(&self.projection, LocationProjection::Complete { clauses, .. } if clauses.is_empty())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -654,6 +793,24 @@ struct ContainmentPlan {
 }
 
 impl ContainmentPlan {
+    fn requires_runtime_root_visibility(&self) -> bool {
+        self.scope
+            .contract
+            .effects
+            .contains(&ContainmentEffect::SubtreeImpact)
+            && self
+                .candidates
+                .iter()
+                .filter_map(|candidate| candidate.containment.as_ref())
+                .chain(self.token.iter())
+                .any(|boundary| {
+                    boundary
+                        .excluded()
+                        .iter()
+                        .any(|selector| selector.projection().is_some())
+                })
+    }
+
     fn boundary(&self, index: usize) -> &ContainmentBoundary {
         self.candidates[index]
             .containment
@@ -803,6 +960,7 @@ impl BrokerRuntime {
             &plan.scope,
             plan.collection,
             projection,
+            plan.requires_runtime_root_visibility(),
         )))
     }
 
@@ -816,6 +974,14 @@ impl BrokerRuntime {
         collection: bool,
     ) -> LocationAccess {
         let boundary = self.resolve_containment_boundary(snapshot, context, scope, resources);
+        let requires_runtime_root_visibility = scope
+            .contract
+            .effects
+            .contains(&ContainmentEffect::SubtreeImpact)
+            && boundary
+                .excluded()
+                .iter()
+                .any(|selector| selector.projection().is_some());
         let projection = if boundary
             .included()
             .len()
@@ -831,16 +997,33 @@ impl BrokerRuntime {
                 clauses: Vec::new(),
             }
         } else {
-            LocationProjection::Complete {
-                boundaries: vec![LocationBoundary::from(&boundary)],
-                clauses: vec![LocationAccessClause {
-                    required: vec![0],
-                    excluded_requests: Vec::new(),
-                    credential_mode: credential_mode.into(),
-                }],
+            let clauses = vec![LocationAccessClause {
+                required: vec![0],
+                excluded_requests: Vec::new(),
+                credential_mode: credential_mode.into(),
+            }];
+            if location_projection_fits_bytes(
+                scope,
+                collection,
+                requires_runtime_root_visibility,
+                &[&boundary],
+                &clauses,
+                crate::RESOURCE_ACCESS_MAX_RESPONSE_BYTES as u64,
+            ) {
+                LocationProjection::Complete {
+                    boundaries: vec![LocationBoundary::from(&boundary)],
+                    clauses,
+                }
+            } else {
+                projection_too_complex()
             }
         };
-        bound_location_access(location_access(scope, collection, projection))
+        bound_location_access(location_access(
+            scope,
+            collection,
+            projection,
+            requires_runtime_root_visibility,
+        ))
     }
 
     /// Redacted positive coverage is derived from the same candidate conditions
@@ -913,6 +1096,52 @@ impl BrokerRuntime {
                 };
                 if !result.contains(&coverage) {
                     result.push(coverage);
+                }
+            }
+        }
+        if let Some(token) = &plan.token {
+            for selector in token.included() {
+                if result.iter().any(|coverage| {
+                    coverage.resource_type == *selector.resource_type()
+                        && coverage.selector == *selector.selector()
+                }) {
+                    continue;
+                }
+                let singleton = ContainmentBoundary::new(vec![selector.clone()], Vec::new());
+                if singleton.prove_intersection(
+                    token,
+                    &plan.scope.contract,
+                    &plan.scope.site_origin,
+                ) == OfflineContainmentProof::Empty
+                {
+                    continue;
+                }
+                let covered = plan
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .any(|(index, candidate)| {
+                        mode_available(&candidate.credential_mode)
+                            && self.containment_mode_available(
+                                identity,
+                                service,
+                                action,
+                                &candidate.credential_mode,
+                            )
+                            && plan.possible(index)
+                            && plan.boundary(index).prove_covers(
+                                &singleton,
+                                &plan.scope.contract,
+                                &plan.scope.site_origin,
+                            ) == OfflineContainmentProof::Covered
+                    });
+                if covered {
+                    result.push(LocationCoverage {
+                        resource_type: selector.resource_type().clone(),
+                        selector: selector.selector().clone(),
+                        restricted: true,
+                        conditional: true,
+                    });
                 }
             }
         }
@@ -1090,6 +1319,7 @@ fn location_access(
     scope: &ActionContainmentScope,
     collection: bool,
     projection: LocationProjection,
+    requires_runtime_root_visibility: bool,
 ) -> LocationAccess {
     LocationAccess {
         resource_types: scope.contract.selectors_by_type.keys().cloned().collect(),
@@ -1100,6 +1330,7 @@ fn location_access(
             ResourceAccessEnforcement::Request
         },
         containment_verification: ContainmentVerification::AtInvocation,
+        requires_runtime_root_visibility,
         projection,
     }
 }
@@ -1186,18 +1417,78 @@ fn project_location_plan<'a>(
             credential_mode: candidate.credential_mode.clone(),
         });
     }
-    let result = LocationProjection::Complete {
+    if !location_projection_fits_bytes(
+        &plan.scope,
+        plan.collection,
+        plan.requires_runtime_root_visibility(),
+        &boundaries,
+        &clauses,
+        byte_limit,
+    ) {
+        return projection_too_complex();
+    }
+    LocationProjection::Complete {
         boundaries: boundaries.into_iter().map(LocationBoundary::from).collect(),
         clauses,
+    }
+}
+
+/// SDK boundaries serialize exactly the authored selector fields used by the
+/// management projection. Borrow them for the byte preflight so an over-budget
+/// expression never clones its URL/selector strings into an owned result.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BorrowedLocationProjection<'a> {
+    projection_status: &'static str,
+    boundaries: &'a [&'a ContainmentBoundary],
+    clauses: &'a [LocationAccessClause],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BorrowedLocationAccess<'a> {
+    resource_types: Vec<&'a ResourceType>,
+    domain: &'a str,
+    enforcement: ResourceAccessEnforcement,
+    containment_verification: ContainmentVerification,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    requires_runtime_root_visibility: bool,
+    #[serde(flatten)]
+    projection: BorrowedLocationProjection<'a>,
+}
+
+fn location_projection_fits_bytes(
+    scope: &ActionContainmentScope,
+    collection: bool,
+    requires_runtime_root_visibility: bool,
+    boundaries: &[&ContainmentBoundary],
+    clauses: &[LocationAccessClause],
+    byte_limit: u64,
+) -> bool {
+    let access = BorrowedLocationAccess {
+        resource_types: scope.contract.selectors_by_type.keys().collect(),
+        domain: &scope.contract.domain,
+        enforcement: if collection {
+            ResourceAccessEnforcement::Results
+        } else {
+            ResourceAccessEnforcement::Request
+        },
+        containment_verification: ContainmentVerification::AtInvocation,
+        requires_runtime_root_visibility,
+        projection: BorrowedLocationProjection {
+            projection_status: "complete",
+            boundaries,
+            clauses,
+        },
     };
+    serialized_fits_bytes(&access, byte_limit)
+}
+
+fn serialized_fits_bytes(value: &impl Serialize, byte_limit: u64) -> bool {
     let mut writer = ProjectionByteCounter {
         remaining: byte_limit,
     };
-    if serde_json::to_writer(&mut writer, &result).is_err() {
-        projection_too_complex()
-    } else {
-        result
-    }
+    serde_json::to_writer(&mut writer, value).is_ok()
 }
 
 struct ProjectionByteCounter {

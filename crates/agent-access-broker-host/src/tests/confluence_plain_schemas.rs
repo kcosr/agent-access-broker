@@ -229,7 +229,7 @@ impl ConfluenceBackend for ReadBackend {
                 web_url: None,
                 alias: None,
                 status: Some("current".into()),
-                homepage_id: None,
+                homepage_id: Some("123456".into()),
             },
             status: 200,
             duration_ms: 1,
@@ -638,14 +638,16 @@ async fn confluence_schema_accepts_relations_that_the_provider_still_refuses() {
             jsonschema::validator_for(schema).unwrap().is_valid(&inputs),
             "{action}: {inputs}"
         );
-        let response = invoke(
+        let response = http_invoke(
             &fixture,
-            &format!("confluence-plain-refusal-{index}"),
-            "confluence",
             action,
-            inputs.clone(),
+            &format!("confluence-plain-refusal-{index}"),
+            json!({"inputs": inputs}),
         )
         .await;
+        let status = response.status();
+        let response = response_json(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{}", response["reason"]);
         assert_eq!(response["reason"], expected);
         let called = fixture
             .call(
@@ -824,8 +826,9 @@ async fn confluence_content_denials_keep_non_input_reasons_and_statuses() {
             json!({"inputs": inputs}),
         )
         .await;
-        assert_eq!(response.status(), status);
+        let actual_status = response.status();
         let response = response_json(response).await;
+        assert_eq!(actual_status, status, "{}", response["reason"]);
         let called = fixture
             .call(
                 &session,

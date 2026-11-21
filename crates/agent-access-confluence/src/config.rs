@@ -138,7 +138,8 @@ pub static CONFLUENCE_BACKEND: BackendRegistration = BackendRegistration::new(
     "confluence",
     parse_backend_config::<ConfluenceProviderConfig>,
 )
-.with_resource_types(&[&CONFLUENCE_SPACE_RESOURCE, &CONFLUENCE_CONTENT_RESOURCE]);
+.with_resource_types(&[&CONFLUENCE_SPACE_RESOURCE, &CONFLUENCE_CONTENT_RESOURCE])
+.with_domain_reasons(&[&UPDATE_CONFLICT]);
 
 impl BackendConfig for ConfluenceProviderConfig {
     fn kind(&self) -> &'static str {

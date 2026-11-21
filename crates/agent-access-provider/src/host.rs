@@ -263,7 +263,7 @@ pub fn configure_client_profile(
 ///
 /// Intentionally exhaustive: the host supplies every input, so a new one
 /// fails to compile until the host provides it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ScopeRequestParts<'a> {
     pub service: &'a str,
     pub action: &'a str,
@@ -275,6 +275,12 @@ pub struct ScopeRequestParts<'a> {
     pub containment_evidence_level: ContainmentEvidenceLevel,
     pub containment_roots: &'a [TypedResourceSelector],
     pub locator_state: Option<&'a ProviderState>,
+}
+
+impl std::fmt::Debug for ScopeRequestParts<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::scope::fmt_scope_request_debug(scope_request(*self), "ScopeRequestParts", f)
+    }
 }
 
 /// The request a provider's scope resolution receives. It carries no admitted

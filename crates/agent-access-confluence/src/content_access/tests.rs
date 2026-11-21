@@ -59,12 +59,27 @@ fn space() -> ConfluenceSpace {
 
 struct EvidenceBackend {
     nodes: Mutex<BTreeMap<(ConfluenceNodeKind, String), ConfluenceNode>>,
+    hidden_nodes: Mutex<BTreeSet<String>>,
+    hidden_for_credential: Mutex<Option<ExecutionCredential>>,
+    hierarchy_credentials: Mutex<Vec<ExecutionCredential>>,
     space: Mutex<ConfluenceSpace>,
     page_reads: AtomicUsize,
     metadata_reads: AtomicUsize,
     move_during_metadata: bool,
     writes: AtomicUsize,
+    published_current_version: AtomicUsize,
+    published_current_reads: AtomicUsize,
+    published_current_parent: Mutex<Option<ConfluenceParent>>,
+    publish_requests: Mutex<Vec<ConfluenceDraftUpdateRequest>>,
+    publish_response: Mutex<Option<ConfluenceDraftContent>>,
     emitted_bytes: Arc<AtomicUsize>,
+    content_opens: AtomicUsize,
+    download_fixture: bool,
+    move_during_membership: bool,
+    update_conflict: bool,
+    draft_read_failure: Mutex<Option<ConfluenceBackendError>>,
+    draft_read_budget: Mutex<Option<ConfluenceMetadataBudget>>,
+    draft_read_override: Mutex<Option<ConfluenceDraftContent>>,
     move_during_body: bool,
     move_during_download: bool,
     move_after_upload: bool,
@@ -93,17 +108,49 @@ impl EvidenceBackend {
         }
         Self {
             nodes: Mutex::new(nodes),
+            hidden_nodes: Mutex::new(BTreeSet::new()),
+            hidden_for_credential: Mutex::new(None),
+            hierarchy_credentials: Mutex::new(Vec::new()),
             space: Mutex::new(space()),
             page_reads: AtomicUsize::new(0),
             metadata_reads: AtomicUsize::new(0),
             move_during_metadata: false,
             writes: AtomicUsize::new(0),
+            published_current_version: AtomicUsize::new(7),
+            published_current_reads: AtomicUsize::new(0),
+            published_current_parent: Mutex::new(None),
+            publish_requests: Mutex::new(Vec::new()),
+            publish_response: Mutex::new(None),
             emitted_bytes: Arc::new(AtomicUsize::new(0)),
+            content_opens: AtomicUsize::new(0),
+            download_fixture: false,
+            move_during_membership: false,
+            update_conflict: false,
+            draft_read_failure: Mutex::new(None),
+            draft_read_budget: Mutex::new(None),
+            draft_read_override: Mutex::new(None),
             move_during_body: false,
             move_during_download: false,
             move_after_upload: false,
             comment_chain: AtomicUsize::new(0),
         }
+    }
+    fn publish(
+        &self,
+        request: ConfluenceDraftUpdateRequest,
+        kind: ConfluenceDraftContentType,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.publish_requests.lock().unwrap().push(request.clone());
+        let mut published = self.draft(&request.content_id, kind);
+        published.status = Some(request.status);
+        published.version = request.version_number;
+        ok(self
+            .publish_response
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(published))
     }
     fn move_page(&self) {
         self.nodes
@@ -151,11 +198,28 @@ impl ConfluenceBackend for EvidenceBackend {
         id: &str,
         status: ConfluenceContentStatus,
         _require_parent: bool,
-        _credential: &AtlassianCredential,
+        credential: &AtlassianCredential,
         budget: &ConfluenceMetadataBudget,
     ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
         budget.charge_request()?;
         budget.charge_bytes(100)?;
+        let material = credential
+            .static_credential()
+            .expect("fixture uses static credentials");
+        self.hierarchy_credentials
+            .lock()
+            .unwrap()
+            .push(material.clone());
+        if self.hidden_nodes.lock().unwrap().contains(id)
+            && self
+                .hidden_for_credential
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(|blocked| blocked == material)
+        {
+            return Err(ConfluenceBackendError::Forbidden);
+        }
         let mut node = self
             .nodes
             .lock()
@@ -164,12 +228,62 @@ impl ConfluenceBackend for EvidenceBackend {
             .cloned()
             .ok_or(ConfluenceBackendError::NotFound)?;
         if id == "400" {
-            node.status = ConfluenceContentStatus::Draft;
+            node.status = status;
+            if status == ConfluenceContentStatus::Current {
+                self.published_current_reads.fetch_add(1, Ordering::SeqCst);
+                node.version = Some(self.published_current_version.load(Ordering::SeqCst) as u64);
+                if let Some(parent) = self.published_current_parent.lock().unwrap().as_ref() {
+                    node.parent = Some(parent.clone());
+                }
+            }
         }
         if node.status != status {
             return Err(ConfluenceBackendError::ScopeUnresolved);
         }
         ok(node)
+    }
+    async fn page_hierarchy(
+        &self,
+        id: &str,
+        _get_draft: bool,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluencePageHierarchy>, ConfluenceBackendError> {
+        let node = self
+            .nodes
+            .lock()
+            .unwrap()
+            .get(&(ConfluenceNodeKind::Page, id.into()))
+            .cloned()
+            .ok_or(ConfluenceBackendError::NotFound)?;
+        ok(ConfluencePageHierarchy {
+            id: node.id,
+            space_id: node.space_id,
+            parent_page_id: node.parent.as_ref().map(|parent| parent.id.clone()),
+            parent_type: node
+                .parent
+                .as_ref()
+                .map(|parent| parent.kind.as_str().into()),
+            status: "current".into(),
+            version: 1,
+        })
+    }
+    async fn page_ancestors(
+        &self,
+        _id: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<Vec<ConfluencePageAncestor>>, ConfluenceBackendError>
+    {
+        ok(Vec::new())
+    }
+    async fn move_page(
+        &self,
+        _id: &str,
+        _position: ConfluencePageMovePosition,
+        _target: &str,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<String>, ConfluenceBackendError> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        Err(ConfluenceBackendError::Protocol("unexpected move".into()))
     }
     async fn regular_page_metadata(
         &self,
@@ -203,11 +317,18 @@ impl ConfluenceBackend for EvidenceBackend {
     ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
         budget.charge_request()?;
         budget.charge_bytes(100)?;
+        if id == "800" && status == ConfluenceContentStatus::Current {
+            self.published_current_reads.fetch_add(1, Ordering::SeqCst);
+        }
         ok(ConfluenceBlogLocation {
             id: id.into(),
             space_id: "98765".into(),
             status,
-            version: 1,
+            version: if id == "800" && status == ConfluenceContentStatus::Current {
+                self.published_current_version.load(Ordering::SeqCst) as u64
+            } else {
+                1
+            },
         })
     }
     async fn space_location_metadata(
@@ -326,7 +447,18 @@ impl ConfluenceBackend for EvidenceBackend {
         _body_format: Option<&str>,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
-        ok(self.draft(id, ConfluenceDraftContentType::Page))
+        if let Some(budget) = self.draft_read_budget.lock().unwrap().as_ref() {
+            budget.charge_bytes(u64::MAX)?;
+        }
+        if let Some(error) = self.draft_read_failure.lock().unwrap().as_ref() {
+            return Err(error.clone());
+        }
+        ok(self
+            .draft_read_override
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.draft(id, ConfluenceDraftContentType::Page)))
     }
     async fn draft_blog(
         &self,
@@ -334,7 +466,66 @@ impl ConfluenceBackend for EvidenceBackend {
         _body_format: Option<&str>,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
-        ok(self.draft(id, ConfluenceDraftContentType::Blog))
+        if let Some(budget) = self.draft_read_budget.lock().unwrap().as_ref() {
+            budget.charge_bytes(u64::MAX)?;
+        }
+        if let Some(error) = self.draft_read_failure.lock().unwrap().as_ref() {
+            return Err(error.clone());
+        }
+        ok(self
+            .draft_read_override
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.draft(id, ConfluenceDraftContentType::Blog)))
+    }
+    async fn update_page_draft(
+        &self,
+        request: ConfluenceDraftUpdateRequest,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
+        self.publish(request, ConfluenceDraftContentType::Page)
+    }
+    async fn update_blog_draft(
+        &self,
+        request: ConfluenceDraftUpdateRequest,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceDraftContent>, ConfluenceBackendError> {
+        self.publish(request, ConfluenceDraftContentType::Blog)
+    }
+    async fn page_draft_attachments_page(
+        &self,
+        id: &str,
+        _limit: u32,
+        _cursor: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
+    {
+        ok(ConfluenceAttachmentListPage {
+            attachments: if self.download_fixture {
+                self.page_attachments(id, _credential).await?.value
+            } else {
+                Vec::new()
+            },
+            next_position: None,
+        })
+    }
+    async fn blog_draft_attachments_page(
+        &self,
+        id: &str,
+        _limit: u32,
+        _cursor: Option<&str>,
+        _credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentListPage>, ConfluenceBackendError>
+    {
+        ok(ConfluenceAttachmentListPage {
+            attachments: if self.download_fixture {
+                self.page_attachments(id, _credential).await?.value
+            } else {
+                Vec::new()
+            },
+            next_position: None,
+        })
     }
     async fn search(
         &self,
@@ -357,6 +548,9 @@ impl ConfluenceBackend for EvidenceBackend {
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
         self.writes.fetch_add(1, Ordering::SeqCst);
+        if self.update_conflict {
+            return Err(ConfluenceBackendError::Conflict);
+        }
         let mut value = page(&request.page_id);
         value.version = request.base_version + 1;
         ok(value)
@@ -385,6 +579,9 @@ impl ConfluenceBackend for EvidenceBackend {
         page_id: &str,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
+        if self.move_during_membership {
+            self.space.lock().unwrap().key = "OPS".into();
+        }
         ok(vec![ConfluenceAttachment {
             id: "800".into(),
             page_id: page_id.into(),
@@ -401,6 +598,7 @@ impl ConfluenceBackend for EvidenceBackend {
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
     {
+        self.content_opens.fetch_add(1, Ordering::SeqCst);
         if self.move_during_download {
             self.move_page();
         }
@@ -417,6 +615,40 @@ impl ConfluenceBackend for EvidenceBackend {
             content_type: "text/plain".into(),
             media_type_declaration: MediaTypeDeclaration::parse("text/plain"),
         })
+    }
+    async fn blog_attachments(
+        &self,
+        id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<Vec<ConfluenceAttachment>>, ConfluenceBackendError> {
+        self.page_attachments(id, credential).await
+    }
+    async fn blog_attachment_content(
+        &self,
+        id: &str,
+        attachment_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
+    {
+        self.attachment_content(id, attachment_id, credential).await
+    }
+    async fn page_draft_attachment_content(
+        &self,
+        id: &str,
+        attachment_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
+    {
+        self.attachment_content(id, attachment_id, credential).await
+    }
+    async fn blog_draft_attachment_content(
+        &self,
+        id: &str,
+        attachment_id: &str,
+        credential: &AtlassianCredential,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceAttachmentContent>, ConfluenceBackendError>
+    {
+        self.attachment_content(id, attachment_id, credential).await
     }
 }
 
@@ -511,10 +743,36 @@ async fn admitted(
     action: &str,
     level: ContainmentEvidenceLevel,
 ) -> ProviderInvocation {
-    let inputs = action_inputs(provider, action);
+    admitted_with_roots(provider, action, level, Vec::new()).await
+}
+
+async fn admitted_with_roots(
+    provider: &ConfluenceProvider,
+    action: &str,
+    level: ContainmentEvidenceLevel,
+    roots: Vec<TypedResourceSelector>,
+) -> ProviderInvocation {
+    admitted_inputs(
+        provider,
+        action,
+        level,
+        roots,
+        action_inputs(provider, action),
+    )
+    .await
+}
+
+async fn admitted_inputs(
+    provider: &ConfluenceProvider,
+    action: &str,
+    level: ContainmentEvidenceLevel,
+    roots: Vec<TypedResourceSelector>,
+    inputs: Value,
+) -> ProviderInvocation {
     let mut fixture = ScopeRequestFixture::new("confluence", action, inputs.clone())
         .lookup_credential(token())
-        .containment_evidence_level(level);
+        .containment_evidence_level(level)
+        .containment_roots(roots);
     if let Some(state) = provider
         .validate_scope_locator(fixture.local_request())
         .unwrap()
@@ -867,4 +1125,589 @@ async fn prewrite_version_conflict_does_not_release_new_facts_after_location_cha
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(error.result.is_none());
     assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+}
+
+fn diagnostic_root() -> TypedResourceSelector {
+    ResourceTypeRegistry::new([&CONFLUENCE_SPACE_RESOURCE, &CONFLUENCE_CONTENT_RESOURCE])
+        .unwrap()
+        .typed_selector(
+            CONFLUENCE_CONTENT_RESOURCE.id(),
+            &ResourceSelector::Subtree {
+                value: "https://example.atlassian.net/wiki/spaces/ENG/pages/900000000001".into(),
+            },
+        )
+        .unwrap()
+}
+
+fn insert_diagnostic_root(backend: &EvidenceBackend, ancestor: Option<ConfluenceParent>) {
+    backend.nodes.lock().unwrap().insert(
+        (ConfluenceNodeKind::Page, "900000000001".into()),
+        ConfluenceNode {
+            id: "900000000001".into(),
+            kind: ConfluenceNodeKind::Page,
+            space_id: "98765".into(),
+            parent: ancestor,
+            status: ConfluenceContentStatus::Current,
+            version: Some(1),
+        },
+    );
+}
+
+fn assert_private_move_diagnostic(error: &ProviderError) {
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert_eq!(
+        error.message,
+        "Confluence content location could not be confirmed"
+    );
+    assert!(error.result.is_none());
+    assert!(error.object_ids.is_none());
+    let proof = &error.audit.as_deref().unwrap()["locationProof"];
+    assert_eq!(proof["diagnostic"], "confluence_move_relation_unresolved");
+    assert_eq!(proof["category"], "not_visible_or_absent");
+    assert_eq!(proof["finalCheck"], "unresolved");
+    let diagnostic = serde_json::to_string(&error.audit).unwrap();
+    for forbidden in [
+        "900000000001",
+        "900000000002",
+        "https://",
+        "deleted",
+        "title",
+        "body",
+    ] {
+        assert!(!diagnostic.contains(forbidden), "{forbidden}: {diagnostic}");
+        assert!(!error.message.contains(forbidden));
+    }
+}
+
+#[tokio::test]
+async fn unresolved_move_roots_and_ancestors_are_only_identified_in_protected_audit() {
+    for mode in ["missing_root", "hidden_root", "missing_ancestor"] {
+        let backend = Arc::new(EvidenceBackend::new());
+        if mode != "missing_root" {
+            insert_diagnostic_root(
+                &backend,
+                (mode == "missing_ancestor")
+                    .then(|| parent(ConfluenceNodeKind::Folder, "900000000002")),
+            );
+        }
+        if mode == "hidden_root" {
+            backend
+                .hidden_nodes
+                .lock()
+                .unwrap()
+                .insert("900000000001".into());
+        }
+        let provider = backend.provider();
+        let request = ScopeRequestFixture::new(
+            "confluence",
+            "page.move",
+            action_inputs(&provider, "page.move"),
+        )
+        .lookup_credential(token())
+        .containment_evidence_level(ContainmentEvidenceLevel::CompleteLineage)
+        .containment_roots(vec![diagnostic_root()]);
+        let error = provider
+            .resolve_scopes(request.request())
+            .await
+            .unwrap_err();
+        assert_private_move_diagnostic(&error);
+        assert_eq!(
+            error.audit.as_deref().unwrap()["locationProof"]
+                .as_object()
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+    }
+    // Missing operation targets carry no policy-root diagnostic.
+    let backend = Arc::new(EvidenceBackend::new());
+    backend
+        .nodes
+        .lock()
+        .unwrap()
+        .remove(&(ConfluenceNodeKind::Page, "100".into()));
+    let provider = backend.provider();
+    let request = ScopeRequestFixture::new(
+        "confluence",
+        "page.move",
+        action_inputs(&provider, "page.move"),
+    )
+    .lookup_credential(token())
+    .containment_evidence_level(ContainmentEvidenceLevel::CompleteLineage)
+    .containment_roots(vec![diagnostic_root()]);
+    let error = provider
+        .resolve_scopes(request.request())
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert!(error.audit.is_none());
+}
+
+#[tokio::test]
+async fn a_move_root_lost_after_admission_preserves_diagnostic_and_blocks_the_move() {
+    for hidden in [false, true] {
+        let backend = Arc::new(EvidenceBackend::new());
+        insert_diagnostic_root(&backend, None);
+        let provider = backend.provider();
+        let request = admitted_with_roots(
+            &provider,
+            "page.move",
+            ContainmentEvidenceLevel::CompleteLineage,
+            vec![diagnostic_root()],
+        )
+        .await;
+        if hidden {
+            backend
+                .hidden_nodes
+                .lock()
+                .unwrap()
+                .insert("900000000001".into());
+        } else {
+            backend
+                .nodes
+                .lock()
+                .unwrap()
+                .remove(&(ConfluenceNodeKind::Page, "900000000001".into()));
+        }
+        let error = provider.invoke(request).await.unwrap_err();
+        assert_private_move_diagnostic(&error);
+        assert_eq!(
+            error.audit.as_deref().unwrap()["locationProof"]["space"],
+            "ENG"
+        );
+        assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn lookup_readable_intermediate_never_substitutes_for_execution_visibility() {
+    let execution = basic_credential("reader@example.test", "different-execution-token");
+    for action in ["page.view", "page.update"] {
+        let backend = Arc::new(EvidenceBackend::new());
+        backend.hidden_nodes.lock().unwrap().insert("200".into());
+        *backend.hidden_for_credential.lock().unwrap() = Some(execution.clone());
+        let provider = backend.provider();
+        // Lookup can see the complete initial path with its own material.
+        let request = admitted(&provider, action, ContainmentEvidenceLevel::CompleteLineage).await;
+        assert!(
+            backend
+                .hierarchy_credentials
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|material| material == &token())
+        );
+        backend.hierarchy_credentials.lock().unwrap().clear();
+        let request = InvocationBuilder::from(request)
+            .credential(execution.clone())
+            .build();
+        let error = provider.invoke(request).await.unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert!(error.result.is_none());
+        assert_eq!(
+            error.audit.as_deref().unwrap()["locationProof"]["finalCheck"],
+            "unresolved"
+        );
+        assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+        let observed = backend.hierarchy_credentials.lock().unwrap();
+        assert!(observed.len() >= 2);
+        assert!(observed.iter().all(|material| material == &execution));
+    }
+}
+
+async fn draft_origin_request(
+    provider: &ConfluenceProvider,
+    action: &str,
+    origin: ConfluenceDraftOrigin,
+) -> ProviderInvocation {
+    let kind = if action.starts_with("page.") {
+        ConfluenceDraftContentType::Page
+    } else {
+        ConfluenceDraftContentType::Blog
+    };
+    let handle = ConfluenceDraftHandle {
+        content_type: kind,
+        content_id: if kind == ConfluenceDraftContentType::Page {
+            "400".into()
+        } else {
+            "800".into()
+        },
+        space: "ENG".into(),
+        space_id: "98765".into(),
+        origin,
+        parent: (kind == ConfluenceDraftContentType::Page)
+            .then(|| parent(ConfluenceNodeKind::Page, "200")),
+        base_version: (origin == ConfluenceDraftOrigin::Staged).then_some(7),
+    };
+    let binding = InvocationBuilder::new("confluence", action)
+        .credential(token())
+        .build();
+    let signed = provider
+        .continuations
+        .seal_draft_handle(binding.context(), binding.execution(), &handle)
+        .unwrap();
+    let mut inputs = action_inputs(provider, action);
+    inputs["draftHandle"] = json!(signed);
+    admitted_inputs(
+        provider,
+        action,
+        ContainmentEvidenceLevel::CompleteLineage,
+        Vec::new(),
+        inputs,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn new_and_staged_drafts_publish_with_distinct_versions_and_same_identity_placement() {
+    for action in ["page.draft.publish", "blog.draft.publish"] {
+        for origin in [ConfluenceDraftOrigin::New, ConfluenceDraftOrigin::Staged] {
+            let backend = Arc::new(EvidenceBackend::new());
+            let provider = backend.provider();
+            let request = draft_origin_request(&provider, action, origin).await;
+            let result = provider.invoke(request).await.unwrap();
+            let expected = if origin == ConfluenceDraftOrigin::New {
+                1
+            } else {
+                8
+            };
+            let id_field = if action.starts_with("page.") {
+                "pageId"
+            } else {
+                "blogId"
+            };
+            let expected_id = if action.starts_with("page.") {
+                "400"
+            } else {
+                "800"
+            };
+            assert_eq!(result.result[id_field], expected_id);
+            assert_eq!(result.result["version"], expected);
+            if action.starts_with("page.") {
+                assert_eq!(result.result["parent"], json!({"kind":"page","id":"200"}));
+            }
+            let requests = backend.publish_requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].version_number, expected);
+            assert_eq!(requests[0].content_id, expected_id);
+            assert_eq!(requests[0].space_id, "98765");
+            assert_eq!(requests[0].status, "current");
+            assert_eq!(
+                backend.published_current_reads.load(Ordering::SeqCst),
+                usize::from(origin == ConfluenceDraftOrigin::Staged)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn staged_publish_rechecks_current_version_and_placement_before_any_write() {
+    for action in ["page.draft.publish", "blog.draft.publish"] {
+        let backend = Arc::new(EvidenceBackend::new());
+        let provider = backend.provider();
+        let request = draft_origin_request(&provider, action, ConfluenceDraftOrigin::Staged).await;
+        backend.published_current_version.store(8, Ordering::SeqCst);
+        let error = provider.invoke(request).await.unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
+        assert_eq!(error.result.as_deref().unwrap()["expectedBaseVersion"], 7);
+        assert_eq!(error.result.as_deref().unwrap()["currentVersion"], 8);
+        assert!(
+            error
+                .result
+                .as_deref()
+                .unwrap()
+                .get("mutationStatus")
+                .is_none()
+        );
+        assert_eq!(
+            error.audit.as_deref().unwrap()["locationProof"]["finalCheck"],
+            "matched"
+        );
+        assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+    }
+    let backend = Arc::new(EvidenceBackend::new());
+    let provider = backend.provider();
+    let request = draft_origin_request(
+        &provider,
+        "page.draft.publish",
+        ConfluenceDraftOrigin::Staged,
+    )
+    .await;
+    *backend.published_current_parent.lock().unwrap() =
+        Some(parent(ConfluenceNodeKind::Page, "300"));
+    let error = provider.invoke(request).await.unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert!(error.result.is_none());
+    assert_eq!(
+        error.audit.as_deref().unwrap()["locationProof"]["finalCheck"],
+        "unresolved"
+    );
+    assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn accepted_publish_mismatches_keep_applied_unverified_receipts_without_replay() {
+    for action in ["page.draft.publish", "blog.draft.publish"] {
+        let kind = if action.starts_with("page.") {
+            ConfluenceDraftContentType::Page
+        } else {
+            ConfluenceDraftContentType::Blog
+        };
+        let id = if kind == ConfluenceDraftContentType::Page {
+            "400"
+        } else {
+            "800"
+        };
+        for origin in [ConfluenceDraftOrigin::New, ConfluenceDraftOrigin::Staged] {
+            for mismatch in ["version", "id", "space", "parent"] {
+                let backend = Arc::new(EvidenceBackend::new());
+                let provider = backend.provider();
+                let request = draft_origin_request(&provider, action, origin).await;
+                let mut response = backend.draft(id, kind);
+                response.status = Some("current".into());
+                response.version = if origin == ConfluenceDraftOrigin::New {
+                    1
+                } else {
+                    8
+                };
+                match mismatch {
+                    "version" => response.version += 1,
+                    "id" => response.id = "900".into(),
+                    "space" => response.space_id = "99999".into(),
+                    "parent" => response.parent = Some(parent(ConfluenceNodeKind::Page, "300")),
+                    _ => unreachable!(),
+                }
+                *backend.publish_response.lock().unwrap() = Some(response);
+                let error = provider.invoke(request).await.unwrap_err();
+                assert_eq!(
+                    error.reason_code(),
+                    ReasonCode::UpstreamProtocolFailed,
+                    "{action} {origin:?} {mismatch}"
+                );
+                let receipt = error.result.as_deref().unwrap();
+                assert_eq!(receipt["mutationStatus"], "applied_unverified");
+                assert_eq!(receipt["retrySafe"], false);
+                assert_eq!(receipt["verificationStage"], "mutation_response");
+                assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+                assert_eq!(backend.publish_requests.lock().unwrap().len(), 1);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn staged_discard_and_attachment_modes_remain_explicitly_unsupported() {
+    for prefix in ["page", "blog"] {
+        for suffix in [
+            "discard",
+            "attachment.add",
+            "attachment.download",
+            "attachment.list",
+        ] {
+            let action = format!("{prefix}.draft.{suffix}");
+            let backend = Arc::new(EvidenceBackend::new());
+            let provider = backend.provider();
+            let request =
+                draft_origin_request(&provider, &action, ConfluenceDraftOrigin::Staged).await;
+            let error = provider.invoke(request).await.unwrap_err();
+            assert_eq!(
+                error.reason_code(),
+                ReasonCode::ServiceActionDenied,
+                "{action}"
+            );
+            assert!(error.result.is_none());
+            assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+        }
+    }
+}
+
+#[tokio::test]
+async fn all_attachment_downloads_recheck_location_before_opening_content() {
+    for action in [
+        "attachment.download",
+        "blog.attachment.download",
+        "page.draft.attachment.download",
+        "blog.draft.attachment.download",
+    ] {
+        let mut raw = EvidenceBackend::new();
+        raw.download_fixture = true;
+        raw.move_during_membership = true;
+        let backend = Arc::new(raw);
+        let provider = backend.provider();
+        let request = admitted(&provider, action, ContainmentEvidenceLevel::CompleteLineage).await;
+        let error = provider.invoke(request).await.unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved, "{action}");
+        assert!(error.result.is_none(), "{action}");
+        assert_eq!(backend.content_opens.load(Ordering::SeqCst), 0, "{action}");
+        assert_eq!(backend.emitted_bytes.load(Ordering::SeqCst), 0, "{action}");
+    }
+}
+
+#[tokio::test]
+async fn page_update_upstream_conflict_is_distinct_from_measured_version_mismatch() {
+    let mut raw = EvidenceBackend::new();
+    raw.update_conflict = true;
+    let backend = Arc::new(raw);
+    let provider = backend.provider();
+    let request = admitted(
+        &provider,
+        "page.update",
+        ContainmentEvidenceLevel::ContainerOnly,
+    )
+    .await;
+    let error = provider.invoke(request).await.unwrap_err();
+    assert_eq!(error.reason_code().as_str(), "confluence_update_conflict");
+    assert_eq!(error.decision(), Decision::Error);
+    assert_eq!(error.message, "Confluence rejected the page update");
+    assert_eq!(
+        error.result.as_deref().unwrap(),
+        &json!({"pageId":"100","space":"ENG","expectedBaseVersion":1})
+    );
+    assert_eq!(error.upstream_status, Some(409));
+    assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+    let reason = CONFLUENCE_BACKEND
+        .domain_reasons()
+        .iter()
+        .find(|reason| reason.code() == "confluence_update_conflict")
+        .unwrap();
+    assert_eq!(reason.status().as_u16(), 409);
+    assert_eq!(reason.decision(), Decision::Error);
+
+    let mut inputs = action_inputs(&provider, "page.update");
+    inputs["baseVersion"] = json!(2);
+    let request = admitted_inputs(
+        &provider,
+        "page.update",
+        ContainmentEvidenceLevel::ContainerOnly,
+        Vec::new(),
+        inputs,
+    )
+    .await;
+    let error = provider.invoke(request).await.unwrap_err();
+    assert_eq!(error.reason_code(), ReasonCode::VersionConflict);
+    assert_eq!(error.result.as_deref().unwrap()["currentVersion"], 1);
+    assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn page_update_version_range_is_rejected_before_lookup_and_declared_in_schema() {
+    let backend = Arc::new(EvidenceBackend::new());
+    let provider = backend.provider();
+    let schema = confluence_descriptor(&config())
+        .action("page.update")
+        .unwrap()
+        .input_schema
+        .clone();
+    assert_eq!(schema["properties"]["baseVersion"]["minimum"], 1);
+    assert_eq!(
+        schema["properties"]["baseVersion"]["maximum"],
+        2147483646u64
+    );
+    for version in [1, 2147483646] {
+        let mut inputs = action_inputs(&provider, "page.update");
+        inputs["baseVersion"] = json!(version);
+        assert!(parse_page_update_inputs(&inputs).is_ok());
+    }
+    for version in [0, 2147483647, u64::MAX] {
+        let mut inputs = action_inputs(&provider, "page.update");
+        inputs["baseVersion"] = json!(version);
+        let fixture = ScopeRequestFixture::new("confluence", "page.update", inputs)
+            .lookup_credential(token());
+        let error = provider
+            .resolve_scopes(fixture.request())
+            .await
+            .unwrap_err();
+        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+        assert_eq!(
+            error.message,
+            "confluence.page.update baseVersion must be between 1 and 2147483646"
+        );
+    }
+    assert!(backend.hierarchy_credentials.lock().unwrap().is_empty());
+    assert_eq!(backend.metadata_reads.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn draft_stage_proceeds_only_after_a_raw_missing_draft() {
+    for action in ["page.draft.stage", "blog.draft.stage"] {
+        for mode in [
+            "present",
+            "missing",
+            "malformed",
+            "budget",
+            "wrong_lifecycle",
+            "space_missing",
+        ] {
+            if mode == "malformed" && action.starts_with("blog") {
+                continue;
+            }
+            let backend = Arc::new(EvidenceBackend::new());
+            let provider = backend.provider();
+            let request =
+                admitted(&provider, action, ContainmentEvidenceLevel::ContainerOnly).await;
+            match mode {
+                "missing" => {
+                    *backend.draft_read_failure.lock().unwrap() =
+                        Some(ConfluenceBackendError::NotFound)
+                }
+                "malformed" => {
+                    let kind = if action.starts_with("page") {
+                        ConfluenceDraftContentType::Page
+                    } else {
+                        ConfluenceDraftContentType::Blog
+                    };
+                    // This is the strict parser's actual missing-parent failure.
+                    let error = draft_content_from_value(json!({"id":"100","type":kind.as_str(),"title":"Competing","status":"draft","spaceId":"98765","version":{"number":1}}), kind).unwrap_err();
+                    assert_eq!(error, ConfluenceBackendError::ScopeUnresolved);
+                    *backend.draft_read_failure.lock().unwrap() = Some(error);
+                }
+                "wrong_lifecycle" | "space_missing" => {
+                    let kind = if action.starts_with("page") {
+                        ConfluenceDraftContentType::Page
+                    } else {
+                        ConfluenceDraftContentType::Blog
+                    };
+                    let mut draft = backend.draft(
+                        if kind == ConfluenceDraftContentType::Page {
+                            "100"
+                        } else {
+                            "700"
+                        },
+                        kind,
+                    );
+                    if mode == "wrong_lifecycle" {
+                        draft.status = Some("current".into());
+                    } else {
+                        draft.space_id = "99999".into();
+                    }
+                    *backend.draft_read_override.lock().unwrap() = Some(draft);
+                }
+                "budget" => {
+                    let state =
+                        ProviderState::require::<ContentOperationState>(request.state()).unwrap();
+                    *backend.draft_read_budget.lock().unwrap() = Some(state.budget.clone());
+                }
+                _ => {}
+            }
+            let result = provider.invoke(request).await;
+            if mode == "missing" {
+                assert!(result.is_ok(), "{action} {mode}: {result:?}");
+                assert_eq!(backend.writes.load(Ordering::SeqCst), 1);
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.reason_code(),
+                    if mode == "present" {
+                        ReasonCode::VersionConflict
+                    } else {
+                        ReasonCode::ScopeUnresolved
+                    },
+                    "{action} {mode}"
+                );
+                assert_eq!(backend.writes.load(Ordering::SeqCst), 0, "{action} {mode}");
+            }
+        }
+    }
 }

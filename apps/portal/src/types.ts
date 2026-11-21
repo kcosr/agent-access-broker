@@ -170,6 +170,7 @@ export type LocationAccessDetail = {
   domain: string;
   enforcement: "request" | "results";
   containmentVerification: "at_invocation";
+  requiresRuntimeRootVisibility?: boolean;
 } & ({ projectionStatus: "complete"; boundaries: LocationBoundary[]; clauses: LocationClause[] }
   | { projectionStatus: "too_complex"; reasonCode: "resource_access_too_complex" });
 export type LocationAccess = { scope: "location" } & LocationAccessDetail;

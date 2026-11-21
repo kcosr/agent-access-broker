@@ -10,7 +10,7 @@ use serde_json::Value;
 /// admitted execution authority and no execution credential. The lookup
 /// access, when present, is the one the host selected for this request; a
 /// provider never chooses another or falls back to a shared credential.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ScopeRequest<'a> {
     pub(crate) service: &'a str,
     pub(crate) action: &'a str,
@@ -22,6 +22,36 @@ pub struct ScopeRequest<'a> {
     pub(crate) containment_evidence_level: ContainmentEvidenceLevel,
     pub(crate) containment_roots: &'a [TypedResourceSelector],
     pub(crate) locator_state: Option<&'a ProviderState>,
+}
+
+impl std::fmt::Debug for ScopeRequest<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt_scope_request_debug(*self, "ScopeRequest", f)
+    }
+}
+
+/// Both host and provider request wrappers keep policy-root identities out of
+/// diagnostics. Other request fields retain their established Debug behavior.
+pub(crate) fn fmt_scope_request_debug(
+    request: ScopeRequest<'_>,
+    name: &'static str,
+    f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+    f.debug_struct(name)
+        .field("service", &request.service)
+        .field("action", &request.action)
+        .field("inputs", &request.inputs)
+        .field("execution_context", &request.execution_context)
+        .field("identity", &request.identity)
+        .field("correlation", &request.correlation)
+        .field("lookup_access", &request.lookup_access)
+        .field(
+            "containment_evidence_level",
+            &request.containment_evidence_level,
+        )
+        .field("containment_root_count", &request.containment_roots.len())
+        .field("locator_state", &request.locator_state)
+        .finish()
 }
 
 impl<'a> ScopeRequest<'a> {

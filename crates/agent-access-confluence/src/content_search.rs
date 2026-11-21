@@ -6,13 +6,16 @@ use super::*;
 const TOKENS: ContinuationFamily = ContinuationFamily::new(
     "confluence",
     "content-search",
-    2,
+    3,
     ContinuationLifetime::Generation,
     0,
 )
 .confidential()
 .expires_after(Duration::from_secs(900));
-const MAX_CURSOR_HISTORY: usize = 4096;
+const CURSOR_HISTORY_SLOTS: usize = 8;
+const EMPTY_CURSOR_DIGEST: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+const MAX_CURSOR_TRAVERSALS: u32 = 4096;
 // Each complete pass can read 64 typed nodes and one space. The operation's
 // actual HTTP counters additionally count the one shared delegated recovery.
 const PROOF_PASS_REQUESTS: u32 = 65;
@@ -50,6 +53,7 @@ fn token_error(error: ContinuationError) -> ProviderError {
         | ContinuationError::Expired
         | ContinuationError::UpstreamQueryChanged
         | ContinuationError::TokenTooLarge { .. } => invalid_cursor(),
+        ContinuationError::PayloadTooLarge { .. } => budget_error(),
         _ => protocol(),
     }
 }
@@ -61,9 +65,15 @@ struct Position {
     offset: usize,
     page_limit: u32,
     page_commitment: Option<String>,
-    // Cursor digests, inside the confidential envelope. This detects cycles
-    // across invocations without disclosing upstream cursor material.
-    history: Vec<String>,
+    // Recent cursor digests detect short cycles across invocations. Every slot
+    // is serialized from the first continuation, and the counter has a fixed
+    // width: payload growth must not reveal how many pages were scanned.
+    history: [String; CURSOR_HISTORY_SLOTS],
+    #[serde(
+        serialize_with = "serialize_traversals",
+        deserialize_with = "deserialize_traversals"
+    )]
+    traversals: u32,
 }
 
 impl Position {
@@ -73,7 +83,8 @@ impl Position {
             offset: 0,
             page_limit,
             page_commitment: None,
-            history: vec![],
+            history: std::array::from_fn(|_| EMPTY_CURSOR_DIGEST.to_owned()),
+            traversals: 0,
         }
     }
 
@@ -82,27 +93,77 @@ impl Position {
         if position.page_limit == 0
             || position.page_limit > max_results
             || position.offset >= position.page_limit as usize
-            || position.history.len() > MAX_CURSOR_HISTORY
+            || position.traversals > MAX_CURSOR_TRAVERSALS
             || position.cursor.as_ref().is_some_and(String::is_empty)
             || position.history.iter().any(|hash| !is_digest(hash))
+            || position.history[position.history_len()..]
+                .iter()
+                .any(|hash| hash != EMPTY_CURSOR_DIGEST)
             || position
                 .page_commitment
                 .as_ref()
                 .is_some_and(|hash| !is_digest(hash))
             || ((position.offset > 0) != position.page_commitment.is_some())
-            || (position.cursor.is_some() != !position.history.is_empty())
+            || (position.cursor.is_some() != (position.traversals > 0))
             || position.cursor.as_ref().is_some_and(|cursor| {
-                position.history.last() != Some(&sha256_hex(cursor.as_bytes()))
+                position.history[(position.traversals - 1) as usize % CURSOR_HISTORY_SLOTS]
+                    != sha256_hex(cursor.as_bytes())
             })
         {
             return Err(invalid_cursor());
         }
-        let unique = position.history.iter().collect::<BTreeSet<_>>();
-        if unique.len() != position.history.len() {
+        let unique = position.history[..position.history_len()]
+            .iter()
+            .collect::<BTreeSet<_>>();
+        if unique.len() != position.history_len() {
             return Err(invalid_cursor());
         }
         Ok(position)
     }
+
+    fn history_len(&self) -> usize {
+        (self.traversals as usize).min(CURSOR_HISTORY_SLOTS)
+    }
+
+    fn has_cursor(&self, cursor: &str) -> bool {
+        self.history[..self.history_len()].contains(&sha256_hex(cursor.as_bytes()))
+    }
+
+    fn follow_cursor(&mut self, cursor: String) -> Result<(), ProviderError> {
+        // The recent ring is not an inventory of every visited cursor. This
+        // independent lifetime cap also bounds longer or changing cycles.
+        if self.traversals >= MAX_CURSOR_TRAVERSALS {
+            return Err(budget_error());
+        }
+        self.history[self.traversals as usize % CURSOR_HISTORY_SLOTS] =
+            sha256_hex(cursor.as_bytes());
+        self.traversals += 1;
+        self.cursor = Some(cursor);
+        self.offset = 0;
+        self.page_commitment = None;
+        Ok(())
+    }
+}
+
+fn serialize_traversals<S: serde::Serializer>(
+    traversals: &u32,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&format!("{traversals:08x}"))
+}
+
+fn deserialize_traversals<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u32, D::Error> {
+    let encoded = String::deserialize(deserializer)?;
+    if encoded.len() != 8
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(serde::de::Error::custom("invalid traversal count"));
+    }
+    u32::from_str_radix(&encoded, 16).map_err(serde::de::Error::custom)
 }
 
 fn is_digest(value: &str) -> bool {
@@ -249,7 +310,7 @@ impl ConfluenceProvider {
             || page
                 .next
                 .as_ref()
-                .is_some_and(|cursor| position.history.contains(&sha256_hex(cursor.as_bytes())))
+                .is_some_and(|cursor| position.has_cursor(cursor))
         {
             return Err(protocol());
         }
@@ -425,13 +486,7 @@ impl ConfluenceProvider {
                     let Some(cursor) = page.next else {
                         break Ok((retained, None, "exhausted"));
                     };
-                    if position.history.len() >= MAX_CURSOR_HISTORY {
-                        return Err(protocol());
-                    }
-                    position.history.push(sha256_hex(cursor.as_bytes()));
-                    position.cursor = Some(cursor);
-                    position.offset = 0;
-                    position.page_commitment = None;
+                    position.follow_cursor(cursor)?;
                     position.page_limit = max_results.min(limits.max_candidates);
                     // A result page need not fill maxResults. Continue empty indexed
                     // pages within the budget; once there are rows, finish their final

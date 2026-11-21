@@ -7465,6 +7465,7 @@ fn resource_types_follow_backend_registration_order() {
             "git_repository",
             "jira_project",
             "confluence_space",
+            "confluence_content",
             "cloudbees_ci_job",
             "fake_project",
             "oauth_collection",

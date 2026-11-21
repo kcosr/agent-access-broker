@@ -474,9 +474,20 @@ path described in [imported OAuth](imported-oauth.md).
 ## Create resources and grants
 
 Create resources before referencing them in grants or token restrictions. In
-**Admin > Catalog**, choose the resource type, exact/all/namespace selector,
+**Admin > Catalog**, choose the resource type and one of its supported
+exact/all/namespace/subtree selectors,
 execution contexts, and an identifiable label. Flat resource groups may include
 and exclude entries; inspect their current members before reuse.
+
+For Confluence, the resource editor can normalize a pasted space, page, blog or
+folder URL after selecting the service and intended coverage. Review and save
+the resulting selector. This preview is offline and reports
+`verification: "not_checked"`; no administrator connection is required and
+existence or upstream permissions are checked only at invocation. Exact pages
+cover the page itself; a page or folder subtree covers its current descendants.
+Space grants remain broad when a narrower resource is added. See
+[content access](confluence-content-access.md) for supported URLs, exclusions,
+overlap and token restrictions.
 
 The example below grants the group read access to Jira project `ENG` from the
 `default` context. It assumes Jira and its credential connection are

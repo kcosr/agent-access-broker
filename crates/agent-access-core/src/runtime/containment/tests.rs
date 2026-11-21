@@ -108,6 +108,8 @@ struct FixtureState {
     omit_state: bool,
     initial_failure: bool,
     final_failure: bool,
+    initial_root_failure: bool,
+    final_root_failure: bool,
     requested_level: Option<ContainmentEvidenceLevel>,
     roots: usize,
 }
@@ -151,6 +153,10 @@ impl BackendConfig for Fixture {
         ServiceDescriptor::new(SERVICE, "Content location fixture")
             .with_upstream_authority(UpstreamAuthority::from_base_url(ORIGIN).unwrap())
             .with_resource_scopes(BTreeMap::from([
+                (
+                    "area".into(),
+                    ResourceScopeCapabilities::new(area_type(), vec!["exact".into(), "all".into()]),
+                ),
                 (
                     "document_location".into(),
                     ResourceScopeCapabilities::containment(contract(
@@ -247,6 +253,13 @@ impl Provider for Fixture {
         let mut state = self.state.lock().unwrap();
         state.requested_level = Some(request.containment_evidence_level());
         state.roots = request.containment_roots().len();
+        if state.initial_root_failure {
+            return Err(ProviderError::deny(ReasonCode::ScopeUnresolved, "private upstream root failure")
+                .with_result(json!({"private":"root-result"}))
+                .with_audit(json!({"private":"root-audit", "locationProof": {
+                    "finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"not_visible_or_absent"
+                }})));
+        }
         if state.initial_failure {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
@@ -266,6 +279,12 @@ impl Provider for Fixture {
     async fn invoke(&self, request: ProviderInvocation) -> Result<ProviderResult, ProviderError> {
         self.invoke_calls.fetch_add(1, Ordering::SeqCst);
         let state = self.state.lock().unwrap();
+        if state.final_root_failure {
+            return Err(ProviderError::deny(ReasonCode::ScopeUnresolved, "relevant root unavailable")
+                .with_audit(json!({"locationProof": {
+                    "finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"not_visible_or_absent"
+                }})));
+        }
         if state.final_failure {
             return Err(ProviderError::deny(
                 ReasonCode::ScopeUnresolved,
@@ -1237,6 +1256,27 @@ fn projection_budgets_do_not_change_streaming_availability_or_actual_admission()
             let json = serde_json::to_value(projected).unwrap();
             assert_eq!(json["reasonCode"], "resource_access_too_complex");
             assert!(json.get("boundaries").is_none() && json.get("clauses").is_none());
+            let options = runtime.agent_token_options_for_identity(&identity());
+            let action = options
+                .services
+                .iter()
+                .find(|service| service.service == SERVICE)
+                .unwrap()
+                .actions
+                .iter()
+                .find(|action| action.action == "view")
+                .unwrap();
+            let AgentTokenActionScope::Location {
+                effective_access_by_execution_context,
+                ..
+            } = &action.scope
+            else {
+                panic!("location option")
+            };
+            assert!(matches!(
+                effective_access_by_execution_context[&context()].projection,
+                LocationProjection::TooComplex { .. }
+            ));
         }
     }
 }
@@ -1259,7 +1299,7 @@ fn projection_preflights_selector_reference_and_byte_limits() {
                 "group:agents",
                 "view",
                 "service",
-                id as i32,
+                id,
                 &[&format!("root-{id}")],
             )
         })
@@ -1351,4 +1391,787 @@ async fn optional_containment_hints_use_same_mode_and_complete_evidence() {
         .invoke(operation("universal"), InvokeRequest::new(json!({})))
         .await;
     assert_eq!(universal.envelope.result.unwrap()["universal"], false);
+}
+
+#[tokio::test]
+async fn unresolved_move_roots_keep_bounded_provenance_in_protected_audit_and_offline_previews() {
+    let (mut config, fixture) = fixture();
+    config.policy.resource_groups.push(ResourceGroupDefinition {
+        id: "move-boundary".into(),
+        name: "Move boundary".into(),
+        included_resource_ids: vec!["eng".into()],
+        excluded_resource_ids: vec!["document-two".into()],
+    });
+    let mut selected = grant("group:agents", "move", "service", 0, &[]);
+    selected.resources = selection(&[], &["move-boundary"]);
+    config.policy.grants.push(selected);
+    let audit_path = super::super::tests::test_temp_dir().join("root-audit.jsonl");
+    config.audit = Some(crate::AuditConfig::new(
+        crate::AuditStoreType::Jsonl,
+        audit_path.display().to_string(),
+    ));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let preview = runtime
+        .preview_policy_resources(
+            SERVICE,
+            &["move".into()],
+            &[context()],
+            &selection(&[], &["move-boundary"]),
+            "service",
+        )
+        .unwrap();
+    let serialized = serde_json::to_value(preview).unwrap();
+    assert_eq!(
+        serialized["access"][0]["requiresRuntimeRootVisibility"],
+        true
+    );
+    assert_eq!(
+        fixture.scope_calls.load(Ordering::SeqCst),
+        0,
+        "preview stays offline"
+    );
+    fixture.state.lock().unwrap().initial_root_failure = true;
+    let initial = runtime
+        .invoke(operation("move"), InvokeRequest::new(json!({})))
+        .await;
+    assert!(initial.envelope.resource_scopes.is_empty());
+    assert!(initial.envelope.result.is_none());
+    let initial_wire = serde_json::to_string(&initial.envelope).unwrap();
+    assert!(
+        !initial_wire.contains("move-boundary")
+            && !initial_wire.contains("document-two")
+            && !initial_wire.contains("root failure")
+    );
+    {
+        let mut state = fixture.state.lock().unwrap();
+        state.initial_root_failure = false;
+        state.final_root_failure = true;
+        state.evidence = Some(
+            ContainmentEvidence::new(
+                "document_move",
+                ORIGIN,
+                vec![
+                    ContainmentObligation::SubtreeImpact {
+                        current: location("document", 1, vec![content("directory", 10)]),
+                        proposed: location("document", 1, vec![content("directory", 20)])
+                            .with_provenance(ContainmentProvenance::Proposed),
+                    },
+                    ContainmentObligation::ChildPlacement(location("directory", 20, vec![])),
+                    ContainmentObligation::Content(location(
+                        "document",
+                        3,
+                        vec![content("directory", 20)],
+                    )),
+                ],
+            )
+            .with_related_roots(vec![location(
+                "document",
+                2,
+                vec![content("directory", 30)],
+            )]),
+        );
+    }
+    let final_error = runtime
+        .invoke(operation("move"), InvokeRequest::new(json!({})))
+        .await;
+    assert!(
+        !final_error.envelope.resource_scopes.is_empty(),
+        "admitted target projection survives final proof failure"
+    );
+    assert_eq!(fixture.invoke_calls.load(Ordering::SeqCst), 1);
+    fixture.state.lock().unwrap().final_root_failure = false;
+    let success = runtime
+        .invoke(operation("move"), InvokeRequest::new(json!({})))
+        .await;
+    assert_eq!(success.envelope.decision, Decision::Allow);
+    runtime
+        .shutdown_own_audit(Duration::from_secs(5))
+        .await
+        .unwrap();
+    let rows: Vec<AuditRecord> = fs::read_to_string(audit_path)
+        .unwrap()
+        .lines()
+        .map(|row| serde_json::from_str(row).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 3);
+    for row in &rows[..2] {
+        let audit = row.provider_audit.as_ref().unwrap();
+        let summary = &audit["locationAuthorization"];
+        assert_eq!(summary["finalCheck"], "unresolved");
+        assert_eq!(
+            summary["rootVisibility"]["diagnostic"],
+            "confluence_move_relation_unresolved"
+        );
+        assert_eq!(
+            summary["rootVisibility"]["category"],
+            "not_visible_or_absent"
+        );
+        assert_eq!(
+            summary["rootVisibility"]["resourceIds"],
+            json!(["document-two"])
+        );
+        assert_eq!(
+            summary["rootVisibility"]["resourceGroupIds"],
+            json!(["move-boundary"])
+        );
+        assert!(summary.get("_rootVisibilityProvenance").is_none());
+        assert!(audit.get("private").is_none());
+    }
+    let success_summary = &rows[2].provider_audit.as_ref().unwrap()["locationAuthorization"];
+    assert_eq!(success_summary["finalCheck"], "matched");
+    assert!(success_summary.get("rootVisibility").is_none());
+    assert!(success_summary.get("_rootVisibilityProvenance").is_none());
+}
+
+#[test]
+fn projection_byte_preflight_borrows_long_selectors_and_matches_the_published_shape() {
+    let (mut config, _) = fixture();
+    config
+        .policy
+        .grants
+        .push(grant("group:agents", "view", "service", 0, &["eng"]));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let mut plan = runtime
+        .containment_plan(
+            &runtime.policy_snapshot(),
+            &identity(),
+            &context(),
+            SERVICE,
+            "view",
+            None,
+        )
+        .unwrap();
+    let one = project_location_plan(&plan, |_| true, u64::MAX);
+    let LocationProjection::Complete { clauses, .. } = &one else {
+        panic!("complete small plan")
+    };
+    let borrowed_boundaries = [plan.boundary(0)];
+    let borrowed = BorrowedLocationProjection {
+        projection_status: "complete",
+        boundaries: &borrowed_boundaries,
+        clauses,
+    };
+    let owned_bytes = serde_json::to_vec(&one).unwrap();
+    assert_eq!(serde_json::to_vec(&borrowed).unwrap(), owned_bytes);
+    assert!(serialized_fits_bytes(&borrowed, owned_bytes.len() as u64));
+    assert!(!serialized_fits_bytes(
+        &borrowed,
+        owned_bytes.len() as u64 - 1
+    ));
+    let complete_access = location_access(
+        &plan.scope,
+        plan.collection,
+        one.clone(),
+        plan.requires_runtime_root_visibility(),
+    );
+    let complete_bytes = serde_json::to_vec(&complete_access).unwrap();
+    assert!(location_projection_fits_bytes(
+        &plan.scope,
+        plan.collection,
+        plan.requires_runtime_root_visibility(),
+        &borrowed_boundaries,
+        clauses,
+        complete_bytes.len() as u64
+    ));
+    assert!(!location_projection_fits_bytes(
+        &plan.scope,
+        plan.collection,
+        plan.requires_runtime_root_visibility(),
+        &borrowed_boundaries,
+        clauses,
+        complete_bytes.len() as u64 - 1
+    ));
+    let long = "1".repeat(8000);
+    let selectors = (1..=2300)
+        .map(|id| {
+            let selector = ResourceSelector::Exact {
+                value: format!("{ORIGIN}/s/ENG/document/{long}{id}"),
+            };
+            runtime
+                .resource_types
+                .registry()
+                .typed_selector(&content_type(), &selector)
+                .unwrap()
+        })
+        .collect();
+    plan.candidates[0].containment = Some(ContainmentBoundary::new(selectors, Vec::new()));
+    assert_eq!(
+        plan.boundary(0).included().len(),
+        2300,
+        "selector count is under its independent limit"
+    );
+    // Only borrowed SDK selectors reach the bounded writer; owned LocationBoundary
+    // conversion is below this failed preflight in the production path.
+    assert!(!location_projection_fits_bytes(
+        &plan.scope,
+        plan.collection,
+        plan.requires_runtime_root_visibility(),
+        &[plan.boundary(0)],
+        clauses,
+        crate::RESOURCE_ACCESS_MAX_RESPONSE_BYTES as u64
+    ));
+    assert!(matches!(
+        project_location_plan(
+            &plan,
+            |_| true,
+            crate::RESOURCE_ACCESS_MAX_RESPONSE_BYTES as u64
+        ),
+        LocationProjection::TooComplex { .. }
+    ));
+}
+
+#[test]
+fn move_root_provenance_is_bounded_and_includes_token_exclusions_only_from_selected_groups() {
+    let (mut config, _) = fixture();
+    let mut selected = grant("group:agents", "move", "service", 0, &[]);
+    for index in 0..33 {
+        let id = format!("move-group-{index:02}");
+        config.policy.resource_groups.push(ResourceGroupDefinition {
+            id: id.clone(),
+            name: "Move boundary".into(),
+            included_resource_ids: vec!["eng".into()],
+            excluded_resource_ids: vec!["document-two".into()],
+        });
+        selected.resources.resource_group_ids.push(id);
+    }
+    config.policy.grants.push(selected);
+    config.policy.resource_groups.extend([
+        ResourceGroupDefinition {
+            id: "token-boundary".into(),
+            name: "Token boundary".into(),
+            included_resource_ids: vec!["eng".into()],
+            excluded_resource_ids: vec!["folder-b".into()],
+        },
+        ResourceGroupDefinition {
+            id: "unselected".into(),
+            name: "Unselected".into(),
+            included_resource_ids: vec!["eng".into()],
+            excluded_resource_ids: vec!["document-one".into()],
+        },
+    ]);
+    let excluded = config
+        .policy
+        .resources
+        .iter_mut()
+        .find(|resource| resource.id == "document-two")
+        .unwrap();
+    excluded.enabled = false;
+    excluded.allowed_execution_contexts = vec!["external".into()];
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let ceiling = token(selection(&[], &["token-boundary"]), "move");
+    let snapshot = runtime.policy_snapshot();
+    let (_, roots) = runtime.containment_lookup_requirements(
+        &snapshot,
+        &identity(),
+        &context(),
+        SERVICE,
+        "move",
+        Some(&ceiling),
+    );
+    assert_eq!(roots.len(), 2);
+    let provenance = runtime
+        .containment_root_provenance(
+            &snapshot,
+            &identity(),
+            &context(),
+            SERVICE,
+            "move",
+            Some(&ceiling),
+            &roots,
+        )
+        .unwrap();
+    assert_eq!(
+        provenance["resourceIds"],
+        json!(["document-two", "folder-b"])
+    );
+    assert_eq!(provenance["resourceGroupIds"].as_array().unwrap().len(), 16);
+    assert_eq!(provenance["additionalProvenanceCount"], 18);
+    assert!(!provenance.to_string().contains("unselected"));
+    assert!(root_visibility_diagnostic(Some(&json!({"locationProof":{"finalCheck":"unresolved", "diagnostic":"confluence_move_relation_unresolved", "category":"private-value"}})), Some(&provenance)).is_none());
+}
+
+#[test]
+fn empty_location_selections_disappear_from_previews_and_token_options() {
+    let (mut config, _) = fixture();
+    for (id, disabled, external) in [("disabled", true, false), ("external", false, true)] {
+        let mut entry = resource(
+            id,
+            content_type(),
+            exact("document", if disabled { 99 } else { 100 }),
+        );
+        entry.enabled = !disabled;
+        if external {
+            entry.allowed_execution_contexts = vec!["external".into()];
+        }
+        config.policy.resources.push(entry);
+    }
+    config.policy.resources.push(resource(
+        "foreign",
+        content_type(),
+        ResourceSelector::Exact {
+            value: locator("document", 80).replace(ORIGIN, "https://foreign.example.test"),
+        },
+    ));
+    config.policy.grants = vec![
+        grant("group:agents", "view", "service", 0, &["journal-one"]),
+        grant("group:agents", "search", "service", 0, &["document-one"]),
+        grant("group:other", "search", "per_user", 0, &["document-two"]),
+        grant("group:agents", "update", "service", 0, &["eng"]),
+    ];
+    let runtime = BrokerRuntime::new(config).unwrap();
+    for ids in [
+        &[][..],
+        &["disabled"],
+        &["external"],
+        &["foreign"],
+        &["journal-one"],
+    ] {
+        assert!(
+            runtime
+                .preview_policy_resources(
+                    SERVICE,
+                    &["view".into()],
+                    &[context()],
+                    &selection(ids, &[]),
+                    "service"
+                )
+                .unwrap()
+                .access
+                .is_empty(),
+            "{ids:?}"
+        );
+    }
+    let options = runtime.agent_token_options_for_identity(&identity());
+    let actions = &options
+        .services
+        .iter()
+        .find(|service| service.service == SERVICE)
+        .unwrap()
+        .actions;
+    assert_eq!(
+        actions
+            .iter()
+            .map(|action| action.action.as_str())
+            .collect::<Vec<_>>(),
+        ["update"]
+    );
+}
+
+#[test]
+fn token_options_drop_only_empty_location_contexts() {
+    let (mut config, _) = fixture();
+    config
+        .policy
+        .resources
+        .iter_mut()
+        .find(|resource| resource.id == "folder-a")
+        .unwrap()
+        .allowed_execution_contexts = vec!["external".into()];
+    let mut access = grant("group:agents", "view", "service", 0, &["folder-a"]);
+    access.execution_contexts = Some(vec!["default".into(), "external".into()]);
+    config.policy.grants.push(access);
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let options = runtime.agent_token_options_for_identity(&identity());
+    let action = &options
+        .services
+        .iter()
+        .find(|service| service.service == SERVICE)
+        .unwrap()
+        .actions[0];
+    let external = ExecutionContext::new("external").unwrap();
+    assert_eq!(
+        action.execution_contexts.as_slice(),
+        std::slice::from_ref(&external)
+    );
+    let AgentTokenActionScope::Location {
+        effective_access_by_execution_context,
+        ..
+    } = &action.scope
+    else {
+        panic!("location")
+    };
+    assert_eq!(
+        effective_access_by_execution_context
+            .keys()
+            .collect::<Vec<_>>(),
+        [&external]
+    );
+}
+
+#[test]
+fn token_picker_offers_unauthored_location_groups_with_visible_enabled_members() {
+    let (mut config, _) = fixture();
+    config
+        .policy
+        .grants
+        .push(grant("group:agents", "view", "service", 0, &["eng"]));
+    let mut disabled = resource("disabled", content_type(), exact("document", 90));
+    disabled.enabled = false;
+    let mut external = resource("external", content_type(), exact("document", 91));
+    external.allowed_execution_contexts = vec!["external".into()];
+    config.policy.resources.extend([
+        disabled,
+        external,
+        resource(
+            "outside",
+            content_type(),
+            ResourceSelector::Exact {
+                value: locator("document", 92).replace("/s/ENG/", "/s/OTHER/"),
+            },
+        ),
+    ]);
+    for (id, included) in [
+        ("subtree-group", "folder-a"),
+        ("disabled-group", "disabled"),
+        ("external-group", "external"),
+        ("outside-group", "outside"),
+    ] {
+        config.policy.resource_groups.push(ResourceGroupDefinition {
+            id: id.into(),
+            name: id.into(),
+            included_resource_ids: vec![included.into()],
+            excluded_resource_ids: vec![],
+        });
+    }
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let options = runtime.agent_token_options_for_identity(&identity());
+    assert_eq!(
+        options
+            .resource_groups
+            .iter()
+            .map(|group| group.id.as_str())
+            .collect::<Vec<_>>(),
+        ["subtree-group"]
+    );
+    let preview = runtime
+        .preview_agent_token_access(
+            &identity(),
+            &token(selection(&[], &["subtree-group"]), "view").caveats,
+        )
+        .unwrap();
+    assert_eq!(preview.access.len(), 1);
+    assert!(
+        matches!(&preview.access[0].scope, EffectiveAccessScope::Location(access) if !access.is_empty())
+    );
+}
+
+#[test]
+fn caller_coverage_includes_its_narrow_token_roots_without_exclusions_or_disjoint_roots() {
+    let (mut config, _) = fixture();
+    config
+        .policy
+        .grants
+        .push(grant("group:agents", "view", "service", 0, &["eng"]));
+    config.policy.resource_groups.push(ResourceGroupDefinition {
+        id: "token-folder".into(),
+        name: "Token folder".into(),
+        included_resource_ids: vec!["folder-a".into(), "other-area".into()],
+        excluded_resource_ids: vec!["document-two".into()],
+    });
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let ceiling = token(selection(&[], &["token-folder"]), "view");
+    let coverage = runtime.containment_coverage(
+        &runtime.policy_snapshot(),
+        &identity(),
+        &context(),
+        SERVICE,
+        "view",
+        Some(&ceiling),
+        |_| true,
+    );
+    assert!(
+        coverage
+            .iter()
+            .any(|entry| entry.selector == subtree("directory", 10)
+                && entry.restricted
+                && entry.conditional)
+    );
+    assert!(coverage.iter().any(|entry| entry.selector
+        == ResourceSelector::Exact {
+            value: "ENG".into()
+        }
+        && entry.restricted));
+    let serialized = serde_json::to_string(&coverage).unwrap();
+    assert!(!serialized.contains(&locator("document", 2)) && !serialized.contains("OTHER"));
+    assert!(!serialized.contains("excluded") && !serialized.contains("boundaries"));
+}
+
+#[tokio::test]
+async fn space_only_child_placement_uses_container_evidence_until_a_subtree_predicate_applies() {
+    let (mut config, fixture) = fixture();
+    config
+        .policy
+        .grants
+        .push(grant("group:agents", "create", "service", 0, &["eng"]));
+    fixture.state.lock().unwrap().evidence = Some(ContainmentEvidence::new(
+        "document_destination",
+        ORIGIN,
+        vec![ContainmentObligation::ChildPlacement(ContentLocation::new(
+            content("document", 1),
+            vec![ResourceContainer::new(area_type(), "ENG")],
+            ContainmentEvidenceLevel::ContainerOnly,
+        ))],
+    ));
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let admitted = runtime
+        .invoke(operation("create"), InvokeRequest::new(json!({})))
+        .await;
+    assert_eq!(admitted.envelope.decision, Decision::Allow);
+    assert_eq!(
+        fixture.state.lock().unwrap().requested_level,
+        Some(ContainmentEvidenceLevel::ContainerOnly)
+    );
+    let ceiling = token(selection(&["folder-a"], &[]), "create");
+    assert_eq!(
+        runtime
+            .containment_lookup_requirements(
+                &runtime.policy_snapshot(),
+                &identity(),
+                &context(),
+                SERVICE,
+                "create",
+                Some(&ceiling)
+            )
+            .0,
+        ContainmentEvidenceLevel::CompleteLineage
+    );
+    config
+        .policy
+        .grants
+        .push(grant("group:other", "create", "service", -1, &["folder-a"]));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    assert_eq!(
+        runtime
+            .containment_lookup_requirements(
+                &runtime.policy_snapshot(),
+                &identity(),
+                &context(),
+                SERVICE,
+                "create",
+                None
+            )
+            .0,
+        ContainmentEvidenceLevel::CompleteLineage
+    );
+    assert_eq!(
+        runtime
+            .containment_lookup_requirements(
+                &runtime.policy_snapshot(),
+                &identity(),
+                &context(),
+                SERVICE,
+                "move",
+                None
+            )
+            .0,
+        ContainmentEvidenceLevel::CompleteLineage
+    );
+}
+
+#[tokio::test]
+async fn move_root_requirements_reach_provider_before_its_relevant_container_limit() {
+    let (mut config, fixture) = fixture();
+    let excluded_ids: Vec<_> = (1..=65).map(|id| format!("other-root-{id}")).collect();
+    config
+        .policy
+        .resources
+        .extend(excluded_ids.iter().enumerate().map(|(index, id)| {
+            resource(
+                id,
+                content_type(),
+                ResourceSelector::Exact {
+                    value: locator("document", index + 100).replace("/s/ENG/", "/s/OTHER/"),
+                },
+            )
+        }));
+    config.policy.resource_groups.push(ResourceGroupDefinition {
+        id: "move-boundary".into(),
+        name: "Move boundary".into(),
+        included_resource_ids: vec!["eng".into()],
+        excluded_resource_ids: excluded_ids,
+    });
+    let mut access = grant("group:agents", "move", "service", 0, &[]);
+    access
+        .resources
+        .resource_group_ids
+        .push("move-boundary".into());
+    config.policy.grants.push(access);
+    fixture.state.lock().unwrap().evidence = Some(ContainmentEvidence::new(
+        "document_move",
+        ORIGIN,
+        vec![
+            ContainmentObligation::SubtreeImpact {
+                current: location("document", 1, vec![content("directory", 10)]),
+                proposed: location("document", 1, vec![content("directory", 20)])
+                    .with_provenance(ContainmentProvenance::Proposed),
+            },
+            ContainmentObligation::ChildPlacement(location("directory", 20, vec![])),
+            ContainmentObligation::Content(location("document", 3, vec![content("directory", 20)])),
+        ],
+    ));
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let admitted = runtime
+        .invoke(operation("move"), InvokeRequest::new(json!({})))
+        .await;
+    assert_eq!(admitted.envelope.decision, Decision::Allow);
+    assert_eq!(fixture.state.lock().unwrap().roots, 65);
+    assert_eq!(fixture.scope_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn collection_digest_tracks_canonical_authority_and_survives_unrelated_publications() {
+    let (mut config, _) = fixture();
+    config.policy.grants = vec![
+        grant("group:agents", "search", "service", 0, &["folder-a"]),
+        grant("group:agents", "search", "service", 0, &["folder-b"]),
+    ];
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let snapshot = runtime.policy_snapshot();
+    let digest = |snapshot: &PolicySnapshot,
+                  ceiling: Option<&ParsedAgentInvokeTokenCaveats<'_>>| {
+        let admission = runtime
+            .admit_containment_collection(
+                snapshot,
+                &identity(),
+                &context(),
+                SERVICE,
+                "search",
+                ceiling,
+            )
+            .unwrap();
+        let InvocationAuthority::ContainmentCollection(authority) = admission.authority else {
+            panic!("collection")
+        };
+        authority.authority_digest().to_owned()
+    };
+    let original = digest(&snapshot, None);
+    let mut republished = (*snapshot).clone();
+    republished.generation += 1;
+    republished.grants.reverse();
+    republished.grants.push(republished.grants[0].clone());
+    assert_eq!(digest(&republished, None), original);
+    config
+        .policy
+        .grants
+        .push(grant("group:agents", "view", "service", 0, &["eng"]));
+    let unrelated = PolicySnapshot::from_config(&config, snapshot.generation() + 2);
+    assert_eq!(digest(&unrelated, None), original);
+    let ceiling = token(selection(&["folder-a"], &[]), "search");
+    assert_ne!(digest(&republished, Some(&ceiling)), original);
+    republished
+        .grants
+        .retain(|grant| grant.resources.resource_ids != ["folder-a"]);
+    assert_ne!(digest(&republished, None), original);
+}
+
+#[test]
+fn confluence_collection_summary_retains_space_and_existing_content_scope_keys() {
+    let (mut config, _) = fixture();
+    config.providers = ProvidersConfig::new(crate::tests::test_backend_registry()).with(
+        serde_json::from_value::<agent_access_confluence::ConfluenceProviderConfig>(json!({
+            "tenant_host":"example.atlassian.net", "allowed_upstream_hosts":["https://example.atlassian.net/wiki/**"]
+        })).unwrap());
+    config.credentials.lookup.clear();
+    config.credentials.per_user.clear();
+    let mut credential = config.credentials.service.remove(SERVICE).unwrap();
+    credential.kind = "basic_api_token".into();
+    credential.username_ref = credential.token_ref.clone();
+    config
+        .credentials
+        .service
+        .insert("confluence".into(), credential);
+    let space_type = agent_access_confluence::CONFLUENCE_SPACE_RESOURCE
+        .id()
+        .clone();
+    let content_type = agent_access_confluence::CONFLUENCE_CONTENT_RESOURCE
+        .id()
+        .clone();
+    let page = "https://example.atlassian.net/wiki/spaces/OPS/folder/10";
+    let blog = "https://example.atlassian.net/wiki/spaces/OPS/blog/30";
+    config.policy.resources = vec![
+        resource("all", space_type.clone(), ResourceSelector::All),
+        resource(
+            "eng",
+            space_type,
+            ResourceSelector::Exact {
+                value: "ENG".into(),
+            },
+        ),
+        resource(
+            "page",
+            content_type.clone(),
+            ResourceSelector::Subtree { value: page.into() },
+        ),
+        resource(
+            "blog",
+            content_type,
+            ResourceSelector::Exact { value: blog.into() },
+        ),
+    ];
+    for (action, ids) in [
+        ("search", vec!["eng", "page"]),
+        ("blog.search", vec!["eng", "blog"]),
+    ] {
+        let mut access = grant("group:agents", action, "service", 0, &ids);
+        access.service = "confluence".into();
+        config.policy.grants.push(access);
+    }
+    let runtime = BrokerRuntime::new(config.clone()).unwrap();
+    let snapshot = runtime.policy_snapshot();
+    for (action, key, root) in [
+        ("search", "page_location", page),
+        ("blog.search", "blog_location", blog),
+    ] {
+        let admitted = runtime
+            .admit_containment_collection(
+                &snapshot,
+                &identity(),
+                &context(),
+                "confluence",
+                action,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            admitted.scopes,
+            BTreeMap::from([
+                ("space".into(), vec!["ENG".into()]),
+                (key.into(), vec![root.into()])
+            ])
+        );
+        let mut ceiling = token(selection(&["eng"], &[]), action);
+        let restrictions = ceiling.caveats.service_restrictions.as_mut().unwrap();
+        let restriction = restrictions.remove(SERVICE).unwrap();
+        restrictions.insert("confluence".into(), restriction);
+        let narrowed = runtime
+            .admit_containment_collection(
+                &snapshot,
+                &identity(),
+                &context(),
+                "confluence",
+                action,
+                Some(&ceiling),
+            )
+            .unwrap();
+        assert_eq!(
+            narrowed.scopes,
+            BTreeMap::from([("space".into(), vec!["ENG".into()])])
+        );
+    }
+    config.policy.grants[0].resources = selection(&["all"], &[]);
+    let runtime = BrokerRuntime::new(config).unwrap();
+    let admitted = runtime
+        .admit_containment_collection(
+            &runtime.policy_snapshot(),
+            &identity(),
+            &context(),
+            "confluence",
+            "search",
+            None,
+        )
+        .unwrap();
+    assert_eq!(
+        admitted.scopes,
+        BTreeMap::from([("space".into(), vec!["*".into()])])
+    );
 }

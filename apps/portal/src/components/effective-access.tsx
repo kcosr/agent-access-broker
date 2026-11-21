@@ -52,7 +52,11 @@ export function AccessCoverage({ coverage }: { coverage: EffectiveAccessScope })
   const types = useResourceTypes();
   if (coverage.scope === "unscoped") return <span>{ACTION_GRANT_LABEL}</span>;
   if (coverage.scope === "resource") return <AccessClauses type={coverage.resourceType} clauses={coverage.clauses} />;
-  if (coverage.projectionStatus === "too_complex") return <p className="pt-prose">Coverage preview unavailable. Existing selections still apply; current policy is checked at invocation.</p>;
+  if (coverage.projectionStatus === "complete" && coverage.clauses.length === 0) return <span>No access currently</span>;
+  const rootVisibilityWarning = coverage.requiresRuntimeRootVisibility
+    ? <p className="pt-clause-note">Moves require runtime visibility of relevant excluded roots. This offline preview does not check whether those roots are current or readable. A stale, absent or unreadable root can block moves throughout its space. An administrator can inspect the configured exclusion and correct or remove it.</p>
+    : null;
+  if (coverage.projectionStatus === "too_complex") return <div className="flex flex-col gap-2"><p className="pt-prose">Coverage preview unavailable. Existing selections still apply; current policy is checked at invocation.</p>{rootVisibilityWarning}</div>;
   return <div className="flex flex-col gap-2">
     <p className="pt-clause-note">{coverage.enforcement === "results"
       ? "Search uses the global highest grant rank and priority. Its boundaries are unioned, then restricted by the token. Query filters never select a lower grant."
@@ -60,6 +64,7 @@ export function AccessCoverage({ coverage }: { coverage: EffectiveAccessScope })
     <ul className="pt-clauses">{coverageLabels(types, coverage).map((label, index) => <li key={index}>{label}</li>)}</ul>
     {coverage.domain === "page_destination" ? <p className="pt-clause-note">Creating a child requires space or subtree coverage. An exact parent does not grant child creation.</p> : null}
     {coverage.domain === "page_move" ? <p className="pt-clause-note">A move must cover the entire current and proposed subtree, destination and anchor. Unreadable or hidden excluded roots can prevent the move.</p> : null}
+    {rootVisibilityWarning}
   </div>;
 }
 

@@ -744,6 +744,43 @@ fn authority_and_evidence_debug_do_not_dump_ancestor_or_exclusion_inventories() 
 }
 
 #[test]
+fn scope_request_debug_hides_private_root_values_in_both_wrappers() {
+    let roots = [exact_id("document", 87654), subtree_id("directory", 98765)];
+    let identity = crate::InvocationIdentity::new("synthetic-user", true);
+    let correlation = crate::CorrelationContext::for_tests();
+    let inputs = serde_json::json!({"documentId": "31"});
+    let parts = crate::host::ScopeRequestParts {
+        service: "docs",
+        action: "document.move",
+        inputs: &inputs,
+        execution_context: "development",
+        identity: &identity,
+        correlation: &correlation,
+        lookup_access: None,
+        containment_evidence_level: ContainmentEvidenceLevel::CompleteLineage,
+        containment_roots: &roots,
+        locator_state: None,
+    };
+    let request = crate::host::scope_request(parts);
+    for dump in [
+        format!("{parts:?}"),
+        format!("{parts:#?}"),
+        format!("{request:?}"),
+        format!("{request:#?}"),
+    ] {
+        for private in ["87654", "98765", ORIGIN] {
+            assert!(!dump.contains(private), "private root printed: {dump}");
+        }
+        assert!(dump.contains("containment_root_count: 2"));
+        assert!(dump.contains("CompleteLineage"));
+        assert!(dump.contains("synthetic-user"));
+        assert!(dump.contains("document.move"));
+        assert!(dump.contains("documentId"));
+    }
+    assert_eq!(request.containment_roots(), &roots);
+}
+
+#[test]
 fn offline_empty_and_coverage_claims_agree_with_independent_finite_tree_semantics() {
     // The finite oracle evaluates selector membership directly against known
     // parent IDs; it does not use the SDK matcher or its offline relation code.

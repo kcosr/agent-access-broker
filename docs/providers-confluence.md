@@ -1124,10 +1124,13 @@ A space or subtree resource must cover prospective child placement; an exact
 parent alone is insufficient.
 
 `page.update` is optimistic-concurrency. It requires `pageId`, `baseVersion`
-(`>= 1`), `contentFormat`, and `content`. If the page's current version does not equal
+(`1..=2147483646`), `contentFormat`, and `content`. If the page's current version does not equal
 `baseVersion`, the admitted request returns `version_conflict` (HTTP 409)
-without writing. A generic upstream 409 remains an upstream conflict rather than
-claiming a measured version mismatch. Updates use the v2 page endpoint with only
+without writing, including the observed `currentVersion`. A completed upstream
+PUT 409 returns `decision: "error"`, `confluence_update_conflict` (HTTP 409), and
+`{pageId, space, expectedBaseVersion}` without `currentVersion` or a mutation
+status. It can reflect an approval requirement or another upstream conflict and
+does not prove a stale version. Updates use the v2 page endpoint with only
 ID, current status, title, body and the incremented version; hierarchy fields are
 never sent. The target must be a current regular page, not a live doc. After the
 update, the page must report `version == baseVersion + 1`.

@@ -136,38 +136,45 @@ test("an unsuccessful preview keeps saving blocked and reports the server field 
   expect(model.api.createdResources).toEqual([]);
 });
 
-test("grant editor explains location applicability and broad unions while preserving an unavailable preview", async ({ page }) => {
-  const model = await fixture(page);
-  model.api.resources = [
-    { id: "space", displayName: "Engineering", resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, allowedExecutionContexts: ["internal"], enabled: true, version: 1 },
-    { id: "folder", displayName: "Runbooks", resourceType: "confluence_content", selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/spaces/ENG/folder/12" }, allowedExecutionContexts: ["internal"], enabled: true, version: 1 }
-  ];
-  const previews: Array<Record<string, unknown>> = [];
-  await page.route("**/v1/admin/policy/catalog", (route) => route.fulfill({ json: { ok: true, result: {
-    resources: model.api.resources, resourceGroups: [], subjects: { users: [], groups: [], anonymous: false }, executionContexts: { allowedValues: ["internal"], defaultContext: "internal", contextRequired: false },
-    services: [{ service: "confluence", displayName: "Confluence", surface: "invoke", configuredCredentialModes: ["per_user"], lookupCredentialConfigured: false,
-      resourceScopes: { location: { matching: "containment", domain: "page", selectorsByType: { confluence_space: ["exact", "all"], confluence_content: ["exact", "subtree"] }, containerTypes: ["confluence_space"], targetKinds: ["page"], ancestorKinds: ["page", "folder"], effects: ["content"] } },
-      actions: [{ action: "page.update", readOnly: false, description: "Update a page", requiredScopeTypes: ["location"], credentialModes: ["per_user"], lookupRequired: true, inputSchema: {} }]
-    }]
-  } } }));
-  await page.route("**/v1/admin/policy/effective-access", (route) => {
-    previews.push(route.request().postDataJSON());
-    return route.fulfill({ json: { ok: true, result: { policyGeneration: 2, access: [{ service: "confluence", action: "page.update", executionContext: "internal", scope: "location", resourceTypes: ["confluence_space", "confluence_content"], domain: "page", enforcement: "request", containmentVerification: "at_invocation", projectionStatus: "too_complex", reasonCode: "resource_access_too_complex" }] } } });
+for (const projectionStatus of ["complete", "too_complex"] as const) {
+  test(`grant editor explains applicability, broad unions and offline move-root visibility with ${projectionStatus} coverage`, async ({ page }) => {
+    const model = await fixture(page);
+    model.api.resources = [
+      { id: "space", displayName: "Engineering", resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, allowedExecutionContexts: ["internal"], enabled: true, version: 1 },
+      { id: "folder", displayName: "Runbooks", resourceType: "confluence_content", selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/spaces/ENG/folder/12" }, allowedExecutionContexts: ["internal"], enabled: true, version: 1 }
+    ];
+    const previews: Array<Record<string, unknown>> = [];
+    await page.route("**/v1/admin/policy/catalog", (route) => route.fulfill({ json: { ok: true, result: {
+      resources: model.api.resources, resourceGroups: [], subjects: { users: [], groups: [], anonymous: false }, executionContexts: { allowedValues: ["internal"], defaultContext: "internal", contextRequired: false },
+      services: [{ service: "confluence", displayName: "Confluence", surface: "invoke", configuredCredentialModes: ["per_user"], lookupCredentialConfigured: false,
+        resourceScopes: { location: { matching: "containment", domain: "page_move", selectorsByType: { confluence_space: ["exact", "all"], confluence_content: ["exact", "subtree"] }, containerTypes: ["confluence_space"], targetKinds: ["page"], ancestorKinds: ["page", "folder"], effects: ["content"] } },
+        actions: [{ action: "page.move", readOnly: false, description: "Move a page", requiredScopeTypes: ["location"], credentialModes: ["per_user"], lookupRequired: true, inputSchema: {} }]
+      }]
+    } } }));
+    await page.route("**/v1/admin/policy/effective-access", (route) => {
+      previews.push(route.request().postDataJSON());
+      return route.fulfill({ json: { ok: true, result: { policyGeneration: 2, access: [{ service: "confluence", action: "page.move", executionContext: "internal", scope: "location", resourceTypes: ["confluence_space", "confluence_content"], domain: "page_move", enforcement: "request", containmentVerification: "at_invocation", requiresRuntimeRootVisibility: true, ...(projectionStatus === "too_complex" ? { projectionStatus, reasonCode: "resource_access_too_complex" } : { projectionStatus, boundaries: [{ included: [{ resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" } }], excluded: [{ resourceType: "confluence_content", selector: model.api.resources[1].selector }] }], clauses: [{ required: [0], excludedRequests: [], credentialMode: "per_user" }] }) }] } } });
+    });
+    await page.goto(`${assets.baseUrl}/ui/admin/policies/new`);
+    await page.getByRole("combobox", { name: "Service", exact: true }).selectOption("confluence");
+    await page.getByRole("group", { name: "Write-capable", exact: true }).getByRole("checkbox", { name: "page.move", exact: true }).check();
+    await page.getByRole("group", { name: "Execution contexts", exact: true }).getByRole("checkbox", { name: "internal", exact: true }).check();
+    const resources = page.getByRole("group", { name: "Resources", exact: true });
+    await resources.getByRole("checkbox", { name: "Engineering · ENG", exact: true }).check();
+    await resources.getByRole("checkbox", { name: /^Runbooks ·/ }).check();
+    await expect(page.getByText(/Page and folder selections do not authorize blogs or space metadata/)).toBeVisible();
+    await expect(page.getByText(/the space still permits the selected write actions throughout that space/)).toBeVisible();
+    const preview = page.getByRole("complementary", { name: "Preview", exact: true });
+    if (projectionStatus === "too_complex") await expect(preview).toContainText("Coverage preview unavailable");
+    await expect(preview).toContainText("Moves require runtime visibility of relevant excluded roots");
+    await expect(preview).toContainText("This offline preview does not check whether those roots are current or readable");
+    await expect(preview).toContainText("can block moves throughout its space");
+    await expect(preview).toContainText("administrator can inspect the configured exclusion and correct or remove it");
+    await expect.poll(() => previews.at(-1)).toMatchObject({ service: "confluence", credentialMode: "per_user", actions: ["page.move"], resources: { resourceIds: ["space", "folder"], resourceGroupIds: [] } });
+    await expect(resources.getByRole("checkbox", { name: /^Runbooks ·/ })).toBeChecked();
+    expect(model.api.errors).toEqual([]);
   });
-  await page.goto(`${assets.baseUrl}/ui/admin/policies/new`);
-  await page.getByRole("combobox", { name: "Service", exact: true }).selectOption("confluence");
-  await page.getByRole("group", { name: "Write-capable", exact: true }).getByRole("checkbox", { name: "page.update", exact: true }).check();
-  await page.getByRole("group", { name: "Execution contexts", exact: true }).getByRole("checkbox", { name: "internal", exact: true }).check();
-  const resources = page.getByRole("group", { name: "Resources", exact: true });
-  await resources.getByRole("checkbox", { name: "Engineering · ENG", exact: true }).check();
-  await resources.getByRole("checkbox", { name: /^Runbooks ·/ }).check();
-  await expect(page.getByText(/Page and folder selections do not authorize blogs or space metadata/)).toBeVisible();
-  await expect(page.getByText(/the space still permits the selected write actions throughout that space/)).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Preview", exact: true })).toContainText("Coverage preview unavailable");
-  await expect.poll(() => previews.at(-1)).toMatchObject({ service: "confluence", credentialMode: "per_user", actions: ["page.update"], resources: { resourceIds: ["space", "folder"], resourceGroupIds: [] } });
-  await expect(resources.getByRole("checkbox", { name: /^Runbooks ·/ })).toBeChecked();
-  expect(model.api.errors).toEqual([]);
-});
+}
 
 test("switching from URL entry to another resource type restores that type’s canonical editor", async ({ page }) => {
   const model = await fixture(page);

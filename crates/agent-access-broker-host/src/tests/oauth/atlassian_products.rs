@@ -463,6 +463,31 @@ fn personal_page_json() -> Value {
     })
 }
 
+async fn mount_personal_page_location(atlassian: &MockServer, token_number: u32) -> [String; 2] {
+    let node = format!("{CONFLUENCE_GATEWAY}/api/v2/pages/123456");
+    let space = format!("{CONFLUENCE_GATEWAY}/api/v2/spaces/7");
+    mount_gateway(
+        atlassian,
+        &node,
+        token_number,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id":"123456", "spaceId":"7", "status":"current", "parentId":null,
+            "version":{"number":7}
+        })),
+    )
+    .await;
+    mount_gateway(
+        atlassian,
+        &space,
+        token_number,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id":"7", "key":"~alice", "status":"current", "homepageId":"123456"
+        })),
+    )
+    .await;
+    [node, space]
+}
+
 /// Alice reads a Jira issue and lists its comments, both lookup-backed,
 /// then reads a page in her personal space and searches it, all through
 /// the gateway with her one Atlassian connection. Audit names the
@@ -487,9 +512,13 @@ async fn a_person_reads_jira_and_a_personal_confluence_space_through_the_gateway
     )
     .await;
     mount_gateway(&atlassian, &page, 1, personal_page()).await;
+    let [page_location, space_location] = mount_personal_page_location(&atlassian, 1).await;
     Mock::given(method("GET"))
         .and(path(search.as_str()))
-        .and(query_param("cql", "type = page AND space IN (\"~alice\")"))
+        .and(query_param(
+            "cql",
+            "type = page AND ((((space = \"~alice\"))))",
+        ))
         .and(header_is("authorization", "Bearer atlassian-access-1"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({"results": [personal_page_json()]})),
@@ -549,9 +578,13 @@ async fn a_person_reads_jira_and_a_personal_confluence_space_through_the_gateway
             format!("GET {issue} {bearer}"),
             format!("GET {issue} {bearer}"),
             format!("GET {comments} {bearer}"),
-            // page.view: the lookup before policy, then the read.
+            // page.view: current evidence before policy, the read, then the
+            // final page/space proof before releasing content.
+            format!("GET {page_location} {bearer}"),
+            format!("GET {space_location} {bearer}"),
             format!("GET {page} {bearer}"),
-            format!("GET {page} {bearer}"),
+            format!("GET {page_location} {bearer}"),
+            format!("GET {space_location} {bearer}"),
             format!("GET {search} {bearer}"),
         ]
     );
@@ -993,6 +1026,7 @@ async fn a_refresh_response_lost_in_transit_requires_reconnect() {
         .await;
     let page = format!("{CONFLUENCE_GATEWAY}/rest/api/content/123456");
     mount_gateway(&atlassian, &page, 3, personal_page()).await;
+    mount_personal_page_location(&atlassian, 3).await;
     let (status, body) = fixture
         .invoke_product(
             "confluence",
