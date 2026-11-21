@@ -63,6 +63,7 @@ struct EvidenceBackend {
     hidden_for_credential: Mutex<Option<ExecutionCredential>>,
     hierarchy_credentials: Mutex<Vec<ExecutionCredential>>,
     hierarchy_reads: Mutex<Vec<(String, bool)>>,
+    space_location_reads: AtomicUsize,
     weak_parent_omissions: bool,
     space: Mutex<ConfluenceSpace>,
     extra_spaces: Mutex<BTreeMap<String, ConfluenceSpace>>,
@@ -115,6 +116,7 @@ impl EvidenceBackend {
             hidden_for_credential: Mutex::new(None),
             hierarchy_credentials: Mutex::new(Vec::new()),
             hierarchy_reads: Mutex::new(Vec::new()),
+            space_location_reads: AtomicUsize::new(0),
             weak_parent_omissions: false,
             space: Mutex::new(space()),
             extra_spaces: Mutex::new(BTreeMap::new()),
@@ -352,6 +354,7 @@ impl ConfluenceBackend for EvidenceBackend {
     ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
         budget.charge_request()?;
         budget.charge_bytes(100)?;
+        self.space_location_reads.fetch_add(1, Ordering::SeqCst);
         let s = self.space.lock().unwrap().clone();
         if s.id != id {
             return self

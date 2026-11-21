@@ -588,7 +588,7 @@ function ResourceEditorDrawer({ model, record: latestRecord, onDone }: { model: 
       const confluence = (type === "confluence_content" || type === "confluence_space") && (next === "confluence_content" || next === "confluence_space");
       setAttributes(new Map());
       // A recognized URL owns its displayed type, including within this family.
-      if (confluence && urlMode) {
+      if (confluence && urlMode && url.trim()) {
         setType(hints ? locationResourceType(hints.kind) : next);
         setEntryMode("url");
       }

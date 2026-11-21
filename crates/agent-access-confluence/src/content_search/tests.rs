@@ -177,6 +177,10 @@ struct Backend {
     reads: Mutex<Vec<String>>,
     failures: Mutex<BTreeMap<String, VecDeque<Option<ConfluenceBackendError>>>>,
     space_keys: Mutex<BTreeMap<String, VecDeque<String>>>,
+    // Fault injection charges the real shared counters instead of returning a
+    // preselected ScopeUnresolved error. Ordinary reads keep their usual cost.
+    metadata_charges: Mutex<BTreeMap<String, VecDeque<(u32, u64)>>>,
+    last_metadata_budget: Mutex<Option<ConfluenceMetadataBudget>>,
 }
 impl Backend {
     fn new(pages: Vec<ConfluenceSearchPage>) -> Arc<Self> {
@@ -205,8 +209,18 @@ impl Backend {
         label: String,
         budget: &ConfluenceMetadataBudget,
     ) -> Result<(), ConfluenceBackendError> {
-        budget.charge_request()?;
-        budget.charge_bytes(64)?;
+        *self.last_metadata_budget.lock().unwrap() = Some(budget.clone());
+        let (requests, bytes) = self
+            .metadata_charges
+            .lock()
+            .unwrap()
+            .get_mut(&label)
+            .and_then(VecDeque::pop_front)
+            .unwrap_or((1, 64));
+        for _ in 0..requests {
+            budget.charge_request()?;
+        }
+        budget.charge_bytes(bytes)?;
         self.reads.lock().unwrap().push(label.clone());
         if let Some(Some(error)) = self
             .failures
@@ -1235,3 +1249,5 @@ async fn final_proof_failure_records_unresolved_without_releasing_candidates() {
 }
 
 mod refinement;
+
+mod final_pass;

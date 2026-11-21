@@ -134,6 +134,39 @@ fn vectors() -> Value {
             ));
         }
     }
+    for (name, path, id) in [
+        (
+            "blog-date-leading-plus",
+            "/wiki/spaces/ENG/blog/2026/+5/+6/789/Title",
+            "789",
+        ),
+        (
+            "blog-year-like-id-and-title",
+            "/wiki/spaces/ENG/blog/2026/5",
+            "2026",
+        ),
+    ] {
+        cases.push(vector(name, SITE, &format!("{SITE}{path}"), "exact",
+            json!({"kind":"blog","id":id}), json!({"accepted":{
+                "resourceType":"confluence_content", "selector":{"kind":"exact","value":format!("{SITE}/wiki/content/blog/{id}")},
+                "locationKind":"blog","verification":"not_checked"}})));
+    }
+    for (name, path) in [
+        ("blog-date-without-id", "/wiki/spaces/ENG/blog/2026/11/20"),
+        (
+            "blog-three-segment-nondate",
+            "/wiki/spaces/ENG/blog/789/Title/Extra",
+        ),
+    ] {
+        cases.push(vector(
+            name,
+            SITE,
+            &format!("{SITE}{path}"),
+            "exact",
+            Value::Null,
+            json!({"rejectedField":"url"}),
+        ));
+    }
     for (name, origin) in [
         ("host-case", "https://EXAMPLE.atlassian.net"),
         ("host-dot", "https://example.atlassian.net."),

@@ -2137,15 +2137,15 @@ test("the catalog adds, filters, groups, and deletes resources with live referen
 
   editor = await addResource();
   await editor.getByLabel("Resource type").selectOption("confluence_space");
-  await editor.getByLabel("Coverage").selectOption("all");
-  await expect(editor.getByLabel("Canonical identifier")).toHaveCount(0);
+  await editor.getByRole("button", { name: "All spaces", exact: true }).click();
+  await expect(editor.getByLabel("Space key", { exact: true })).toHaveCount(0);
   for (const context of ["default", "internal", "external"]) await editor.getByRole("group", { name: "Allowed execution contexts" }).getByLabel(context, { exact: true }).check();
   await editor.getByRole("button", { name: "Save resource", exact: true }).click();
   await expect(tableRow(page, "All Confluence spaces")).toBeVisible();
 
   editor = await addResource();
   await editor.getByLabel("Resource type").selectOption("confluence_space");
-  await editor.getByLabel("Canonical identifier").fill("HIDDEN");
+  await editor.getByLabel("Space key", { exact: true }).fill("HIDDEN");
   await editor.getByRole("group", { name: "Allowed execution contexts" }).getByLabel("internal", { exact: true }).check();
   await editor.getByRole("switch", { name: "Enabled" }).or(editor.getByRole("checkbox", { name: "Enabled" })).uncheck();
   await editor.getByRole("button", { name: "Save resource", exact: true }).click();
@@ -2249,8 +2249,8 @@ test("the catalog preserves personal Confluence space keys through creation, edi
   await page.getByRole("main").getByRole("button", { name: "Add resource", exact: true }).first().click();
   const add = page.getByRole("complementary", { name: "Add resource", exact: true });
   await add.getByLabel("Resource type").selectOption("confluence_space");
-  await add.getByLabel("Coverage").selectOption("exact");
-  await add.getByLabel("Canonical identifier").fill("~alice");
+  await add.getByRole("button", { name: "By space key", exact: true }).click();
+  await add.getByLabel("Space key", { exact: true }).fill("~alice");
   await add.getByLabel("Display name").fill("Alice personal space");
   await add.getByRole("group", { name: "Allowed execution contexts" }).getByLabel("default", { exact: true }).check();
   await add.getByRole("button", { name: "Save resource", exact: true }).click();
@@ -2264,8 +2264,8 @@ test("the catalog preserves personal Confluence space keys through creation, edi
 
   await details.getByRole("button", { name: "Edit", exact: true }).click();
   const edit = page.getByRole("complementary", { name: "Edit resource Alice personal space", exact: true });
-  await expect(edit.getByLabel("Canonical identifier")).toHaveValue("~alice");
-  await edit.getByLabel("Canonical identifier").fill("~Alice");
+  await expect(edit.getByLabel("Space key", { exact: true })).toHaveValue("~alice");
+  await edit.getByLabel("Space key", { exact: true }).fill("~Alice");
   await edit.getByLabel("Display name").fill("Alice personal documentation");
   await edit.getByRole("button", { name: "Save resource", exact: true }).click();
   const renamed = page.getByRole("complementary", { name: "Resource Alice personal documentation", exact: true });

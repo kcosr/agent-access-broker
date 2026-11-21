@@ -2210,6 +2210,16 @@ The provider owns
 Rust normalizer tests assert the expected outcomes and export these vectors;
 portal unit tests consume the same file to check local recognition, invalid URL
 versus unsupported coverage, origin normalization and date/path boundaries.
+To regenerate the tracked fixture after updating its independently specified
+expected cases, run this exact test:
+
+```bash
+cargo test --locked -p agent-access-confluence --lib locations::tests::export_location_normalization_fixture -- --ignored --exact
+```
+
+The exporter writes the tracked JSON file; review and commit that change with
+the normalizer tests.
+
 Portal browser coverage exercises the normalize-then-save flow, stale-response and
 version protection, standalone space-key/all editing and saved-identity edits.
 These fixtures do not qualify live Confluence lifecycle, index convergence,

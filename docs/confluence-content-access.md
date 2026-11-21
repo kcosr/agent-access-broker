@@ -271,6 +271,13 @@ the final observation can still race the operation. The search index can lag, an
 timing is not constant.
 
 Metadata and scan budgets are operation-wide, including retries and final checks.
+Move proofs also have independent per-pass ceilings of 256 logical metadata reads,
+64 potentially overlapping roots and 256 unique content nodes. These are separate
+ceilings, not a promise that every combination below the root/node limits fits the
+read budget. Classifying a root and then obtaining stronger parent evidence can
+require a second read; both count, as do current-space reads. Foreign-space roots
+need only the evidence establishing disjointness. The read ceiling can be reached
+before the node ceiling, and the protected audit identifies budget exhaustion.
 See [configuration](configuration.md#providersconfluence) for defaults and bounds.
 The encoded request-target ceiling is an operator limit, defaulting to 4096 bytes;
 the HTTP client's absolute-URI limit also applies. Qualify the selected ceiling

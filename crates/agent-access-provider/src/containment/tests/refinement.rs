@@ -735,3 +735,185 @@ fn conjunction_budget_exhaustion_keeps_unknown_roots_conditional() {
         OfflineContainmentProof::Conditional
     );
 }
+
+fn large_space_key(index: usize) -> String {
+    format!(
+        "SPACE{}{}{}",
+        char::from(b'A' + ((index / (26 * 26)) % 26) as u8),
+        char::from(b'A' + ((index / 26) % 26) as u8),
+        char::from(b'A' + (index % 26) as u8),
+    )
+}
+
+fn large_space_boundary(start: usize, count: usize, common: Option<&str>) -> ContainmentBoundary {
+    let mut included: Vec<_> = (start..start + count)
+        .map(|index| space(&large_space_key(index)))
+        .collect();
+    if let Some(common) = common {
+        included.push(space(common));
+    }
+    boundary(included, vec![])
+}
+
+#[test]
+fn large_exact_space_relations_are_decided_independently_of_authored_order() {
+    let contract = contract(vec![ContainmentEffect::Content]);
+    let left = large_space_boundary(0, 100, None);
+    let right = large_space_boundary(100, 100, None);
+    for (left, right) in [(&left, &right), (&right, &left)] {
+        assert_eq!(
+            left.prove_intersection(right, &contract, ORIGIN),
+            OfflineContainmentProof::Empty
+        );
+    }
+    let left = large_space_boundary(0, 99, Some("ZZZ"));
+    let right = large_space_boundary(100, 99, Some("ZZZ"));
+    assert_eq!(left.included.len(), 100);
+    assert_eq!(right.included.len(), 100);
+    for (left, right) in [(&left, &right), (&right, &left)] {
+        assert_eq!(
+            left.included.last().unwrap().selector().value(),
+            Some("ZZZ")
+        );
+        assert_eq!(
+            left.prove_intersection(right, &contract, ORIGIN),
+            OfflineContainmentProof::Covered
+        );
+        assert_eq!(
+            left.prove_intersection(right, &move_contract(), ORIGIN),
+            OfflineContainmentProof::Covered
+        );
+    }
+    let excluded = boundary(right.included.clone(), vec![space("ZZZ")]);
+    assert_eq!(
+        left.prove_intersection(&excluded, &contract, ORIGIN),
+        OfflineContainmentProof::Empty
+    );
+    let conditional = boundary(right.included.clone(), vec![exact_id("document", 99999)]);
+    assert_eq!(
+        left.prove_intersection(&conditional, &contract, ORIGIN),
+        OfflineContainmentProof::Conditional
+    );
+}
+
+#[test]
+fn late_identical_exact_or_subtree_root_is_a_witness_without_search_budget() {
+    let contract = contract(vec![ContainmentEffect::Content]);
+    for subtree in [false, true] {
+        let selector = |id| {
+            if subtree {
+                subtree_id("document", id)
+            } else {
+                exact_id("document", id)
+            }
+        };
+        let common = selector(99999);
+        let mut left: Vec<_> = (1..100).map(selector).collect();
+        let mut right: Vec<_> = (1000..1099).map(selector).collect();
+        left.push(common.clone());
+        right.push(common.clone());
+        let left = boundary(left, vec![]);
+        let right = boundary(right, vec![]);
+        assert_eq!(left.included.last(), Some(&common));
+        assert_eq!(right.included.last(), Some(&common));
+        for (left, right) in [(&left, &right), (&right, &left)] {
+            assert_eq!(
+                left.prove_intersection(right, &contract, ORIGIN),
+                OfflineContainmentProof::Covered
+            );
+        }
+        let excluded = boundary(right.included.clone(), vec![common]);
+        assert_eq!(
+            left.prove_intersection(&excluded, &contract, ORIGIN),
+            if subtree {
+                OfflineContainmentProof::Conditional
+            } else {
+                OfflineContainmentProof::Empty
+            },
+        );
+    }
+    let left = boundary(
+        (1..101).map(|id| exact_id("document", id)).collect(),
+        vec![],
+    );
+    let right = boundary(
+        (1000..1100).map(|id| exact_id("document", id)).collect(),
+        vec![],
+    );
+    assert_eq!(
+        left.prove_intersection(&right, &contract, ORIGIN),
+        OfflineContainmentProof::Empty
+    );
+}
+
+#[test]
+fn indexed_proofs_preserve_all_three_operands_and_every_negative() {
+    let shared = "ZZZ";
+    let left = large_space_boundary(0, 99, Some(shared));
+    let right = large_space_boundary(100, 99, Some(shared));
+    let scalar = collection(
+        vec![left.clone()],
+        Some(right.clone()),
+        ContainmentEvidenceLevel::ContainerOnly,
+    );
+    assert_eq!(
+        scalar.requested_container_coverage(&ResourceContainer::new(area_type(), shared)),
+        OfflineContainmentProof::Covered
+    );
+    assert_eq!(
+        scalar.requested_container_coverage(&ResourceContainer::new(area_type(), "OTHER")),
+        OfflineContainmentProof::Empty
+    );
+    let excluded = collection(
+        vec![left],
+        Some(boundary(right.included.clone(), vec![space(shared)])),
+        ContainmentEvidenceLevel::ContainerOnly,
+    );
+    assert_eq!(
+        excluded.requested_container_coverage(&ResourceContainer::new(area_type(), shared)),
+        OfflineContainmentProof::Empty
+    );
+    let content_roots = boundary(
+        (1..101).map(|id| subtree_id("document", id)).collect(),
+        vec![],
+    );
+    let content_with_scalar_token = collection(
+        vec![content_roots.clone()],
+        Some(large_space_boundary(0, 100, None)),
+        ContainmentEvidenceLevel::CompleteLineage,
+    );
+    assert_eq!(
+        content_with_scalar_token
+            .requested_container_coverage(&ResourceContainer::new(area_type(), "OTHER")),
+        OfflineContainmentProof::Empty
+    );
+    assert_eq!(
+        content_with_scalar_token.requested_container_coverage(&ResourceContainer::new(
+            area_type(),
+            large_space_key(99)
+        )),
+        OfflineContainmentProof::Conditional
+    );
+    let same_content = collection(
+        vec![content_roots.clone()],
+        Some(content_roots),
+        ContainmentEvidenceLevel::CompleteLineage,
+    );
+    assert_eq!(
+        same_content.requested_container_coverage(&ResourceContainer::new(area_type(), shared)),
+        OfflineContainmentProof::Conditional
+    );
+
+    // Pairwise overlaps do not establish a three-way intersection.
+    let a = boundary(vec![space("ENG"), space("OPS")], vec![]);
+    let b = boundary(vec![space("OPS"), space("WEST")], vec![]);
+    let c = boundary(vec![space("ENG"), space("WEST")], vec![]);
+    assert_eq!(
+        matching::prove_conjunction(
+            &[&a, &b, &c],
+            &contract(vec![ContainmentEffect::Content]),
+            ORIGIN
+        ),
+        OfflineContainmentProof::Empty,
+    );
+}

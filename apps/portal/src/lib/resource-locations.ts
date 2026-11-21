@@ -81,13 +81,6 @@ export function locationCoverage(kind: LocationKind | undefined, choice: PageCov
   return kind === "page" ? choice || null : null;
 }
 
-export function locationPreviewLabel(location: NormalizedResourceLocation): string {
-  if (location.locationKind === "space") return `Entire ${location.selector.kind === "exact" ? location.selector.value : ""} space`;
-  if (location.locationKind === "blog") return "This blog post only";
-  if (location.locationKind === "folder") return "This folder and descendants";
-  return location.selector.kind === "subtree" ? "This page and descendants" : "This page only";
-}
-
 export function configuredLocationService(services: ResourceLocationService[], type: ResourceType, hints: LocationHints | null): {
   service: ResourceLocationService | null; issue: "absent" | "wrong_site" | "ambiguous" | null;
 } {

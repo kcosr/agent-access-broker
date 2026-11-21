@@ -335,6 +335,25 @@ test("normalization and mutation failures retain fields and retry from the curre
   expect(model.api.createdResources[0].selector).toEqual({ kind: "exact", value: pageIdentity.replace("12345", "67890") });
 });
 
+for (const blankUrl of ["", "   "]) {
+  test(`switching ${blankUrl ? "whitespace-only" : "empty"} content entry to a space starts by key`, async ({ page }) => {
+    const model = await fixture(page, []);
+    const editor = await open(page);
+    await editor.getByLabel("Location URL", { exact: true }).fill(blankUrl);
+    await editor.getByLabel(/^Display name/).fill("Engineering");
+    await editor.getByRole("checkbox", { name: "internal", exact: true }).check();
+    await editor.getByLabel("Resource type", { exact: true }).selectOption("confluence_space");
+    await expect(editor.getByRole("button", { name: "By space key", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(editor.getByLabel("Space key", { exact: true })).toHaveValue("");
+    await expect(editor.getByLabel("Location URL", { exact: true })).toHaveCount(0);
+    await editor.getByLabel("Space key", { exact: true }).fill("ENG");
+    await save(editor);
+    await expect.poll(() => model.mutations.length).toBe(1);
+    expect(model.mutations[0]).toMatchObject({ resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, displayName: "Engineering", allowedExecutionContexts: ["internal"] });
+    expect(model.requests).toEqual([]);
+  });
+}
+
 test("standalone space-key and all-spaces entry work without any location service", async ({ page }) => {
   const model = await fixture(page, []);
   const editor = await open(page, "confluence_space");

@@ -605,7 +605,7 @@ impl ResourceTypeDescriptor {
         self.subtree.as_ref()
     }
 
-    /// Projects canonical selectors into pure authored coordinates.
+    /// Projects canonical selectors into stable site and content-kind identity fields.
     pub const fn with_selector_projection(
         mut self,
         project: crate::ResourceSelectorProjector,
@@ -664,7 +664,7 @@ impl ResourceTypeDescriptor {
         }
         Err(crate::LocationNormalizationError::new(
             "selector",
-            "target kind has no authored coordinate projection",
+            "target kind has no stable identity projection",
         ))
     }
 

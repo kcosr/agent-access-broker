@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgentTokenOptions, LocationAccess, NormalizedResourceLocation, PolicyServiceCatalog } from "../src/types";
+import type { AgentTokenOptions, LocationAccess, PolicyServiceCatalog } from "../src/types";
 import { AccessCoverage, EffectiveAccessSummary } from "../src/components/effective-access";
 import { buildAccessSummary, mergeEffectiveAccess } from "../src/lib/access";
 import { buildAgentTokenServiceRestrictions } from "../src/lib/helpers";
 import { coverageLabels, selectorLabel } from "../src/lib/resource-labels";
-import { locationCoverage, locationInputHints, locationPreviewLabel } from "../src/lib/resource-locations";
+import { locationCoverage, locationInputHints } from "../src/lib/resource-locations";
 import { grantResourceChoices } from "../src/lib/grant-resources";
 import { indexResourceTypes } from "../src/lib/resource-types";
 import { RESOURCE_TYPES } from "./resource-types.fixture";
@@ -135,12 +135,5 @@ describe("offline location editor", () => {
     expect(locationCoverage("space", "subtree")).toBe("space");
     expect(locationCoverage("folder", "exact")).toBe("subtree");
     expect(locationCoverage("blog", "subtree")).toBe("exact");
-  });
-
-  test("states exact-space coverage and selected exact/subtree semantics", () => {
-    const preview: NormalizedResourceLocation = { resourceType: "confluence_content", selector: { kind: "exact", value: point }, locationKind: "page", verification: "not_checked" };
-    expect(locationPreviewLabel(preview)).toBe("This page only");
-    expect(locationPreviewLabel({ ...preview, selector: { kind: "subtree", value: point } })).toBe("This page and descendants");
-    expect(locationPreviewLabel({ ...preview, resourceType: "confluence_space", selector: { kind: "exact", value: "ENG" }, locationKind: "space" })).toBe("Entire ENG space");
   });
 });

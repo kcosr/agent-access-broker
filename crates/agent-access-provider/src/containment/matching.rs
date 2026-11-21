@@ -226,6 +226,12 @@ pub(super) fn prove_conjunction(
     if boundaries.is_empty() || boundaries.len() > 3 {
         return OfflineContainmentProof::Conditional;
     }
+    let negatives: Vec<_> = boundaries
+        .iter()
+        .flat_map(|boundary| &boundary.excluded)
+        .filter(|selector| contract.selector_applicable(selector, site_origin))
+        .collect();
+    let negative_index = KnownSelectorIndex::new(negatives.iter().copied());
     let mut remaining = MAX_PROOF_STEPS;
     let mut conditional = false;
     for effect in &contract.effects {
@@ -238,6 +244,7 @@ pub(super) fn prove_conjunction(
                     .filter(|selector| {
                         contract.selector_applicable(selector, site_origin)
                             && can_cover_effect(selector, *effect)
+                            && !negative_index.contains(selector)
                     })
                     .collect()
             })
@@ -245,19 +252,16 @@ pub(super) fn prove_conjunction(
         if choices.iter().any(Vec::is_empty) {
             return OfflineContainmentProof::Empty;
         }
-        let negatives: Vec<_> = boundaries
-            .iter()
-            .flat_map(|boundary| &boundary.excluded)
-            .filter(|selector| contract.selector_applicable(selector, site_origin))
-            .collect();
-        let mut selected = Vec::with_capacity(boundaries.len());
-        let proof = prove_choices(
-            &choices,
-            &negatives,
-            &mut selected,
-            contract,
-            &mut remaining,
-        );
+        let proof = prove_known_relations(&choices, &negative_index).unwrap_or_else(|| {
+            let mut selected = Vec::with_capacity(boundaries.len());
+            prove_choices(
+                &choices,
+                &negatives,
+                &mut selected,
+                contract,
+                &mut remaining,
+            )
+        });
         if proof == OfflineContainmentProof::Empty {
             return proof;
         }
@@ -268,6 +272,192 @@ pub(super) fn prove_conjunction(
     } else {
         OfflineContainmentProof::Covered
     }
+}
+
+/// Index only relations that are decided by the stable selector contract.
+/// Every input has already been filtered to one scope/site/effect. Scalar All
+/// covers that whole domain; a finite container is never inferred for content.
+type ContentSelectorKey<'a> = (&'a ResourceType, &'a str, &'a str);
+
+#[derive(Default)]
+struct KnownSelectorIndex<'a> {
+    all: bool,
+    scalar_exact: BTreeMap<&'a ResourceType, BTreeSet<&'a str>>,
+    content_exact: BTreeSet<ContentSelectorKey<'a>>,
+    content_subtree: BTreeSet<ContentSelectorKey<'a>>,
+}
+
+impl<'a> KnownSelectorIndex<'a> {
+    fn new(selectors: impl IntoIterator<Item = &'a TypedResourceSelector>) -> Self {
+        let mut index = Self::default();
+        for selector in selectors {
+            match (selector.projection(), selector.selector()) {
+                (None, ResourceSelector::All) => index.all = true,
+                (None, ResourceSelector::Exact { value }) => {
+                    index
+                        .scalar_exact
+                        .entry(selector.resource_type())
+                        .or_default()
+                        .insert(value);
+                }
+                (Some(projection), ResourceSelector::Exact { value }) => {
+                    index.content_exact.insert((
+                        selector.resource_type(),
+                        &projection.root_kind,
+                        value,
+                    ));
+                }
+                (Some(projection), ResourceSelector::Subtree { value }) => {
+                    index.content_subtree.insert((
+                        selector.resource_type(),
+                        &projection.root_kind,
+                        value,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        index
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.all
+            && self.scalar_exact.is_empty()
+            && self.content_exact.is_empty()
+            && self.content_subtree.is_empty()
+    }
+
+    /// Whether one indexed positive contains the complete witness selector.
+    fn contains(&self, witness: &TypedResourceSelector) -> bool {
+        if self.all {
+            return true;
+        }
+        match (witness.projection(), witness.selector()) {
+            (None, ResourceSelector::Exact { value }) => self
+                .scalar_exact
+                .get(witness.resource_type())
+                .is_some_and(|values| values.contains(value.as_str())),
+            (Some(projection), ResourceSelector::Exact { value }) => {
+                let key = (
+                    witness.resource_type(),
+                    projection.root_kind.as_str(),
+                    value.as_str(),
+                );
+                self.content_exact.contains(&key) || self.content_subtree.contains(&key)
+            }
+            (Some(projection), ResourceSelector::Subtree { value }) => {
+                self.content_subtree.contains(&(
+                    witness.resource_type(),
+                    projection.root_kind.as_str(),
+                    value.as_str(),
+                ))
+            }
+            _ => false,
+        }
+    }
+
+    /// Every negative must be proven disjoint. Unknown cross-dimension,
+    /// container/content and distinct-subtree relations remain unknown.
+    fn disjoint_from(&self, witness: &TypedResourceSelector) -> bool {
+        if self.all {
+            return false;
+        }
+        match (witness.projection(), witness.selector()) {
+            (None, ResourceSelector::Exact { value }) => {
+                self.content_exact.is_empty()
+                    && self.content_subtree.is_empty()
+                    && self.scalar_exact.iter().all(|(resource_type, values)| {
+                        *resource_type == witness.resource_type()
+                            && !values.contains(value.as_str())
+                    })
+            }
+            (Some(projection), ResourceSelector::Exact { value }) => {
+                self.scalar_exact.is_empty()
+                    && self.content_subtree.is_empty()
+                    && !self.content_exact.contains(&(
+                        witness.resource_type(),
+                        projection.root_kind.as_str(),
+                        value.as_str(),
+                    ))
+            }
+            (None, ResourceSelector::All) | (Some(_), ResourceSelector::Subtree { .. }) => {
+                self.is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    fn scalar_partition(&self) -> Option<(&ResourceType, &BTreeSet<&'a str>)> {
+        if self.all
+            || !self.content_exact.is_empty()
+            || !self.content_subtree.is_empty()
+            || self.scalar_exact.len() != 1
+        {
+            return None;
+        }
+        self.scalar_exact
+            .iter()
+            .next()
+            .map(|(resource_type, values)| (*resource_type, values))
+    }
+
+    fn content_partition(&self) -> Option<&BTreeSet<ContentSelectorKey<'a>>> {
+        (!self.all
+            && self.scalar_exact.is_empty()
+            && self.content_subtree.is_empty()
+            && !self.content_exact.is_empty())
+        .then_some(&self.content_exact)
+    }
+}
+
+/// Set lookups decide cheap relations before bounded relationship search. This
+/// is linearithmic in the input lists, with at most three operands and no
+/// Cartesian-product allocation. Large disjoint exact sets and a late shared
+/// identity therefore do not consume the budget for unresolved relationships.
+fn prove_known_relations(
+    choices: &[Vec<&TypedResourceSelector>],
+    negatives: &KnownSelectorIndex<'_>,
+) -> Option<OfflineContainmentProof> {
+    let indexes: Vec<_> = choices
+        .iter()
+        .map(|choices| KnownSelectorIndex::new(choices.iter().copied()))
+        .collect();
+    if choices.iter().flatten().any(|witness| {
+        indexes.iter().all(|index| index.contains(witness)) && negatives.disjoint_from(witness)
+    }) {
+        return Some(OfflineContainmentProof::Covered);
+    }
+    // Any contradiction among whole operands disproves the full conjunction,
+    // including scalar token/requested-container operands beside content roots.
+    for index in &indexes {
+        if let Some((resource_type, values)) = index.scalar_partition() {
+            let possible = values.iter().any(|value| {
+                indexes.iter().all(|other| {
+                    other
+                        .scalar_partition()
+                        .is_none_or(|(other_type, other_values)| {
+                            other_type != resource_type || other_values.contains(value)
+                        })
+                })
+            });
+            if !possible {
+                return Some(OfflineContainmentProof::Empty);
+            }
+        }
+        if let Some(values) = index.content_partition() {
+            let possible = values.iter().any(|value| {
+                indexes.iter().all(|other| {
+                    other
+                        .content_partition()
+                        .is_none_or(|other_values| other_values.contains(value))
+                })
+            });
+            if !possible {
+                return Some(OfflineContainmentProof::Empty);
+            }
+        }
+    }
+    None
 }
 
 fn prove_choices<'a>(

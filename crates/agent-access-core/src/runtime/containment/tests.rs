@@ -628,6 +628,170 @@ fn publication_rejects_proven_mixed_modes_and_preserves_conditional_and_lookup_u
     }
 }
 
+fn large_disjoint_exact_selections(
+    config: &mut BrokerConfig,
+    content_roots: bool,
+) -> (ResourceSelection, ResourceSelection) {
+    let selections: Vec<_> = ['L', 'R']
+        .into_iter()
+        .enumerate()
+        .map(|(side, prefix)| {
+            let ids: Vec<_> = (0..100)
+                .map(|index| {
+                    let id = format!("large-{prefix}-{index:03}");
+                    let (kind, selector) = if content_roots {
+                        (
+                            content_type(),
+                            exact("document", (side + 1) * 10_000 + index),
+                        )
+                    } else {
+                        (
+                            area_type(),
+                            ResourceSelector::Exact {
+                                value: format!(
+                                    "{prefix}{}{}",
+                                    char::from(b'A' + (index / 26) as u8),
+                                    char::from(b'A' + (index % 26) as u8),
+                                ),
+                            },
+                        )
+                    };
+                    config.policy.resources.push(resource(&id, kind, selector));
+                    id
+                })
+                .collect();
+            ResourceSelection {
+                resource_ids: ids,
+                resource_group_ids: Vec::new(),
+            }
+        })
+        .collect();
+    (selections[0].clone(), selections[1].clone())
+}
+
+#[test]
+fn large_decidable_late_overlap_still_rejects_mixed_mode_publication() {
+    for content_roots in [false, true] {
+        for reversed in [false, true] {
+            let (mut config, _) = fixture();
+            let (mut left, mut right) = large_disjoint_exact_selections(&mut config, content_roots);
+            let (kind, selector) = if content_roots {
+                (content_type(), exact("document", 99_999))
+            } else {
+                (
+                    area_type(),
+                    ResourceSelector::Exact {
+                        value: "ZZZ".into(),
+                    },
+                )
+            };
+            config
+                .policy
+                .resources
+                .push(resource("late-shared", kind, selector));
+            left.resource_ids.push("late-shared".into());
+            right.resource_ids.push("late-shared".into());
+            let mut shared = grant("user:person", "update", "service", 0, &[]);
+            shared.resources = left;
+            let mut personal = grant("user:person", "update", "per_user", 0, &[]);
+            personal.resources = right;
+            config.policy.grants = vec![shared, personal];
+            if reversed {
+                config.policy.grants.reverse();
+                for grant in &mut config.policy.grants {
+                    grant.resources.resource_ids.reverse();
+                }
+            }
+            let error = match BrokerRuntime::new(config) {
+                Ok(_) => panic!(
+                    "decidable overlap published: content_roots={content_roots}, reversed={reversed}"
+                ),
+                Err(error) => error,
+            };
+            assert!(
+                format!("{error:?}").contains("ambiguous credential mode"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn large_decidable_disjoint_token_collection_denies_before_provider_work() {
+    for content_roots in [false, true] {
+        let (mut config, fixture) = fixture();
+        let (allowed, limited) = large_disjoint_exact_selections(&mut config, content_roots);
+        let mut selected = grant("group:agents", "search", "service", 0, &[]);
+        selected.resources = allowed;
+        config.policy.grants.push(selected);
+        let runtime = BrokerRuntime::new(config).unwrap();
+        let ceiling = token(limited, "search");
+        let snapshot = runtime.policy_snapshot();
+        let error = match runtime.admit_containment_collection(
+            &snapshot,
+            &identity(),
+            &context(),
+            SERVICE,
+            "search",
+            Some(&ceiling),
+        ) {
+            Ok(_) => panic!("provably disjoint token admitted: content_roots={content_roots}"),
+            Err(error) => error,
+        };
+        assert_eq!(error.reason_code(), ReasonCode::ServiceActionDenied);
+        assert_eq!(
+            error.message,
+            "broker token content boundary has no currently authorized resources"
+        );
+        assert_eq!(
+            error.audit.as_ref().unwrap()["brokerToken"]["tokenId"],
+            "fixture-token"
+        );
+        assert!(!runtime.containment_has_access(
+            &snapshot,
+            &identity(),
+            &context(),
+            SERVICE,
+            "search",
+            Some(&ceiling),
+            |_| true,
+        ));
+        assert!(
+            runtime
+                .preview_agent_token_access(&identity(), &ceiling.caveats)
+                .unwrap()
+                .access
+                .is_empty()
+        );
+        let mut invocation = operation("search");
+        invocation.operation.identity.source = Some(IdentitySourceAudit {
+            name: "broker".into(),
+            kind: "broker_tokens".into(),
+            token_header: "Authorization".into(),
+            token_scheme: "Bearer".into(),
+            token_class: Some(BrokerTokenClass::AgentInvoke),
+            token_id: Some("fixture-token".into()),
+            namespace: None,
+            binding_id: None,
+            read_only_access: None,
+            token_scopes: Some(serde_json::to_value(&ceiling.caveats).unwrap()),
+        });
+        let denied = runtime
+            .invoke(invocation, InvokeRequest::new(json!({})))
+            .await;
+        assert_eq!(denied.envelope.decision, Decision::Deny);
+        assert_eq!(
+            denied.envelope.reason_code,
+            Some(ReasonCode::ServiceActionDenied.into())
+        );
+        assert!(denied.envelope.result.is_none());
+        assert!(denied.envelope.resource_scopes.is_empty());
+        assert_eq!(fixture.local_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.scope_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fixture.invoke_calls.load(Ordering::SeqCst), 0);
+    }
+}
+
 #[test]
 fn conditional_same_subject_space_and_content_modes_publish_then_deny_current_overlap() {
     let (mut config, _) = fixture();

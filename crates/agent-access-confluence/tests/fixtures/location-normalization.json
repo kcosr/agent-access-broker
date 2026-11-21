@@ -1390,6 +1390,68 @@
       "coverage": "exact",
       "declaredSite": "https://example.atlassian.net",
       "expectedParsed": {
+        "id": "789",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/789"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-date-leading-plus",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/+5/+6/789/Title"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
+        "id": "2026",
+        "kind": "blog"
+      },
+      "expectedResult": {
+        "accepted": {
+          "locationKind": "blog",
+          "resourceType": "confluence_content",
+          "selector": {
+            "kind": "exact",
+            "value": "https://example.atlassian.net/wiki/content/blog/2026"
+          },
+          "verification": "not_checked"
+        }
+      },
+      "id": "blog-year-like-id-and-title",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/5"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "blog-date-without-id",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/2026/11/20"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": null,
+      "expectedResult": {
+        "rejectedField": "url"
+      },
+      "id": "blog-three-segment-nondate",
+      "url": "https://example.atlassian.net/wiki/spaces/ENG/blog/789/Title/Extra"
+    },
+    {
+      "coverage": "exact",
+      "declaredSite": "https://example.atlassian.net",
+      "expectedParsed": {
         "id": "123",
         "kind": "page"
       },
@@ -1889,7 +1951,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-133",
+      "id": "invalid-service-137",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     },
     {
@@ -1899,7 +1961,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-134",
+      "id": "invalid-service-138",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     },
     {
@@ -1909,7 +1971,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-135",
+      "id": "invalid-service-139",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     },
     {
@@ -1919,7 +1981,7 @@
       "expectedResult": {
         "rejectedField": "service"
       },
-      "id": "invalid-service-136",
+      "id": "invalid-service-140",
       "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/123"
     }
   ],

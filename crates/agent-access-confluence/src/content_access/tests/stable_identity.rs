@@ -470,3 +470,123 @@ async fn disclosed_stable_identity_uses_the_described_id_input_for_execution() {
     assert_eq!(result.result["id"], "100");
     assert_eq!(backend.page_reads.load(Ordering::SeqCst), 1);
 }
+
+fn many_foreign_roots(backend: &EvidenceBackend) -> Vec<TypedResourceSelector> {
+    foreign_space(backend);
+    (1000..1127)
+        .map(|id| {
+            let id = id.to_string();
+            insert_node(backend, &id, true, None);
+            resource("page", &id, true)
+        })
+        .collect()
+}
+
+fn relocate_roots_to_distinct_foreign_spaces(backend: &EvidenceBackend) {
+    for (ordinal, id) in (1000..1127).enumerate() {
+        let mut observed_space = space();
+        observed_space.id = (10000 + ordinal).to_string();
+        observed_space.key = format!("FOREIGN_{ordinal}");
+        backend
+            .nodes
+            .lock()
+            .unwrap()
+            .get_mut(&(ConfluenceNodeKind::Page, id.to_string()))
+            .unwrap()
+            .space_id = observed_space.id.clone();
+        backend
+            .extra_spaces
+            .lock()
+            .unwrap()
+            .insert(observed_space.id.clone(), observed_space);
+    }
+}
+
+fn assert_move_pass_budget_refusal(error: &ProviderError, backend: &EvidenceBackend) {
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+    assert!(error.result.is_none());
+    assert!(error.object_ids.is_none());
+    let proof = &error.audit.as_deref().unwrap()["locationProof"];
+    assert_eq!(proof["diagnostic"], "confluence_move_relation_unresolved");
+    assert_eq!(proof["category"], "root_budget_exhausted");
+    assert_eq!(proof["finalCheck"], "unresolved");
+    assert_eq!(proof["rootOrdinal"], 126);
+    assert_eq!(backend.writes.load(Ordering::SeqCst), 0);
+
+    // Three operation nodes plus one common space cost four reads. Each
+    // classified root then costs one node and one distinct space: the 126
+    // completed roots consume the remaining 252 reads. The next node is never
+    // fetched, and request/byte budgets are still ample.
+    let nodes = backend.hierarchy_reads.lock().unwrap();
+    assert_eq!(nodes.len(), 129);
+    assert!(!nodes.iter().any(|(id, _)| id == "1126"));
+    assert_eq!(backend.space_location_reads.load(Ordering::SeqCst), 127);
+    assert_eq!(
+        nodes.len() + backend.space_location_reads.load(Ordering::SeqCst),
+        256
+    );
+}
+
+#[tokio::test]
+async fn initial_move_pass_read_limit_keeps_the_original_root_ordinal_and_blocks_writes() {
+    let backend = Arc::new(EvidenceBackend::new());
+    let roots = many_foreign_roots(&backend);
+    relocate_roots_to_distinct_foreign_spaces(&backend);
+    let provider = backend.provider();
+    let error = move_resolution(&provider, roots).await.unwrap_err();
+    assert_move_pass_budget_refusal(&error, &backend);
+    assert!(
+        backend
+            .hierarchy_credentials
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|material| material == &token())
+    );
+}
+
+#[tokio::test]
+async fn final_move_pass_read_limit_uses_execution_access_and_preserves_root_diagnostics() {
+    let backend = Arc::new(EvidenceBackend::new());
+    let roots = many_foreign_roots(&backend);
+    let provider = backend.provider();
+    let request = admitted_with_roots(
+        &provider,
+        "page.move",
+        ContainmentEvidenceLevel::CompleteLineage,
+        roots,
+    )
+    .await;
+    let budget = ProviderState::require::<ContentOperationState>(request.state())
+        .unwrap()
+        .budget
+        .clone();
+    assert_eq!(budget.usage().unwrap(), (132, 13200));
+
+    // Externally relocated roots require more distinct space observations in
+    // the final pass. They remain foreign, but the provider must observe each
+    // current location without refreshing the admitted operation's authority.
+    relocate_roots_to_distinct_foreign_spaces(&backend);
+    backend.hierarchy_reads.lock().unwrap().clear();
+    backend.hierarchy_credentials.lock().unwrap().clear();
+    backend.space_location_reads.store(0, Ordering::SeqCst);
+    let execution = basic_credential("mover@example.test", "synthetic-execution-token");
+    let request = InvocationBuilder::from(request)
+        .credential(execution.clone())
+        .build();
+    let error = provider.invoke(request).await.unwrap_err();
+    assert_move_pass_budget_refusal(&error, &backend);
+    assert!(
+        backend
+            .hierarchy_credentials
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|material| material == &execution)
+    );
+    assert_eq!(budget.usage().unwrap(), (388, 38800));
+    assert!(
+        !budget.exhausted(),
+        "the logical pass limit, not the shared HTTP limit, refused the proof"
+    );
+}

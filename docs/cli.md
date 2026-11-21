@@ -1024,8 +1024,8 @@ the same effective group.
   `types` prints the broker's registered resource types (`GET /v1/resource-types`)
   with labels, examples, and supported selector forms.
   `locations` lists services offering offline resource URL entry.
-  `normalize-location` previews a canonical selector without contacting the
-  upstream or reading credentials; `verification: "not_checked"` means no
+  `normalize-location` returns the canonical selector offline without saving it,
+  contacting the upstream or reading credentials; `verification: "not_checked"` means no
   existence or permission check occurred. Content selectors preserve the site,
   kind and immutable ID independently of current space. A space URL preserves
   its explicit key; use direct creation to enter a known space key instead.
