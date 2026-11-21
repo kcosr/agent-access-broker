@@ -300,7 +300,10 @@ async fn cli_personal_space_exact_grant_uses_per_user_credentials_and_contains_w
         ],
     ] {
         let page = personal_cli(&broker, &token, &locator, true);
-        assert_eq!(page["resourceScopes"]["space"], json!(["~alice"]));
+        assert_eq!(
+            page["resourceScopes"],
+            json!({"page_location":["https://example.atlassian.net/wiki/spaces/~alice/pages/111"]})
+        );
         assert_eq!(
             page["result"]["spaceUrl"],
             "https://example.atlassian.net/wiki/spaces/~alice"
@@ -322,9 +325,8 @@ async fn cli_personal_space_exact_grant_uses_per_user_credentials_and_contains_w
     );
     assert_eq!(search["result"]["pages"][0]["space"], "~alice");
     let request = backend.searches.lock().unwrap().last().unwrap().clone();
-    assert_eq!(request.spaces, ["~alice"]);
     assert!(
-        request.cql.contains("space IN (\"~alice\")"),
+        request.cql.contains("space = \"~alice\""),
         "{}",
         request.cql
     );
@@ -339,7 +341,9 @@ async fn cli_personal_space_exact_grant_uses_per_user_credentials_and_contains_w
             "~alice",
             "--title",
             "New notes",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "111",
             "--content",
             "<p>New notes</p>",
@@ -409,7 +413,9 @@ async fn cli_personal_space_exact_grant_uses_per_user_credentials_and_contains_w
             "~bob",
             "--title",
             "Denied",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "222",
             "--content",
             "Denied",
@@ -473,9 +479,8 @@ async fn cli_personal_spaces_respect_all_grants_exclusions_and_token_ceilings() 
             if excluded { 1 } else { 2 }
         );
         let request = backend.searches.lock().unwrap().last().unwrap().clone();
-        assert!(request.spaces.is_empty());
         assert_eq!(
-            request.cql.contains("space NOT IN (\"~bob\")"),
+            request.cql.contains("AND NOT (space = \"~bob\")"),
             excluded,
             "{}",
             request.cql
@@ -507,9 +512,8 @@ async fn cli_personal_spaces_respect_all_grants_exclusions_and_token_ceilings() 
             true,
         );
         let request = backend.searches.lock().unwrap().last().unwrap().clone();
-        assert_eq!(request.spaces, ["~alice"]);
         assert!(
-            request.cql.contains("space IN (\"~alice\")"),
+            request.cql.contains("space = \"~alice\""),
             "{}",
             request.cql
         );

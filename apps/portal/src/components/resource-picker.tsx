@@ -192,6 +192,9 @@ export function GrantResourcePicker({
   return (
     <div className="flex flex-col gap-3">
       {service ? <p className="pt-prose">Showing resource types used by {service.service}. Existing selections remain until you remove them.</p> : null}
+      {service && Object.values(service.resourceScopes).some((scope) => scope.matching === "containment") ? <Banner tone="info">
+        Locations grant no actions by themselves. Page and folder selections do not authorize blogs or space metadata; an exact parent does not authorize creating a child. Selecting a space and a subtree in one grant is a union: the space still permits the selected write actions throughout that space. Group exclusions subtract from every inclusion in this grant. Another eligible grant may still authorize the location; token restrictions remain an independent ceiling.
+      </Banner> : null}
       <FilterInput value={search} onChange={setSearch} placeholder="Filter resources…" label="Filter resources" hotkey={null} />
       <div className="pt-checks pt-checks--scroll" role="group" aria-label="Resources">
         {matches.map((resource) => (

@@ -764,9 +764,7 @@ mod tests {
             .unwrap()
             .actions[0];
         assert!(
-            action.effective_access_by_execution_context
-                [&ExecutionContext::new("default").unwrap()]
-                .is_empty()
+            action.scalar_access().unwrap()[&ExecutionContext::new("default").unwrap()].is_empty()
         );
     }
 
@@ -854,10 +852,11 @@ mod tests {
                 &["echo".into()],
                 &[ExecutionContext::new("default").unwrap()],
                 &selection,
+                "service",
             )
             .unwrap();
         assert_eq!(preview.access.len(), 1);
-        assert!(!preview.access[0].clauses[0].matches("PRIVATE"));
+        assert!(!preview.access[0].clauses().unwrap()[0].matches("PRIVATE"));
         assert!(
             runtime
                 .policy_resource_catalog_for_scope(&PolicyReadScope::Services {

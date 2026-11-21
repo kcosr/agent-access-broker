@@ -3,6 +3,7 @@ pub use agent_token_issuance::*;
 mod application_access;
 pub use application_access::*;
 mod connection_credentials;
+mod content_resources;
 mod identity_access;
 mod identity_tokens;
 pub use identity_access::{
@@ -91,7 +92,8 @@ use uuid::Uuid;
 
 type HmacSha256 = Hmac<Sha256>;
 
-pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_APPLICATION_ACCESS_VERSION;
+pub const MANAGED_STORE_SCHEMA_VERSION: &str = MANAGED_STORE_CONTENT_RESOURCES_VERSION;
+const MANAGED_STORE_CONTENT_RESOURCES_VERSION: &str = "038_confluence_content_resources";
 const MANAGED_STORE_APPLICATION_ACCESS_VERSION: &str = "037_application_access";
 const MANAGED_STORE_MICROSOFT_ENROLLMENTS_VERSION: &str = "036_microsoft_enrollments";
 const MANAGED_STORE_IMPORTED_GATEWAY_ROUTES_VERSION: &str = "035_imported_gateway_routes";
@@ -325,6 +327,13 @@ const MANAGED_STORE_MIGRATIONS: &[ManagedStoreMigration] = &[
         sql: include_str!("managed_store/application_access.sql"),
         seed: None,
         structural_validation: application_access::validate_structure,
+    },
+    ManagedStoreMigration {
+        version: MANAGED_STORE_CONTENT_RESOURCES_VERSION,
+        checksum: "1290ac0b9f06ec75888448e961003bd0ed0132739b809207c56b6540878494c9",
+        sql: include_str!("managed_store/confluence_content_resources.sql"),
+        seed: None,
+        structural_validation: content_resources::validate_structure,
     },
 ];
 

@@ -1868,8 +1868,19 @@ remain. Paused tokens still count; expired and revoked tokens do not. Unlink
 references manually or revoke tokens. Resource disable removes only positive
 permission and preserves its effect in exclusions. See [resources.md](resources.md).
 
+`GET /v1/admin/policy/resource-locations` lists authorized services offering
+pure URL entry. `POST /v1/admin/policy/resource-locations/normalize` accepts
+`{service, url, coverage, spaceKey?}` and returns canonical resource type and
+selector plus `locationKind`, `configuredSpaceKey` and
+`verification: "not_checked"`. Both require management-class policy-read access;
+normalization applies browser CSRF. Ordinary agent credentials, including an
+administrator's agent token, cannot use them. The service scope is checked before
+its settings are inspected. No network lookup, credential access or mutation
+occurs. Resource writes still require canonical selectors and write permission.
+See [content URL entry](confluence-content-access.md#resources-and-url-entry).
+
 `POST /v1/admin/policy/effective-access` previews a grant selection from
-`{service, actions, executionContexts, resources}`. `POST
+`{service, actions, executionContexts, resources, credentialMode}`. `POST
 /v1/tokens/effective-access` previews the calling principal's token caveats;
 `POST /v1/admin/principals/{principal}/agent-token-effective-access` previews
 for an administered principal. Token previews require Boolean `readOnly` and
@@ -1878,9 +1889,9 @@ for an administered principal. Token previews require Boolean `readOnly` and
 owner's issuance mode or the manager's login path. Retained selections whose
 grants or classifications changed remain valid preview inputs and show their
 current intersection; a read-only token's reclassified write contributes no
-access. Responses contain
-`policyGeneration` and `access`, with service/action/context/resource-type rows
-and separate `clauses`. Each clause contains `included` / `excluded` selectors
+access. Responses contain `policyGeneration` and `access`, discriminated by
+`scope: unscoped|resource|location`. Scalar resource entries have one
+`resourceType` and separate `clauses`. Each scalar clause contains `included` / `excluded` selectors
 and may also contain `excludedRequests`, an array of boundaries with their own
 `included` / `excluded` selectors.
 
@@ -1893,6 +1904,18 @@ preview conditions, not an additional administrator-authored deny mechanism.
 Do not flatten them into global resource exclusions or combine partial clauses.
 Search and grant-selection previews ordinarily need only included/excluded
 selectors; token previews can carry whole-request conditions.
+
+Location entries have `resourceTypes`, `domain`, `enforcement` and
+`containmentVerification: "at_invocation"`. A complete entry has
+`projectionStatus: "complete"`, indexed typed `boundaries`, and clauses whose
+`required` and `excludedRequests` indices preserve the expression with its
+`credentialMode`. If the per-entry preview budget is exceeded,
+`projectionStatus: "too_complex"` and `reasonCode: "resource_access_too_complex"`
+replace the boundary/clauses arrays; access is unknown from that preview, not
+empty or broad. Preserve explicit selections. Aggregate inspection responses are
+bounded to 16 MiB and fail as a whole with HTTP 422 rather than omit actions;
+MCP additionally observes its configured response limit. Invocation and token
+issuance evaluate policy independently of preview serialization.
 
 An empty access array describes no current access. Symbolic all-except coverage
 is preserved. Grant previews describe the proposed resource selection; token
@@ -4299,9 +4322,12 @@ linking uses `/v1/oauth/callback/google` for a registration named `google`. Call
 parsing tolerates bounded provider extension fields but rejects duplicate parameters;
 a supplied Google issuer must match. See [Gmail](providers-gmail.md).
 
-Agent-token action options and effective-access previews use `resourceType: null` for actions that have no
-resource selector (including Gmail). Their `executionContexts` describe explicit
-action grants; their resource-clause lists are empty. Caller-filtered discovery
+Agent-token action options and effective-access previews use `scope: "unscoped"`
+for actions without a resource selector (including Gmail), omitting resource fields.
+Scalar options use `scope: "resource"` and `resourceType`; containment options use
+`scope: "location"`, `resourceTypes` and `domain`. Their `executionContexts`
+describe explicit action grants. Location options retain complete or too-complex
+entries per execution context without inventing scalar clause arrays. Caller-filtered discovery
 uses ordinary grant selection for these actions and excludes them when a token
 tries to impose a resource restriction on that service.
 

@@ -64,10 +64,16 @@ The schema catalog starts at `014_resource_policy_baseline` and applies
 `031_oidc_membership_renewal`, `032_imported_source_documents`,
 `033_agent_token_issuance`, `034_agent_token_issuance_contexts`,
 `035_imported_gateway_routes`, `036_microsoft_enrollments`, and
-`037_application_access` in order. The
+`037_application_access`, and `038_confluence_content_resources` in order. The
 `schema_migrations` ledger records each identifier,
 immutable SQL checksum, and application timestamp. `schemaChecksum` hashes the
 ordered catalog checksums.
+
+Migration `038_confluence_content_resources` adds the stored `subtree` selector
+kind. It preserves resource rows, memberships and private attribute ciphertext
+without changing policy revision. Registered types still enforce which selector
+kinds are valid. Older binaries reject the advanced ledger; rollback requires
+a matched pre-migration backup. See [content access](confluence-content-access.md#upgrade-and-qualification).
 
 A new empty database can be initialized, and the supported resource-policy
 baseline can be upgraded with `auto_migrate`. Databases predating that baseline

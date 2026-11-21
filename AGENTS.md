@@ -51,8 +51,8 @@ actions and exposes typed wrappers for supported services.
   do not reintroduce singular grant `subject` config, API, CLI JSON, or store
   shapes unless an approved interface change explicitly changes the contract.
 - Grants and token resource restrictions reference typed resource entries and
-  resource groups. Do not restore freeform policy scope strings, Jira issue or
-  Confluence page scopes, or generic HTTP services. Group exclusions apply
+  resource groups. Do not restore freeform policy scope strings, Jira issue scopes, or generic HTTP services. Confluence content
+  uses the registered exact/subtree containment type, not freeform page scopes. Group exclusions apply
   across selections within one grant/token boundary, including when their
   resource entry is disabled or context-ineligible; they are not global denies.
   Resource types may opt out with `supportsExclusions: false`: validate every

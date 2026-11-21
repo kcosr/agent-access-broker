@@ -609,12 +609,12 @@ function SettingsSection({ draft, readonly, update, messages }: SectionProps) {
 function LivePreview({ draft }: { draft: PolicyGrantDraft }) {
   const settled = useDeferredValue(draft);
   if (settled.status === "disabled") return <p className="pt-prose">No access currently: the grant is disabled.</p>;
-  if (!settled.service || settled.actions.length === 0 || settled.executionContexts.length === 0) {
-    return <p className="pt-prose">Choose a service, at least one action, and an execution context to preview access.</p>;
+  if (!settled.service || !settled.credentialMode || settled.actions.length === 0 || settled.executionContexts.length === 0) {
+    return <p className="pt-prose">Choose a service, credential mode, at least one action, and an execution context to preview access.</p>;
   }
   return (
     <EffectiveAccessPanel
-      grant={{ service: settled.service, actions: settled.actions, executionContexts: settled.executionContexts, resources: settled.resources }}
+      grant={{ service: settled.service, credentialMode: settled.credentialMode, actions: settled.actions, executionContexts: settled.executionContexts, resources: settled.resources }}
     />
   );
 }

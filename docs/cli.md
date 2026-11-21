@@ -1684,7 +1684,7 @@ agent-access --url http://127.0.0.1:8787 confluence page view --page-url 'https:
 agent-access --url http://127.0.0.1:8787 confluence page search --text 'runbook' --max-results 10
 agent-access --url http://127.0.0.1:8787 confluence page search --text 'runbook' --max-results 10 --output-format markdown
 agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title "Deploy Runbook" --content-file page.md --content-format markdown
-agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title "Child Runbook" --parent 123456 --content-file child.storage.html --content-format storage
+agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title "Child Runbook" --parent-kind page --parent-id 123456 --content-file child.storage.html --content-format storage
 agent-access --url http://127.0.0.1:8787 confluence page update 123456 --base-version 7 --content-file page.adf.json --content-format atlas_doc_format
 agent-access --url http://127.0.0.1:8787 confluence page move 234567 --position append --target 123456
 agent-access --url http://127.0.0.1:8787 confluence page move 234567 --position after --target 345678
@@ -1700,8 +1700,9 @@ canonical `confluence.<action>` invoke inputs, JSON `send` payloads, content-for
 requirements, draft semantics, and lookup-backed
 authorization behavior.
 
-Page and page-draft creation accept `--parent <page-id>` or
-`--parent-url <page-url>`; omitting both places the page under the space homepage.
+Page and page-draft creation accept `--parent-kind page|folder --parent-id ID`
+or `--parent-url URL`; omitting both resolves the space homepage. Creation
+requires prospective child authority; an exact parent grant is insufficient.
 Existing pages are reparented only through the separately granted
 `confluence page move` command. Select the moved page by positional page ID or
 `--page-url`, choose `--position before|after|append`, and select the target with

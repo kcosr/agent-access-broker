@@ -5,8 +5,11 @@ page/blog URL locators, CQL, drafts, comments, attachments, audit metadata, and
 attribution notes. Shared provider concepts and runtime discovery guidance are in
 [providers.md](providers.md); CLI-wide behavior is in [cli.md](cli.md).
 
-Service name `confluence`. Policy scope type `space`, bound to `confluence_space` resources. Every action advertises
-credential modes `[service, per_user]`.
+Service name `confluence`. Space operations use `confluence_space`; content
+operations use typed location scopes over spaces and exact page/blog or page/folder
+subtree resources. Every action advertises credential modes `[service, per_user]`.
+See [content access](confluence-content-access.md) for URL entry, overlap,
+exclusions, token restrictions, current evidence and upgrade requirements.
 
 ## Input arguments
 
@@ -21,7 +24,8 @@ refused by provider validation.
 or `url`; `blog.view` and `blog.attachment.list` require exactly one of `blogId`
 or `url`. `page.move` independently requires exactly one of `targetPageId` or
 `targetUrl`. For `page.create` and `page.draft.create`, parent placement is
-optional; do not combine `parentPageId` with `parentUrl`. Other actions use the
+optional; supply typed `parent: {"kind":"page"|"folder","id":"…"}` or
+`parentUrl`, never both. Other actions use the
 fields advertised by their schemas. Optional locator fields retain their
 existing null-as-absent behavior.
 
@@ -136,7 +140,7 @@ management uses explicit scoped credential rights; see the
 [administrator guide](administrator-guide.md) for that distinct setup and the
 complete user handoff. OAuth connections use grant-based personal setup instead.
 
-Create `confluence_space` resources and action grants through the configured policy
+Create [space or content resources](confluence-content-access.md) and action grants through the configured policy
 authority, then validate and reload configuration. Start with a granted view or
 search action and verify its scope and audit record. The explicit content settings
 above enable the write formats used in this document; inspect the running catalog
@@ -322,7 +326,7 @@ agent-access --url http://127.0.0.1:8787 confluence page view 123456789 --read-c
 agent-access --url http://127.0.0.1:8787 confluence page view 123456789 --output-format markdown
 agent-access --url http://127.0.0.1:8787 confluence page view --page-url 'https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456789'
 agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title 'Deploy Runbook' --content-file page.md --content-format markdown
-agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title 'Child Runbook' --parent 123456789 --content-file child.storage.html --content-format storage
+agent-access --url http://127.0.0.1:8787 confluence page create --space ENG --title 'Child Runbook' --parent-kind page --parent-id 123456789 --content-file child.storage.html --content-format storage
 agent-access --url http://127.0.0.1:8787 confluence page update 123456789 --base-version 7 --content-file page.adf.json --content-format atlas_doc_format
 agent-access --url http://127.0.0.1:8787 confluence page move 234567890 --position append --target 123456789
 agent-access --url http://127.0.0.1:8787 confluence page move 234567890 --position before --target 345678901
@@ -474,7 +478,7 @@ done:
 
 `safeLocators` name the target from the validated request and the reads before
 the write, such as the `pageId`, `blogId`, `commentId`, `parentCommentId`,
-`containerId`, or the `space` and `parentPageId` of a create; a failed
+`containerId`, or the `space` and typed `parent` of a create; a failed
 read-back keeps the locators its throttled form reports. A throttled read-back
 or batch keeps its `mutation_verification_failed`/`applied_unverified`
 outcome. A 4xx rejection, a version conflict and throttling of the write itself
@@ -546,64 +550,58 @@ Thirty-eight page, blog, draft, attachment, and space actions; comment actions f
 | Action | Required scope type | Pre-authorization metadata lookup |
 | --- | --- | --- |
 | `space.list` | `space` | no |
-| `page.view` | `space` | yes |
-| `search` | `space` | no |
-| `page.create` | `space` | lookup-backed; parent lookup when supplied |
-| `page.update` | `space` | yes |
-| `page.move` | `space` | lookup-backed; moved page, target, and effective parent |
-| `attachment.add` | `space` | yes |
-| `attachment.download` | `space` | yes |
-| `attachment.list` | `space` | yes |
-| `verify` | `space` | yes |
-| `blog.view` | `space` | yes |
-| `blog.search` | `space` | no |
+| `page.view` | `page_location` | yes |
+| `search` | `page_location` | no |
+| `page.create` | `page_destination` | lookup-backed; parent lookup when supplied |
+| `page.update` | `page_location` | yes |
+| `page.move` | `page_move` | lookup-backed; moved page, target, and effective parent |
+| `attachment.add` | `page_location` | yes |
+| `attachment.download` | `page_location` | yes |
+| `attachment.list` | `page_location` | yes |
+| `verify` | `page_location` | yes |
+| `blog.view` | `blog_location` | yes |
+| `blog.search` | `blog_location` | no |
 | `blog.create` | `space` | space-key-to-space-ID lookup |
-| `blog.update` | `space` | yes |
-| `blog.attachment.add` | `space` | yes |
-| `blog.attachment.download` | `space` | yes |
-| `blog.attachment.list` | `space` | yes |
-| `blog.verify` | `space` | yes |
-| `page.draft.create` | `space` | lookup-backed; space ID and optional parent |
-| `page.draft.stage` | `space` | yes |
-| `page.draft.view` | `space` | signed draft handle |
-| `page.draft.update` | `space` | signed draft handle |
-| `page.draft.publish` | `space` | signed draft handle |
-| `page.draft.discard` | `space` | signed draft handle |
-| `page.draft.verify` | `space` | signed draft handle |
-| `page.draft.attachment.add` | `space` | signed draft handle |
-| `page.draft.attachment.list` | `space` | signed draft handle |
-| `page.draft.attachment.download` | `space` | signed draft handle |
+| `blog.update` | `blog_location` | yes |
+| `blog.attachment.add` | `blog_location` | yes |
+| `blog.attachment.download` | `blog_location` | yes |
+| `blog.attachment.list` | `blog_location` | yes |
+| `blog.verify` | `blog_location` | yes |
+| `page.draft.create` | `page_destination` | lookup-backed; space ID and optional parent |
+| `page.draft.stage` | `page_location` | yes |
+| `page.draft.view` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.update` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.publish` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.discard` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.verify` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.attachment.add` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.attachment.list` | `page_location` | local signed handle, then current space/parent evidence |
+| `page.draft.attachment.download` | `page_location` | local signed handle, then current space/parent evidence |
 | `blog.draft.create` | `space` | space-key-to-space-ID lookup |
-| `blog.draft.stage` | `space` | yes |
-| `blog.draft.view` | `space` | signed draft handle |
-| `blog.draft.update` | `space` | signed draft handle |
-| `blog.draft.publish` | `space` | signed draft handle |
-| `blog.draft.discard` | `space` | signed draft handle |
-| `blog.draft.verify` | `space` | signed draft handle |
-| `blog.draft.attachment.add` | `space` | signed draft handle |
-| `blog.draft.attachment.list` | `space` | signed draft handle |
-| `blog.draft.attachment.download` | `space` | signed draft handle |
+| `blog.draft.stage` | `blog_location` | yes |
+| `blog.draft.view` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.update` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.publish` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.discard` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.verify` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.attachment.add` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.attachment.list` | `blog_location` | local signed handle, then current space/parent evidence |
+| `blog.draft.attachment.download` | `blog_location` | local signed handle, then current space/parent evidence |
 
-`space.list`, `search`, and `blog.search` do not require pre-authorization metadata lookup.
-The action catalog statically classifies `page.create`, `page.draft.create`, and
-`page.move` as lookup-backed. `page.create` takes the requested space from
-inputs; when a parent is supplied, it resolves that page and requires its
-authoritative space to match. Blog create and draft create actions accept a
-space key for policy authorization and then resolve that key to the Confluence
-v2 `spaceId` needed by upstream. Page draft create also resolves an optional
-parent page and requires the same-space relationship. Every current page-id or
-blog-id action confirms the content's space by lookup before authorization.
-`page.move` resolves the moved page and target; `before`/`after` also resolve
-and authorize the target's current parent. It authorizes their common space and
-rejects cross-space moves. Draft stage confirms the current page/blog and checks
-`baseVersion` before creating a staged draft. Other draft actions resolve policy
-scope from the signed draft handle before policy evaluation, then re-read the
-draft after authorization. Blog pre-authorization lookup uses only blog ID,
-`spaceId`, and resolved space-key evidence; current-status, title, version, and
-body checks happen after policy authorizes the resolved space. Page and blog
-attachment downloads also resolve only the parent content scope before
-authorization; attachment existence and parent-membership checks happen after the
-parent content space is authorized.
+`space.list`, `search`, and `blog.search` authorize their collection before
+retrieving candidates. Other actions resolve the location obligations declared
+by their scope. Page creation resolves its requested space and page/folder
+parent, including the default homepage. Blog creation resolves the space key to
+its v2 space ID. Point operations resolve the actual content or comment owner;
+attachment membership is checked after owner authorization. Moves resolve the
+complete current/proposed region and destination obligations.
+
+All 16 handle-consuming draft actions first validate the handle locally, before
+credentials or upstream lookup. They then confirm its space, and for full page
+proofs walk the signed parent, without requiring shared lookup to read a private
+draft. Execution confirms the actual draft and its placement with the admitted
+credential. Version comparisons and mutations occur only after policy and final
+location confirmation. See [content action rules](confluence-content-access.md#actions-and-compound-operations).
 
 If content attribution is enabled for Confluence drafts, it applies to draft
 body creation/edit actions (`page.draft.create`, `page.draft.stage`,
@@ -621,7 +619,7 @@ provider-side execution-time confirmation.
 
 Confluence draft grants require `[broker_tokens].hash_key_ref` to resolve to a
 valid 32-byte base64url signing key. A `draftHandle` (prefix
-`aab_confluence_draft_v4_`) is a durable broker continuation with no expiry,
+`aab_confluence_draft_v5_`) is a durable broker continuation with no expiry,
 signed only with that key scoped to the `confluence` service, so it survives
 reloads and restarts and no other backend's tokens verify as Confluence handles.
 Without the key, minting or presenting a handle fails explicitly with
@@ -629,7 +627,7 @@ Without the key, minting or presenting a handle fails explicitly with
 broker_tokens.hash_key_ref").
 
 A handle carries the draft's space key, space ID, origin (`new` or `staged`),
-staged base version, and page-draft parent placement. It is bound to the
+staged base version, and typed page/folder parent placement for page drafts. It is bound to the
 `confluence` service, the execution context it was issued in, the tenant host,
 and the content type and ID the action names; any draft action of that content
 accepts it. Its owner travels inside it as a keyed commitment: a handle minted
@@ -639,7 +637,7 @@ handed off to any principal admitted in service mode within policy. It also
 carries a keyed commitment to the
 [credential binding](#continuation-credential-binding) it was minted with.
 Before policy, scope resolution verifies the handle, accepts it only when the
-caller could own it, and authorizes its space; after admission the handle is
+caller could own it, and resolves current location evidence; after admission the handle is
 opened again and must match the admitted credential mode, principal and
 credential binding. Any other context, tenant, content, owner, credential
 binding, key, or handle version is rejected with `invalid_draft_handle`.
@@ -766,11 +764,11 @@ The `search` input mirrors Jira's: a `query` of `{ type: "cql" | "text", value }
 an optional `spaces` array (min 1), `maxResults`, and a `nextPageToken`
 continuation (see [Search pagination](#search-pagination)). Raw CQL is
 parsed into a broker-owned AST and re-emitted canonically. Omit `spaces` to search
-all effective broker-authorized spaces after grant, token, and execution-context
+all effective broker-authorized content after grant, token, and execution-context
 restrictions; supply it only to narrow that boundary. Empty or whitespace-only
 CQL searches that boundary, and `ORDER BY lastModified DESC` works without a
-caller filter. The broker always adds the authorized space constraint when
-needed and `type = page` (`type = blogpost` for `blog.search`). Empty `text`
+caller filter. The broker always adds complete authority constraints and
+`type = page` (`type = blogpost` for `blog.search`). Empty `text`
 queries remain invalid.
 
 Space selections are literal keys: `spaces: ["*"]`, `space = "*"`, and wildcard
@@ -860,48 +858,43 @@ Confluence Cloud `/wiki/rest/api/content/search` has been observed returning an
 upstream error for `parent IN (...)`; the conformance smoke records that as an
 expected upstream incompatibility when present.
 
-Scope composition emits the fixed positive `type = page` predicate first,
-then `space IN (...)` for finite space coverage or `space NOT IN (...)` for
-all-except coverage, followed by the entire caller filter in parentheses.
-`ORDER BY` follows the complete expression. This keeps negative caller filters
-after a positive first clause. Explicit `spaces` and caller space predicates
-narrow the query without losing all-except exclusions. Space and content-ID
-exclusions are filters: they do not request access, trigger metadata lookups,
-or become local subtraction from the authorization boundary. Every returned page is
-validated against the authorization boundary, the granted space keys or the
-all-except exclusions, not against the space names the caller wrote: Confluence
-may resolve a [space URL alias](#space-url-aliases) to its key, so a caller who
-names `VECTOR` receives content of space `ROCKET` when that space is authorized,
-and an excluded `ROCKET` stays excluded whichever name the caller used. Backend search
-GETs `content/search` with `cql=<composed>`, `limit=<max>`,
-`expand=space,version,history`, and an optional `cursor`. As with Jira, `<max>` (the
-caller's `maxResults`) defaults to `providers.confluence.search.max_results`
-(default `50`), rejects `0`, and is clamped to that same value, while the response
-is bounded by `limits.max_upstream_response_bytes`. Page status is read from the
-base content item. Every result must be a current page in an authorized space;
-otherwise the request denies with `scope_unresolved` and returns no partial
-results. `spaces` accepts only space keys; with a finite boundary each must be
-a granted key, so an alias there is denied with `service_action_denied`.
+Scope composition emits the fixed positive content-type predicate first, then
+the complete winning-grant union and independent token boundary, then requested
+spaces and the grouped caller filter. Each grant keeps its own exclusions.
+Content roots pin both space and ID/ancestor predicates. `ORDER BY` follows the
+complete expression. Caller predicates never grant authority or remove a policy
+exclusion. The separate trusted compiler can emit grouped negation without
+extending the caller CQL grammar.
 
-Personal-space keys are also quoted in injected scope constraints. For example,
-`--space '~alice' --cql ''` emits `type = page AND space IN ("~alice")`.
+Search GETs `content/search` with bounded `cql`, `limit`,
+`expand=space,version,history`, and optional `cursor`. `maxResults` defaults to
+`providers.confluence.search.max_results` (50), rejects zero and is clamped to
+that setting. Explicit `spaces` can narrow content-only authority; any provably
+empty requested space denies the request. A conditional intersection can return
+an exhausted empty result. Caller aliases do not change the canonical space key
+used for authorization.
+
+Space-only and exact-only collection authority validates returned rows without
+per-candidate metadata requests. Hierarchy-dependent authority obtains current
+bounded proofs and rechecks selected results. A valid candidate outside authority
+is discarded; lost containment fails with `scope_unresolved`, while malformed
+upstream evidence fails with `upstream_protocol_failed`. Neither releases partial
+results. Counts include released rows only. Candidate/request/byte
+limits can yield an empty page with continuation and `scanStatus`; they do not
+imply exhaustion. See [search containment](confluence-content-access.md#search-and-discovery).
 
 Examples with a finite space scope of `ENG`:
 
 | Input | Composed CQL sent upstream |
 | --- | --- |
-| `--cql ''` | `type = page AND space IN (ENG)` |
-| `--cql 'ORDER BY lastModified DESC'` | `type = page AND space IN (ENG) ORDER BY lastModified DESC` |
-| `--text runbook` | `type = page AND space IN (ENG) AND (title ~ "runbook")` |
-| `--cql 'title ~ "runbook"'` | `type = page AND space IN (ENG) AND (title ~ "runbook")` |
-| `--cql 'text ~ "deploy"'` | `type = page AND space IN (ENG) AND (text ~ "deploy")` |
-| `--cql 'title !~ "obsolete" AND text !~ "deprecated"'` | `type = page AND space IN (ENG) AND (title !~ "obsolete" AND text !~ "deprecated")` |
-| `--cql 'space != ARCHIVE AND content.id NOT IN (12345, 67890)'` | `type = page AND space IN (ENG) AND (space != ARCHIVE AND id NOT IN (12345, 67890))` |
-| `--cql 'labels NOT IN (security, "needs triage")'` | `type = page AND space IN (ENG) AND (label NOT IN (security, "needs triage"))` |
-| `--cql 'creator = "abc:123" AND contributor != alice'` | `type = page AND space IN (ENG) AND (creator = "abc:123" AND contributor != "alice")` |
-| `--cql 'mention IN ("abc:123")'` | `type = page AND space IN (ENG) AND (mention IN ("abc:123"))` |
-| `--cql 'ancestor IN (123456, 234567) AND parent = 345678'` | `type = page AND space IN (ENG) AND (ancestor IN (123456, 234567) AND parent = 345678)` |
-| `--cql 'created >= 2024/01/31 AND lastmodified < "2024-02-01 12:30" ORDER BY lastModified DESC, title'` | `type = page AND space IN (ENG) AND (created >= "2024-01-31" AND lastModified < "2024-02-01 12:30") ORDER BY lastModified DESC, title ASC` |
+| `--text runbook` | `type = page AND ((((space = "ENG")))) AND (title ~ "runbook")` |
+| `--cql 'title ~ "runbook"'` | `type = page AND ((((space = "ENG")))) AND (title ~ "runbook")` |
+| `--cql 'title !~ "obsolete" AND text !~ "deprecated"'` | `type = page AND ((((space = "ENG")))) AND (title !~ "obsolete" AND text !~ "deprecated")` |
+| `--cql 'space NOT IN (ARCHIVE, SANDBOX) AND id != 12345'` | `type = page AND ((((space = "ENG")))) AND (space NOT IN (ARCHIVE, SANDBOX) AND id != 12345)` |
+| `--cql 'labels IN (ops, "llm") ORDER BY lastModified DESC'` | `type = page AND ((((space = "ENG")))) AND (label IN (ops, llm)) ORDER BY lastModified DESC` |
+
+The nested grouping keeps policy unions, exclusions and token intersections
+separate from caller filters. Page/folder grants add their ID/ancestor constraints.
 
 Examples rejected by page search include `type = blogpost`, `space = "*"`,
 `space !~ "ENG"`, `label !~ "obsolete"`, `currentUser()`, `content.property.foo = bar`,
@@ -935,17 +928,12 @@ signed with a key generated for each broker runtime generation, so a
 configuration reload or restart also invalidates them. Confluence may also
 expire its own cursor.
 
-A continuation carries no authority and does not bind the effective space
-boundary. Every page is authorized again under current policy, its CQL is
-composed under the current boundary, and returned content is checked against
-it, so a grant change applies from the next page. When that change alters the
-composed CQL, the continuation is rejected with `input_invalid` ("the effective
-Confluence space scope changed since nextPageToken was issued; repeat the search
-without nextPageToken") before Confluence is called; Confluence's cursor is
-never sent with a different query. The broker adds no cursor length limit of its
-own: Confluence's cursor arrives in a response bounded by
-`limits.max_upstream_response_bytes`, and a continuation that would not fit that
-bound fails with `upstream_protocol_failed`, never truncated.
+A continuation carries no authority. Every page is admitted under current
+policy. Its confidential envelope binds the current normalized authority digest
+as well as composed query, so an authority change rejects it even when CQL would
+remain equal. It retains the original expiry across pages and stores cursor and
+offset rather than cached candidate bodies. Rejected or obsolete tokens require
+restarting without a token; no cursor is sent under changed authority.
 
 ### Continuation credential binding
 
@@ -1128,17 +1116,21 @@ effective format rules above. Native storage is a non-empty string; native
 `atlas_doc_format` is an Atlassian document
 (`{ type: "doc", version: 1, content: [...] }`). Normalized input becomes
 storage. `page.create` requires `space`, `title`, `contentFormat`, and `content`.
-It optionally accepts exactly one of
-`parentPageId` or `parentUrl`. The parent must resolve to a page in the requested
-space. If neither parent locator is supplied, Confluence places the page under
-the space homepage: the broker sends `root-level=false` without `parentId`, then
-verifies the returned page against the resolved homepage ID.
+It optionally accepts typed `parent: {"kind":"page"|"folder","id":"…"}`
+or `parentUrl`, never both. The parent must be current and in the requested
+space. If omitted, Broker resolves and authorizes the space homepage before
+creating the page. Results, receipts, object IDs and audit use typed `parent`.
+A space or subtree resource must cover prospective child placement; an exact
+parent alone is insufficient.
 
 `page.update` is optimistic-concurrency. It requires `pageId`, `baseVersion`
 (`>= 1`), `contentFormat`, and `content`. If the page's current version does not equal
-`baseVersion` (or the upstream reports a conflict), the request returns
-`version_conflict` (HTTP 409). After the update, the page must report
-`version == baseVersion + 1`.
+`baseVersion`, the admitted request returns `version_conflict` (HTTP 409)
+without writing. A generic upstream 409 remains an upstream conflict rather than
+claiming a measured version mismatch. Updates use the v2 page endpoint with only
+ID, current status, title, body and the incremented version; hierarchy fields are
+never sent. The target must be a current regular page, not a live doc. After the
+update, the page must report `version == baseVersion + 1`.
 
 `page.move` is a separately granted hierarchy mutation; `page.update`
 does not change hierarchy. It requires exactly one moved-page locator (`pageId`
@@ -1150,7 +1142,8 @@ For `append`, the target becomes the page's parent and the page is placed last
 in that parent's direct-child order. For `before` and `after`, the target is a
 sibling; its current page parent becomes the effective parent. A top-level
 target without a page parent is rejected. The broker authorizes the moved page,
-target, and effective parent, rejects cycles, calls Confluence's corresponding
+and proposed subtree, destination placement and target in one grant and token
+boundary, rejects cycles, calls Confluence's corresponding
 move operation, then verifies both the effective parent and the direct-child
 ordering. Successful results include `position`, `targetPageId`, `parentPageId`,
 `previousParentId`, `previousParentType`, `childPosition`, and, for sibling
@@ -1167,9 +1160,9 @@ use `page.draft.*` or `blog.draft.*` for draft content.
 
 `page.draft.create` and `blog.draft.create` create new draft content through
 Confluence REST API v2 with `status = "draft"` and return a `draftHandle`.
-Page draft create optionally accepts exactly one of `parentPageId` or
-`parentUrl`; the parent must be a page in the requested space. With no parent,
-Confluence places the page under the space homepage. Blog draft create does not
+Page draft create optionally accepts typed `parent` or `parentUrl`; the parent
+can be a page or folder in the requested space. With no parent, Broker resolves
+and authorizes the space homepage. Blog draft create does not
 accept page hierarchy inputs.
 `page.draft.stage` and `blog.draft.stage` create a draft against an existing
 current page/blog through the proven `get-draft=true` path: the broker confirms
@@ -1235,11 +1228,11 @@ Examples with a finite space scope of `ENG`:
 
 | Input | Composed CQL sent upstream |
 | --- | --- |
-| `--text release` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
-| `--cql 'title ~ "release"'` | `type = blogpost AND space IN (ENG) AND (title ~ "release")` |
-| `--cql 'title !~ "obsolete" AND text !~ "deprecated"'` | `type = blogpost AND space IN (ENG) AND (title !~ "obsolete" AND text !~ "deprecated")` |
-| `--cql 'space NOT IN (ARCHIVE, SANDBOX) AND id != 12345'` | `type = blogpost AND space IN (ENG) AND (space NOT IN (ARCHIVE, SANDBOX) AND id != 12345)` |
-| `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `type = blogpost AND space IN (ENG) AND (label IN (release, llm)) ORDER BY created DESC` |
+| `--text release` | `type = blogpost AND ((((space = "ENG")))) AND (title ~ "release")` |
+| `--cql 'title ~ "release"'` | `type = blogpost AND ((((space = "ENG")))) AND (title ~ "release")` |
+| `--cql 'title !~ "obsolete" AND text !~ "deprecated"'` | `type = blogpost AND ((((space = "ENG")))) AND (title !~ "obsolete" AND text !~ "deprecated")` |
+| `--cql 'space NOT IN (ARCHIVE, SANDBOX) AND id != 12345'` | `type = blogpost AND ((((space = "ENG")))) AND (space NOT IN (ARCHIVE, SANDBOX) AND id != 12345)` |
+| `--cql 'labels IN (release, "llm") ORDER BY created DESC'` | `type = blogpost AND ((((space = "ENG")))) AND (label IN (release, llm)) ORDER BY created DESC` |
 
 Blog metadata, create, update, and attachment listing use Confluence REST API v2.
 Blog attachment upload/download use the v1 content attachment endpoints.

@@ -329,6 +329,21 @@ enum ConfluencePageMovePositionArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ConfluenceParentKindArg {
+    Page,
+    Folder,
+}
+
+impl ConfluenceParentKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Folder => "folder",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum JiraContentFormatArg {
     Adf,
     Markdown,
@@ -1758,6 +1773,7 @@ enum AdminPolicyCommand {
         command: ResourceGroupsCommand,
     },
     EffectiveAccess {
+        /// JSON object with service, actions, executionContexts, resources and credentialMode.
         #[arg(long)]
         request_file: PathBuf,
     },
@@ -2521,9 +2537,18 @@ enum ConfluencePageCommand {
         space: String,
         #[arg(long)]
         title: String,
-        #[arg(long, conflicts_with = "parent_url")]
-        parent: Option<String>,
-        #[arg(long)]
+        /// Kind of the explicit destination parent.
+        #[arg(
+            long,
+            value_enum,
+            requires = "parent_id",
+            conflicts_with = "parent_url"
+        )]
+        parent_kind: Option<ConfluenceParentKindArg>,
+        /// ID of the explicit page or folder parent.
+        #[arg(long, requires = "parent_kind", conflicts_with = "parent_url")]
+        parent_id: Option<String>,
+        #[arg(long, conflicts_with_all = ["parent_kind", "parent_id"])]
         parent_url: Option<String>,
         #[arg(
             long,
@@ -2618,9 +2643,18 @@ enum ConfluencePageDraftCommand {
         space: String,
         #[arg(long)]
         title: String,
-        #[arg(long, conflicts_with = "parent_url")]
-        parent: Option<String>,
-        #[arg(long)]
+        /// Kind of the explicit destination parent.
+        #[arg(
+            long,
+            value_enum,
+            requires = "parent_id",
+            conflicts_with = "parent_url"
+        )]
+        parent_kind: Option<ConfluenceParentKindArg>,
+        /// ID of the explicit page or folder parent.
+        #[arg(long, requires = "parent_kind", conflicts_with = "parent_url")]
+        parent_id: Option<String>,
+        #[arg(long, conflicts_with_all = ["parent_kind", "parent_id"])]
         parent_url: Option<String>,
         #[arg(
             long,
@@ -5505,7 +5539,8 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
             ConfluencePageCommand::Create {
                 space,
                 title,
-                parent,
+                parent_kind,
+                parent_id,
                 parent_url,
                 content,
                 content_file,
@@ -5523,7 +5558,8 @@ async fn run_confluence_command(ctx: &CliContext<'_>, command: &ConfluenceComman
                 )?;
                 confluence_optional_parent_locator_inputs(
                     &mut inputs,
-                    parent.as_deref(),
+                    *parent_kind,
+                    parent_id.as_deref(),
                     parent_url.as_deref(),
                     "confluence page create",
                 );
@@ -5935,7 +5971,8 @@ async fn run_confluence_page_draft_command(
         ConfluencePageDraftCommand::Create {
             space,
             title,
-            parent,
+            parent_kind,
+            parent_id,
             parent_url,
             content,
             content_file,
@@ -5953,7 +5990,8 @@ async fn run_confluence_page_draft_command(
             )?;
             confluence_optional_parent_locator_inputs(
                 &mut inputs,
-                parent.as_deref(),
+                *parent_kind,
+                parent_id.as_deref(),
                 parent_url.as_deref(),
                 "confluence page draft create",
             );
@@ -16449,20 +16487,24 @@ fn confluence_page_argument_locator_inputs(
 
 fn confluence_optional_parent_locator_inputs(
     inputs: &mut serde_json::Map<String, serde_json::Value>,
-    parent: Option<&str>,
+    parent_kind: Option<ConfluenceParentKindArg>,
+    parent_id: Option<&str>,
     parent_url: Option<&str>,
     command: &str,
 ) {
-    match (parent, parent_url) {
-        (Some(parent), None) => {
-            inputs.insert("parentPageId".to_string(), serde_json::json!(parent));
+    match (parent_kind, parent_id, parent_url) {
+        (Some(kind), Some(id), None) => {
+            inputs.insert(
+                "parent".to_string(),
+                serde_json::json!({ "kind": kind.as_str(), "id": id }),
+            );
         }
-        (None, Some(url)) => {
+        (None, None, Some(url)) => {
             inputs.insert("parentUrl".to_string(), serde_json::json!(url));
         }
-        (None, None) => {}
-        (Some(_), Some(_)) => require_cli_input::<()>(Err(anyhow::anyhow!(
-            "{command} accepts at most one --parent or --parent-url"
+        (None, None, None) => {}
+        _ => require_cli_input::<()>(Err(anyhow::anyhow!(
+            "{command} accepts --parent-kind with --parent-id, or --parent-url"
         ))),
     }
 }
@@ -23042,7 +23084,9 @@ upload_spool_dir = "upload-spool"
             "ENG",
             "--title",
             "Runbook",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "123",
             "--content-file",
             "body.html",
@@ -23053,13 +23097,19 @@ upload_spool_dir = "upload-spool"
         let Command::Confluence {
             command:
                 ConfluenceCommand::Page {
-                    command: ConfluencePageCommand::Create { parent, .. },
+                    command:
+                        ConfluencePageCommand::Create {
+                            parent_kind,
+                            parent_id,
+                            ..
+                        },
                 },
         } = create.command
         else {
             panic!("expected confluence page create command");
         };
-        assert_eq!(parent.as_deref(), Some("123"));
+        assert_eq!(parent_kind, Some(ConfluenceParentKindArg::Page));
+        assert_eq!(parent_id.as_deref(), Some("123"));
 
         let draft_create = Cli::try_parse_from([
             "agent-access",
@@ -23139,7 +23189,9 @@ upload_spool_dir = "upload-spool"
             "ENG",
             "--title",
             "Runbook",
-            "--parent",
+            "--parent-kind",
+            "page",
+            "--parent-id",
             "123",
             "--parent-url",
             "https://example.atlassian.net/wiki/spaces/ENG/pages/123",
@@ -23150,6 +23202,39 @@ upload_spool_dir = "upload-spool"
         ])
         .unwrap_err();
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn confluence_creation_requires_typed_parent_pairs_without_legacy_alias() {
+        for command in [vec!["page", "create"], vec!["page", "draft", "create"]] {
+            let mut base = vec!["agent-access", "confluence"];
+            base.extend(command);
+            base.extend([
+                "--space",
+                "ENG",
+                "--title",
+                "Title",
+                "--content",
+                "Body",
+                "--content-format",
+                "storage",
+            ]);
+            for extra in [
+                vec!["--parent-id", "123"],
+                vec!["--parent-kind", "folder"],
+                vec!["--parent", "123"],
+                vec!["--parent-kind", "blog", "--parent-id", "123"],
+            ] {
+                let mut args = base.clone();
+                args.extend(extra);
+                assert!(Cli::try_parse_from(args).is_err());
+            }
+            for kind in ["page", "folder"] {
+                let mut args = base.clone();
+                args.extend(["--parent-kind", kind, "--parent-id", "123"]);
+                assert!(Cli::try_parse_from(args).is_ok());
+            }
+        }
     }
 
     #[test]
@@ -23426,11 +23511,16 @@ upload_spool_dir = "upload-spool"
         let mut create_inputs = serde_json::Map::new();
         confluence_optional_parent_locator_inputs(
             &mut create_inputs,
+            Some(ConfluenceParentKindArg::Folder),
             Some("123"),
             None,
             "confluence page create",
         );
-        assert_eq!(create_inputs["parentPageId"], "123");
+        assert_eq!(
+            create_inputs["parent"],
+            serde_json::json!({ "kind": "folder", "id": "123" })
+        );
+        assert!(!create_inputs.contains_key("parentPageId"));
 
         let mut move_inputs = confluence_page_argument_locator_inputs(
             None,

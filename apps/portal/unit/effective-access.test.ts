@@ -11,7 +11,7 @@ import { RESOURCE_TYPES } from "./resource-types.fixture";
 
 const sbc: EffectiveAccessClause[] = [{ included: [{ kind: "exact", value: "SBC" }], excluded: [] }];
 const eng: EffectiveAccessClause[] = [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }];
-const item = (action: string, executionContext: string, clauses: EffectiveAccessClause[], service = "jira"): EffectiveAccessItem => ({
+const item = (action: string, executionContext: string, clauses: EffectiveAccessClause[], service = "jira"): Extract<EffectiveAccessItem, {scope: "resource"}> => ({ scope: "resource" as const,
   service,
   action,
   executionContext,
@@ -22,14 +22,14 @@ const item = (action: string, executionContext: string, clauses: EffectiveAccess
 /** Every (service, action, context) pair a set of rows states, with its clauses. */
 function expand(rows: ReturnType<typeof mergeEffectiveAccess>) {
   return rows
-    .flatMap((row) => row.actions.flatMap((action) => row.contexts.map((context) => `${row.service}:${action}:${context}=${JSON.stringify(row.clauses)}`)))
+    .flatMap((row) => row.actions.flatMap((action) => row.contexts.map((context) => `${row.service}:${action}:${context}=${JSON.stringify(row.coverage)}`)))
     .sort();
 }
 
 describe("merged effective access", () => {
   it("merges an action's contexts with identical clauses", () => {
     const rows = mergeEffectiveAccess([item("attachment.add", "internal", sbc), item("attachment.add", "external", sbc)]);
-    expect(rows).toEqual([{ service: "jira", actions: ["attachment.add"], contexts: ["internal", "external"], resourceType: "jira_project", clauses: sbc }]);
+    expect(rows).toEqual([{ service: "jira", actions: ["attachment.add"], contexts: ["internal", "external"], coverage: { scope: "resource", resourceType: "jira_project", clauses: sbc } }]);
   });
 
   it("keeps contexts apart when their clauses differ", () => {
@@ -51,13 +51,13 @@ describe("merged effective access", () => {
       item("comment.add", "default", sbc)
     ];
     const rows = mergeEffectiveAccess(items);
-    expect(rows.map((row) => [row.actions, row.contexts, row.clauses])).toEqual([
+    expect(rows.map((row) => [row.actions, row.contexts, row.coverage.scope === "resource" ? row.coverage.clauses : null])).toEqual([
       [["issue.view", "search"], ["default", "internal"], sbc],
       [["issue.create", "comment.add"], ["default"], sbc],
       [["issue.create"], ["internal"], eng]
     ]);
     // Nothing is lost or added: the rows state exactly the input pairs.
-    expect(expand(rows)).toEqual(items.map((entry) => `jira:${entry.action}:${entry.executionContext}=${JSON.stringify(entry.clauses)}`).sort());
+    expect(expand(rows)).toEqual(items.map((entry) => `jira:${entry.action}:${entry.executionContext}=${JSON.stringify({scope: entry.scope, resourceType: entry.resourceType, clauses: entry.clauses})}`).sort());
   });
 
   it("treats a different resource type or exclusion as different access", () => {
@@ -68,7 +68,7 @@ describe("merged effective access", () => {
       item("a", "default", plain),
       item("a", "internal", withExclusion),
       item("a", "external", withRequestExclusion),
-      { ...item("b", "default", plain), resourceType: null }
+      { service: "jira", action: "b", executionContext: "default", scope: "unscoped" }
     ]);
     expect(rows).toHaveLength(4);
   });

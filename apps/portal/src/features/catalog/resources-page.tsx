@@ -6,7 +6,7 @@ import { AdminButton, AdminIconButton, AdminForm } from "../../components/admin-
 // drawer for details, private attributes, used-by, edit, enable, and delete.
 import { useId, useMemo, useState } from "react";
 import { brokerApi } from "../../api";
-import type { ResourceGroupRecord, ResourceRecord, ResourceSelector, ResourceType, ResourceWriteBody } from "../../types";
+import type { NormalizedResourceLocation, ResourceGroupRecord, ResourceRecord, ResourceSelector, ResourceType, ResourceWriteBody } from "../../types";
 import { resourceLabel, selectorLabel } from "../../lib/resource-labels";
 import { creatableResourceTypes, namespaceCoverage, resourceTypeLabel, resourceTypePluralLabel, selectorPlaceholder, useResourceTypes, type ResourceTypes } from "../../lib/resource-types";
 import { groupRows, sortRows } from "../../lib/table-sort";
@@ -17,10 +17,11 @@ import { FieldGroup } from "../../components/form";
 import { useTableUrlState } from "../../app/list-state";
 import { paths } from "../../app/paths";
 import { useSession } from "../../app/session";
-import { usePolicyCatalog, usePolicyStatus, useResourceCatalog, useResourceUsedBy } from "../../data/queries";
+import { usePolicyCatalog, usePolicyStatus, useResourceCatalog, useResourceUsedBy, useResourceLocations } from "../../data/queries";
 import { CatalogFrame } from "./catalog-frame";
 import { ResourceAttributeField, ResourceAttributeValue } from "./resource-attributes";
 import { useResourceActions } from "./resource-actions";
+import { ResourceLocationEntry } from "./resource-location-entry";
 import { UsedBySection } from "./used-by";
 
 const STATUSES = ["all", "active", "disabled"] as const;
@@ -504,6 +505,13 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
   // New resources start with the first type the broker lists.
   const type = chosenType ?? offered[0]?.id ?? "";
   const namespace = namespaceCoverage(types, type);
+  const locations = useResourceLocations();
+  const services = locations.data?.services.filter((service) => service.resourceTypes.includes(type)) ?? [];
+  const [entryMode, setEntryMode] = useState<"canonical" | "url">("canonical");
+  const [locationPreview, setLocationPreview] = useState<NormalizedResourceLocation | null>(null);
+  const urlMode = entryMode === "url";
+  const selectorKinds = types.get(type)?.selectors ?? [];
+  const subtree = types.get(type)?.subtree;
   const [kind, setKind] = useState<ResourceSelector["kind"]>(record?.selector.kind ?? "exact");
   const [value, setValue] = useState(record && record.selector.kind !== "all" ? record.selector.value : "");
   const [name, setName] = useState(record?.displayName ?? "");
@@ -521,7 +529,9 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
   const fields = kind === "exact" ? types.get(type)?.attributes ?? [] : [];
   const issues: Record<string, string> = {};
   if (!type) issues.type = "Choose a resource type.";
-  if (kind !== "all" && !value.trim()) issues.value = kind === "namespace" ? "Enter the namespace." : "Enter the canonical identifier.";
+  if (urlMode && !locationPreview) issues.location = "Preview the location before saving.";
+  if (!urlMode && !selectorKinds.includes(kind)) issues.value = "Choose supported coverage.";
+  if (!urlMode && kind !== "all" && !value.trim()) issues.value = kind === "namespace" ? "Enter the namespace." : "Enter the canonical identifier.";
   if (!selectedContexts.length) issues.contexts = "Select at least one execution context.";
   const attributeIssues = new Map(
     fields.filter((field) => field.required && !configured.includes(field.name) && !attributes.get(field.name)).map((field) => [field.name, `Enter the ${field.label.toLowerCase()}.`])
@@ -540,8 +550,8 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
       })
     );
     const body: ResourceWriteBody = {
-      resourceType: type,
-      selector: kind === "all" ? { kind } : { kind, value: value.trim() },
+      resourceType: urlMode ? locationPreview!.resourceType : type,
+      selector: urlMode ? locationPreview!.selector : kind === "all" ? { kind } : { kind, value: value.trim() },
       displayName: name.trim() || null,
       allowedExecutionContexts: selectedContexts,
       enabled,
@@ -602,7 +612,9 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
               onChange={(event) => {
                 setAttributes(new Map());
                 setType(event.target.value);
-                if (kind === "namespace" && !namespaceCoverage(types, event.target.value)) setKind("exact");
+                setEntryMode("canonical");
+                setLocationPreview(null);
+                if (!types.get(event.target.value)?.selectors.includes(kind)) setKind("exact");
               }}
             >
               {type && !types.has(type) ? <option value={type}>{type}</option> : null}
@@ -614,7 +626,7 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
               ))}
             </Select>
           </Field>
-          <Field label="Coverage">
+          {!urlMode ? <Field label="Coverage">
             <Select
               value={kind}
               disabled={configured.length > 0 || pending}
@@ -623,14 +635,20 @@ function ResourceEditorDrawer({ model, record, onDone }: { model: ResourcesModel
                 setKind(event.target.value as ResourceSelector["kind"]);
               }}
             >
-              <option value="exact">Specific resource</option>
+              {selectorKinds.includes("exact") ? <option value="exact">Specific resource</option> : null}
               {namespace ? <option value="namespace">{namespace.label}</option> : null}
-              <option value="all">All {resourceTypePluralLabel(types, type)}</option>
+              {subtree && selectorKinds.includes("subtree") ? <option value="subtree">{subtree.label}</option> : null}
+              {selectorKinds.includes("all") ? <option value="all">All {resourceTypePluralLabel(types, type)}</option> : null}
             </Select>
-          </Field>
+          </Field> : null}
         </div>
-        {kind !== "all" ? (
-          <Field label={kind === "namespace" ? "Namespace" : "Canonical identifier"} error={shown.value}>
+        {services.length > 0 || urlMode ? <Seg label="Resource entry" value={entryMode} onChange={(mode) => { setEntryMode(mode); setLocationPreview(null); }} options={[{ value: "canonical", label: "Canonical identifier", disabled: pending }, { value: "url", label: "Enter location URL", disabled: pending || configured.length > 0 }]} /> : null}
+        {locations.isError ? <ErrorState compact title="Location services unavailable" error={locations.error} onRetry={() => void locations.refetch()} /> : null}
+        {type === "confluence_content" && locations.isSuccess && services.length === 0 ? <p className="pt-prose">No applicable service is configured. Enter a strict canonical selector; this resource is currently dormant.</p> : null}
+        {urlMode ? <ResourceLocationEntry key={type} services={services} disabled={pending} preview={locationPreview} onPreview={setLocationPreview} /> : null}
+        {shown.location ? <p className="wb-field-error">{shown.location}</p> : null}
+        {!urlMode && kind !== "all" ? (
+          <Field label={kind === "namespace" ? "Namespace" : kind === "subtree" ? "Canonical subtree root" : "Canonical identifier"} error={shown.value}>
             <Input mono value={value} disabled={pending} onChange={(event) => setValue(event.target.value)} placeholder={selectorPlaceholder(types, type, kind)} spellCheck={false} />
           </Field>
         ) : null}

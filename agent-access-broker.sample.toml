@@ -874,6 +874,19 @@ max_body_bytes = 2097152
 [providers.confluence.search]
 max_results = 50
 
+# Location proofs share these limits across initial and final checks and retries.
+[providers.confluence.content_access]
+max_metadata_requests = 1024
+max_metadata_bytes = 33554432
+
+[providers.confluence.content_search]
+max_candidate_pages = 4
+max_candidates = 100
+max_upstream_requests = 1024
+max_scan_bytes = 33554432
+# Operator ceiling for the encoded path/query/cursor; qualify on each route.
+max_encoded_request_target_bytes = 4096
+
 [providers.confluence.listing]
 max_results = 50
 max_candidate_pages = 4

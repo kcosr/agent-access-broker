@@ -73,6 +73,7 @@ export async function mockCommandImportApi(page: Page, current: ImportPreviewRes
       route.fulfill({ status: 400, json: { ok: false, decision: "deny", reasonCode: "input_invalid", requestId: "fixture", brokerRequestId: "fixture", operation: "imports", principal: "admin", target: { service: "ticketing", ...blocked }, error: { message } } });
     let result: unknown = [];
     if (pathname === "/v1/auth/session") result = ADMIN_SESSION;
+    else if (pathname === "/v1/admin/policy/resource-locations") result = { services: [] };
     else if (pathname === "/v1/resource-types" || pathname === "/v1/me") {
       // Discovery routes: their body is the result itself, without an envelope.
       await route.fulfill({ json: pathname === "/v1/me" ? { principal: "admin", serviceLimits: [] } : { resourceTypes: [...RESOURCE_TYPES, ...api.resourceTypes] } });

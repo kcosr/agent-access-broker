@@ -3491,7 +3491,7 @@ fn agent_token_options_preserve_configured_context_order_and_union_groups() {
     assert_eq!(action.action, "echo");
     assert_eq!(action.execution_contexts, options.execution_contexts);
     for execution_context in &options.execution_contexts {
-        let clauses = &action.effective_access_by_execution_context[execution_context];
+        let clauses = &action.scalar_access().unwrap()[execution_context];
         assert!(clauses.iter().any(|boundary| boundary.matches("TEST")));
         assert!(clauses.iter().all(|boundary| !boundary.matches("OTHER")));
     }
@@ -3609,8 +3609,8 @@ fn agent_token_options_exclude_only_same_band_wildcard_credential_overlap() {
 
     let options = runtime.agent_token_options_for_identity(&agent_one_identity());
 
-    let clauses = &options.services[0].actions[0].effective_access_by_execution_context
-        [&default_execution_context()];
+    let clauses =
+        &options.services[0].actions[0].scalar_access().unwrap()[&default_execution_context()];
     assert!(
         clauses
             .iter()
@@ -3714,7 +3714,7 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
     let snapshot = runtime.policy_snapshot();
     for context in ["rank", "priority"] {
         let context = ExecutionContext::new(context).unwrap();
-        let clauses = &action.effective_access_by_execution_context[&context];
+        let clauses = &action.scalar_access().unwrap()[&context];
         assert!(clauses.iter().any(|boundary| boundary.matches("ENG")));
         assert!(clauses.iter().all(|boundary| !boundary.matches("OPS")));
         let authorization = runtime
@@ -3724,7 +3724,7 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
         assert!(!authorization.scope.matches("OPS"));
     }
     let missing_scope = ExecutionContext::new("missing-scope").unwrap();
-    let clauses = &action.effective_access_by_execution_context[&missing_scope];
+    let clauses = &action.scalar_access().unwrap()[&missing_scope];
     assert!(clauses.iter().any(|boundary| boundary.matches("OPS")));
     assert!(
         clauses
@@ -3741,7 +3741,7 @@ fn search_token_options_preserve_authored_contexts_and_report_effective_preceden
 
     let ambiguous = ExecutionContext::new("ambiguous").unwrap();
     assert!(
-        action.effective_access_by_execution_context[&ambiguous].is_empty(),
+        action.scalar_access().unwrap()[&ambiguous].is_empty(),
         "mixed credential modes in the top search band provide no effective access"
     );
     assert_eq!(
@@ -5725,7 +5725,7 @@ fn git_http_gateways_retain_policy_and_access_metadata_without_agent_discovery()
     assert_eq!(gitlab.broker_hosts, vec!["git.example.test"]);
     assert_eq!(gitlab.scope_types, vec!["repository"]);
     assert_eq!(
-        gitlab.resource_scopes["repository"].selectors,
+        gitlab.resource_scopes["repository"].as_scalar().unwrap().1,
         vec!["exact", "namespace", "all"]
     );
     assert_eq!(gitlab.actions.len(), 2);
@@ -8039,9 +8039,13 @@ fn repository_candidate(included: Vec<ResourceSelector>) -> PolicyCandidate {
             resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
         }),
         boundary: ResourceBoundary {
-            included,
+            included: included
+                .into_iter()
+                .map(|selector| selector.try_into().unwrap())
+                .collect(),
             excluded: vec![],
         },
+        containment: None,
     }
 }
 
@@ -9210,6 +9214,8 @@ fn configure_lookup_trace_confluence(config: &mut BrokerConfig) {
         .providers
         .insert(agent_access_confluence::ConfluenceProviderConfig {
             listing: Default::default(),
+            content_access: Default::default(),
+            content_search: Default::default(),
             tenant_host: "example.atlassian.net".to_string(),
             cloud_id: None,
             egress_proxy: None,
@@ -9638,7 +9644,8 @@ fn per_user_credential_onboarding_follows_authored_grants_with_no_current_access
                 .agent_token_options_for_identity(&agent_one_identity())
                 .services[0]
                 .actions[0]
-                .effective_access_by_execution_context
+                .scalar_access()
+                .unwrap()
                 .values()
                 .all(Vec::is_empty)
         );
@@ -10045,6 +10052,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
                 &["echo".into()],
                 &[default_execution_context()],
                 &selection,
+                "service",
             )
             .unwrap();
         assert_eq!(!preview.access.is_empty(), allows_test);
@@ -10067,13 +10075,15 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
         if allows_test {
             assert!(
                 token_preview.access[0]
-                    .clauses
+                    .clauses()
+                    .unwrap()
                     .iter()
                     .any(|clause| clause.matches("TEST"))
             );
             assert!(
                 !token_preview.access[0]
-                    .clauses
+                    .clauses()
+                    .unwrap()
                     .iter()
                     .any(|clause| clause.matches("OPS"))
             );
@@ -10085,6 +10095,7 @@ fn resource_previews_resolve_hidden_and_mixed_live_references_exactly() {
             &["echo".into()],
             &[default_execution_context()],
             &resource_selection(&["fake-project-TEST"]),
+            "service",
         )
         .unwrap();
     assert!(!valid.access.is_empty());
@@ -10225,12 +10236,12 @@ fn unrelated_authorization_still_cannot_fall_back_to_forwarded_identity() {
 
 #[test]
 fn search_boundaries_preserve_namespace_exclusions() {
-    let exact = |value: &str| ResourceSelector::Exact {
+    let exact = |value: &str| ScalarResourceSelector::Exact {
         value: value.to_string(),
     };
-    let all_except = |excluded: Vec<ResourceSelector>| {
+    let all_except = |excluded: Vec<ScalarResourceSelector>| {
         search_scope_from_boundary(&ResourceBoundary {
-            included: vec![ResourceSelector::All],
+            included: vec![ScalarResourceSelector::All],
             excluded,
         })
     };
@@ -10240,7 +10251,7 @@ fn search_boundaries_preserve_namespace_exclusions() {
     );
     let namespace = all_except(vec![
         exact("a"),
-        ResourceSelector::Namespace {
+        ScalarResourceSelector::Namespace {
             value: "team".into(),
         },
     ]);
@@ -10249,5 +10260,5 @@ fn search_boundaries_preserve_namespace_exclusions() {
     assert!(namespace.matches("team"));
     assert!(!namespace.matches("a"));
     assert!(namespace.exact_projection().is_err());
-    assert!(all_except(vec![ResourceSelector::All]).is_empty());
+    assert!(all_except(vec![ScalarResourceSelector::All]).is_empty());
 }

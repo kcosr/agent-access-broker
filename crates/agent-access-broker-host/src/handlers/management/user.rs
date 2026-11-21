@@ -90,16 +90,27 @@ pub(crate) async fn user_token_options(
         .snapshot
         .runtime
         .agent_token_options_for_identity(&context.identity);
-    let mut options = json!(options);
-    match super::common::agent_token_issuance_policy(&context, context.identity.principal.clone())
-        .await
+    let policy = match super::common::agent_token_issuance_policy(
+        &context,
+        context.identity.principal.clone(),
+    )
+    .await
     {
-        Ok(policy) => options["agentTokenIssuancePolicy"] = json!(policy),
+        Ok(policy) => policy,
         Err(error) => {
             return management_store_error_response(&context, operation, None, error).await;
         }
-    }
-    management_success_response(&context, operation, None, options).await
+    };
+    management_success_response(
+        &context,
+        operation,
+        None,
+        super::common::TokenOptionsResponse {
+            options,
+            agent_token_issuance_policy: policy,
+        },
+    )
+    .await
 }
 
 pub(crate) async fn user_token_issue(

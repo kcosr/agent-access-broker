@@ -2590,8 +2590,11 @@ fn validates_jira_issue_link_config_and_exposes_project_scope_only() {
     );
     assert!(!capabilities.resource_scopes.contains_key("issue"));
     assert_eq!(
-        capabilities.resource_scopes["project"].resource_type,
-        agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone()
+        capabilities.resource_scopes["project"]
+            .as_scalar()
+            .unwrap()
+            .0,
+        agent_access_jira::JIRA_PROJECT_RESOURCE.id()
     );
 }
 
@@ -5146,12 +5149,17 @@ fn gitlab_rest_provider_accepts_exact_namespace_and_all_resources() {
             .unwrap(),
     );
     assert_eq!(
-        capabilities.resource_scopes["repository"].resource_type,
-        GIT_REPOSITORY_RESOURCE.id().clone()
+        capabilities.resource_scopes["repository"]
+            .as_scalar()
+            .unwrap()
+            .0,
+        GIT_REPOSITORY_RESOURCE.id()
     );
     assert!(
         capabilities.resource_scopes["repository"]
-            .selectors
+            .as_scalar()
+            .unwrap()
+            .1
             .contains(&"all".to_string())
     );
     assert_eq!(
@@ -7174,17 +7182,17 @@ fn resource_scopes_must_bind_registered_types_and_supported_selectors() {
             vec!["exact".into()],
         ),
     );
-    descriptor
-        .resource_scopes
-        .get_mut("project")
-        .unwrap()
-        .selectors
-        .push("namespace".into());
+    let agent_access_provider::ResourceScopeCapabilities::Scalar { selectors, .. } =
+        descriptor.resource_scopes.get_mut("project").unwrap()
+    else {
+        panic!("fake project scope must remain scalar");
+    };
+    selectors.push("namespace".into());
     assert_eq!(
         descriptor.validate_resource_types(&registry),
         [
             "service fake scope issue uses unregistered resource type jira_issue",
-            "service fake scope project offers selector namespace that resource type fake_project does not support",
+            "service fake scalar scope project offers unsupported selector namespace for resource type fake_project",
         ]
     );
 }

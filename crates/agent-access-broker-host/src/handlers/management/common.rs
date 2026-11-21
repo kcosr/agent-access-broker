@@ -531,6 +531,14 @@ where
         .await
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct TokenOptionsResponse {
+    #[serde(flatten)]
+    pub(super) options: AgentTokenOptions,
+    pub(super) agent_token_issuance_policy: agent_access_core::AgentTokenIssuancePolicy,
+}
+
 pub(super) async fn agent_token_issuance_policy(
     context: &ManagementContext,
     principal: String,
@@ -1074,6 +1082,7 @@ fn management_cookie_csrf_required(operation: &str) -> bool {
             | "config.status"
             | "admin.policy.status"
             | "admin.policy.catalog"
+            | "admin.policy.resource_locations.list"
             | "admin.policy.grants.list"
             | "admin.policy.grants.inspect"
             | "admin.policy.grants.export"
@@ -1314,6 +1323,8 @@ pub(crate) const UNAUDITED_READ_OPERATIONS: &[&str] = &[
     "admin.policy.grants.inspect",
     "admin.policy.grants.validate",
     "admin.policy.service_managers.list",
+    "admin.policy.resource_locations.list",
+    "admin.policy.resource_locations.normalize",
     "admin.policy.effective_access",
     "admin.policy.resources.list",
     "admin.policy.resources.get",
@@ -1346,6 +1357,7 @@ pub(crate) const AUDITED_READ_OPERATIONS: &[&str] = &[
 pub(crate) const READ_ONLY_POST_CATALOG_OPERATIONS: &[&str] = &[
     "tokens.effective_access",
     "admin.tokens.effective_access_principal_agent",
+    "admin.policy.resource_locations.normalize",
     "admin.policy.effective_access",
     "admin.policy.grants.validate",
     "admin.principals.identity_token.reveal",
@@ -1423,26 +1435,84 @@ pub(crate) async fn management_success_response<R: Serialize>(
         target: Option<Value>,
         result: R,
     }
+    let envelope = SuccessEnvelope {
+        ok: true,
+        decision: Decision::Allow,
+        request_id: &context.request_id,
+        broker_request_id: &context.broker_request_id,
+        operation,
+        principal: &context.identity.principal,
+        target,
+        result,
+    };
+    // Entry-level complexity markers are complete results. Only aggregate
+    // serialization failure replaces the whole inspection, never individual entries.
+    let bounded = if matches!(
+        operation,
+        "tokens.options"
+            | "admin.tokens.options_principal_agent"
+            | "admin.policy.effective_access"
+            | "tokens.effective_access"
+            | "admin.tokens.effective_access_principal_agent"
+    ) {
+        match crate::bounded_json::serialize(
+            &envelope,
+            agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES,
+        ) {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                let (status, reason, message) = match error {
+                    crate::bounded_json::Error::TooLarge => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        ReasonCode::ResourceAccessTooComplex,
+                        "Resource access response exceeds the result size limit.",
+                    ),
+                    crate::bounded_json::Error::Serialization => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ReasonCode::OperationFailed,
+                        "Resource access response could not be encoded.",
+                    ),
+                };
+                return management_audited_response(
+                    context,
+                    status,
+                    management_failure_envelope(
+                        context,
+                        operation,
+                        Decision::Error,
+                        reason,
+                        message,
+                        None,
+                    ),
+                )
+                .await;
+            }
+        }
+    } else {
+        None
+    };
     observability::record_request_ids(&context.request_id, &context.broker_request_id);
     observability::record_operation(operation);
     observability::record_principal(&context.identity.principal);
     observability::record_decision(Decision::Allow.as_str());
     observability::record_status(StatusCode::OK.as_u16());
-    (
-        StatusCode::OK,
-        [(axum::http::header::CACHE_CONTROL, "no-store")],
-        Json(SuccessEnvelope {
-            ok: true,
-            decision: Decision::Allow,
-            request_id: &context.request_id,
-            broker_request_id: &context.broker_request_id,
-            operation,
-            principal: &context.identity.principal,
-            target,
-            result,
-        }),
-    )
-        .into_response()
+    match bounded {
+        Some(bytes) => (
+            StatusCode::OK,
+            [
+                (axum::http::header::CACHE_CONTROL, "no-store"),
+                (axum::http::header::CONTENT_TYPE, "application/json"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        None => (
+            StatusCode::OK,
+            [(axum::http::header::CACHE_CONTROL, "no-store")],
+            Json(envelope),
+        )
+            .into_response(),
+    }
 }
 
 pub(super) fn management_pre_audited_success_response(
@@ -2405,9 +2475,11 @@ mod tests {
                     description: "View issue".to_string(),
                     read_only: true,
                     required_scope_types: vec!["project".to_string()],
-                    resource_type: Some(agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone()),
                     execution_contexts: vec![internal, external],
-                    effective_access_by_execution_context: BTreeMap::new(),
+                    scope: agent_access_core::AgentTokenActionScope::Resource {
+                        resource_type: agent_access_jira::JIRA_PROJECT_RESOURCE.id().clone(),
+                        effective_access_by_execution_context: BTreeMap::new(),
+                    },
                 }],
             }],
             mcp: None,

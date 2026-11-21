@@ -16,8 +16,8 @@ must be addressable as an HTTP path segment.
 
 Resource types are registered, not hard-coded in policy. Each registered type
 defines its canonical target grammar, the selector forms it supports, and the
-labels clients show; a service descriptor binds each of its resource scopes to
-one registered type. The broker publishes the registry, in registration order,
+labels clients show. Scalar service scopes bind one registered type; typed
+containment scopes declare their supported content and container types. The broker publishes the registry, in registration order,
 at `GET /v1/resource-types` (any authenticated caller, no execution context) and
 as `resourceTypes` in the runtime catalog (`/v1/spec/catalog`);
 `agent-access admin policy resources types` prints it. Each type exposes
@@ -27,6 +27,9 @@ inclusion but cannot be used as an excluded group member. This build registers:
 - `git_repository` supports `exact`, `namespace`, and `all` selectors.
 - `jira_project` supports `exact` and `all` selectors.
 - `confluence_space` supports `exact` and `all` selectors.
+- `confluence_content` supports exact pages/blogs and page/folder `subtree`
+  selectors; it does not support `all` or `namespace`. See
+  [Confluence content access](confluence-content-access.md).
 - `cloudbees_ci_job` supports `exact`, `namespace`, and `all` selectors.
 - `teams_notification_destination` supports `exact` and `all` selectors; an
   exact entry binds its alias to one encrypted Workflow URL in managed storage.
@@ -96,9 +99,10 @@ When a managed create or edit would duplicate a selector, the error identifies
 the existing entry and the portal offers **Open existing resource**. Edit that
 entry's contexts or enabled state and reuse it in groups and grants.
 
-Jira issues and Confluence pages remain ordinary operation targets. Their
-containing project or space is the authorization boundary; neither has a
-separate resource type or fine-grained grant/token scope.
+Jira issues use their containing project as the authorization boundary.
+Confluence pages and blogs can use exact content resources, and page/folder
+subtrees cover current descendants. These are typed containment relations,
+not string-prefix namespace matches.
 
 ### Catalog change history
 
@@ -186,8 +190,9 @@ Native searches and listings select credentials for the collection as a whole;
 ordinary reads can select the winning grant per resource. Their coverage can
 therefore differ even when grants name the same resources.
 
-- A coverage selector is `exact`, `namespace`, or `all`; `exact` and `namespace`
-  carry `value`. Optional `inputs` address that selector, such as
+- A scalar coverage selector is `exact`, `namespace`, or `all`; `exact` and
+  `namespace` carry `value`. Location coverage also supports typed `subtree`
+  selectors and conditional relations; see [content discovery](confluence-content-access.md#search-and-discovery). Optional `inputs` address that selector, such as
   `{"controller":"team-ci","job":"payments/build-api"}` for a CloudBees job.
 - A type whose provider declares roots, such as CloudBees CI controller aliases,
   reports `all` as reachable `namespace` entries. Unreachable roots and denied

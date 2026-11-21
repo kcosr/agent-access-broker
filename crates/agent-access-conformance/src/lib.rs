@@ -1480,14 +1480,14 @@ mod tests {
                     "item",
                     SearchAuthorizationScope::from_selectors(
                         vec![
-                            ResourceSelector::Namespace {
+                            agent_access_provider::ScalarResourceSelector::Namespace {
                                 value: "shelf-one".into(),
                             },
-                            ResourceSelector::Namespace {
+                            agent_access_provider::ScalarResourceSelector::Namespace {
                                 value: "shelf-three".into(),
                             },
                         ],
-                        vec![ResourceSelector::Exact {
+                        vec![agent_access_provider::ScalarResourceSelector::Exact {
                             value: "shelf-one/excluded".into(),
                         }],
                     ),

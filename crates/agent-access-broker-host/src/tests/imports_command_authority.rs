@@ -715,11 +715,19 @@ async fn an_action_naming_a_dropped_type_fails_closed_alone() {
         .unwrap()
         .clone();
     assert_eq!(
-        descriptor.resource_scopes["queue"].resource_type.as_str(),
+        descriptor.resource_scopes["queue"]
+            .as_scalar()
+            .unwrap()
+            .0
+            .as_str(),
         "unresolved_resource_type"
     );
     assert_eq!(
-        descriptor.resource_scopes["project"].resource_type.as_str(),
+        descriptor.resource_scopes["project"]
+            .as_scalar()
+            .unwrap()
+            .0
+            .as_str(),
         "tickets_project"
     );
     drop(published);

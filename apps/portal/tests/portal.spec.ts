@@ -483,7 +483,7 @@ test("token boundaries use live resource references and allow empty effective ac
   ];
   const options = {
     policyGeneration: 5, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources, resourceGroups: [{ id: "docs", name: "Documentation" }], executionContexts: ["internal", "external"],
-    services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
+    services: [{ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["internal", "external"], actions: [{ scope: "resource" as const, action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", requiredScopeTypes: ["space"], executionContexts: ["internal", "external"], effectiveAccessByExecutionContext: {
       internal: [{ included: [{ kind: "all" }], excluded: [] }],
       external: [{ included: [{ kind: "exact", value: "ENG" }], excluded: [] }]
     } }] }],
@@ -2675,9 +2675,9 @@ test("a grant's effective access merges only identical contexts into compact row
       body: managementResult({
         policyGeneration: 7,
         access: [
-          { service: "jira", action: "issue.view", executionContext: "default", resourceType: "jira_project", clauses: all },
-          { service: "jira", action: "issue.view", executionContext: "internal", resourceType: "jira_project", clauses: all },
-          { service: "jira", action: "issue.view", executionContext: "external", resourceType: "jira_project", clauses: eng }
+          { scope: "resource" as const, service: "jira", action: "issue.view", executionContext: "default", resourceType: "jira_project", clauses: all },
+          { scope: "resource" as const, service: "jira", action: "issue.view", executionContext: "internal", resourceType: "jira_project", clauses: all },
+          { scope: "resource" as const, service: "jira", action: "issue.view", executionContext: "external", resourceType: "jira_project", clauses: eng }
         ]
       })
     })
@@ -2727,7 +2727,7 @@ test("effective access keeps long merged contexts inside the drawer and lists al
       body: managementResult({
         policyGeneration: 7,
         access: ["issue.view", "search"].flatMap((action) =>
-          contexts.map((executionContext) => ({ service: "jira", action, executionContext, resourceType: "jira_project", clauses }))
+          contexts.map((executionContext) => ({ scope: "resource" as const, service: "jira", action, executionContext, resourceType: "jira_project", clauses }))
         )
       })
     })
@@ -2799,13 +2799,13 @@ test("access resource details disclose exclusions with their own alternative", a
     contentType: "application/json",
     body: envelope({
       policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "default", mode: "write_capable", groupIds: [] }, { executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, resources: [], resourceGroups: [], executionContexts: ["internal", "external"],
-      services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{
+      services: [{ service: "jira", displayName: "Jira", brokerHosts: [], executionContexts: ["internal"], actions: [{ scope: "resource" as const,
         action: "issue.view", description: "View issues", readOnly: true, resourceType: "jira_project", executionContexts: ["internal"],
         effectiveAccessByExecutionContext: { internal: [
           { included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "SECRET" }], excluded: [] }] },
           { included: [{ kind: "exact", value: "ENG" }], excluded: [] }
         ] }
-      }] }, { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{
+      }] }, { service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: ["external"], actions: [{ scope: "resource" as const,
         action: "page.view", description: "View pages", readOnly: true, resourceType: "confluence_space", executionContexts: ["external"],
         effectiveAccessByExecutionContext: { external: [
           { included: [{ kind: "all" }], excluded: [], excludedRequests: [{ included: [{ kind: "exact", value: "PRIVATE" }], excluded: [] }] }

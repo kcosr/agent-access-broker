@@ -4,7 +4,10 @@
 //! is rendered, and [`super::ConfigDoc::from_config`] checks that the
 //! document parses back to exactly the same configuration.
 use agent_access_cloudbees_ci::{CloudbeesCiControllerConfig, CloudbeesCiProviderConfig};
-use agent_access_confluence::{ConfluenceContentConfig, ConfluenceProviderConfig};
+use agent_access_confluence::{
+    ConfluenceContentAccessConfig, ConfluenceContentConfig, ConfluenceContentSearchConfig,
+    ConfluenceProviderConfig,
+};
 use agent_access_conformance::ConformanceConfig;
 use agent_access_core::{
     AggregateInvocationLimitConfig, ApplicationConfig, AttributionConfig, AuditConfig,
@@ -1236,6 +1239,8 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         attachments,
         content,
         search,
+        content_access,
+        content_search,
     } = confluence;
     let ConfluenceContentConfig {
         page_formats,
@@ -1243,6 +1248,17 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
         comment_formats,
         max_body_bytes,
     } = content;
+    let ConfluenceContentAccessConfig {
+        max_metadata_requests,
+        max_metadata_bytes,
+    } = content_access;
+    let ConfluenceContentSearchConfig {
+        max_candidate_pages,
+        max_candidates,
+        max_upstream_requests,
+        max_scan_bytes,
+        max_encoded_request_target_bytes,
+    } = content_search;
     Fields::default()
         .put("tenant_host", tenant_host.as_str())
         .opt("cloud_id", cloud_id.clone())
@@ -1271,6 +1287,26 @@ fn confluence_value(confluence: &ConfluenceProviderConfig) -> Value {
                 .value(),
         )
         .put("search", search_value(search))
+        .put(
+            "content_access",
+            Fields::default()
+                .int("max_metadata_requests", *max_metadata_requests)
+                .int("max_metadata_bytes", *max_metadata_bytes)
+                .value(),
+        )
+        .put(
+            "content_search",
+            Fields::default()
+                .int("max_candidate_pages", *max_candidate_pages)
+                .int("max_candidates", *max_candidates)
+                .int("max_upstream_requests", *max_upstream_requests)
+                .int("max_scan_bytes", *max_scan_bytes)
+                .int(
+                    "max_encoded_request_target_bytes",
+                    *max_encoded_request_target_bytes,
+                )
+                .value(),
+        )
         .value()
 }
 

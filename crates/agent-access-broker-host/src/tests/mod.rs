@@ -9955,6 +9955,8 @@ async fn scoped_service_policy_manager_is_confined_and_revocation_is_immediate()
         ("GET", "/v1/admin/policy/resource-groups"),
         ("GET", "/v1/admin/policy/resource-groups/{id}"),
         ("POST", "/v1/admin/policy/effective-access"),
+        ("GET", "/v1/admin/policy/resource-locations"),
+        ("POST", "/v1/admin/policy/resource-locations/normalize"),
         ("GET", "/v1/admin/policy/status"),
         ("GET", "/v1/admin/policy/catalog"),
         ("GET", "/v1/admin/policy/grants"),
@@ -10351,7 +10353,7 @@ async fn admin_policy_managed_grants_crud_validate_and_export() {
     assert_eq!(fake_service["actions"][0]["readOnly"], true);
     assert_eq!(
         fake_service["resourceScopes"]["project"],
-        json!({"resourceType": "fake_project", "selectors": ["exact", "all"]})
+        json!({"matching":"scalar", "resourceType": "fake_project", "selectors": ["exact", "all"]})
     );
     assert!(
         catalog_body["result"]["subjects"]["groups"]
@@ -14034,6 +14036,8 @@ async fn confluence_normalized_write_content_is_absent_from_tracing_and_audit() 
     config
         .providers
         .insert(agent_access_confluence::ConfluenceProviderConfig {
+            content_access: Default::default(),
+            content_search: Default::default(),
             listing: Default::default(),
             tenant_host: "example.atlassian.net".to_string(),
             cloud_id: None,
@@ -16997,6 +17001,8 @@ async fn spec_token_fixture_with_restrictions(
         config
             .providers
             .insert(agent_access_confluence::ConfluenceProviderConfig {
+                content_access: Default::default(),
+                content_search: Default::default(),
                 listing: Default::default(),
                 tenant_host: "example.atlassian.net".to_string(),
                 cloud_id: None,
@@ -18195,6 +18201,8 @@ fn jira_capabilities_omit_content_writes_without_a_native_comment_target() {
 #[test]
 fn confluence_capabilities_advertise_only_effective_content_write_formats() {
     let config = agent_access_confluence::ConfluenceProviderConfig {
+        content_access: Default::default(),
+        content_search: Default::default(),
         listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: None,

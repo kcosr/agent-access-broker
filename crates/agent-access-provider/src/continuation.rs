@@ -78,8 +78,8 @@ pub use confidential::OpenedContinuation;
 
 use crate::signing::{generate_local_key, local_hmac};
 use crate::{
-    AdmittedContext, CredentialMode, DelegatedCredential, ProviderError, ScopeRequest,
-    StableSigningKey,
+    AdmittedContext, CredentialMode, DelegatedCredential, LocalScopeRequest, ProviderError,
+    ScopeRequest, StableSigningKey,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -430,6 +430,31 @@ impl ContinuationFamily {
         debug_assert!(
             self.scope_resolved,
             "{}/{} is not opened during scope resolution",
+            self.service, self.purpose
+        );
+        let identity = request.identity();
+        self.start_binding(
+            request.service(),
+            request.action(),
+            request.execution_context(),
+            ScopeResolutionStage {
+                principal: identity.principal.clone(),
+                authenticated: identity.authenticated,
+            },
+        )
+        .bytes("configuration", configuration.as_ref())
+    }
+
+    /// Binds an owner-committed handle in the credential-free local locator
+    /// phase. This grants no execution authority and cannot mint handles.
+    pub fn bind_local_scope(
+        &self,
+        request: &LocalScopeRequest<'_>,
+        configuration: impl AsRef<[u8]>,
+    ) -> ContinuationBinding<ScopeResolutionStage> {
+        debug_assert!(
+            self.scope_resolved,
+            "{}/{} is not opened before admission",
             self.service, self.purpose
         );
         let identity = request.identity();

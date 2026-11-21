@@ -14,6 +14,38 @@ impl NormalizedReadBackend {
 
 #[async_trait]
 impl ConfluenceBackend for NormalizedReadBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        if kind != ConfluenceNodeKind::Page || status != ConfluenceContentStatus::Current {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        let page = self.page_metadata(id, credential).await?;
+        Ok(ConfluenceBackendResponse {
+            value: read_fixture_node(&page.value),
+            status: page.status,
+            duration_ms: page.duration_ms,
+        })
+    }
+
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &agent_access_confluence::AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        budget.charge_request()?;
+        self.calls.lock().unwrap().push("space_location_metadata");
+        read_fixture_space(id, &self.page)
+    }
+
     async fn space_list(
         &self,
         _request: agent_access_confluence::ConfluenceSpaceListRequest,
@@ -299,7 +331,16 @@ async fn page_read_formats_prefer_adf_preserve_native_and_do_not_refetch() {
     assert_eq!(native["result"]["body"]["atlas_doc_format"]["value"], adf);
     assert!(native["result"].get("renderedBody").is_none());
     let native_calls = backend.take_calls();
-    assert_eq!(native_calls, vec!["page_metadata", "page"]);
+    assert_eq!(
+        native_calls,
+        vec![
+            "page_metadata",
+            "space_location_metadata",
+            "page",
+            "page_metadata",
+            "space_location_metadata"
+        ]
+    );
 
     let (embedded_status, embedded) = invoke(
         &base_url,
@@ -369,7 +410,16 @@ async fn malformed_preferred_adf_fails_without_storage_fallback() {
     assert_eq!(status, reqwest::StatusCode::BAD_GATEWAY, "{body}");
     assert_eq!(body["reasonCode"], "upstream_protocol_failed");
     assert!(!body.to_string().contains(STORAGE));
-    assert_eq!(backend.take_calls(), vec!["page_metadata", "page"]);
+    assert_eq!(
+        backend.take_calls(),
+        vec![
+            "page_metadata",
+            "space_location_metadata",
+            "page",
+            "page_metadata",
+            "space_location_metadata"
+        ]
+    );
 
     stop(broker).await;
 }

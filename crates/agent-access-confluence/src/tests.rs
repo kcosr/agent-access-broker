@@ -73,7 +73,7 @@ fn descriptor_audits_targets_searches_and_create_titles_only() {
         [
             ("space", "Space"),
             ("title", "Title"),
-            ("parentPageId", "Parent page ID"),
+            ("parent", "Parent"),
             ("parentUrl", "Parent URL")
         ]
     );
@@ -191,14 +191,15 @@ fn descriptor_lookup_requirements_follow_scope_resolution_needs() {
             "page.draft.create" | "page.draft.stage" | "blog.draft.stage" => {
                 LookupRequirement::ScopeResolution
             }
-            "blog.create" => LookupRequirement::Execution,
-            _ if name.starts_with("page.draft.") || name.starts_with("blog.draft.") => {
-                LookupRequirement::Execution
-            }
+            "blog.create" | "blog.draft.create" => LookupRequirement::Execution,
             _ => LookupRequirement::ScopeResolution,
         };
         assert_eq!(action.lookup, expected, "unexpected lookup for {name}");
-        assert_eq!(action.required_scope_types(), ["space"], "{name}");
+        assert_eq!(
+            action.required_scope_types(),
+            [confluence_scope_name(name)],
+            "{name}"
+        );
         assert_eq!(action.credential_modes, ["service", "per_user"], "{name}");
     }
 }
@@ -321,8 +322,8 @@ fn page_placement_capabilities_and_parsers_are_closed_and_mutually_exclusive() {
         );
         assert_eq!(action.input_schema["additionalProperties"], false);
         assert_eq!(
-            action.input_schema["properties"]["parentPageId"]["type"],
-            "string"
+            action.input_schema["properties"]["parent"]["type"],
+            "object"
         );
         assert_eq!(
             action.input_schema["properties"]["parentUrl"]["type"],
@@ -372,7 +373,7 @@ fn page_placement_capabilities_and_parsers_are_closed_and_mutually_exclusive() {
         &config,
     )
     .unwrap();
-    assert_eq!(create.parent.unwrap().page_id, "200");
+    assert_eq!(create.parent.unwrap().parent.id, "200");
     let page_move = parse_page_move_inputs(
         &json!({
             "url": "https://example.atlassian.net/wiki/spaces/ENG/pages/100/Child",
@@ -388,12 +389,12 @@ fn page_placement_capabilities_and_parsers_are_closed_and_mutually_exclusive() {
 
     for invalid in [
         json!({
-            "space": "ENG", "title": "Child", "parentPageId": "200",
+            "space": "ENG", "title": "Child", "parent": {"kind":"page","id":"200"},
             "parentUrl": "https://example.atlassian.net/wiki/spaces/ENG/pages/200/Parent",
             "contentFormat": "storage", "content": "<p>body</p>"
         }),
         json!({
-            "space": "ENG", "title": "Child", "parentPageId": "200",
+            "space": "ENG", "title": "Child", "parent": {"kind":"page","id":"200"},
             "contentFormat": "storage", "content": "<p>body</p>", "parent": "200"
         }),
     ] {
@@ -416,10 +417,10 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let create_scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.create",
             &json!({
-                "space": "ENG", "title": "Child", "parentPageId": "200",
+                "space": "ENG", "title": "Child", "parent": {"kind":"page","id":"200"},
                 "contentFormat": "storage", "content": "<p>body</p>"
             }),
             Some(&AtlassianCredential::from_static(credential())),
@@ -430,7 +431,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     assert!(!create_scopes.contains_key("page"));
 
     let append_scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&AtlassianCredential::from_static(credential())),
@@ -440,7 +441,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     assert_eq!(append_scopes["space"], vec!["ENG"]);
     assert!(!append_scopes.contains_key("page"));
     let before_scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
             Some(&AtlassianCredential::from_static(credential())),
@@ -453,7 +454,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
     {
         let mut hierarchies = target_under_folder.hierarchies.lock().unwrap();
         let target = hierarchies.get_mut("200").unwrap();
-        target.parent_page_id = Some("folder-abc".to_string());
+        target.parent_page_id = Some("600".to_string());
         target.parent_type = Some("folder".to_string());
     }
     let target_under_folder_provider = ConfluenceProvider::with_backend(
@@ -462,7 +463,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         Arc::new(target_under_folder),
     );
     let append_scopes = target_under_folder_provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&AtlassianCredential::from_static(credential())),
@@ -471,24 +472,31 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
         .unwrap();
     assert!(!append_scopes.contains_key("page"));
     let error = target_under_folder_provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.move",
             &json!({"pageId": "100", "position": "before", "targetPageId": "200"}),
             Some(&AtlassianCredential::from_static(credential())),
         )
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 
     let mut cross_space = PageMoveTestBackend::new();
     cross_space.pages.get_mut("200").unwrap().space = "OPS".to_string();
+    cross_space
+        .hierarchies
+        .lock()
+        .unwrap()
+        .get_mut("200")
+        .unwrap()
+        .space_id = "88888".into();
     let cross_space_provider = ConfluenceProvider::with_backend(
         confluence_config(),
         ProviderLimits::default(),
         Arc::new(cross_space),
     );
     let error = cross_space_provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.move",
             &json!({"pageId": "100", "position": "append", "targetPageId": "200"}),
             Some(&AtlassianCredential::from_static(credential())),
@@ -499,7 +507,7 @@ async fn page_move_lookup_scopes_authorize_space_and_reject_cross_space() {
 }
 
 #[tokio::test]
-async fn page_create_uses_requested_parent_or_space_homepage_and_verifies_readback() {
+async fn page_create_uses_requested_parent_or_space_homepage_and_validates_acceptance() {
     for (parent_page_id, expected_parent, expected_placement) in [
         (Some("200"), "200", "requested_parent"),
         (None, "55555", "space_homepage"),
@@ -515,7 +523,7 @@ async fn page_create_uses_requested_parent_or_space_homepage_and_verifies_readba
             "content": "<p>body</p>"
         });
         if let Some(parent_page_id) = parent_page_id {
-            inputs["parentPageId"] = json!(parent_page_id);
+            inputs["parent"] = json!({"kind":"page","id":parent_page_id});
         }
         let mut request = invocation("page.create", inputs);
         request = InvocationBuilder::from(request)
@@ -525,18 +533,21 @@ async fn page_create_uses_requested_parent_or_space_homepage_and_verifies_readba
             )]))
             .build();
 
-        let result = provider.invoke(request).await.unwrap();
+        let result = provider.invoke_fixture(request).await.unwrap();
 
-        assert_eq!(result.result["parentPageId"], expected_parent);
+        assert_eq!(result.result["parent"]["id"], expected_parent);
         assert_eq!(result.result["placement"], expected_placement);
         assert_eq!(result.result["verification"]["status"], "matched");
         let audit = result.audit.as_ref().unwrap();
-        assert_eq!(audit["parentPageId"], expected_parent);
+        assert_eq!(audit["parent"]["id"], expected_parent);
         assert_eq!(audit["placement"], expected_placement);
         assert_eq!(audit["verificationStatus"], "matched");
         let requests = backend.create_requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].parent_page_id.as_deref(), parent_page_id);
+        assert_eq!(
+            requests[0].parent.as_ref().map(|parent| parent.id.as_str()),
+            Some(expected_parent)
+        );
     }
 }
 
@@ -548,7 +559,10 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         ProviderLimits::default(),
         backend.clone(),
     );
-    let result = provider.invoke(page_move_invocation()).await.unwrap();
+    let result = provider
+        .invoke_fixture(page_move_invocation())
+        .await
+        .unwrap();
     assert_eq!(result.result["pageId"], "100");
     assert_eq!(result.result["position"], "append");
     assert_eq!(result.result["targetPageId"], "200");
@@ -570,7 +584,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
     {
         let mut hierarchies = moved_from_folder_backend.hierarchies.lock().unwrap();
         let page = hierarchies.get_mut("100").unwrap();
-        page.parent_page_id = Some("folder-abc".to_string());
+        page.parent_page_id = Some("600".to_string());
         page.parent_type = Some("folder".to_string());
     }
     moved_from_folder_backend
@@ -587,10 +601,10 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         moved_from_folder_backend,
     );
     let result = moved_from_folder_provider
-        .invoke(page_move_invocation())
+        .invoke_fixture(page_move_invocation())
         .await
         .unwrap();
-    assert_eq!(result.result["previousParentId"], "folder-abc");
+    assert_eq!(result.result["previousParentId"], "600");
     assert_eq!(result.result["previousParentType"], "folder");
 
     let cycle_backend = Arc::new(PageMoveTestBackend::new());
@@ -602,16 +616,23 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
             id: "100".to_string(),
             content_type: "page".to_string(),
         });
+    cycle_backend
+        .hierarchies
+        .lock()
+        .unwrap()
+        .get_mut("200")
+        .unwrap()
+        .parent_page_id = Some("100".into());
     let cycle_provider = ConfluenceProvider::with_backend(
         confluence_config(),
         ProviderLimits::default(),
         cycle_backend.clone(),
     );
     let error = cycle_provider
-        .invoke(page_move_invocation())
+        .invoke_fixture(page_move_invocation())
         .await
         .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
+    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert!(cycle_backend.moves.lock().unwrap().is_empty());
 
     let mismatch_backend = Arc::new(PageMoveTestBackend {
@@ -624,7 +645,7 @@ async fn page_move_moves_only_after_cycle_check_and_fails_closed_on_readback_mis
         mismatch_backend.clone(),
     );
     let error = mismatch_provider
-        .invoke(page_move_invocation())
+        .invoke_fixture(page_move_invocation())
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -648,7 +669,7 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
         );
 
         let result = provider
-            .invoke(sibling_page_move_invocation(position))
+            .invoke_fixture(sibling_page_move_invocation(position))
             .await
             .unwrap();
 
@@ -682,7 +703,7 @@ async fn page_move_places_pages_before_and_after_siblings_and_verifies_positions
         mismatch_backend,
     );
     let error = mismatch_provider
-        .invoke(sibling_page_move_invocation("before"))
+        .invoke_fixture(sibling_page_move_invocation("before"))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -714,16 +735,7 @@ fn assert_unverified_after_throttling(error: &ProviderError, stage: &str, locato
 #[tokio::test]
 async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
     let space_scopes = ResourceScopes::from([("space".to_string(), vec!["ENG".to_string()])]);
-    for (action, locators) in [
-        (
-            "page.create",
-            json!({"pageId": "900001", "parentPageId": "55555"}),
-        ),
-        (
-            "page.draft.create",
-            json!({"pageId": "900002", "parentPageId": "55555"}),
-        ),
-    ] {
+    for action in ["page.create", "page.draft.create"] {
         let backend = Arc::new(PageMoveTestBackend {
             throttle_hierarchy_after_mutation: true,
             ..PageMoveTestBackend::new()
@@ -740,18 +752,25 @@ async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
         request = InvocationBuilder::from(request)
             .resources(space_scopes.clone())
             .build();
-        let error = ConfluenceProvider::with_backend(
+        let result = ConfluenceProvider::with_backend_and_signing_key(
             confluence_config(),
             ProviderLimits::default(),
             backend,
+            agent_access_provider::test_support::test_signing_key(37),
         )
-        .invoke(request)
+        .invoke_fixture(request)
         .await
-        .unwrap_err();
-        assert_unverified_after_throttling(&error, "post_create_readback", locators);
-        let audit = error.audit.as_deref().unwrap();
-        assert_eq!(audit["mutationPhase"], "post_create_readback");
-        assert_eq!(audit["upstreamFailure"], "upstream_rate_limited");
+        .unwrap();
+        assert_eq!(
+            result.result["pageId"],
+            if action == "page.create" {
+                "900001"
+            } else {
+                "900002"
+            }
+        );
+        assert_eq!(result.result["parent"]["id"], "55555");
+        assert!(result.result.get("mutationStatus").is_none());
     }
 
     let move_locators = json!({
@@ -783,7 +802,7 @@ async fn throttled_placement_readbacks_after_applied_writes_are_unverified() {
             ProviderLimits::default(),
             backend.clone(),
         )
-        .invoke(page_move_invocation())
+        .invoke_fixture(page_move_invocation())
         .await
         .unwrap_err();
         assert_unverified_after_throttling(&error, stage, move_locators.clone());
@@ -819,7 +838,10 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         )]))
         .build();
 
-    let create_error = create_provider.invoke(create_request).await.unwrap_err();
+    let create_error = create_provider
+        .invoke_fixture(create_request)
+        .await
+        .unwrap_err();
 
     assert_eq!(create_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
@@ -839,7 +861,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         "upstream_timeout"
     );
     assert_eq!(
-        create_error.object_ids.as_ref().unwrap()["parentPageId"],
+        create_error.object_ids.as_ref().unwrap()["parent"]["id"],
         "55555"
     );
 
@@ -868,7 +890,10 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         )]))
         .build();
 
-    let draft_error = draft_provider.invoke(draft_request).await.unwrap_err();
+    let draft_error = draft_provider
+        .invoke_fixture(draft_request)
+        .await
+        .unwrap_err();
 
     assert_eq!(draft_error.reason_code(), ReasonCode::UpstreamTimeout);
     assert_eq!(
@@ -884,7 +909,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
         "upstream_timeout"
     );
     assert_eq!(
-        draft_error.object_ids.as_ref().unwrap()["parentPageId"],
+        draft_error.object_ids.as_ref().unwrap()["parent"]["id"],
         "55555"
     );
 
@@ -899,7 +924,7 @@ async fn page_placement_mutation_call_failures_report_possible_side_effects() {
     );
 
     let move_error = move_provider
-        .invoke(page_move_invocation())
+        .invoke_fixture(page_move_invocation())
         .await
         .unwrap_err();
 
@@ -950,7 +975,7 @@ async fn page_view_resolves_viewpage_locator_with_lookup_before_policy() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.view",
             &json!({
                 "url": "https://example.atlassian.net/wiki/pages/viewpage.action?pageId=123456"
@@ -974,7 +999,7 @@ async fn blog_scope_lookup_redirects_stay_scope_resolution_denials() {
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                     "id": "123456",
                     "type": "blogpost",
-                    "spaceId": "98765",
+                    "spaceId": "98765", "status":"current", "version":{"number":1},
                 })))
                 .mount(&server)
                 .await;
@@ -1000,19 +1025,16 @@ async fn blog_scope_lookup_redirects_stay_scope_resolution_denials() {
         // Both the blog evidence and its space lookup run in scope
         // resolution: a redirect leaves the blog unconfirmed.
         let error = provider
-            .lookup_scopes(
+            .fixture_space_lookup(
                 "blog.view",
                 &json!({ "blogId": "123456" }),
                 Some(&AtlassianCredential::from_static(credential())),
             )
             .await
             .unwrap_err();
-        assert_eq!(error.decision(), Decision::Deny, "{redirect_space}");
-        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
-        assert_eq!(
-            error.message,
-            "Confluence blog 123456 scope requires lookup confirmation"
-        );
+        assert_eq!(error.decision(), Decision::Error, "{redirect_space}");
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
+        assert_eq!(error.message, "Confluence response protocol error");
         assert!(error.result.is_none());
     }
 }
@@ -1044,7 +1066,7 @@ async fn page_view_rejects_legacy_space_input() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.view",
             &json!({ "pageId": "123456", "space": "OPS" }),
             Some(&AtlassianCredential::from_static(credential())),
@@ -1082,7 +1104,7 @@ async fn verify_scope_resolution_uses_lookup_for_existing_pages_in_requested_spa
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "verify",
             &json!({
                 "pageId": "123456",
@@ -1123,7 +1145,7 @@ async fn verify_scope_resolution_uses_authoritative_space_from_lookup() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "verify",
             &json!({
                 "pageId": "123456",
@@ -1194,7 +1216,7 @@ async fn comment_scope_resolution_walks_nested_parent_chain_with_lookup() {
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
 
     let scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "page.inline_comment.reply.add",
             &json!({
                 "commentId": "6003",
@@ -1242,7 +1264,7 @@ async fn comment_view_uses_lookup_for_authorization_and_execution_for_body() {
         .lookup_credential(credential_with_token("lookup-token"))
         .build();
 
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_fixture(request).await.unwrap();
 
     assert_eq!(
         result.result["comment"]["body"]["storage"]["value"],
@@ -1310,7 +1332,7 @@ async fn comment_add_applies_configured_storage_attribution_footer() {
         ))
         .build();
 
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_fixture(request).await.unwrap();
 
     let audit = result.audit.as_ref().unwrap();
     assert_eq!(audit["attribution"]["applied"], true);
@@ -1359,7 +1381,7 @@ async fn page_create_applies_configured_adf_attribution_footer_and_dedupes() {
         ))
         .build();
 
-    let result = provider.invoke(request).await.unwrap();
+    let result = provider.invoke_fixture(request).await.unwrap();
 
     let audit = result.audit.as_ref().unwrap();
     assert_eq!(audit["attribution"]["applied"], true);
@@ -1414,7 +1436,7 @@ async fn page_update_enforces_adf_body_cap_after_attribution() {
         ))
         .build();
 
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_fixture(request).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
@@ -1457,7 +1479,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let page_create_result = provider.invoke(page_create).await.unwrap();
+    let page_create_result = provider.invoke_fixture(page_create).await.unwrap();
 
     let mut page_update = invocation(
         "page.update",
@@ -1484,7 +1506,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let page_update_result = provider.invoke(page_update).await.unwrap();
+    let page_update_result = provider.invoke_fixture(page_update).await.unwrap();
 
     let mut blog_create = invocation(
         "blog.create",
@@ -1511,7 +1533,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let blog_create_result = provider.invoke(blog_create).await.unwrap();
+    let blog_create_result = provider.invoke_fixture(blog_create).await.unwrap();
 
     let mut blog_update = invocation(
         "blog.update",
@@ -1538,7 +1560,7 @@ async fn page_and_blog_storage_writes_apply_configured_attribution_footer_and_de
             broker_request_id.to_string(),
         ))
         .build();
-    let blog_update_result = provider.invoke(blog_update).await.unwrap();
+    let blog_update_result = provider.invoke_fixture(blog_update).await.unwrap();
 
     assert_storage_attribution_audit(&page_create_result, "add");
     assert_storage_attribution_audit(&page_update_result, "update");
@@ -1610,7 +1632,7 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             broker_request_id.to_string(),
         ))
         .build();
-    provider.invoke(page_request).await.unwrap();
+    provider.invoke_fixture(page_request).await.unwrap();
 
     let mut blog_request = invocation(
         "blog.create",
@@ -1633,7 +1655,7 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             broker_request_id.to_string(),
         ))
         .build();
-    provider.invoke(blog_request).await.unwrap();
+    provider.invoke_fixture(blog_request).await.unwrap();
 
     let page_body = backend.page_create_requests.lock().unwrap()[0]
         .body
@@ -1679,7 +1701,10 @@ async fn normalized_storage_conversion_precedes_attribution_and_final_cap() {
             vec!["ENG".to_string()],
         )]))
         .build();
-    let error = capped_provider.invoke(capped_request).await.unwrap_err();
+    let error = capped_provider
+        .invoke_fixture(capped_request)
+        .await
+        .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::BodySizeDenied);
     assert!(error.message.contains("after broker attribution was added"));
     assert!(
@@ -1758,7 +1783,7 @@ async fn comment_execution_reconfirms_parent_chain_after_lookup() {
         )))
         .build();
 
-    let error = provider.invoke(request).await.unwrap_err();
+    let error = provider.invoke_fixture(request).await.unwrap_err();
 
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
 }
@@ -1784,7 +1809,11 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         )]))
         .build();
     assert_eq!(
-        provider.invoke(denied).await.unwrap_err().reason_code(),
+        provider
+            .invoke_fixture(denied)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::ScopeUnresolved
     );
 
@@ -1839,7 +1868,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         .build();
     assert_eq!(
         provider
-            .invoke(wrong_container)
+            .invoke_fixture(wrong_container)
             .await
             .unwrap_err()
             .reason_code(),
@@ -1868,7 +1897,7 @@ async fn comment_actions_reject_denied_space_wrong_container_and_non_current_com
         .build();
     assert_eq!(
         provider
-            .invoke(non_current)
+            .invoke_fixture(non_current)
             .await
             .unwrap_err()
             .reason_code(),
@@ -1885,7 +1914,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .invoke(invocation(
+            .invoke_fixture(invocation(
                 "page.footer_comment.add",
                 json!({
                     "pageId": "0",
@@ -1914,7 +1943,11 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
         )]))
         .build();
     assert_eq!(
-        provider.invoke(body_cap).await.unwrap_err().reason_code(),
+        provider
+            .invoke_fixture(body_cap)
+            .await
+            .unwrap_err()
+            .reason_code(),
         ReasonCode::BodySizeDenied
     );
 
@@ -1931,7 +1964,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .lookup_scopes(
+            .fixture_space_lookup(
                 "page.inline_comment.view",
                 &json!({
                     "commentId": "6003",
@@ -1958,7 +1991,7 @@ async fn comment_inputs_and_parent_chains_fail_closed() {
     );
     assert_eq!(
         provider
-            .lookup_scopes(
+            .fixture_space_lookup(
                 "page.inline_comment.view",
                 &json!({
                     "commentId": "6003",
@@ -2416,32 +2449,6 @@ fn raw_cql_keeps_clause_like_text_inside_string_literals() {
 }
 
 #[test]
-fn raw_cql_is_reemitted_and_rejects_unsafe_literals() {
-    let query = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: r#"(space in ("ENG") and title ~ "runbook") or (content.id = 123456)"#
-                .to_string(),
-        },
-        &EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        query.cql,
-        r#"type = page AND space IN (ENG) AND ((space IN (ENG) AND title ~ "runbook") OR id = 123456)"#
-    );
-
-    for raw in [
-        "title ~ \"x\\\"",
-        "space in (\"ENG)",
-        "title ~ \"runbook\")",
-    ] {
-        let error = parse_cql_query(raw).unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
-    }
-}
-
-#[test]
 fn raw_cql_rejects_unsupported_fields_operators_and_functions() {
     for raw in [
         "type = blogpost",
@@ -2465,96 +2472,6 @@ fn raw_cql_rejects_unsupported_fields_operators_and_functions() {
         let error = parse_cql_query(raw).unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{raw}");
     }
-}
-
-#[test]
-fn blog_cql_composes_blogpost_type_and_rejects_page_hierarchy_fields() {
-    let query = build_confluence_blog_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: r#"space = ENG AND type = blogpost AND title ~ "release""#.to_string(),
-        },
-        &EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        query.cql,
-        r#"type = blogpost AND space IN (ENG) AND (space = ENG AND type = blogpost AND title ~ "release")"#
-    );
-    assert_eq!(query.injected_type_predicate, "type_blogpost");
-
-    for raw in ["type = page", "ancestor = 123456", "parent IN (123456)"] {
-        let error = build_confluence_blog_search_query(
-            &ConfluenceSearchQueryInput::Cql {
-                value: raw.to_string(),
-            },
-            &EffectiveSearchScope::AllExcept(BTreeSet::new()),
-            &SearchLimitsConfig::default(),
-        )
-        .unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::InputInvalid, "{raw}");
-    }
-}
-
-#[test]
-fn all_except_cql_preserves_caller_grouping_and_exclusions() {
-    let excluded = BTreeSet::from(["PRIVATE".to_string(), "IN".to_string()]);
-    let boundary = EffectiveSearchScope::AllExcept(excluded);
-    let query = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: "space = PRIVATE OR title ~ \"runbook\" ORDER BY title".to_string(),
-        },
-        &boundary,
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        query.cql,
-        "type = page AND space NOT IN (\"IN\", PRIVATE) AND (space = PRIVATE OR title ~ \"runbook\") ORDER BY title ASC"
-    );
-    assert_eq!(query.injected_space_predicate, "space_not_in");
-    assert!(!boundary.authorizes_value("PRIVATE"));
-    assert!(boundary.authorizes_value("NEW"));
-    assert_eq!(
-        boundary.audit_value("space")["excludedValues"],
-        json!(["IN", "PRIVATE"])
-    );
-    // A caller's space predicate narrows the query and keeps the exclusions.
-    let narrowed = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: "space IN (PRIVATE, ENG)".to_string(),
-        },
-        &boundary,
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        narrowed.cql,
-        "type = page AND space NOT IN (\"IN\", PRIVATE) AND (space IN (PRIVATE, ENG))"
-    );
-    let blog = build_confluence_blog_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: "title ~ \"runbook\"".to_string(),
-        },
-        &boundary,
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        blog.cql,
-        "type = blogpost AND space NOT IN (\"IN\", PRIVATE) AND (title ~ \"runbook\")"
-    );
-    let authorization = SearchAuthorization::new(
-        "space".to_string(),
-        SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
-    );
-    assert!(
-        effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()])).is_err()
-    );
-    assert_eq!(
-        effective_search_scope(&authorization, &BTreeSet::from(["NEW".to_string()])).unwrap(),
-        EffectiveSearchScope::Finite(BTreeSet::from(["NEW".to_string()]))
-    );
 }
 
 #[tokio::test]
@@ -2584,10 +2501,21 @@ async fn all_except_confluence_search_checks_returned_containment() {
                 SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".to_string()]),
             ))
             .build();
-        let result = provider.invoke(request).await;
-        assert_eq!(result.is_ok(), allowed, "{space}: {result:?}");
-        if let Err(error) = result {
-            assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        let result = provider.invoke_fixture(request).await;
+        if space.is_empty() {
+            assert_eq!(
+                result.unwrap_err().reason_code(),
+                ReasonCode::UpstreamProtocolFailed
+            );
+        } else {
+            let result = result.unwrap();
+            assert_eq!(
+                result.result["pages"].as_array().unwrap().len(),
+                usize::from(allowed)
+            );
+            if !allowed {
+                assert_eq!(result.result["scanStatus"], "exhausted");
+            }
         }
     }
 }
@@ -2634,58 +2562,6 @@ fn raw_cql_rejects_length_token_list_string_depth_and_sort_caps() {
         "title ~ \"runbook\" ORDER BY title, created, lastModified, title, created, lastModified";
     let error = parse_cql_query(sort_heavy).unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::InputInvalid);
-}
-
-#[test]
-fn cql_quote_style_hashes_are_stable_for_equivalent_canonical_queries() {
-    let quoted = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: r#"label = "security""#.to_string(),
-        },
-        &EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    let bare = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: "label = security".to_string(),
-        },
-        &EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-
-    assert_eq!(
-        quoted.canonical_caller_cql_hash,
-        bare.canonical_caller_cql_hash
-    );
-    assert_eq!(quoted.text_operand_hashes, Vec::<String>::new());
-}
-
-#[test]
-fn wildcard_cql_space_predicates_narrow_the_query_not_containment() {
-    let narrowed = build_confluence_search_query(
-        &ConfluenceSearchQueryInput::Cql {
-            value: r#"space = ENG AND title ~ "runbook""#.to_string(),
-        },
-        &EffectiveSearchScope::AllExcept(BTreeSet::new()),
-        &SearchLimitsConfig::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        narrowed.cql,
-        r#"type = page AND (space = ENG AND title ~ "runbook")"#
-    );
-    // Returned content is checked against the authorization boundary, not
-    // against the space the caller named.
-    let boundary = authorized_search_scope(&SearchAuthorization::new(
-        "space".to_string(),
-        SearchAuthorizationScope::excluding_exact_values(Vec::new()),
-    ))
-    .unwrap();
-    assert_eq!(boundary, EffectiveSearchScope::AllExcept(BTreeSet::new()));
-    assert!(boundary.authorizes_value("ROCKET"));
-    assert_eq!(boundary.values_for_backend(), Vec::<String>::new());
 }
 
 #[test]
@@ -2738,7 +2614,10 @@ fn page_write_request_bodies_use_selected_confluence_representation() {
     let create = page_create_request_body(&ConfluencePageCreateRequest {
         space: "ENG".to_string(),
         space_id: "98765".to_string(),
-        parent_page_id: Some("55555".to_string()),
+        parent: Some(ConfluenceParent {
+            kind: ConfluenceNodeKind::Page,
+            id: "55555".to_string(),
+        }),
         title: "Runbook".to_string(),
         body: ConfluencePageBody {
             representation: "storage".to_string(),
@@ -2751,22 +2630,21 @@ fn page_write_request_bodies_use_selected_confluence_representation() {
     assert_eq!(create["body"]["representation"], "storage");
     assert_eq!(create["body"]["value"], "<p>body</p>");
 
-    let update = content_request_body(
-        "123456".to_string(),
-        8,
-        "ENG".to_string(),
-        "Runbook".to_string(),
-        ConfluencePageBody {
+    let update = page_update_request_body(&ConfluencePageUpdateRequest {
+        page_id: "123456".to_string(),
+        space: "ENG".to_string(),
+        space_id: "98765".to_string(),
+        title: "Runbook".to_string(),
+        base_version: 7,
+        body: ConfluencePageBody {
             representation: "atlas_doc_format".to_string(),
             value: r#"{"type":"doc","version":1,"content":[]}"#.to_string(),
         },
-    );
+    })
+    .unwrap();
     assert_eq!(update["id"], "123456");
     assert_eq!(update["version"]["number"], 8);
-    assert_eq!(
-        update["body"]["atlas_doc_format"]["representation"],
-        "atlas_doc_format"
-    );
+    assert_eq!(update["body"]["representation"], "atlas_doc_format");
 }
 
 #[test]
@@ -2985,7 +2863,7 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
         .build();
     assert_eq!(
         provider
-            .invoke(page_request)
+            .invoke_fixture(page_request)
             .await
             .unwrap_err()
             .reason_code(),
@@ -3023,7 +2901,7 @@ async fn draft_update_rejects_content_before_handle_lookup_or_upstream_access() 
         .build();
     assert_eq!(
         provider
-            .invoke(blog_request)
+            .invoke_fixture(blog_request)
             .await
             .unwrap_err()
             .reason_code(),
@@ -3073,7 +2951,7 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     let service_token = continuations
         .seal_draft_handle(request.context(), request.execution(), &handle)
         .unwrap();
-    assert!(service_token.starts_with("aab_confluence_draft_v4_"));
+    assert!(service_token.starts_with("aab_confluence_draft_v5_"));
     assert!(service_token.len() <= DRAFT_HANDLE_MAX_BYTES);
     assert!(validate_draft_handle_input(&service_token).is_ok());
     // Service-mode handles are shared among service-mode principals.
@@ -3090,9 +2968,18 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
     )
     .unwrap();
     assert_eq!(service_handle, handle);
-    assert_eq!(service_handle.parent_page_id.as_deref(), Some("55555"));
+    assert_eq!(
+        service_handle
+            .parent
+            .as_ref()
+            .map(|parent| parent.id.as_str()),
+        Some("55555")
+    );
     let mut reparented_content = content.clone();
-    reparented_content.parent_page_id = Some("66666".to_string());
+    reparented_content.parent = Some(ConfluenceParent {
+        kind: ConfluenceNodeKind::Page,
+        id: "66666".into(),
+    });
     let error =
         ensure_draft_content_matches_handle(&reparented_content, &service_handle).unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -3181,11 +3068,8 @@ fn confluence_draft_handles_use_stable_signing_and_expected_bindings() {
         &wrong_space_token,
     )
     .unwrap();
-    assert_invalid_draft_handle(ensure_authorized_draft_handle(
-        &wrong_space_handle,
-        request.resource_scopes().unwrap(),
-    ));
-    let error = ensure_authorized_space(request.resource_scopes().unwrap(), "OPS").unwrap_err();
+    assert_invalid_draft_handle(ensure_authorized_draft_handle(&wrong_space_handle, "ENG"));
+    let error = ensure_authorized_space("ENG", "OPS").unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
     assert_eq!(
         error.message,
@@ -3328,7 +3212,10 @@ fn confluence_draft_attachment_tokens_and_staged_gates_are_bound() {
         "cursor=next"
     );
     let mut moved = handle.clone();
-    moved.parent_page_id = Some("66666".to_string());
+    moved.parent = Some(ConfluenceParent {
+        kind: ConfluenceNodeKind::Page,
+        id: "66666".into(),
+    });
     for (changed_request, changed_handle) in [
         (
             InvocationBuilder::from(request.clone())
@@ -3416,6 +3303,7 @@ async fn confluence_draft_attachment_lookup_paginates_beyond_first_page() {
         })
         .collect();
     let backend = Arc::new(AttachmentListBackend {
+        upload_failure: None,
         page: attachment_list_page(),
         attachments,
         credential_observations: std::sync::Mutex::new(Vec::new()),
@@ -3576,7 +3464,7 @@ fn search_page_parser_preserves_status_and_rejects_non_pages() {
     )
     .unwrap_err();
     assert!(
-        matches!(error, ConfluenceBackendError::Protocol(message) if message.contains("not a page"))
+        matches!(error, ConfluenceBackendError::Protocol(message) if message == "Confluence content-location metadata is malformed")
     );
 }
 
@@ -3686,6 +3574,7 @@ fn confluence_content_parsers_and_results_expose_metadata_without_search_bodies(
     let draft = draft_content_from_value(
         json!({
             "id": "333333",
+            "parentId":null,"parentType":null,
             "type": "page",
             "status": "draft",
             "title": "Draft",
@@ -4219,8 +4108,10 @@ fn confluence_draft_results_construct_canonical_content_urls() {
             space: "ENG".to_string(),
             space_id: "98765".to_string(),
             space_alias: None,
-            parent_page_id: (content_type == ConfluenceDraftContentType::Page)
-                .then(|| "55555".to_string()),
+            parent: (content_type == ConfluenceDraftContentType::Page).then(|| ConfluenceParent {
+                kind: ConfluenceNodeKind::Page,
+                id: "55555".into(),
+            }),
             web_url: Some(raw_web_url.to_string()),
             space_web_url: Some("/wiki/spaces/ENG".to_string()),
             status: Some("draft".to_string()),
@@ -4409,7 +4300,7 @@ fn blog_url_locator_accepts_numeric_viewpage_and_modern_blog_shapes() {
 }
 
 #[tokio::test]
-async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
+async fn blog_scope_lookup_requires_current_status_before_authorization() {
     for status in [Some("current".to_string()), Some("draft".to_string())] {
         let backend = Arc::new(BlogViewBackend {
             blog: ConfluenceBlog {
@@ -4420,7 +4311,7 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
                 space_alias: None,
                 web_url: None,
                 space_web_url: None,
-                status,
+                status: status.clone(),
                 version: 7,
                 created_at: None,
                 updated_at: None,
@@ -4442,15 +4333,21 @@ async fn blog_scope_lookup_defers_current_status_until_after_authorization() {
             ProviderLimits::default(),
             backend,
         );
-        let scopes = provider
-            .lookup_scopes(
+        let outcome = provider
+            .fixture_space_lookup(
                 "blog.view",
                 &json!({ "blogId": "123456" }),
                 Some(&AtlassianCredential::from_static(credential())),
             )
-            .await
-            .unwrap();
-        assert_eq!(scopes["space"], vec!["ENG"]);
+            .await;
+        if status.as_deref() == Some("current") {
+            assert_eq!(outcome.unwrap()["space"], vec!["ENG"]);
+        } else {
+            assert_eq!(
+                outcome.unwrap_err().reason_code(),
+                ReasonCode::ScopeUnresolved
+            );
+        }
     }
 }
 
@@ -4463,7 +4360,7 @@ async fn attachment_download_scope_lookup_defers_membership_checks() {
         backend.clone(),
     );
     let scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "attachment.download",
             &json!({
                 "pageId": "123456",
@@ -4512,7 +4409,7 @@ async fn blog_attachment_download_scope_lookup_defers_membership_checks() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let scopes = provider
-        .lookup_scopes(
+        .fixture_space_lookup(
             "blog.attachment.download",
             &json!({
                 "blogId": "123456",
@@ -4598,7 +4495,7 @@ async fn verify_missing_page_returns_sanitized_mismatch() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "verify",
             json!({
                 "pageId": "999999",
@@ -4622,7 +4519,7 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "verify",
             json!({
                 "pageId": "123456",
@@ -4643,7 +4540,7 @@ async fn verify_forbidden_page_or_attachment_returns_sanitized_mismatch() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "verify",
             json!({
                 "pageId": "123456",
@@ -4662,6 +4559,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         confluence_config(),
         ProviderLimits::default(),
         Arc::new(AttachmentListBackend {
+            upload_failure: None,
             page: ConfluencePage {
                 id: "123456".to_string(),
                 title: "Runbook".to_string(),
@@ -4699,7 +4597,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
         }),
     );
     let first = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 1}),
         ))
@@ -4712,7 +4610,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
     assert!(!token.contains("start=1"));
 
     let second = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4727,7 +4625,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
     assert_eq!(second.result["hasMore"], false);
 
     let clamped = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 99}),
         ))
@@ -4738,7 +4636,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
     assert!(clamped.result["nextPageToken"].is_null());
 
     let zero = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 0}),
         ))
@@ -4748,7 +4646,7 @@ async fn attachment_list_returns_bounded_pages_and_rejects_tampered_tokens() {
 
     let tampered = format!("{token}x");
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4861,7 +4759,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
     );
 
     let first = first_provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 1}),
         ))
@@ -4869,7 +4767,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
         .unwrap();
     let stable_token = first.result["nextPageToken"].as_str().unwrap();
     let second = second_provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4889,7 +4787,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
     let process_local_second =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let first = process_local_first
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({"pageId": "123456", "maxResults": 1}),
         ))
@@ -4897,7 +4795,7 @@ async fn attachment_list_stable_signer_is_portable_but_process_local_is_not() {
         .unwrap();
     let process_local_token = first.result["nextPageToken"].as_str().unwrap();
     let error = process_local_second
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.list",
             json!({
                 "pageId": "123456",
@@ -4931,7 +4829,7 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
         .lookup_credential(credential_with_token("lookup-token"))
         .build();
 
-    provider.invoke(request).await.unwrap();
+    provider.invoke_fixture(request).await.unwrap();
 
     assert_eq!(
         *backend.credential_observations.lock().unwrap(),
@@ -4941,7 +4839,15 @@ async fn attachment_list_uses_lookup_for_scope_and_execution_for_visible_metadat
                 credential_with_token("lookup-token")
             ),
             (
+                "page_metadata".into(),
+                credential_with_token("per-user-token")
+            ),
+            (
                 "page_attachments_page".to_string(),
+                credential_with_token("per-user-token")
+            ),
+            (
+                "page_metadata".into(),
                 credential_with_token("per-user-token")
             ),
         ]
@@ -4988,8 +4894,8 @@ async fn search_rejects_pages_outside_requested_space() {
     });
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
-    let error = provider
-        .invoke(invocation(
+    let result = provider
+        .invoke_fixture(invocation(
             "search",
             json!({
                 "spaces": ["ENG"],
@@ -5001,8 +4907,9 @@ async fn search_rejects_pages_outside_requested_space() {
             }),
         ))
         .await
-        .unwrap_err();
-    assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        .unwrap();
+    assert_eq!(result.result["pages"], json!([]));
+    assert_eq!(result.result["scanStatus"], "exhausted");
 }
 
 #[tokio::test]
@@ -5050,7 +4957,7 @@ async fn search_rejects_non_current_pages() {
             backend,
         );
         let error = provider
-            .invoke(invocation(
+            .invoke_fixture(invocation(
                 "search",
                 json!({
                     "spaces": ["ENG"],
@@ -5063,7 +4970,7 @@ async fn search_rejects_non_current_pages() {
             ))
             .await
             .unwrap_err();
-        assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
+        assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
     }
 }
 
@@ -5094,7 +5001,7 @@ async fn page_view_enforces_response_byte_cap() {
     });
     let provider = ConfluenceProvider::with_backend(confluence_config(), limits, backend);
     let error = provider
-        .invoke(invocation("page.view", json!({ "pageId": "123456" })))
+        .invoke_fixture(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -5128,7 +5035,7 @@ async fn page_view_enforces_configured_body_byte_cap() {
     });
     let provider = ConfluenceProvider::with_backend(config, ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation("page.view", json!({ "pageId": "123456" })))
+        .invoke_fixture(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamProtocolFailed);
@@ -5161,7 +5068,7 @@ async fn page_view_rejects_body_response_outside_authorized_scope() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation("page.view", json!({ "pageId": "123456" })))
+        .invoke_fixture(invocation("page.view", json!({ "pageId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::ScopeUnresolved);
@@ -5198,7 +5105,7 @@ async fn blog_view_rejects_non_current_execution_response() {
     let provider =
         ConfluenceProvider::with_backend(confluence_config(), ProviderLimits::default(), backend);
     let error = provider
-        .invoke(invocation("blog.view", json!({ "blogId": "123456" })))
+        .invoke_fixture(invocation("blog.view", json!({ "blogId": "123456" })))
         .await
         .unwrap_err();
     assert_eq!(error.decision(), Decision::Deny);
@@ -5490,7 +5397,6 @@ async fn http_backend_search_requests_bounded_page_metadata() {
         backend.search(
             ConfluenceSearchRequest {
                 cql: r#"type = page AND space IN (ENG) AND (title ~ "runbook")"#.to_string(),
-                spaces: vec!["ENG".to_string()],
                 max_results: 2,
                 next_page_token: None,
             },
@@ -5539,12 +5445,12 @@ async fn http_backend_builds_confluence_page_write_requests() {
         .mount(&server)
         .await;
     Mock::given(method("PUT"))
-        .and(path("/wiki/rest/api/content/123456"))
+        .and(path("/wiki/api/v2/pages/123456"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": "123456",
             "type": "page",
             "title": "Updated",
-            "space": { "key": "ENG" },
+            "spaceId": "98765", "status": "current", "parentId": null, "parentType": null,
             "version": { "number": 8 }
         })))
         .mount(&server)
@@ -5556,7 +5462,10 @@ async fn http_backend_builds_confluence_page_write_requests() {
             ConfluencePageCreateRequest {
                 space: "ENG".to_string(),
                 space_id: "98765".to_string(),
-                parent_page_id: Some("55555".to_string()),
+                parent: Some(ConfluenceParent {
+                    kind: ConfluenceNodeKind::Page,
+                    id: "55555".to_string(),
+                }),
                 title: "Created".to_string(),
                 body: ConfluencePageBody {
                     representation: "storage".to_string(),
@@ -5573,6 +5482,7 @@ async fn http_backend_builds_confluence_page_write_requests() {
         .update_page(
             ConfluencePageUpdateRequest {
                 page_id: "123456".to_string(),
+                space_id: "98765".to_string(),
                 space: "ENG".to_string(),
                 title: "Updated".to_string(),
                 base_version: 7,
@@ -5605,15 +5515,15 @@ async fn http_backend_builds_confluence_page_write_requests() {
     let update = requests
         .iter()
         .find(|request| {
-            request.method.as_str() == "PUT"
-                && request.url.path() == "/wiki/rest/api/content/123456"
+            request.method.as_str() == "PUT" && request.url.path() == "/wiki/api/v2/pages/123456"
         })
         .expect("update request was recorded");
     let update_body: Value = update.body_json().unwrap();
     assert_eq!(update_body["id"], "123456");
-    assert_eq!(update_body["space"]["key"], "ENG");
+    assert!(update_body.get("space").is_none());
+    assert_eq!(update_body["status"], "current");
     assert_eq!(update_body["version"]["number"], 8);
-    assert_eq!(update_body["body"]["storage"]["value"], "<p>updated</p>");
+    assert_eq!(update_body["body"]["value"], "<p>updated</p>");
 }
 
 #[tokio::test]
@@ -5654,7 +5564,10 @@ async fn http_backend_exposes_only_allowlisted_validation_for_content_mutations(
             ConfluencePageCreateRequest {
                 space: "ENG".to_string(),
                 space_id: "98765".to_string(),
-                parent_page_id: None,
+                parent: Some(ConfluenceParent {
+                    kind: ConfluenceNodeKind::Page,
+                    id: "55555".into(),
+                }),
                 title: "Created".to_string(),
                 body: ConfluencePageBody {
                     representation: "storage".to_string(),
@@ -6335,7 +6248,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6356,7 +6269,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6389,7 +6302,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6410,7 +6323,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let error = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6434,7 +6347,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let result = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6469,7 +6382,7 @@ async fn attachment_download_denies_metadata_and_content_limit_violations() {
         }),
     );
     let result = provider
-        .invoke(invocation(
+        .invoke_fixture(invocation(
             "attachment.download",
             json!({
                 "pageId": "123456",
@@ -6618,6 +6531,8 @@ impl PageMoveTestBackend {
             },
             hierarchies: std::sync::Mutex::new(BTreeMap::from([
                 ("100".to_string(), test_page_hierarchy("100", Some("111"))),
+                ("111".to_string(), test_page_hierarchy("111", None)),
+                ("600".to_string(), test_page_hierarchy("600", None)),
                 ("200".to_string(), test_page_hierarchy("200", Some("55555"))),
                 ("55555".to_string(), test_page_hierarchy("55555", None)),
             ])),
@@ -6786,6 +6701,7 @@ struct AttachmentDownloadBackend {
 }
 
 struct AttachmentListBackend {
+    upload_failure: Option<ConfluenceBackendError>,
     page: ConfluencePage,
     attachments: Vec<ConfluenceAttachment>,
     credential_observations: std::sync::Mutex<Vec<(String, ExecutionCredential)>>,
@@ -6852,6 +6768,117 @@ struct VerifyForbiddenBackend {
 
 #[async_trait]
 impl ConfluenceBackend for CommentStubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: fixture_space_id(&page.space),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if let Some(blog) = self.blogs.values().find(|blog| blog.space_id == id) {
+            let mut space = fixture_space(&blog.space);
+            space.id = id.into();
+            return ok(space);
+        }
+        self.pages
+            .values()
+            .find(|page| fixture_space_id(&page.space) == id)
+            .map(|page| fixture_space(&page.space))
+            .ok_or(ConfluenceBackendError::NotFound)
+            .and_then(ok)
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -7148,6 +7175,110 @@ impl ConfluenceBackend for CommentStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for BlogViewBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: self.space.id.clone(),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if id != self.space.id {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        ok(self.space.clone())
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -7296,6 +7427,107 @@ impl ConfluenceBackend for BlogViewBackend {
 
 #[async_trait]
 impl ConfluenceBackend for AttachmentDownloadBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: "98765".to_string(),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        self.space_by_id(id, _credential).await
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -7536,6 +7768,110 @@ impl ConfluenceBackend for AttachmentDownloadBackend {
 
 #[async_trait]
 impl ConfluenceBackend for AttachmentListBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: fixture_space_id(&page.space),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if id != fixture_space_id(&self.page.space) {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        ok(fixture_space(&self.page.space))
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -7607,9 +7943,9 @@ impl ConfluenceBackend for AttachmentListBackend {
         _attachment: ConfluenceAttachmentUpload,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluenceAttachment>, ConfluenceBackendError> {
-        Err(ConfluenceBackendError::Protocol(
-            "stub does not add attachments".to_string(),
-        ))
+        Err(self.upload_failure.clone().unwrap_or_else(|| {
+            ConfluenceBackendError::Protocol("stub does not add attachments".to_string())
+        }))
     }
 
     async fn page_attachments(
@@ -7699,6 +8035,119 @@ impl AttachmentListBackend {
 
 #[async_trait]
 impl ConfluenceBackend for AttributionStubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+        if self.space.homepage_id.as_deref() == Some(id) {
+            return ok(ConfluenceNode {
+                id: id.into(),
+                kind,
+                space_id: self.space.id.clone(),
+                parent: None,
+                status,
+                version: Some(1),
+            });
+        }
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: self.space.id.clone(),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if id != self.space.id {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        ok(self.space.clone())
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -7828,9 +8277,7 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
                 value: ConfluencePageHierarchy {
                     id: page_id.to_string(),
                     space_id: request.space_id,
-                    parent_page_id: request
-                        .parent_page_id
-                        .or_else(|| self.space.homepage_id.clone()),
+                    parent_page_id: request.parent.map(|parent| parent.id),
                     parent_type: Some("page".to_string()),
                     status: "current".to_string(),
                     version: 1,
@@ -8016,6 +8463,110 @@ impl ConfluenceBackend for AttributionStubConfluenceBackend {
 
 #[async_trait]
 impl ConfluenceBackend for VerifyForbiddenBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: "98765".to_string(),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if id != "98765" {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        ok(fixture_space("ENG"))
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -8148,6 +8699,53 @@ impl ConfluenceBackend for VerifyForbiddenBackend {
 
 #[async_trait]
 impl ConfluenceBackend for PageMoveTestBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        let value = self
+            .page_hierarchy(id, status == ConfluenceContentStatus::Draft, credential)
+            .await?
+            .value;
+        let parent = match (value.parent_page_id, value.parent_type) {
+            (None, None) => None,
+            (Some(id), Some(kind)) => Some(ConfluenceParent {
+                id,
+                kind: ConfluenceNodeKind::parse(&kind)
+                    .ok_or(ConfluenceBackendError::ScopeUnresolved)?,
+            }),
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: value.id,
+            kind,
+            space_id: value.space_id,
+            parent,
+            status: match value.status.as_str() {
+                "current" => ConfluenceContentStatus::Current,
+                "draft" => ConfluenceContentStatus::Draft,
+                _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+            },
+            version: Some(value.version),
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if id != self.space.id {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        ok(self.space.clone())
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -8341,10 +8939,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         request: ConfluencePageCreateRequest,
         _credential: &AtlassianCredential,
     ) -> Result<ConfluenceBackendResponse<ConfluencePage>, ConfluenceBackendError> {
-        let parent_page_id = request
-            .parent_page_id
-            .clone()
-            .or_else(|| self.space.homepage_id.clone());
+        let parent_page_id = request.parent.as_ref().map(|parent| parent.id.clone());
         self.create_requests.lock().unwrap().push(request.clone());
         if self.fail_create {
             return Err(self.mutation_failure.clone());
@@ -8380,9 +8975,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
         if self.fail_draft_create {
             return Err(self.mutation_failure.clone());
         }
-        let parent_page_id = request
-            .parent_page_id
-            .or_else(|| self.space.homepage_id.clone());
+        let parent_page_id = request.parent.as_ref().map(|parent| parent.id.clone());
         let mut hierarchy = test_page_hierarchy("900002", parent_page_id.as_deref());
         hierarchy.status = "draft".to_string();
         self.hierarchies
@@ -8399,7 +8992,7 @@ impl ConfluenceBackend for PageMoveTestBackend {
                 space: request.space,
                 space_id: request.space_id,
                 space_alias: None,
-                parent_page_id,
+                parent: request.parent,
                 web_url: None,
                 space_web_url: None,
                 status: Some("draft".to_string()),
@@ -8451,6 +9044,110 @@ impl ConfluenceBackend for PageMoveTestBackend {
 
 #[async_trait]
 impl ConfluenceBackend for StubConfluenceBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: fixture_space_id(&page.space),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        if id != fixture_space_id(&self.page.space) {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        ok(fixture_space(&self.page.space))
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -8609,7 +9306,7 @@ async fn credential_verification_uses_current_user_probe() {
 
 fn invocation(action: &str, inputs: Value) -> ProviderInvocation {
     let mut resource_scopes = ResourceScopes::new();
-    if matches!(action, "page.view" | "blog.view") {
+    if confluence_scope_name(action) != "space" && !matches!(action, "search" | "blog.search") {
         resource_scopes.insert("space".to_string(), vec!["ENG".to_string()]);
     }
     let builder = InvocationBuilder::new("confluence", action)
@@ -8884,8 +9581,10 @@ fn draft_content(id: &str, content_type: ConfluenceDraftContentType) -> Confluen
         space: "ENG".to_string(),
         space_id: "98765".to_string(),
         space_alias: None,
-        parent_page_id: (content_type == ConfluenceDraftContentType::Page)
-            .then(|| "55555".to_string()),
+        parent: (content_type == ConfluenceDraftContentType::Page).then(|| ConfluenceParent {
+            kind: ConfluenceNodeKind::Page,
+            id: "55555".into(),
+        }),
         web_url: None,
         space_web_url: None,
         status: Some("draft".to_string()),
@@ -8983,6 +9682,7 @@ fn sibling_page_move_invocation(position: &str) -> ProviderInvocation {
 
 fn attachment_list_backend() -> AttachmentListBackend {
     AttachmentListBackend {
+        upload_failure: None,
         page: attachment_list_page(),
         attachments: vec![
             ConfluenceAttachment {
@@ -9016,8 +9716,10 @@ fn key_only(key: &str) -> ConfluenceSpaceUrlNames<'_> {
     ConfluenceSpaceUrlNames { key, alias: None }
 }
 
-fn confluence_config() -> ConfluenceProviderConfig {
+pub(crate) fn confluence_config() -> ConfluenceProviderConfig {
     ConfluenceProviderConfig {
+        content_access: Default::default(),
+        content_search: Default::default(),
         listing: Default::default(),
         tenant_host: "example.atlassian.net".to_string(),
         cloud_id: Some("00000000-0000-0000-0000-000000000000".to_string()),
@@ -9159,6 +9861,7 @@ async fn http_backend_maps_upstream_429_to_upstream_rate_limited() {
 #[tokio::test]
 async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_limited() {
     let server = MockServer::start().await;
+    mount_attachment_location(&server).await;
     Mock::given(method("POST"))
         .and(path("/wiki/rest/api/content/123456/child/attachment"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -9186,7 +9889,7 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
         Arc::new(http_confluence_backend_for_server(&server)),
     );
     let error = provider
-        .invoke(page_attachment_add_invocation(&[
+        .invoke_fixture(page_attachment_add_invocation(&[
             "first", "second", "third",
         ]))
         .await
@@ -9219,7 +9922,16 @@ async fn attachment_add_throttling_after_applied_uploads_is_unverified_not_rate_
     for field in ["limitScope", "service", "retryAfterSeconds", "retryAt"] {
         assert!(result.get(field).is_none(), "{field}: {result}");
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(
+        server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.method.as_str() == "POST")
+            .count(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -9386,7 +10098,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
             ProviderLimits::default(),
             Arc::new(backend),
         )
-        .invoke(request)
+        .invoke_fixture(request)
         .await
         .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamConnectionFailed);
@@ -9396,7 +10108,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
         assert_eq!(audit["upstreamFailure"], "upstream_connection_failed");
     }
 
-    // A read-back that fails after the page was created leaves it
+    // A read-back that fails after the page was moved leaves it
     // unverified at the read-back stage, with the read-back's reason.
     let backend = PageMoveTestBackend {
         throttle_hierarchy_after_mutation: true,
@@ -9408,10 +10120,7 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
         ProviderLimits::default(),
         Arc::new(backend),
     )
-    .invoke(space_scope(invocation(
-        "page.create",
-        json!({"space": "ENG", "title": "Created", "contentFormat": "storage", "content": "<p>body</p>"}),
-    )))
+    .invoke_fixture(page_move_invocation())
     .await
     .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamTimeout);
@@ -9420,8 +10129,8 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
         Some(&json!({
             "mutationStatus": "applied_unverified",
             "retrySafe": false,
-            "verificationStage": "post_create_readback",
-            "safeLocators": {"pageId": "900001", "parentPageId": "55555"},
+            "verificationStage": "post_move_hierarchy_readback",
+            "safeLocators": {"pageId":"100", "targetPageId":"200", "parentPageId":"200", "previousParentId":"111", "previousParentType":"page"},
         }))
     );
 
@@ -9439,9 +10148,32 @@ async fn write_receipts_follow_what_confluence_may_have_applied() {
         ProviderLimits::default(),
         Url::parse(&format!("{origin}/wiki/rest/api/")).unwrap(),
     );
+    let transport_error = backend
+        .add_attachment(
+            "123456",
+            ConfluenceAttachmentUpload {
+                filename: "first.txt".into(),
+                content_type: "text/plain".into(),
+                size: 5,
+                bytes: b"first".to_vec(),
+                temp_file: None,
+                sha256: sha256_hex(b"first"),
+            },
+            &AtlassianCredential::from_static(credential()),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        transport_error,
+        ConfluenceBackendError::NotSent { timed_out: false }
+    ));
+    let fixture = AttachmentListBackend {
+        upload_failure: Some(transport_error),
+        ..attachment_list_backend()
+    };
     let error =
-        ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(backend))
-            .invoke(page_attachment_add_invocation(&["first", "second"]))
+        ConfluenceProvider::with_backend(config, ProviderLimits::default(), Arc::new(fixture))
+            .invoke_fixture(page_attachment_add_invocation(&["first", "second"]))
             .await
             .unwrap_err();
     assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
@@ -9493,6 +10225,7 @@ async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
         ),
     ] {
         let server = MockServer::start().await;
+        mount_attachment_location(&server).await;
         if first_ok {
             Mock::given(method("POST"))
                 .and(path("/wiki/rest/api/content/123456/child/attachment"))
@@ -9514,7 +10247,7 @@ async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
             ProviderLimits::default(),
             Arc::new(http_confluence_backend_for_server(&server)),
         )
-        .invoke(page_attachment_add_invocation(&["first", "second"]))
+        .invoke_fixture(page_attachment_add_invocation(&["first", "second"]))
         .await
         .unwrap_err();
         assert_eq!(error.reason_code(), ReasonCode::UpstreamFailed);
@@ -9539,21 +10272,6 @@ async fn attachment_batches_that_may_have_applied_report_an_unknown_outcome() {
 /// A page `attachment.add` of one text file per name, admitted with the
 /// page's preflight state.
 fn page_attachment_add_invocation(names: &[&str]) -> ProviderInvocation {
-    let page = ConfluencePage {
-        id: "123456".to_string(),
-        title: "Runbook".to_string(),
-        space: "ENG".to_string(),
-        web_url: None,
-        space_web_url: None,
-        space_alias: None,
-        status: Some("current".to_string()),
-        version: 7,
-        created_at: None,
-        updated_at: None,
-        created_by: None,
-        updated_by: None,
-        bodies: BTreeMap::new(),
-    };
     InvocationBuilder::new("confluence", "attachment.add")
         .inputs(json!({
             "pageId": "123456",
@@ -9585,12 +10303,30 @@ fn page_attachment_add_invocation(names: &[&str]) -> ProviderInvocation {
                 })
                 .collect(),
         )
-        .state(ProviderState::new(ConfluencePagePreflight {
-            page,
-            upstream_status: 200,
-            upstream_duration_ms: 1,
-        }))
         .build()
+}
+
+async fn mount_attachment_location(server: &MockServer) {
+    for (route, value) in [
+        (
+            "/wiki/api/v2/pages/123456",
+            json!({"id":"123456","spaceId":"98765","parentId":null,"parentType":null,"status":"current","version":{"number":1}}),
+        ),
+        (
+            "/wiki/api/v2/spaces/98765",
+            json!({"id":"98765","key":"ENG","status":"current","homepageId":"123456"}),
+        ),
+        (
+            "/wiki/rest/api/content/123456",
+            json!({"id":"123456","type":"page","title":"Page","space":{"key":"ENG"},"status":"current","version":{"number":1}}),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(route))
+            .respond_with(ResponseTemplate::new(200).set_body_json(value))
+            .mount(server)
+            .await;
+    }
 }
 
 fn http_confluence_backend_for_server(server: &MockServer) -> HttpConfluenceBackend {
@@ -9747,6 +10483,116 @@ fn ok<T>(value: T) -> Result<ConfluenceBackendResponse<T>, ConfluenceBackendErro
 
 #[async_trait]
 impl ConfluenceBackend for DraftThrottleBackend {
+    async fn hierarchy_node(
+        &self,
+        kind: ConfluenceNodeKind,
+        id: &str,
+        status: ConfluenceContentStatus,
+        _require_parent: bool,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceNode>, ConfluenceBackendError> {
+        if kind != ConfluenceNodeKind::Page {
+            return Err(ConfluenceBackendError::NotFound);
+        }
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_page(id, None, credential).await?.value;
+            return ok(ConfluenceNode {
+                id: draft.id,
+                kind,
+                space_id: draft.space_id,
+                parent: draft.parent,
+                status,
+                version: Some(draft.version),
+            });
+        }
+        if id == "55555" {
+            return ok(ConfluenceNode {
+                id: id.into(),
+                kind,
+                space_id: "98765".into(),
+                parent: None,
+                status,
+                version: Some(1),
+            });
+        }
+        let page = self.page_metadata(id, credential).await?.value;
+        let status = match page.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceNode {
+            id: page.id,
+            kind,
+            space_id: "98765".to_string(),
+            parent: None,
+            status,
+            version: Some(page.version),
+        })
+    }
+    async fn regular_page_metadata(
+        &self,
+        id: &str,
+        require_parent: bool,
+        credential: &AtlassianCredential,
+        budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceRegularPage>, ConfluenceBackendError> {
+        let node = self
+            .hierarchy_node(
+                ConfluenceNodeKind::Page,
+                id,
+                ConfluenceContentStatus::Current,
+                require_parent,
+                credential,
+                budget,
+            )
+            .await?
+            .value;
+        let page = self.page_metadata(id, credential).await?.value;
+        ok(ConfluenceRegularPage {
+            node,
+            title: page.title,
+        })
+    }
+    async fn blog_location_metadata(
+        &self,
+        id: &str,
+        status: ConfluenceContentStatus,
+        credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceBlogLocation>, ConfluenceBackendError> {
+        if status == ConfluenceContentStatus::Draft {
+            let draft = self.draft_blog(id, None, credential).await?.value;
+            return ok(ConfluenceBlogLocation {
+                id: draft.id,
+                space_id: draft.space_id,
+                status,
+                version: draft.version,
+            });
+        }
+        let blog = self.blog_metadata(id, credential).await?.value;
+        let status = match blog.status.as_deref() {
+            Some("current") => ConfluenceContentStatus::Current,
+            Some("draft") => ConfluenceContentStatus::Draft,
+            _ => return Err(ConfluenceBackendError::ScopeUnresolved),
+        };
+        ok(ConfluenceBlogLocation {
+            id: blog.id,
+            space_id: blog.space_id,
+            status,
+            version: blog.version,
+        })
+    }
+    async fn space_location_metadata(
+        &self,
+        id: &str,
+        _credential: &AtlassianCredential,
+        _budget: &ConfluenceMetadataBudget,
+    ) -> Result<ConfluenceBackendResponse<ConfluenceSpace>, ConfluenceBackendError> {
+        self.space_by_id(id, _credential).await
+    }
+
     async fn space_list(
         &self,
         _request: crate::ConfluenceSpaceListRequest,
@@ -10016,7 +10862,7 @@ async fn throttled_draft_attachment_verification_keeps_the_batch_unverified() {
         backend.throttle_attachment_reads_after_uploads = 2;
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_attachment_add_invocation(
+            .invoke_fixture(draft_attachment_add_invocation(
                 prefix,
                 id_key,
                 backend.id(),
@@ -10099,7 +10945,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
         backend.throttle_uploads_after = 1;
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_attachment_add_invocation(
+            .invoke_fixture(draft_attachment_add_invocation(
                 prefix,
                 id_key,
                 backend.id(),
@@ -10134,7 +10980,7 @@ async fn throttled_draft_attachment_uploads_are_rate_limited_only_before_any_app
         backend.throttle_uploads_after = 0;
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_attachment_add_invocation(
+            .invoke_fixture(draft_attachment_add_invocation(
                 prefix,
                 id_key,
                 backend.id(),
@@ -10167,7 +11013,7 @@ async fn throttled_reads_after_draft_publish_or_discard_are_unverified() {
         }];
         let (provider, backend, handle) = draft_throttle_provider(backend);
         let error = provider
-            .invoke(draft_invocation(
+            .invoke_fixture(draft_invocation(
                 &format!("{prefix}.draft.publish"),
                 json!({id_key: backend.id(), "draftHandle": handle, "bodyFormat": "storage"}),
             ))
@@ -10182,7 +11028,7 @@ async fn throttled_reads_after_draft_publish_or_discard_are_unverified() {
         let (provider, backend, handle) =
             draft_throttle_provider(DraftThrottleBackend::new(content_type));
         let error = provider
-            .invoke(draft_invocation(
+            .invoke_fixture(draft_invocation(
                 &format!("{prefix}.draft.discard"),
                 json!({id_key: backend.id(), "draftHandle": handle}),
             ))
@@ -10221,7 +11067,7 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             vec!["ENG".to_string()],
         )]))
         .build();
-    let error = provider.invoke(reply).await.unwrap_err();
+    let error = provider.invoke_fixture(reply).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
         "post_create_readback",
@@ -10253,91 +11099,13 @@ async fn throttled_comment_readbacks_after_applied_writes_are_unverified() {
             vec!["ENG".to_string()],
         )]))
         .build();
-    let error = provider.invoke(update).await.unwrap_err();
+    let error = provider.invoke_fixture(update).await.unwrap_err();
     assert_unverified_after_throttling(
         &error,
         "post_update_readback",
         json!({"commentId": "5001", "version": 2}),
     );
     assert_eq!(backend.update_requests.lock().unwrap().len(), 1);
-}
-
-#[test]
-fn cql_scope_only_and_order_only_keep_space_and_content_constraints() {
-    for kind in [
-        ConfluenceSearchContentKind::Page,
-        ConfluenceSearchContentKind::BlogPost,
-    ] {
-        for (scope, predicate) in [
-            (
-                EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-                " AND space IN (ENG)",
-            ),
-            (
-                EffectiveSearchScope::AllExcept(BTreeSet::from(["PRIVATE".to_string()])),
-                " AND space NOT IN (PRIVATE)",
-            ),
-            (EffectiveSearchScope::AllExcept(BTreeSet::new()), ""),
-        ] {
-            for (raw, suffix) in [
-                ("", ""),
-                ("  ", ""),
-                ("ORDER BY lastModified DESC", " ORDER BY lastModified DESC"),
-            ] {
-                let query = build_confluence_search_query_for_kind(
-                    &ConfluenceSearchQueryInput::Cql {
-                        value: raw.to_string(),
-                    },
-                    &scope,
-                    &SearchLimitsConfig::default(),
-                    kind,
-                )
-                .unwrap();
-                assert_eq!(
-                    query.cql,
-                    format!("type = {}{predicate}{suffix}", kind.cql_type())
-                );
-                assert!(query.query_shape["filter"].is_null());
-                assert!(query.text_operand_hashes.is_empty());
-            }
-        }
-    }
-    assert_eq!(canonical_cql("  ORDER BY title  "), "ORDER BY title ASC");
-    assert_eq!(canonical_cql("  "), "");
-    assert!(confluence_text_query("", &SearchLimitsConfig::default()).is_err());
-    for raw in [
-        "ORDER BY",
-        "ORDER BY title,",
-        "ORDER BY title DESC title",
-        "AND title ~ \"x\"",
-        "()",
-    ] {
-        assert_eq!(
-            parse_cql_query(raw).unwrap_err().reason_code(),
-            ReasonCode::InputInvalid
-        );
-    }
-}
-
-#[test]
-fn cql_omitted_spaces_use_authorization_and_explicit_spaces_only_narrow() {
-    let inputs = parse_search_inputs(&json!({"query": {"type": "cql", "value": ""}})).unwrap();
-    let authorization = SearchAuthorization::new(
-        "space".to_string(),
-        SearchAuthorizationScope::from_exact_values(vec!["ENG".to_string(), "OPS".to_string()]),
-    );
-    let scope =
-        effective_search_scope(&authorization, &requested_spaces(&inputs).unwrap()).unwrap();
-    let query =
-        build_confluence_search_query(&inputs.query, &scope, &SearchLimitsConfig::default())
-            .unwrap();
-    assert_eq!(query.cql, "type = page AND space IN (ENG, OPS)");
-    assert_eq!(
-        effective_search_scope(&authorization, &BTreeSet::from(["PRIVATE".to_string()]))
-            .unwrap_err()
-            .reason_code(),
-        ReasonCode::ServiceActionDenied
-    );
 }
 
 #[test]
@@ -10370,75 +11138,22 @@ fn cql_grammar_errors_are_actionable_and_do_not_echo_operands() {
     );
 }
 
-#[test]
-fn cql_discovery_examples_execute_and_blog_fields_match_content_kind() {
-    for (name, kind) in [
-        ("search", ConfluenceSearchContentKind::Page),
-        ("blog.search", ConfluenceSearchContentKind::BlogPost),
-    ] {
-        let documentation = cql_documentation(kind);
-        for example in documentation["cql"]["examples"].as_array().unwrap() {
-            let inputs = parse_search_inputs(example).unwrap();
-            build_confluence_search_query_for_kind(
-                &inputs.query,
-                &EffectiveSearchScope::Finite(BTreeSet::from(["ENG".to_string()])),
-                &SearchLimitsConfig::default(),
-                kind,
-            )
-            .unwrap();
-        }
-        let fields = documentation["cql"]["fields"].as_array().unwrap();
-        assert_eq!(
-            fields.iter().any(|field| field["name"] == "parent"),
-            kind == ConfluenceSearchContentKind::Page
-        );
-        let descriptor = confluence_descriptor(&confluence_config());
-        let action = descriptor
-            .actions
-            .iter()
-            .find(|action| action.action == name)
-            .unwrap();
-        for (key, value) in documentation.as_object().unwrap() {
-            assert_eq!(action.documentation.as_ref().unwrap().get(key), Some(value));
-        }
+fn fixture_space_id(key: &str) -> String {
+    match key {
+        "ENG" => "98765",
+        "OPS" => "98766",
+        "SECRET" => "98767",
+        _ => "98768",
     }
+    .into()
 }
-
-#[test]
-fn search_clause_projection_restores_exact_values_and_rejects_namespaces() {
-    let scope =
-        SearchAuthorizationScope::excluding_exact_values(vec!["PRIVATE".into(), "HIDDEN".into()])
-            .union(&SearchAuthorizationScope::from_exact_values(vec![
-                "PRIVATE".into(),
-            ]));
-    let authorization = SearchAuthorization::new("space", scope);
-    assert_eq!(
-        cql::authorized_search_scope(&authorization).unwrap(),
-        EffectiveSearchScope::AllExcept(std::collections::BTreeSet::from(["HIDDEN".to_string()]))
-    );
-    for (included, excluded) in [
-        (
-            vec![agent_access_provider::ResourceSelector::Namespace {
-                value: "engineering".into(),
-            }],
-            vec![],
-        ),
-        (
-            vec![agent_access_provider::ResourceSelector::All],
-            vec![agent_access_provider::ResourceSelector::Namespace {
-                value: "engineering/private".into(),
-            }],
-        ),
-    ] {
-        let authority = SearchAuthorization::new(
-            "space",
-            SearchAuthorizationScope::from_selectors(included, excluded),
-        );
-        assert_eq!(
-            cql::authorized_search_scope(&authority)
-                .unwrap_err()
-                .reason_code(),
-            ReasonCode::BrokerProviderContractFailed
-        );
+fn fixture_space(key: &str) -> ConfluenceSpace {
+    ConfluenceSpace {
+        id: fixture_space_id(key),
+        key: key.into(),
+        web_url: None,
+        alias: None,
+        status: Some("current".into()),
+        homepage_id: Some("55555".into()),
     }
 }

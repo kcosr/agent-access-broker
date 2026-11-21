@@ -482,14 +482,27 @@ fn resource_mutation_schemas_match_core_selector_kind_support() {
             .unwrap();
         let validator =
             jsonschema::validator_for(route.request_body_schema.as_ref().unwrap()).unwrap();
-        for (resource_type, value, supports_namespace) in [
-            ("git_repository", "engineering/payments", true),
-            ("cloudbees_ci_job", "team-ci/payments", true),
-            ("jira_project", "ENG", false),
-            ("confluence_space", "ENG", false),
-            ("oauth_collection", "alpha", false),
+        for (resource_type, value, supported) in [
+            (
+                "git_repository",
+                "engineering/payments",
+                &["exact", "namespace", "all"][..],
+            ),
+            (
+                "cloudbees_ci_job",
+                "team-ci/payments",
+                &["exact", "namespace", "all"][..],
+            ),
+            ("jira_project", "ENG", &["exact", "all"][..]),
+            ("confluence_space", "ENG", &["exact", "all"][..]),
+            ("oauth_collection", "alpha", &["exact", "all"][..]),
+            (
+                "confluence_content",
+                "https://example.atlassian.net/wiki/spaces/ENG/pages/123",
+                &["exact", "subtree"][..],
+            ),
         ] {
-            for kind in ["exact", "namespace", "all"] {
+            for kind in ["exact", "namespace", "all", "subtree"] {
                 let selector = if kind == "all" {
                     json!({"kind": kind})
                 } else {
@@ -509,7 +522,7 @@ fn resource_mutation_schemas_match_core_selector_kind_support() {
                         && definition
                             .validate_type(&crate::tests::test_resource_types())
                             .is_ok();
-                let expected = kind != "namespace" || supports_namespace;
+                let expected = supported.contains(&kind);
                 assert_eq!(core_accepts, expected, "core: {body}");
                 if method == "PATCH" {
                     body["expectedVersion"] = json!(1);
@@ -2456,6 +2469,8 @@ fn policy_management_routes_have_the_reviewed_access_boundary() {
         "admin.policy.resource_groups.list",
         "admin.policy.resource_groups.get",
         "admin.policy.effective_access",
+        "admin.policy.resource_locations.list",
+        "admin.policy.resource_locations.normalize",
         "admin.policy.status",
         "admin.policy.catalog",
         "admin.policy.grants.list",
@@ -2480,7 +2495,9 @@ fn policy_management_routes_have_the_reviewed_access_boundary() {
         let read = route.method == "GET"
             || matches!(
                 route.operation.as_str(),
-                "admin.policy.grants.validate" | "admin.policy.effective_access"
+                "admin.policy.grants.validate"
+                    | "admin.policy.effective_access"
+                    | "admin.policy.resource_locations.normalize"
             );
         let expected = match (
             policy_management_operations.contains(route.operation.as_str()),
@@ -3407,4 +3424,88 @@ fn every_supported_io_kind_is_published_with_its_response_shape() {
         assert_eq!(spec.response_kind, response_kind);
         assert_eq!(spec.exit_policy, exit_policy);
     }
+}
+
+#[test]
+fn resource_location_routes_project_management_schemas_and_required_preview_mode() {
+    let mut catalog = empty_catalog(json!({}));
+    catalog.routes = http_route_specs(&crate::tests::test_resource_types());
+    let document = openapi_from_catalog(&catalog, RenderAuthMode::Omit, &[], "aab_session");
+    let normalize = &document["paths"]["/v1/admin/policy/resource-locations/normalize"]["post"];
+    let schema = &normalize["requestBody"]["content"]["application/json"]["schema"];
+    let validator = jsonschema::validator_for(schema).unwrap();
+    assert!(validator.is_valid(&json!({"service":"confluence","url":"https://example.atlassian.net/wiki/spaces/ENG/pages/123","coverage":"subtree","spaceKey":"Engineering"})));
+    assert!(!validator.is_valid(&json!({"service":"confluence","url":"https://example.atlassian.net/wiki/spaces/ENG/pages/123","coverage":"all"})));
+    let send = send_schema_from_catalog(&catalog);
+    assert!(send["oneOf"].as_array().unwrap().iter().any(
+        |variant| variant["properties"]["method"]["const"] == "POST"
+            && variant["properties"]["route"]["const"]
+                == "/v1/admin/policy/resource-locations/normalize"
+    ));
+    let preview = &document["paths"]["/v1/admin/policy/effective-access"]["post"];
+    let schema = &preview["requestBody"]["content"]["application/json"]["schema"];
+    let validator = jsonschema::validator_for(schema).unwrap();
+    let mut body = json!({"service":"confluence","actions":["page.view"],"executionContexts":["default"],"resources":{"resourceIds":[],"resourceGroupIds":[]}});
+    assert!(
+        !validator.is_valid(&body),
+        "preview may not invent a credential mode"
+    );
+    body["credentialMode"] = json!("per_user");
+    assert!(validator.is_valid(&body));
+    body["credentialMode"] = json!("unknown");
+    assert!(!validator.is_valid(&body));
+    for (path, method) in [
+        ("/v1/admin/policy/effective-access", "post"),
+        ("/v1/tokens/effective-access", "post"),
+        (
+            "/v1/admin/principals/{principal}/agent-token-effective-access",
+            "post",
+        ),
+        ("/v1/tokens/options", "get"),
+        (
+            "/v1/admin/principals/{principal}/agent-token-options",
+            "get",
+        ),
+        ("/v1/services/{service}/resource-access", "get"),
+    ] {
+        let failure = &document["paths"][path][method]["responses"]["422"];
+        assert!(
+            failure["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("resource_access_too_complex")),
+            "{path}: {failure}"
+        );
+    }
+}
+
+#[test]
+fn resource_access_location_response_schema_preserves_conditions_without_private_boundaries() {
+    let registry = crate::tests::test_resource_types();
+    let ids = registry
+        .ids()
+        .map(|id| id.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let schema = resource_access_response_schema(&ids);
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let response = json!({
+        "service":"confluence","executionContext":"default",
+        "availability":{"state":"available","requirements":[],"message":"Locally available"},
+        "coverageSemantics":"single_target",
+        "access":[{"action":"page.view","scope":"location","resourceTypes":["confluence_space","confluence_content"],
+            "domain":"page","enforcement":"request","containmentVerification":"at_invocation",
+            "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/spaces/ENG/pages/123"},"restricted":true,"conditional":true}]}],
+        "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null}
+    });
+    assert!(validator.is_valid(&response));
+    for field in ["boundaries", "excluded", "excludedRequests", "resourceType"] {
+        let mut invalid = response.clone();
+        invalid["access"][0][field] = json!([]);
+        assert!(!validator.is_valid(&invalid), "{field}");
+    }
+    let mut invalid = response.clone();
+    invalid["access"][0]["coverage"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("conditional");
+    assert!(!validator.is_valid(&invalid));
 }

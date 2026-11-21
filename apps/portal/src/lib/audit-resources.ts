@@ -55,7 +55,7 @@ function strings(value: unknown): string[] {
 function selector(value: unknown): ResourceSelector | null {
   const item = object(value);
   if (item?.kind === "all") return { kind: "all" };
-  if ((item?.kind === "exact" || item?.kind === "namespace") && text(item.value)) return { kind: item.kind, value: item.value as string };
+  if ((item?.kind === "exact" || item?.kind === "namespace" || item?.kind === "subtree") && text(item.value)) return { kind: item.kind, value: item.value as string };
   return null;
 }
 

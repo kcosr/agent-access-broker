@@ -1,17 +1,18 @@
 use crate::{
-    ExactSearchProjection, ResourceSelector, SearchAuthorizationClause, SearchAuthorizationScope,
+    ExactSearchProjection, ScalarResourceSelector, SearchAuthorizationClause,
+    SearchAuthorizationScope,
 };
 use serde_json::json;
 use std::collections::BTreeSet;
 
-fn exact(value: &str) -> ResourceSelector {
-    ResourceSelector::Exact {
+fn exact(value: &str) -> ScalarResourceSelector {
+    ScalarResourceSelector::Exact {
         value: value.into(),
     }
 }
 
-fn namespace(value: &str) -> ResourceSelector {
-    ResourceSelector::Namespace {
+fn namespace(value: &str) -> ScalarResourceSelector {
+    ScalarResourceSelector::Namespace {
         value: value.into(),
     }
 }
@@ -49,7 +50,7 @@ fn namespaces_match_descendants_but_not_their_own_path_or_sibling_prefixes() {
 #[test]
 fn union_keeps_exclusions_local_and_restores_only_the_independent_grant() {
     let broad = SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::All],
+        vec![ScalarResourceSelector::All],
         vec![namespace("engineering/private")],
     );
     let restored =
@@ -115,7 +116,7 @@ fn intersection_distributes_across_clauses_and_combines_local_exclusions() {
 fn empty_clauses_and_fully_excluded_regions_admit_nothing() {
     let empty = SearchAuthorizationScope::empty();
     for clause in [
-        SearchAuthorizationClause::new(vec![], vec![ResourceSelector::All]),
+        SearchAuthorizationClause::new(vec![], vec![ScalarResourceSelector::All]),
         SearchAuthorizationClause::new(
             vec![exact("engineering/tool")],
             vec![namespace("engineering")],
@@ -124,7 +125,10 @@ fn empty_clauses_and_fully_excluded_regions_admit_nothing() {
             vec![namespace("engineering")],
             vec![namespace("engineering")],
         ),
-        SearchAuthorizationClause::new(vec![ResourceSelector::All], vec![ResourceSelector::All]),
+        SearchAuthorizationClause::new(
+            vec![ScalarResourceSelector::All],
+            vec![ScalarResourceSelector::All],
+        ),
     ] {
         assert!(clause.is_empty());
         assert!(!clause.matches("engineering/tool"));
@@ -227,11 +231,11 @@ fn coverage_proves_the_complete_union_without_mistaking_overlap_for_coverage() {
         "engineering/private/secret",
     ])));
     assert!(restored.covers(&namespace_region));
-    assert!(!restored.covers(&ResourceSelector::All));
+    assert!(!restored.covers(&ScalarResourceSelector::All));
     assert!(!restored.covers(&exact("engineering")));
 
     let outside_namespace = SearchAuthorizationScope::from_selectors(
-        vec![ResourceSelector::All],
+        vec![ScalarResourceSelector::All],
         vec![namespace_region],
     );
     assert!(outside_namespace.union(&restored).is_universe());
@@ -298,7 +302,7 @@ fn exact_projection_rejects_surviving_positive_and_negative_namespaces() {
     for scope in [
         SearchAuthorizationScope::from_selectors(vec![namespace("engineering")], vec![]),
         SearchAuthorizationScope::from_selectors(
-            vec![ResourceSelector::All],
+            vec![ScalarResourceSelector::All],
             vec![namespace("engineering/private")],
         ),
         SearchAuthorizationScope::from_exact_values(strings(&["labs/tool"])).union(
@@ -391,11 +395,11 @@ enum ModelSelector {
 }
 
 impl ModelSelector {
-    fn to_selector(self) -> ResourceSelector {
+    fn to_selector(self) -> ScalarResourceSelector {
         match self {
             Self::Exact(value) => exact(value),
             Self::Namespace(value) => namespace(value),
-            Self::All => ResourceSelector::All,
+            Self::All => ScalarResourceSelector::All,
         }
     }
 

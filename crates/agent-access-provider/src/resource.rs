@@ -268,6 +268,11 @@ pub struct ResourceTypeDescriptor {
     attributes: Cow<'static, [ResourceAttributeDescriptor]>,
     action_inputs: Option<ResourceActionInputs>,
     supports_exclusions: bool,
+    supports_all: bool,
+    exact_validator: Option<fn(&str) -> bool>,
+    subtree: Option<SubtreeSelectorDescriptor>,
+    selector_projection: Option<crate::ResourceSelectorProjector>,
+    location_normalizer: Option<crate::LocationNormalizer>,
 }
 
 /// Projects a selector onto the action inputs that address it.
@@ -489,6 +494,11 @@ impl ResourceTypeDescriptor {
             attributes: Cow::Borrowed(attributes),
             action_inputs: None,
             supports_exclusions: true,
+            supports_all: true,
+            exact_validator: None,
+            subtree: None,
+            selector_projection: None,
+            location_normalizer: None,
         }
     }
 
@@ -548,6 +558,11 @@ impl ResourceTypeDescriptor {
             attributes: Cow::Owned(attributes),
             action_inputs: None,
             supports_exclusions: true,
+            supports_all: true,
+            exact_validator: None,
+            subtree: None,
+            selector_projection: None,
+            location_normalizer: None,
         }
     }
 
@@ -562,6 +577,107 @@ impl ResourceTypeDescriptor {
     /// Whether resources of this type may be excluded from resource groups.
     pub const fn supports_exclusions(&self) -> bool {
         self.supports_exclusions
+    }
+
+    /// Explicitly controls the all selector independently of other kinds.
+    pub const fn with_supports_all(mut self, supported: bool) -> Self {
+        self.supports_all = supported;
+        self
+    }
+
+    pub const fn supports_all(&self) -> bool {
+        self.supports_all
+    }
+
+    /// Narrows exact selectors without changing the grammar of observed targets.
+    pub const fn with_exact_validator(mut self, validate: fn(&str) -> bool) -> Self {
+        self.exact_validator = Some(validate);
+        self
+    }
+
+    /// Declares ancestry-based subtree selectors; these never use lexical prefixes.
+    pub const fn with_subtree(mut self, subtree: SubtreeSelectorDescriptor) -> Self {
+        self.subtree = Some(subtree);
+        self
+    }
+
+    pub const fn subtree(&self) -> Option<&SubtreeSelectorDescriptor> {
+        self.subtree.as_ref()
+    }
+
+    /// Projects canonical selectors into pure authored coordinates.
+    pub const fn with_selector_projection(
+        mut self,
+        project: crate::ResourceSelectorProjector,
+    ) -> Self {
+        self.selector_projection = Some(project);
+        self
+    }
+
+    /// Registers a pure location editor normalizer. It has no network capability.
+    pub const fn with_location_normalizer(mut self, normalize: crate::LocationNormalizer) -> Self {
+        self.location_normalizer = Some(normalize);
+        self
+    }
+
+    pub const fn has_location_normalizer(&self) -> bool {
+        self.location_normalizer.is_some()
+    }
+
+    pub fn project_selector(
+        &self,
+        selector: &ResourceSelector,
+    ) -> Result<Option<crate::ResourceSelectorProjection>, crate::LocationNormalizationError> {
+        if !self.accepts(selector) {
+            return Err(crate::LocationNormalizationError::new(
+                "selector",
+                "selector is not canonical for its resource type",
+            ));
+        }
+        self.selector_projection
+            .map(|project| project(selector))
+            .transpose()
+    }
+
+    /// Projects an observed canonical target even when its kind is not exact-selectable.
+    pub fn project_target(
+        &self,
+        value: &str,
+    ) -> Result<Option<crate::ResourceSelectorProjection>, crate::LocationNormalizationError> {
+        if !self.is_canonical_target(value) {
+            return Err(crate::LocationNormalizationError::new(
+                "selector",
+                "target is not canonical for its resource type",
+            ));
+        }
+        let exact = ResourceSelector::Exact {
+            value: value.to_owned(),
+        };
+        if self.accepts(&exact) {
+            return self.project_selector(&exact);
+        }
+        let subtree = ResourceSelector::Subtree {
+            value: value.to_owned(),
+        };
+        if self.accepts(&subtree) {
+            return self.project_selector(&subtree);
+        }
+        Err(crate::LocationNormalizationError::new(
+            "selector",
+            "target kind has no authored coordinate projection",
+        ))
+    }
+
+    pub(crate) fn normalize_location(
+        &self,
+        request: &crate::LocationNormalizationRequest<'_>,
+    ) -> Result<crate::NormalizedResourceLocation, crate::LocationNormalizationError> {
+        self.location_normalizer.ok_or_else(|| {
+            crate::LocationNormalizationError::new(
+                "service",
+                "location normalization is unavailable",
+            )
+        })?(request)
     }
 
     /// Adds namespace selectors: a prefix that covers every canonical target
@@ -665,14 +781,29 @@ impl ResourceTypeDescriptor {
         if self.namespace.is_some() {
             kinds.push("namespace");
         }
-        kinds.push("all");
+        if self.subtree.is_some() {
+            kinds.push("subtree");
+        }
+        if self.supports_all {
+            kinds.push("all");
+        }
         kinds
     }
 
     pub fn accepts(&self, selector: &ResourceSelector) -> bool {
         match selector {
-            ResourceSelector::All => true,
-            ResourceSelector::Exact { value } => self.is_canonical_target(value),
+            ResourceSelector::All => self.supports_all,
+            ResourceSelector::Exact { value } => {
+                self.is_canonical_target(value)
+                    && self.exact_validator.is_none_or(|validate| validate(value))
+            }
+            ResourceSelector::Subtree { value } => {
+                self.is_canonical_target(value)
+                    && self
+                        .subtree
+                        .as_ref()
+                        .is_some_and(|subtree| subtree.is_valid(value))
+            }
             ResourceSelector::Namespace { value } => self
                 .namespace
                 .as_ref()
@@ -711,6 +842,14 @@ impl ResourceTypeDescriptor {
                     members_label: namespace.members_label.to_string(),
                     example: namespace.example.to_string(),
                 }),
+            subtree: self
+                .subtree
+                .as_ref()
+                .map(|subtree| SubtreeSelectorMetadata {
+                    label: subtree.label.to_string(),
+                    members_label: subtree.members_label.to_string(),
+                    example: subtree.example.to_string(),
+                }),
             removed: false,
             imported_service: None,
         }
@@ -733,6 +872,8 @@ pub struct ResourceTypeMetadata {
     pub attributes: Vec<ResourceAttributeMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<NamespaceSelectorMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtree: Option<SubtreeSelectorMetadata>,
     /// The type accepts no new resources: the imported service that
     /// declared it no longer does, and it stays registered only for its
     /// remaining resources. Omitted when false.
@@ -749,6 +890,51 @@ pub struct ResourceTypeMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NamespaceSelectorMetadata {
+    pub label: String,
+    pub members_label: String,
+    pub example: String,
+}
+
+/// An ancestry-based selector grammar and its user-visible coverage labels.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct SubtreeSelectorDescriptor {
+    valid: fn(&str) -> bool,
+    label: &'static str,
+    members_label: &'static str,
+    example: &'static str,
+}
+impl SubtreeSelectorDescriptor {
+    pub const fn new(
+        valid: fn(&str) -> bool,
+        label: &'static str,
+        members_label: &'static str,
+        example: &'static str,
+    ) -> Self {
+        Self {
+            valid,
+            label,
+            members_label,
+            example,
+        }
+    }
+    pub fn is_valid(&self, value: &str) -> bool {
+        (self.valid)(value)
+    }
+    pub const fn label(&self) -> &'static str {
+        self.label
+    }
+    pub const fn members_label(&self) -> &'static str {
+        self.members_label
+    }
+    pub const fn example(&self) -> &'static str {
+        self.example
+    }
+}
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubtreeSelectorMetadata {
     pub label: String,
     pub members_label: String,
     pub example: String,
@@ -806,6 +992,19 @@ impl ResourceTypeRegistry {
                     "resource type {} namespace example is not a valid namespace",
                     descriptor.id
                 ));
+            }
+            if let Some(subtree) = &descriptor.subtree {
+                if !descriptor.is_canonical_target(subtree.example)
+                    || !subtree.is_valid(subtree.example)
+                {
+                    errors.push(format!(
+                        "resource type {} subtree example is not canonical",
+                        descriptor.id
+                    ));
+                }
+                if descriptor.selector_projection.is_none() || !descriptor.attributes.is_empty() {
+                    errors.push(format!("resource type {} subtree selectors require typed projection and no private attributes", descriptor.id));
+                }
             }
             let mut attribute_names = std::collections::BTreeSet::new();
             for attribute in descriptor.attributes() {
@@ -909,6 +1108,7 @@ pub fn is_canonical_repository_path(value: &str) -> bool {
 pub enum ResourceSelector {
     Exact { value: String },
     Namespace { value: String },
+    Subtree { value: String },
     All,
 }
 
@@ -919,6 +1119,7 @@ impl<'de> Deserialize<'de> for ResourceSelector {
         enum Kind {
             Exact,
             Namespace,
+            Subtree,
             All,
         }
         #[derive(Deserialize)]
@@ -937,6 +1138,7 @@ impl<'de> Deserialize<'de> for ResourceSelector {
         match (input.kind, input.value) {
             (Kind::Exact, Some(value)) => Ok(Self::Exact { value }),
             (Kind::Namespace, Some(value)) => Ok(Self::Namespace { value }),
+            (Kind::Subtree, Some(value)) => Ok(Self::Subtree { value }),
             (Kind::All, None) => Ok(Self::All),
             (Kind::All, Some(_)) => Err(serde::de::Error::custom(
                 "all selector must not include value",
@@ -947,6 +1149,80 @@ impl<'de> Deserialize<'de> for ResourceSelector {
 }
 
 impl ResourceSelector {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Exact { .. } => "exact",
+            Self::Namespace { .. } => "namespace",
+            Self::Subtree { .. } => "subtree",
+            Self::All => "all",
+        }
+    }
+    pub fn value(&self) -> Option<&str> {
+        match self {
+            Self::Exact { value } | Self::Namespace { value } | Self::Subtree { value } => {
+                Some(value)
+            }
+            Self::All => None,
+        }
+    }
+}
+
+/// A selector whose complete semantics can be evaluated without hierarchy evidence.
+/// Conversion rejects subtree selectors in both positive and negative positions.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ScalarResourceSelector {
+    Exact { value: String },
+    Namespace { value: String },
+    All,
+}
+
+/// The selector requires trusted containment evidence and is not scalar.
+/// Intentionally a unit error: it exposes no selector value or other detail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("resource selector requires containment evidence")]
+pub struct NonScalarResourceSelector;
+
+impl TryFrom<ResourceSelector> for ScalarResourceSelector {
+    type Error = NonScalarResourceSelector;
+    fn try_from(selector: ResourceSelector) -> Result<Self, Self::Error> {
+        match selector {
+            ResourceSelector::Exact { value } => Ok(Self::Exact { value }),
+            ResourceSelector::Namespace { value } => Ok(Self::Namespace { value }),
+            ResourceSelector::All => Ok(Self::All),
+            ResourceSelector::Subtree { .. } => Err(NonScalarResourceSelector),
+        }
+    }
+}
+impl TryFrom<&ResourceSelector> for ScalarResourceSelector {
+    type Error = NonScalarResourceSelector;
+    fn try_from(selector: &ResourceSelector) -> Result<Self, Self::Error> {
+        selector.clone().try_into()
+    }
+}
+impl From<ScalarResourceSelector> for ResourceSelector {
+    fn from(selector: ScalarResourceSelector) -> Self {
+        match selector {
+            ScalarResourceSelector::Exact { value } => Self::Exact { value },
+            ScalarResourceSelector::Namespace { value } => Self::Namespace { value },
+            ScalarResourceSelector::All => Self::All,
+        }
+    }
+}
+impl From<&ScalarResourceSelector> for ResourceSelector {
+    fn from(selector: &ScalarResourceSelector) -> Self {
+        selector.clone().into()
+    }
+}
+impl<'de> Deserialize<'de> for ScalarResourceSelector {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        ResourceSelector::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
+}
+impl ScalarResourceSelector {
     pub fn matches(&self, target: &str) -> bool {
         match self {
             Self::Exact { value } => value == target,

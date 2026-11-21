@@ -463,8 +463,11 @@ attributes)` takes an identifier (`^[a-z][a-z0-9_]{0,63}$`), labels, an
 example, a canonical-target grammar and the type's private string attributes
 (`&[]` for none), and supports exact and all selectors.
 `with_namespace(NamespaceSelectorDescriptor::new(..))` adds namespace selectors
-and `with_action_inputs` adds an action-input projection. Exact selectors and every resolved target must
-satisfy the canonical grammar, which keeps namespace prefix matching sound.
+and `with_action_inputs` adds an action-input projection.
+`with_supports_all(false)` removes all selectors; `with_exact_validator` can
+supply a narrower exact grammar. `with_subtree(SubtreeSelectorDescriptor)`
+adds a distinct containment selector, never namespace prefix matching.
+Each supported kind validates its own canonical grammar.
 Policy validation, resource management, discovery and the portal read the
 published metadata.
 
@@ -529,6 +532,48 @@ such as CloudBees CI controller aliases, which discovery filters by each
 caller's coverage. Neither roots nor renderer support authorize anything. Each
 action has one resource scope, but that scope may name several resources that
 one grant must cover together, as GitLab cross-project operations do.
+
+### Typed containment contracts
+
+Native content providers can declare `ResourceScopeCapabilities::Containment`
+with a `ContainmentScopeCapabilities` contract: domain, allowed selector kinds
+per type, container types, target/ancestor kinds and effects. Effects distinguish
+content points, child placement and whole-subtree impact. Scalar scopes retain
+an explicit `Scalar` variant. Imported, command, gateway and private-attribute
+scopes cannot opt into native containment.
+
+`ResourceTypeDescriptor::with_selector_projection` supplies pure authored
+coordinates for validated selectors. Core consumes `TypedResourceSelector`
+without parsing provider URLs. `with_location_normalizer` and a service's
+`LocationEntryCapability` enable management-only URL entry. The normalizer takes
+the configured canonical site from the service's `UpstreamAuthority`, has no
+network or credential capability, and reports `verification: "not_checked"`.
+Strict stored-selector validation remains separate from editor normalization.
+
+The host requests `ContainerOnly` or `CompleteLineage` evidence through
+`ScopeRequest::containment_evidence_level()` and supplies relevant typed roots.
+Return `ScopeResolution::containment(ContainmentEvidence)` with trusted point,
+child-placement or current/proposed-subtree obligations. Evidence has no caller
+JSON deserializer. Validation checks canonical identity, domain, site, kinds,
+containers, complete ancestry, cycles and budgets. Ancestors remain evidence,
+not additional operation targets. Missing required evidence is a contract error.
+`ScopeResolution::scopes()` is checked and cannot flatten containment to scalars.
+
+`Provider::validate_scope_locator` is a synchronous local hook before credentials
+or upstream lookup. Use it only for fixed local input/handle failures that must
+remain recognizable. It can return private provisional state, never an admitted
+result or upstream scope. Ordinary upstream existence failures remain concealed
+until policy authorizes them.
+
+Core owns grant candidacy, precedence, token intersection and authority digests.
+`InvocationAuthority::Containment` carries validated operation evidence and
+`check_same_location` for the final fence. `ContainmentCollection` carries the
+winning-boundary union, independent token boundary, evidence level and digest;
+`matches_candidate` is checked and treats unknown evidence as an error. Providers
+must not rerank grants or select a lower credential during filtering. Confluence
+also compiles complete authority upstream to prevent caller filters from probing
+unrelated content. Keep private graph facts for kinds/edges omitted from public
+selectable ancestry and compare those at the final check.
 
 ### Scope resolution
 
@@ -719,7 +764,8 @@ sequenceDiagram
   scope unions clauses. Empty clauses admit nothing. Namespace selectors use the
   shared descendant matcher and retain exclusions local to each grant.
 
-`resource_scopes()` and `search_authorization()` return the expected variant,
+`resource_scopes()`, `search_authorization()`, `containment_authorization()` and
+`containment_collection_authorization()` return the expected variant,
 or an `AuthorityMismatch` that `?` turns into `broker_provider_contract_failed`.
 `UpstreamConstrained` providers constrain the upstream query before pagination
 and check every result. `ResultFiltered` providers may retrieve unauthorized
@@ -732,8 +778,10 @@ command enforcement from accepted resource declarations and input pointers.
 
 The SDK supplies normalized union/intersection, `covers` proofs over the complete
 union, and `exact_projection()` for consumers with exact/all resource types.
-Jira and Confluence use that strict projection to compose JQL/CQL; unexpected
-namespaces are contract errors. `ExactSearchProjection` is derived query data,
+Jira uses that strict projection to compose JQL; unexpected namespaces are
+contract errors. Confluence content collections use typed containment authority
+instead. `ScalarResourceSelector` owns scalar matching and algebra; checked
+conversion from a stored `ResourceSelector` rejects subtree without erasing it. `ExactSearchProjection` is derived query data,
 not an alternative accepted invocation authority. Core owns the command
 protocol's exact resources/any-except projection and preserves per-grant modes.
 

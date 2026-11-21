@@ -13,7 +13,7 @@ const stamp = { createdAt: "2026-10-14T00:00:00Z", updatedAt: "2026-10-14T00:00:
 const ttlPolicy = { defaultTtl: "1h", maxTtl: "8h", options: ["1h", "8h"] };
 const rawToken = "aab_test_one_time_token_page_secret";
 const owner = (principalId: string, status = "active") => ({ agentTokenIssuance: { mode: "write_capable", allowedExecutionContexts: ["default"] }, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] }, principalId, kind: "user", displayName: principalId, role: "user", selfServiceEnabled: true, status, groups: [], signInMethods: { localPassword: "active", microsoft: "absent" }, groupMemberships: [], policyReferenceSections: [], activePolicyGroupSubjects: [], ...stamp });
-const action = (action: string, readOnly: boolean, executionContexts = ["internal", "external"]) => ({ action, readOnly, description: `${action} description`, executionContexts, requiredScopeTypes: ["project"], resourceType: "jira_project" as const, effectiveAccessByExecutionContext: Object.fromEntries(executionContexts.map((context) => [context, [{ included: [{ kind: "all" as const }], excluded: [] }]])) });
+const action = (action: string, readOnly: boolean, executionContexts = ["internal", "external"]) => ({ scope: "resource" as const, action, readOnly, description: `${action} description`, executionContexts, requiredScopeTypes: ["project"], resourceType: "jira_project" as const, effectiveAccessByExecutionContext: Object.fromEntries(executionContexts.map((context) => [context, [{ included: [{ kind: "all" as const }], excluded: [] }]])) });
 function tokenOptions(): AgentTokenOptions {
   return {
     policyGeneration: 1, agentTokenIssuancePolicy: { source: "user", contexts: [{ executionContext: "internal", mode: "write_capable", groupIds: [] }, { executionContext: "external", mode: "write_capable", groupIds: [] }] },
@@ -575,12 +575,9 @@ test("a command service restricts its typed actions to resources of its imported
   const model = await fixture(page);
   const contexts = ["internal", "external"];
   // Broker-checked and command-checked typed actions name the import's Broker type; an untyped action names none.
-  const commandAction = (name: string, resourceType: string | null) => ({
-    ...action(name, true),
-    requiredScopeTypes: resourceType ? [resourceType] : [],
-    resourceType,
-    effectiveAccessByExecutionContext: Object.fromEntries(contexts.map((context) => [context, resourceType ? [{ included: [{ kind: "all" as const }], excluded: [] }] : []]))
-  });
+  const commandAction = (name: string, resourceType: string | null) => resourceType === null
+    ? { action: name, description: name, readOnly: true, requiredScopeTypes: [], executionContexts: contexts, scope: "unscoped" as const }
+    : { ...action(name, true), requiredScopeTypes: [resourceType], resourceType };
   const resource = (id: string, displayName: string, resourceType: string, value: string) => ({ id, displayName, resourceType, selector: { kind: "exact" as const, value }, allowedExecutionContexts: contexts, enabled: true });
   model.options = {
     ...model.options,
@@ -618,7 +615,7 @@ test("a command service with only untyped actions has no resource selection", as
     ...model.options,
     services: [
       ...model.options.services,
-      { service: "notes", displayName: "Notes", brokerHosts: [], executionContexts: contexts, actions: [{ ...action("note.list", true), requiredScopeTypes: [], resourceType: null, effectiveAccessByExecutionContext: { internal: [], external: [] } }] }
+      { service: "notes", displayName: "Notes", brokerHosts: [], executionContexts: contexts, actions: [{ action: "note.list", readOnly: true, description: "List notes", scope: "unscoped" as const, requiredScopeTypes: [], executionContexts: contexts }] }
     ]
   };
   await page.goto(`${baseUrl}/ui/tokens/new`);
@@ -1080,4 +1077,45 @@ test("a service-prefilled personal draft selects reads only in its eligible cont
   await expect(service(page, "Jira").getByLabel("issue.view", { exact: true })).toBeChecked();
   await issueButton(page).click();
   expect(model.issued[0].body).toMatchObject({ allowedExecutionContexts: ["external"], serviceRestrictions: { jira: { actions: ["comment.view", "issue.view"] } } });
+});
+
+test("unavailable location preview preserves explicit token resources and disables automatic narrowing", async ({ page }) => {
+  const model = await fixture(page);
+  const context = "internal";
+  const location = {
+    resourceTypes: ["confluence_space", "confluence_content"], domain: "page", enforcement: "request" as const, containmentVerification: "at_invocation" as const,
+    projectionStatus: "complete" as const,
+    boundaries: [{ included: [{ resourceType: "confluence_content", selector: { kind: "subtree" as const, value: "https://example.atlassian.net/wiki/spaces/ENG/folder/12" } }], excluded: [] }],
+    clauses: [{ required: [0], excludedRequests: [], credentialMode: "per_user" }]
+  };
+  model.options.resources.push({ id: "folder", displayName: "Runbooks", resourceType: "confluence_content", selector: { kind: "subtree", value: "https://example.atlassian.net/wiki/spaces/ENG/folder/12" }, allowedExecutionContexts: [context], enabled: true });
+  model.options.services.push({ service: "confluence", displayName: "Confluence", brokerHosts: [], executionContexts: [context], actions: [{
+    action: "page.view", description: "View page", readOnly: true, requiredScopeTypes: ["location"], executionContexts: [context], scope: "location", resourceTypes: location.resourceTypes, domain: "page", effectiveAccessByExecutionContext: { internal: location }
+  }] });
+  await page.goto(`${baseUrl}/ui/tokens/new`);
+  await editor(page).getByRole("textbox", { name: "Name", exact: true }).fill("folder-limited");
+  await restrict(page);
+  await editor(page).getByRole("checkbox", { name: "confluence", exact: true }).check();
+  const confluence = service(page, "Confluence");
+  await reads(confluence).getByLabel("page.view", { exact: true }).check();
+  const modes = confluence.getByRole("group", { name: "confluence resources", exact: true });
+  await modes.getByRole("button", { name: "Selected resources and groups", exact: true }).click();
+  const folder = confluence.getByRole("checkbox", { name: /^Runbooks ·/ });
+  await folder.check();
+  const entry = model.options.services.find((entry) => entry.service === "confluence")!;
+  entry.actions = [{ ...entry.actions[0], scope: "location", resourceTypes: location.resourceTypes, domain: "page", effectiveAccessByExecutionContext: { internal: {
+    resourceTypes: location.resourceTypes, domain: "page", enforcement: "request", containmentVerification: "at_invocation", projectionStatus: "too_complex", reasonCode: "resource_access_too_complex"
+  } } }];
+  const readsBefore = model.optionReads;
+  await refreshQueries(page);
+  await expect.poll(() => model.optionReads).toBeGreaterThan(readsBefore);
+  await expect(confluence).toContainText("Coverage preview unavailable");
+  await expect(folder).toBeChecked();
+  await expect(folder).toBeDisabled();
+  await expect(modes.getByRole("button", { name: "Selected resources and groups", exact: true })).toBeDisabled();
+  await expect(modes.getByRole("button", { name: "Follow available grants", exact: true })).toBeEnabled();
+  await editor(page).getByRole("button", { name: "Issue token", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Token created", exact: true })).toBeVisible();
+  expect(model.issued[0].body.serviceRestrictions?.confluence).toEqual({ actions: ["page.view"], resources: { resourceIds: ["folder"], resourceGroupIds: [] } });
+  expect(model.errors).toEqual([]);
 });

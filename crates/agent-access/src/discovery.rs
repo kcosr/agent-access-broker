@@ -644,6 +644,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resource_access_preserves_conditional_location_coverage_without_scalar_aliases() {
+        let server = MockServer::start().await;
+        let page = json!({
+            "service":"confluence", "executionContext":"default",
+            "availability":{"state":"available","requirements":[],"message":"Locally available"},
+            "coverageSemantics":"single_target",
+            "access":[{"action":"page.view","scope":"location","resourceTypes":["confluence_space","confluence_content"],
+                "domain":"page","enforcement":"request","containmentVerification":"at_invocation",
+                "coverage":[{"resourceType":"confluence_content","selector":{"kind":"subtree","value":"https://example.atlassian.net/wiki/spaces/ENG/folder/12"},"restricted":true,"conditional":true}]}],
+            "registeredResources":{"source":"broker_configuration","items":[],"nextCursor":null},"liveListings":[]
+        });
+        Mock::given(method("GET"))
+            .and(path("/v1/services/confluence/resource-access"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&page))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let actual = resource_access_describe(
+            &settings(&server),
+            "confluence",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, page);
+        assert!(actual["access"][0].get("resourceType").is_none());
+        assert!(actual["access"][0].get("boundaries").is_none());
+        assert!(actual["access"][0].get("clauses").is_none());
+        server.verify().await;
+    }
+
+    #[tokio::test]
     async fn resource_access_rejects_live_listing_links_to_another_service() {
         let server = MockServer::start().await;
         mount(

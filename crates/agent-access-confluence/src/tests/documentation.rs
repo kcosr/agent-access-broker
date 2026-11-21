@@ -141,9 +141,9 @@ fn parse_example(
             } else {
                 ConfluenceSearchContentKind::BlogPost
             };
-            build_confluence_search_query_for_kind(
+            build_fixture_search_query(
                 &parsed.query,
-                &EffectiveSearchScope::Finite(spaces),
+                &FixtureSpaces::Finite(spaces),
                 &config.search,
                 kind,
             )
@@ -224,7 +224,7 @@ fn substitute_draft_handle(action: &str, inputs: &mut Value, config: &Confluence
         )
         .unwrap();
     assert_eq!(opened, handle);
-    ensure_authorized_draft_handle(&opened, request.resource_scopes().unwrap()).unwrap();
+    ensure_authorized_draft_handle(&opened, "ENG").unwrap();
     inputs["draftHandle"] = json!(token);
 }
 

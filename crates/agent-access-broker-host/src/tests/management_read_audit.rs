@@ -353,7 +353,7 @@ async fn admin_reads_and_policy_dry_runs_write_no_audit_records() {
     let fixture = audit_fixture(Backend::Sqlite).await;
     let before = fixture.records().len();
     let invalid_proposal = GRANT_PROPOSAL.replace(r#""echo""#, r#""no-such-action""#);
-    let effective_access = r#"{"service":"fake","actions":["echo"],"executionContexts":["default"],
+    let effective_access = r#"{"service":"fake","credentialMode":"service","actions":["echo"],"executionContexts":["default"],
         "resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}"#;
     let token_boundary = r#"{"readOnly": false, "allowedExecutionContexts":["default"]}"#;
     for (token, method, uri, body) in [
@@ -488,7 +488,7 @@ async fn denied_and_failed_reads_stay_audited() {
             Method::POST,
             "/v1/admin/policy/effective-access",
             Some(
-                r#"{"service":"gitlab","actions":["project.view"],"executionContexts":["default"],
+                r#"{"service":"gitlab","credentialMode":"service","actions":["project.view"],"executionContexts":["default"],
                     "resources":{"resourceIds":[],"resourceGroupIds":[]}}"#,
             ),
             403,
@@ -539,7 +539,7 @@ pub(super) fn read_post_body(catalog_operation: &str) -> Option<&'static str> {
             Some(r#"{"readOnly": false, "allowedExecutionContexts":["default"]}"#)
         }
         "admin.policy.effective_access" => Some(
-            r#"{"service":"fake","actions":["echo"],"executionContexts":["default"],
+            r#"{"service":"fake","credentialMode":"service","actions":["echo"],"executionContexts":["default"],
                 "resources":{"resourceIds":["project-test"],"resourceGroupIds":[]}}"#,
         ),
         "admin.policy.grants.validate" => Some(GRANT_PROPOSAL),

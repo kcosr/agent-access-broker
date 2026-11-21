@@ -308,7 +308,7 @@ async fn oauth_reads_go_through_the_gateway_pinned_to_the_site() {
     let resolution = resolve(&provider, "issue.view", inputs.clone(), &credential)
         .await
         .unwrap();
-    assert_eq!(resolution.scopes(), &eng_scopes());
+    assert_eq!(resolution.scopes().unwrap(), &eng_scopes());
     let result = provider
         .invoke(delegated_invocation(
             "issue.view",
@@ -433,7 +433,7 @@ async fn scoped_api_tokens_take_the_gateway_as_basic_in_every_phase() {
     let fixture = ScopeRequestFixture::new("jira", "issue.view", inputs.clone())
         .lookup_credential(scoped.clone());
     let resolution = provider.resolve_scopes(fixture.request()).await.unwrap();
-    assert_eq!(resolution.scopes(), &eng_scopes());
+    assert_eq!(resolution.scopes().unwrap(), &eng_scopes());
     provider
         .invoke(
             InvocationBuilder::new("jira", "issue.view")
@@ -1208,7 +1208,11 @@ async fn oauth_resolves_a_renamed_project_key_through_the_gateway() {
         let resolution = resolve(&provider, "issue.view", locator.clone(), &credential)
             .await
             .unwrap();
-        assert_eq!(resolution.scopes(), &project_scopes("NEW"), "{locator}");
+        assert_eq!(
+            resolution.scopes().unwrap(),
+            &project_scopes("NEW"),
+            "{locator}"
+        );
         let result = provider
             .invoke(
                 delegated_invocation_builder("NEW", "issue.view", locator.clone(), &credential)
@@ -1301,7 +1305,7 @@ async fn oauth_rechecks_a_moved_issue_through_the_gateway_before_acting() {
         let resolution = resolve(&provider, action, inputs.clone(), &credential)
             .await
             .unwrap();
-        assert_eq!(resolution.scopes(), &eng_scopes(), "{action}");
+        assert_eq!(resolution.scopes().unwrap(), &eng_scopes(), "{action}");
         let error = provider
             .invoke(delegated_invocation(action, inputs, &credential))
             .await
@@ -1465,7 +1469,7 @@ async fn project_listing_counts_oauth_replay_and_shares_one_recovery_across_page
             .search(SearchAuthorization::new(
                 "project",
                 SearchAuthorizationScope::from_selectors(
-                    vec![ResourceSelector::Exact {
+                    vec![ScalarResourceSelector::Exact {
                         value: "ENG".into(),
                     }],
                     vec![],
@@ -1523,10 +1527,10 @@ fn listing_request(credential: &DelegatedCredential, input: Value) -> ProviderIn
             "project",
             SearchAuthorizationScope::from_selectors(
                 vec![
-                    ResourceSelector::Exact {
+                    ScalarResourceSelector::Exact {
                         value: "ENG".into(),
                     },
-                    ResourceSelector::Exact {
+                    ScalarResourceSelector::Exact {
                         value: "OPS".into(),
                     },
                 ],

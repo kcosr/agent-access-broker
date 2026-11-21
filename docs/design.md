@@ -857,8 +857,9 @@ existence, ownership of a particular object, or an authorization outcome.
   comment actions are split into `page.footer_comment.*`,
   `page.inline_comment.*`, `blog.footer_comment.*`, and
   `blog.inline_comment.*`, including list, view, add where supported, update,
-  delete, and reply flows. Policy scope is the containing `space`. Current content
-  actions remain current-only. Draft actions authorize their containing space,
+  delete, and reply flows. Typed location scopes compose space, exact page/blog,
+  and page/folder subtree resources. Current content actions remain current-only.
+  Draft actions reauthorize their current location,
   using signed broker draft handles after create/stage. Page search
   remains page-only and blog search is a separate action that injects
   `type = blogpost`. Page and page-draft creation optionally place content below
@@ -867,8 +868,9 @@ existence, ownership of a particular object, or an authorization outcome.
   support `before`, `after`, and `append` placement, and verify the parent and
   direct-child order by readback. Create actions resolve
   the target space directly from inputs. Update actions are optimistic-concurrency.
-  Search, blog search, attachment and comment list actions are cursor-paginated
-  with broker-signed continuation tokens that relay Confluence's cursor. Space
+  Search and blog search use confidential cursors bound to complete current
+  authority; owner-bound attachment and comment lists reauthorize each page.
+  See [content access](confluence-content-access.md). Space
   listing uses bounded single-attempt requests and shared request/body budgets;
   its confidential continuation preserves original expiry and binds current
   authority, inputs, and route configuration on every resume. See
@@ -1717,12 +1719,15 @@ candidate evaluation. A candidate is a grant subject that matches the identity
 stitched: a single authored grant and concrete subject candidate must authorize
 the service, the action, and the entire resolved scope set on its own.
 
-**Resource matching.** Resources have typed exact, namespace, or all selectors.
+**Resource matching.** Resources declare supported exact, namespace, all or
+subtree selectors; each type validates its own canonical grammar.
 GitLab REST and Git HTTP use the same canonical repository names and resource
-entries. Jira uses projects, Confluence uses spaces, and CloudBees CI uses
+entries. Jira uses projects, Confluence uses spaces and typed content locations,
+and CloudBees CI uses
 controller-alias/full-job-name resources. CloudBees job selectors use exact,
-strict descendant namespace, or all. No issue/page policy
-scopes are supported. An all or namespace entry covers matching upstream objects
+strict descendant namespace, or all. Confluence containment scopes compose
+space and content selectors using current evidence; subtree is not a namespace
+string match. Jira issue scopes are not supported. An all or namespace entry covers matching upstream objects
 without catalog registration.
 
 A grant unions its direct selections and selected groups' inclusions, retains
@@ -1773,8 +1778,9 @@ entries, and context-ineligible entries never create unrestricted access.
 
 Jira and Confluence search planning compiles each eligible grant's inclusion
 minus exclusion boundary before combining grants under the existing precedence
-and credential rules. Project and space scopes can be finite values or all
-except finite exclusions. Token restrictions intersect the result. This is not
+and credential rules. Scalar project/space scopes can be finite values or all
+except finite exclusions. Confluence content search additionally retains exact
+page/blog and subtree predicates across the winning boundary union. Token restrictions intersect the result. This is not
 a global subtraction across grants: another eligible grant can restore access
 excluded by the first grant.
 
@@ -1809,9 +1815,10 @@ explicit authorized `projects` or an additional filter such as `updated >= -7d`.
 Nested `AND`/`OR` groups containing only those clauses follow the same rule.
 This guard does not implement Jira's complete query-bound analysis; other
 nonempty filters retain Jira's endpoint-specific validation. Confluence emits
-the fixed positive page/blog content-type predicate first, then any policy
-space predicate, then the grouped caller filter, including with unrestricted
-all-space access.
+the fixed positive page/blog content-type predicate first, then complete typed
+authority constraints, then the grouped caller filter. Result checks use current
+location evidence and discard valid denied candidates before release. Missing
+required evidence fails closed.
 Empty text-mode queries remain invalid. Malformed syntax, unsupported grammar,
 and query complexity limits use
 `input_invalid` with safe syntax guidance; authorization and returned-resource

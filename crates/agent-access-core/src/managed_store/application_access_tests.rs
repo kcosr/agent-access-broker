@@ -1269,12 +1269,13 @@ fn migration_037_adds_application_access_and_preserves_existing_tokens() {
         )
         .unwrap();
     drop(old);
-    let store = store_at(&path, None);
+    // Exercise this migration's own structural contract even after later
+    // migrations change shared tables such as the resource selector catalog.
+    let store = store_at(&path, Some(MANAGED_STORE_APPLICATION_ACCESS_VERSION));
     assert_eq!(
         store.schema_version,
         MANAGED_STORE_APPLICATION_ACCESS_VERSION
     );
-    assert_eq!(MANAGED_STORE_SCHEMA_VERSION, "037_application_access");
     let kept = store.broker_token(&issued.record.token_id).unwrap();
     assert_eq!(kept, issued.record);
     assert!(resolves(&store, &issued.token).is_ok());

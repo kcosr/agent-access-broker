@@ -21,8 +21,35 @@ pub struct EffectiveAccessEntry {
     pub service: String,
     pub action: String,
     pub execution_context: ExecutionContext,
-    pub resource_type: Option<ResourceType>,
-    pub clauses: Vec<EffectiveAccessClause>,
+    #[serde(flatten)]
+    pub scope: EffectiveAccessScope,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum EffectiveAccessScope {
+    Unscoped,
+    Resource {
+        #[serde(rename = "resourceType")]
+        resource_type: ResourceType,
+        clauses: Vec<EffectiveAccessClause>,
+    },
+    Location(LocationAccess),
+}
+
+impl EffectiveAccessEntry {
+    pub fn resource_type(&self) -> Option<&ResourceType> {
+        match &self.scope {
+            EffectiveAccessScope::Resource { resource_type, .. } => Some(resource_type),
+            _ => None,
+        }
+    }
+    pub fn clauses(&self) -> Option<&[EffectiveAccessClause]> {
+        match &self.scope {
+            EffectiveAccessScope::Resource { clauses, .. } => Some(clauses),
+            _ => None,
+        }
+    }
 }
 
 /// A complete request must fit one clause. `excluded_requests` are precedence
@@ -30,8 +57,8 @@ pub struct EffectiveAccessEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EffectiveAccessClause {
-    pub included: Vec<ResourceSelector>,
-    pub excluded: Vec<ResourceSelector>,
+    pub included: Vec<ScalarResourceSelector>,
+    pub excluded: Vec<ScalarResourceSelector>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded_requests: Vec<ResourceBoundary>,
 }
@@ -107,7 +134,10 @@ impl EffectiveAccessClause {
 }
 
 /// Whether the union of `parts` contains every target `selector` matches.
-pub(super) fn boundaries_cover(parts: &[ResourceBoundary], selector: &ResourceSelector) -> bool {
+pub(super) fn boundaries_cover(
+    parts: &[ResourceBoundary],
+    selector: &ScalarResourceSelector,
+) -> bool {
     let whole = ResourceBoundary {
         included: vec![selector.clone()],
         excluded: Vec::new(),
@@ -153,6 +183,20 @@ impl BrokerRuntime {
         {
             return false;
         }
+        if self
+            .action_containment_scope(service, &action.action)
+            .is_some()
+        {
+            return self.containment_universal_reach(
+                snapshot,
+                identity,
+                context,
+                service,
+                &action.action,
+                token,
+                selected_mode,
+            );
+        }
         let reachable = self
             .effective_resource_clauses_for_modes(
                 snapshot,
@@ -166,7 +210,7 @@ impl BrokerRuntime {
             .iter()
             .flat_map(EffectiveAccessClause::single_target_reach)
             .collect::<Vec<_>>();
-        boundaries_cover(&reachable, &ResourceSelector::All)
+        boundaries_cover(&reachable, &ScalarResourceSelector::All)
     }
 
     /// Prove direct companion reads on the source's exact resolved resources.
@@ -266,7 +310,7 @@ impl BrokerRuntime {
                 service
                     .resource_scopes
                     .values()
-                    .map(|scope| scope.resource_type.clone())
+                    .flat_map(|scope| scope.resource_types().into_iter().cloned())
             })
             .collect::<BTreeSet<_>>();
         let resources = snapshot
@@ -330,6 +374,7 @@ impl BrokerRuntime {
         actions: &[String],
         execution_contexts: &[ExecutionContext],
         resources: &ResourceSelection,
+        credential_mode: &str,
     ) -> Result<EffectiveAccessPreview, ManagedStoreError> {
         let snapshot = self.policy_snapshot();
         resources
@@ -345,6 +390,36 @@ impl BrokerRuntime {
                     "preview service/action is not supported".into(),
                 ));
             }
+            if !matches!(credential_mode, "service" | "per_user")
+                || !self.action_supports_mode(service, action, credential_mode)
+            {
+                return Err(ManagedStoreError::PolicyValidationFailed(
+                    "preview credential mode is not supported by the action".into(),
+                ));
+            }
+            if let Some(scope) = self.action_containment_scope(service, action) {
+                let collection = self
+                    .action_descriptor(service, action)
+                    .is_some_and(|action| action.native_search.is_some());
+                for context in execution_contexts {
+                    access.push(EffectiveAccessEntry {
+                        service: service.into(),
+                        action: action.clone(),
+                        execution_context: context.clone(),
+                        scope: EffectiveAccessScope::Location(
+                            self.containment_selection_projection(
+                                &snapshot,
+                                context,
+                                &scope,
+                                resources,
+                                credential_mode,
+                                collection,
+                            ),
+                        ),
+                    });
+                }
+                continue;
+            }
             let Some(resource_type) = self.action_resource_type(service, action) else {
                 if !resources.is_empty() {
                     return Err(ManagedStoreError::PolicyValidationFailed(
@@ -358,25 +433,27 @@ impl BrokerRuntime {
                             service: service.into(),
                             action: action.clone(),
                             execution_context: context.clone(),
-                            resource_type: None,
-                            clauses: Vec::new(),
+                            scope: EffectiveAccessScope::Unscoped,
                         }),
                 );
                 continue;
             };
             for context in execution_contexts {
-                let boundary = normalize_boundary(snapshot.resources.resolve(
-                    resources,
-                    &resource_type,
-                    context.as_str(),
-                ));
+                let boundary = normalize_boundary(
+                    snapshot
+                        .resources
+                        .resolve(resources, &resource_type, context.as_str())
+                        .map_err(ManagedStoreError::PolicyValidationFailed)?,
+                );
                 if !boundary.is_empty() {
                     access.push(EffectiveAccessEntry {
                         service: service.to_string(),
                         action: action.clone(),
                         execution_context: context.clone(),
-                        resource_type: Some(resource_type.clone()),
-                        clauses: vec![EffectiveAccessClause::from_boundary(boundary)],
+                        scope: EffectiveAccessScope::Resource {
+                            resource_type: resource_type.clone(),
+                            clauses: vec![EffectiveAccessClause::from_boundary(boundary)],
+                        },
                     });
                 }
             }
@@ -416,6 +493,42 @@ impl BrokerRuntime {
         let mut access = Vec::new();
         for service in self.services.values() {
             for action in &service.actions {
+                if self
+                    .action_containment_scope(&service.service, &action.action)
+                    .is_some()
+                {
+                    for context in &configured_contexts {
+                        if !self.agent_invoke_permits_action(
+                            &token,
+                            context,
+                            &service.service,
+                            &action.action,
+                        ) {
+                            continue;
+                        }
+                        let location = self
+                            .containment_access_projection(
+                                &snapshot,
+                                identity,
+                                context,
+                                &service.service,
+                                &action.action,
+                                Some(&token),
+                            )
+                            .expect("containment action");
+                        if matches!(&location.projection, LocationProjection::Complete { clauses, .. } if clauses.is_empty())
+                        {
+                            continue;
+                        }
+                        access.push(EffectiveAccessEntry {
+                            service: service.service.clone(),
+                            action: action.action.clone(),
+                            execution_context: context.clone(),
+                            scope: EffectiveAccessScope::Location(location),
+                        });
+                    }
+                    continue;
+                }
                 let Some(resource_type) =
                     self.action_resource_type(&service.service, &action.action)
                 else {
@@ -437,8 +550,7 @@ impl BrokerRuntime {
                                 service: service.service.clone(),
                                 action: action.action.clone(),
                                 execution_context: context.clone(),
-                                resource_type: None,
-                                clauses: Vec::new(),
+                                scope: EffectiveAccessScope::Unscoped,
                             });
                         }
                     }
@@ -458,8 +570,10 @@ impl BrokerRuntime {
                             service: service.service.clone(),
                             action: action.action.clone(),
                             execution_context: context.clone(),
-                            resource_type: Some(resource_type.clone()),
-                            clauses,
+                            scope: EffectiveAccessScope::Resource {
+                                resource_type: resource_type.clone(),
+                                clauses,
+                            },
                         });
                     }
                 }
@@ -542,6 +656,9 @@ impl BrokerRuntime {
         token: Option<&ParsedAgentInvokeTokenCaveats<'_>>,
         mode_available: impl Fn(&str) -> bool,
     ) -> Vec<EffectiveAccessClause> {
+        if self.action_containment_scope(service, action).is_some() {
+            return Vec::new();
+        }
         if token.is_some_and(|parsed| {
             !self.agent_invoke_permits_action(parsed, context, service, action)
         }) {
@@ -649,7 +766,7 @@ impl BrokerRuntime {
                         .resources
                         .get(&id)
                         .is_some_and(|resource| {
-                            action.resource_type.as_ref() == Some(&resource.resource_type)
+                            action.resource_types().contains(&&resource.resource_type)
                         })
                     {
                         authored_resources.insert(id);
@@ -668,25 +785,59 @@ impl BrokerRuntime {
                 if !resource.enabled {
                     return false;
                 }
-                let entry = ResourceBoundary {
-                    included: vec![resource.selector.clone()],
-                    excluded: Vec::new(),
-                };
-                services
-                    .iter()
-                    .flat_map(|service| &service.actions)
-                    .filter(|action| action.resource_type.as_ref() == Some(&resource.resource_type))
-                    .any(|action| {
-                        action.effective_access_by_execution_context.iter().any(
-                            |(context, clauses)| {
-                                resource
-                                    .allowed_execution_contexts
-                                    .iter()
-                                    .any(|allowed| allowed == context.as_str())
-                                    && clauses.iter().any(|clause| clause.intersects(&entry))
-                            },
-                        )
-                    })
+                services.iter().any(|service| {
+                    service
+                        .actions
+                        .iter()
+                        .filter(|action| action.resource_types().contains(&&resource.resource_type))
+                        .any(|action| match &action.scope {
+                            AgentTokenActionScope::Unscoped => false,
+                            AgentTokenActionScope::Resource {
+                                effective_access_by_execution_context,
+                                ..
+                            } => {
+                                let Ok(selector) =
+                                    ScalarResourceSelector::try_from(&resource.selector)
+                                else {
+                                    return false;
+                                };
+                                let entry = ResourceBoundary {
+                                    included: vec![selector],
+                                    excluded: Vec::new(),
+                                };
+                                effective_access_by_execution_context.iter().any(
+                                    |(context, clauses)| {
+                                        resource
+                                            .allowed_execution_contexts
+                                            .iter()
+                                            .any(|allowed| allowed == context.as_str())
+                                            && clauses
+                                                .iter()
+                                                .any(|clause| clause.intersects(&entry))
+                                    },
+                                )
+                            }
+                            AgentTokenActionScope::Location { .. } => {
+                                action.execution_contexts.iter().any(|context| {
+                                    resource
+                                        .allowed_execution_contexts
+                                        .iter()
+                                        .any(|allowed| allowed == context.as_str())
+                                        && self.containment_reference_visible(
+                                            snapshot,
+                                            identity,
+                                            context,
+                                            &service.service,
+                                            &action.action,
+                                            None,
+                                            &resource.resource_type,
+                                            &resource.selector,
+                                            |_| true,
+                                        )
+                                })
+                            }
+                        })
+                })
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -704,19 +855,18 @@ impl BrokerRuntime {
                         .iter()
                         .flat_map(|service| &service.actions)
                         .any(|action| {
-                            action.effective_access_by_execution_context.iter().any(
-                                |(context, clauses)| {
-                                    let Some(resource_type) = action.resource_type.as_ref() else {
+                            action.scalar_access().is_some_and(|access| {
+                                access.iter().any(|(context, clauses)| {
+                                    let Some(resource_type) = action.resource_type() else {
                                         return false;
                                     };
-                                    let boundary = snapshot.resources.resolve(
-                                        &selection,
-                                        resource_type,
-                                        context.as_str(),
-                                    );
+                                    let boundary = snapshot
+                                        .resources
+                                        .resolve(&selection, resource_type, context.as_str())
+                                        .expect("published scalar selectors remain valid");
                                     clauses.iter().any(|clause| clause.intersects(&boundary))
-                                },
-                            )
+                                })
+                            })
                         });
                 visible.then(|| ResourceGroupOption {
                     id: group.id.clone(),
@@ -830,19 +980,19 @@ fn candidate_clauses_for_modes(
 mod tests {
     use super::*;
 
-    fn exact(value: &str) -> ResourceSelector {
-        ResourceSelector::Exact {
+    fn exact(value: &str) -> ScalarResourceSelector {
+        ScalarResourceSelector::Exact {
             value: value.into(),
         }
     }
-    fn namespace(value: &str) -> ResourceSelector {
-        ResourceSelector::Namespace {
+    fn namespace(value: &str) -> ScalarResourceSelector {
+        ScalarResourceSelector::Namespace {
             value: value.into(),
         }
     }
     fn boundary(
-        included: Vec<ResourceSelector>,
-        excluded: Vec<ResourceSelector>,
+        included: Vec<ScalarResourceSelector>,
+        excluded: Vec<ScalarResourceSelector>,
     ) -> ResourceBoundary {
         ResourceBoundary { included, excluded }
     }
@@ -870,6 +1020,7 @@ mod tests {
                 resource_type: Arc::new(agent_access_provider::GIT_REPOSITORY_RESOURCE.clone()),
             }),
             boundary,
+            containment: None,
         }
     }
 
@@ -912,7 +1063,7 @@ mod tests {
                 "service",
                 1,
                 0,
-                boundary(vec![ResourceSelector::All], vec![]),
+                boundary(vec![ScalarResourceSelector::All], vec![]),
             ),
             candidate(
                 "per_user",
@@ -1004,7 +1155,7 @@ mod tests {
                     "service",
                     1,
                     0,
-                    boundary(vec![ResourceSelector::All], vec![]),
+                    boundary(vec![ScalarResourceSelector::All], vec![]),
                 ),
                 candidate("service", 1, 1, boundary(vec![exact(first)], vec![])),
                 candidate("per_user", 1, 1, boundary(vec![exact(first)], vec![])),
@@ -1071,7 +1222,10 @@ mod tests {
             "service",
             1,
             0,
-            boundary(vec![ResourceSelector::All], vec![namespace("private")]),
+            boundary(
+                vec![ScalarResourceSelector::All],
+                vec![namespace("private")],
+            ),
         );
         for path in [
             "",
@@ -1096,7 +1250,7 @@ mod tests {
     #[test]
     fn single_target_reach_withholds_targets_inside_any_precedence_condition() {
         let clause = EffectiveAccessClause {
-            included: vec![ResourceSelector::All],
+            included: vec![ScalarResourceSelector::All],
             excluded: vec![],
             excluded_requests: vec![
                 boundary(vec![namespace("team")], vec![namespace("team/open")]),
@@ -1115,20 +1269,23 @@ mod tests {
         }
         assert!(!reach.iter().any(|part| part.intersects(&team)));
         assert!(boundaries_cover(&reach, &namespace("other")));
-        assert!(!boundaries_cover(&reach, &ResourceSelector::All));
+        assert!(!boundaries_cover(&reach, &ScalarResourceSelector::All));
         assert!(boundaries_cover(
             &[
-                boundary(vec![ResourceSelector::All], vec![namespace("team")]),
+                boundary(vec![ScalarResourceSelector::All], vec![namespace("team")]),
                 boundary(vec![namespace("team")], vec![exact("team/x")]),
                 boundary(vec![exact("team/x")], vec![]),
             ],
-            &ResourceSelector::All
+            &ScalarResourceSelector::All
         ));
     }
 
     #[test]
     fn symbolic_subtraction_keeps_holes_local_to_the_subtracted_boundary() {
-        let left = boundary(vec![ResourceSelector::All], vec![exact("already/denied")]);
+        let left = boundary(
+            vec![ScalarResourceSelector::All],
+            vec![exact("already/denied")],
+        );
         let right = boundary(
             vec![namespace("engineering")],
             vec![namespace("engineering/public")],

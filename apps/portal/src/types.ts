@@ -49,6 +49,7 @@ export type ResourceTypeMetadata = {
   attributes?: ResourceAttributeMetadata[];
   /** Present only when the type accepts namespace selectors. */
   namespace?: { label: string; membersLabel: string; example: string };
+  subtree?: { label: string; membersLabel: string; example: string };
   /** The imported service that declares the type. */
   importedService?: string;
   /** Present when the declaring import no longer does: the type accepts no new resources. */
@@ -110,7 +111,8 @@ export type OAuthConnectionTarget = {
 /** Administrative OAuth metadata omits the owner-only consent controls. */
 export type AdminOAuthConnectionTarget = Omit<OAuthConnectionTarget, "canConnect" | "connectUnavailableReason">;
 
-export type ResourceSelector = { kind: "exact" | "namespace"; value: string } | { kind: "all" };
+export type ScalarResourceSelector = { kind: "exact" | "namespace"; value: string } | { kind: "all" };
+export type ResourceSelector = ScalarResourceSelector | { kind: "subtree"; value: string };
 export type ResourceSelection = { resourceIds: string[]; resourceGroupIds: string[] };
 export type ResourceDefinition = {
   id: string; resourceType: ResourceType; selector: ResourceSelector;
@@ -159,11 +161,32 @@ export type AgentTokenServiceOption = {
   actions: AgentTokenActionOption[];
 };
 
-export type EffectiveAccessClause = { included: ResourceSelector[]; excluded: ResourceSelector[]; excludedRequests?: EffectiveAccessClause[] };
-export type EffectiveResourceAccess = { resourceType: ResourceType; clauses: EffectiveAccessClause[] };
-export type EffectiveAccessItem = { service: string; action: string; executionContext: string; resourceType: ResourceType | null; clauses: EffectiveAccessClause[] };
+export type EffectiveAccessClause = { included: ScalarResourceSelector[]; excluded: ScalarResourceSelector[]; excludedRequests?: EffectiveAccessClause[] };
+export type TypedResourceSelector = { resourceType: ResourceType; selector: ResourceSelector };
+export type LocationBoundary = { included: TypedResourceSelector[]; excluded: TypedResourceSelector[] };
+export type LocationClause = { required: number[]; excludedRequests: number[]; credentialMode: string };
+export type LocationAccessDetail = {
+  resourceTypes: ResourceType[];
+  domain: string;
+  enforcement: "request" | "results";
+  containmentVerification: "at_invocation";
+} & ({ projectionStatus: "complete"; boundaries: LocationBoundary[]; clauses: LocationClause[] }
+  | { projectionStatus: "too_complex"; reasonCode: "resource_access_too_complex" });
+export type LocationAccess = { scope: "location" } & LocationAccessDetail;
+export type EffectiveResourceAccess = { scope: "resource"; resourceType: ResourceType; clauses: EffectiveAccessClause[] };
+export type EffectiveAccessScope = { scope: "unscoped" } | EffectiveResourceAccess | LocationAccess;
+export type EffectiveAccessItem = { service: string; action: string; executionContext: string } & EffectiveAccessScope;
+export type ResourceLocationService = {
+  service: string; resourceTypes: ResourceType[]; siteHost: string;
+  locationKinds: string[]; coverageKinds: string[]; normalizationRoute: string;
+};
+export type ResourceLocationRequest = { service: string; url: string; coverage: "space" | "exact" | "subtree"; spaceKey?: string };
+export type NormalizedResourceLocation = {
+  resourceType: ResourceType; selector: ResourceSelector; locationKind: string;
+  configuredSpaceKey: string; verification: "not_checked";
+};
 export type EffectiveAccessResult = { policyGeneration: number; access: EffectiveAccessItem[] };
-export type GrantEffectiveAccessBody = { service: string; actions: string[]; executionContexts: string[]; resources: ResourceSelection };
+export type GrantEffectiveAccessBody = { service: string; credentialMode: string; actions: string[]; executionContexts: string[]; resources: ResourceSelection };
 export type TokenEffectiveAccessBody = Pick<AgentTokenIssueBody, "readOnly" | "allowedServices" | "allowedExecutionContexts" | "serviceRestrictions">;
 export type ResourceUsage = { kind: string; id: string; service?: string | null; principalId?: string | null; viaGroupId?: string | null; effect?: string | null };
 export type ResourceUsedBy = ResourceUsage[];
@@ -175,9 +198,11 @@ export type AgentTokenActionOption = {
   readOnly: boolean;
   requiredScopeTypes: string[];
   executionContexts: string[];
-  resourceType: ResourceType | null;
-  effectiveAccessByExecutionContext: Record<string, EffectiveAccessClause[]>;
-};
+} & (
+  | { scope: "unscoped" }
+  | { scope: "resource"; resourceType: ResourceType; effectiveAccessByExecutionContext: Record<string, EffectiveAccessClause[]> }
+  | { scope: "location"; resourceTypes: ResourceType[]; domain: string; effectiveAccessByExecutionContext: Record<string, LocationAccessDetail> }
+);
 
 export type AgentTokenServiceRestriction = {
   actions: string[];
@@ -686,7 +711,9 @@ export type PolicyCatalogSubject = {
   status: string;
 };
 
-export type PolicyScopeCatalog = { resourceType: ResourceType; selectors: string[] };
+export type PolicyScopeCatalog =
+  | { matching: "scalar"; resourceType: ResourceType; selectors: string[] }
+  | { matching: "containment"; domain: string; selectorsByType: Record<ResourceType, string[]>; containerTypes: ResourceType[]; targetKinds: string[]; ancestorKinds: string[]; effects: string[] };
 
 export type PolicyActionCatalog = {
   available?: boolean;

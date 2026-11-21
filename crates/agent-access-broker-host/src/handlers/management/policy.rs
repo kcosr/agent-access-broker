@@ -106,7 +106,7 @@ pub(crate) struct PolicyServiceCatalog {
     credential_verification_inputs: Vec<String>,
     credential_verification_supported: bool,
     actions: Vec<PolicyActionCatalog>,
-    resource_scopes: BTreeMap<String, PolicyScopeCatalog>,
+    resource_scopes: BTreeMap<String, ResourceScopeCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     aggregate_invocation_limit: Option<InvocationLimit>,
     configured_credential_modes: Vec<String>,
@@ -131,13 +131,6 @@ struct PolicyActionCatalog {
     /// For a command import's action, who checks its resources.
     #[serde(skip_serializing_if = "Option::is_none")]
     resources_checked_by: Option<agent_access_core::ResourcesCheckedBy>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PolicyScopeCatalog {
-    resource_type: agent_access_provider::ResourceType,
-    selectors: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -1731,11 +1724,7 @@ pub(crate) fn service_catalog(
         .into_iter()
         .map(action_catalog)
         .collect();
-    let resource_scopes = capabilities
-        .resource_scopes
-        .into_iter()
-        .map(|(scope, capabilities)| (scope.clone(), scope_catalog(&scope, capabilities)))
-        .collect();
+    let resource_scopes = capabilities.resource_scopes;
     PolicyServiceCatalog {
         available: true,
         unavailable_reason: None,
@@ -1769,13 +1758,6 @@ fn action_catalog(action: ActionCapabilities) -> PolicyActionCatalog {
         lookup_required: action.lookup_required,
         input_schema: action.input_schema,
         resources_checked_by: None,
-    }
-}
-
-fn scope_catalog(_scope: &str, capabilities: ResourceScopeCapabilities) -> PolicyScopeCatalog {
-    PolicyScopeCatalog {
-        resource_type: capabilities.resource_type,
-        selectors: capabilities.selectors,
     }
 }
 

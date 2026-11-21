@@ -1,8 +1,9 @@
 //! What the host admitted for one operation: the read-only context shared by
 //! multipart admission and invocation, and the invocation built from it.
 use crate::{
-    BrokerBodyPart, CorrelationContext, CredentialMode, ExecutionAccess, InvocationIdentity,
-    LookupAccess, ProviderError, ProviderState, ReasonCode, ResourceAttributes, ResourceScopes,
+    BrokerBodyPart, ContainmentAuthorization, ContainmentCollectionAuthorization,
+    CorrelationContext, CredentialMode, ExecutionAccess, InvocationIdentity, LookupAccess,
+    ProviderError, ProviderState, ReasonCode, ResourceAttributes, ResourceScopes,
     SearchAuthorization,
 };
 use serde_json::Value;
@@ -22,20 +23,41 @@ pub enum InvocationAuthority {
     Resources(ResourceScopes),
     /// The search boundary a search action must enforce.
     Search(SearchAuthorization),
+    Containment(ContainmentAuthorization),
+    ContainmentCollection(ContainmentCollectionAuthorization),
 }
 
 impl InvocationAuthority {
+    pub fn containment(&self) -> Option<&ContainmentAuthorization> {
+        match self {
+            Self::Containment(authority) => Some(authority),
+            _ => None,
+        }
+    }
+    pub fn containment_collection(&self) -> Option<&ContainmentCollectionAuthorization> {
+        match self {
+            Self::ContainmentCollection(authority) => Some(authority),
+            _ => None,
+        }
+    }
+
     pub fn resources(&self) -> Option<&ResourceScopes> {
         match self {
             Self::Resources(scopes) => Some(scopes),
-            Self::ActionOnly | Self::Search(_) => None,
+            Self::ActionOnly
+            | Self::Search(_)
+            | Self::Containment(_)
+            | Self::ContainmentCollection(_) => None,
         }
     }
 
     pub fn search(&self) -> Option<&SearchAuthorization> {
         match self {
             Self::Search(search) => Some(search),
-            Self::ActionOnly | Self::Resources(_) => None,
+            Self::ActionOnly
+            | Self::Resources(_)
+            | Self::Containment(_)
+            | Self::ContainmentCollection(_) => None,
         }
     }
 }
@@ -50,6 +72,10 @@ pub enum AuthorityMismatch {
     NotResources,
     #[error("the operation was not admitted with a search boundary")]
     NotSearch,
+    #[error("the operation was not admitted with containment authority")]
+    NotContainment,
+    #[error("the operation was not admitted with containment collection authority")]
+    NotContainmentCollection,
 }
 
 impl AuthorityMismatch {
@@ -57,6 +83,8 @@ impl AuthorityMismatch {
         match self {
             Self::NotResources => "provider_authority_not_resources",
             Self::NotSearch => "provider_authority_not_search",
+            Self::NotContainment => "provider_authority_not_containment",
+            Self::NotContainmentCollection => "provider_authority_not_containment_collection",
         }
     }
 }
@@ -144,6 +172,21 @@ impl AdmittedContext {
     /// permits acquisition of another credential.
     pub fn companion_reads_authorized(&self) -> bool {
         self.0.companion_reads_authorized
+    }
+
+    pub fn containment_authorization(
+        &self,
+    ) -> Result<&ContainmentAuthorization, AuthorityMismatch> {
+        self.authority()
+            .containment()
+            .ok_or(AuthorityMismatch::NotContainment)
+    }
+    pub fn containment_collection_authorization(
+        &self,
+    ) -> Result<&ContainmentCollectionAuthorization, AuthorityMismatch> {
+        self.authority()
+            .containment_collection()
+            .ok_or(AuthorityMismatch::NotContainmentCollection)
     }
 
     /// The admitted resources; any other authority fails closed.
@@ -238,6 +281,17 @@ macro_rules! admitted_accessors {
         /// See [`AdmittedContext::companion_reads_authorized`].
         pub fn companion_reads_authorized(&self) -> bool {
             self.context().companion_reads_authorized()
+        }
+
+        pub fn containment_authorization(
+            &self,
+        ) -> Result<&ContainmentAuthorization, AuthorityMismatch> {
+            self.context().containment_authorization()
+        }
+        pub fn containment_collection_authorization(
+            &self,
+        ) -> Result<&ContainmentCollectionAuthorization, AuthorityMismatch> {
+            self.context().containment_collection_authorization()
         }
 
         /// The admitted resources; any other authority fails closed.

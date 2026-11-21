@@ -201,12 +201,12 @@ fn schemas_expose_plain_fields_and_effective_content_types() {
             if let Some(action) = descriptor.action(action) {
                 let properties = &action.input_schema["properties"];
                 assert_eq!(
-                    properties["parentPageId"]["description"],
-                    "Parent page ID. Do not combine with parentUrl."
+                    properties["parent"]["description"],
+                    "Parent page or folder. Do not combine with parentUrl; omission resolves the space homepage."
                 );
                 assert_eq!(
                     properties["parentUrl"]["description"],
-                    "Parent page web URL. Do not combine with parentPageId."
+                    "Parent page or folder URL. Do not combine with parent."
                 );
             }
         }
@@ -354,20 +354,20 @@ fn optional_parent_exclusion_keeps_null_and_absence_behavior() {
         let base = write_inputs(action);
         assert!(parse_write(action, &base, &config).is_ok());
         let mut nulls = base.clone();
-        nulls["parentPageId"] = Value::Null;
+        nulls["parent"] = Value::Null;
         nulls["parentUrl"] = Value::Null;
         assert!(parse_write(action, &nulls, &config).is_ok());
         let mut both = base.clone();
-        both["parentPageId"] = json!("200");
+        both["parent"] = json!({"kind":"page","id":"200"});
         both["parentUrl"] = json!("https://example.atlassian.net/wiki/spaces/ENG/pages/200/Parent");
         assert_denial(
             parse_write(action, &both, &config).unwrap_err(),
             ReasonCode::InputInvalid,
             Some(&format!(
-                "confluence.{action} accepts parentPageId or parentUrl, not both"
+                "confluence.{action} accepts parent or parentUrl, not both"
             )),
         );
-        for (chosen, other) in [("parentPageId", "parentUrl"), ("parentUrl", "parentPageId")] {
+        for (chosen, other) in [("parent", "parentUrl"), ("parentUrl", "parent")] {
             let mut valid = base.clone();
             valid[chosen] = both[chosen].clone();
             assert!(parse_write(action, &valid, &config).is_ok());

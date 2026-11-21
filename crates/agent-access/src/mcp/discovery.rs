@@ -89,9 +89,66 @@ pub(super) async fn call(
     if !is_error && let Some(output) = output {
         value = super::tools::save_json_response(output, &value)?;
     }
+    if name == "resource_access_describe"
+        && !is_error
+        && !resource_access_result_fits(
+            &value,
+            agent_access_core::RESOURCE_ACCESS_MAX_RESPONSE_BYTES,
+        )
+    {
+        return Ok(serde_json::from_value(super::tools::envelope_result(
+            422,
+            serde_json::json!({
+                "decision": "error", "reasonCode": "resource_access_too_complex", "result": null,
+                "error": { "message": "Resource access response exceeds the result size limit." }
+            }),
+            true,
+        )?)?);
+    }
     Ok(serde_json::from_value(super::tools::envelope_result(
         status, value, is_error,
     )?)?)
+}
+
+/// Count both the structured value and its escaped JSON text before allocating
+/// the duplicated MCP result. A compact JSON stream contains no literal controls.
+fn resource_access_result_fits(value: &Value, maximum: usize) -> bool {
+    struct SizeCounter {
+        bytes: usize,
+        maximum: usize,
+    }
+    impl std::io::Write for SizeCounter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let extra = bytes
+                .iter()
+                .filter(|byte| matches!(**byte, b'"' | b'\\'))
+                .count();
+            self.bytes = bytes
+                .len()
+                .checked_mul(2)
+                .and_then(|amount| amount.checked_add(extra))
+                .and_then(|amount| self.bytes.checked_add(amount))
+                .filter(|size| *size <= self.maximum)
+                .ok_or_else(|| std::io::Error::other("resource access result exceeds limit"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let shell = serde_json::json!({"content":[{"type":"text","text":""}],"structuredContent":null,"isError":false});
+    let base = serde_json::to_vec(&shell).expect("fixed MCP shell").len() - 4;
+    if base > maximum {
+        return false;
+    }
+    serde_json::to_writer(
+        SizeCounter {
+            bytes: base,
+            maximum,
+        },
+        value,
+    )
+    .is_ok()
 }
 
 fn validate_scoped_service_detail(value: &Value, selected: &str) -> Result<()> {
@@ -118,4 +175,29 @@ fn validate_scoped_service_detail(value: &Value, selected: &str) -> Result<()> {
         anyhow::bail!("service view is unavailable");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resource_access_wrapper_preflight_counts_escaped_and_unicode_text_exactly() {
+        for value in [
+            serde_json::json!({"url": "https://example.test/quote\"/backslash\\/é/\n"}),
+            serde_json::json!([null, true, 12, {}]),
+        ] {
+            let result = super::super::tools::envelope_result(200, value.clone(), false).unwrap();
+            let bytes = serde_json::to_vec(&result).unwrap().len();
+            assert!(resource_access_result_fits(&value, bytes));
+            assert!(resource_access_result_fits(&value, bytes + 1));
+            assert!(!resource_access_result_fits(&value, bytes - 1));
+        }
+    }
+
+    #[test]
+    fn resource_access_wrapper_preflight_bounds_large_nested_results() {
+        let value = serde_json::json!({"access": [ {"coverage": "x".repeat(1024 * 1024)} ]});
+        assert!(!resource_access_result_fits(&value, 1024));
+    }
 }

@@ -1,5 +1,7 @@
 //! Shared catalog selectors and live resource-group authorization boundaries.
-use agent_access_provider::{ResourceSelector, ResourceType, ResourceTypeRegistry};
+use agent_access_provider::{
+    ResourceSelector, ResourceType, ResourceTypeRegistry, ScalarResourceSelector,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -155,7 +157,7 @@ impl ResourceCatalog {
             // without control characters (SQLite measures text up to NUL).
             if matches!(
                 &resource.selector,
-                ResourceSelector::Exact { value } | ResourceSelector::Namespace { value }
+                ResourceSelector::Exact { value } | ResourceSelector::Namespace { value } | ResourceSelector::Subtree { value }
                     if value.is_empty() || value.chars().any(char::is_control)
             ) {
                 errors.push(format!(
@@ -254,15 +256,20 @@ impl ResourceCatalog {
             Err(errors)
         }
     }
-    pub fn resolve(
+    /// Compile one selection across all types admitted by a containment contract.
+    /// Exclusions are collected across the complete selection before any matching;
+    /// disabled or context-ineligible negative entries retain their effect.
+    pub fn resolve_containment(
         &self,
         selection: &ResourceSelection,
-        resource_type: &ResourceType,
+        contract: &agent_access_provider::ContainmentScopeCapabilities,
+        site_origin: &str,
+        registry: &ResourceTypeRegistry,
         context: &str,
-    ) -> ResourceBoundary {
-        // Invalid references never accidentally turn a restriction into broad access.
+    ) -> Result<agent_access_provider::ContainmentBoundary, String> {
+        use agent_access_provider::ContainmentBoundary;
         if self.validate_selection(selection).is_err() {
-            return ResourceBoundary::default();
+            return Ok(ContainmentBoundary::new(Vec::new(), Vec::new()));
         }
         let mut included: BTreeSet<&String> = selection.resource_ids.iter().collect();
         let mut excluded = BTreeSet::new();
@@ -272,7 +279,62 @@ impl ResourceCatalog {
                 excluded.extend(group.excluded_resource_ids.iter());
             }
         }
-        let selectors = |ids: BTreeSet<&String>, positive: bool| -> Vec<ResourceSelector> {
+        let selectors = |ids: BTreeSet<&String>, positive: bool| {
+            let mut values = Vec::new();
+            for id in ids {
+                let Some(resource) = self.resources.get(id) else {
+                    continue;
+                };
+                if !contract
+                    .selectors_by_type
+                    .contains_key(&resource.resource_type)
+                    || positive
+                        && (!resource.enabled
+                            || !resource
+                                .allowed_execution_contexts
+                                .iter()
+                                .any(|value| value == context))
+                {
+                    continue;
+                }
+                let selector = registry
+                    .typed_selector(&resource.resource_type, &resource.selector)
+                    .map_err(|_| {
+                        "resource selector cannot be compiled for containment".to_string()
+                    })?;
+                if contract.selector_applicable(&selector, site_origin) {
+                    values.push(selector);
+                }
+            }
+            Ok::<_, String>(values)
+        };
+        Ok(ContainmentBoundary::new(
+            selectors(included, true)?,
+            selectors(excluded, false)?,
+        ))
+    }
+
+    pub fn resolve(
+        &self,
+        selection: &ResourceSelection,
+        resource_type: &ResourceType,
+        context: &str,
+    ) -> Result<ResourceBoundary, String> {
+        // Invalid references never accidentally turn a restriction into broad access.
+        if self.validate_selection(selection).is_err() {
+            return Ok(ResourceBoundary::default());
+        }
+        let mut included: BTreeSet<&String> = selection.resource_ids.iter().collect();
+        let mut excluded = BTreeSet::new();
+        for id in &selection.resource_group_ids {
+            if let Some(group) = self.resource_groups.get(id) {
+                included.extend(group.included_resource_ids.iter());
+                excluded.extend(group.excluded_resource_ids.iter());
+            }
+        }
+        let selectors = |ids: BTreeSet<&String>,
+                         positive: bool|
+         -> Result<Vec<ScalarResourceSelector>, String> {
             ids.into_iter()
                 .filter_map(|id| self.resources.get(id))
                 .filter(|r| {
@@ -281,22 +343,25 @@ impl ResourceCatalog {
                             || r.enabled
                                 && r.allowed_execution_contexts.iter().any(|c| c == context))
                 })
-                .map(|r| r.selector.clone())
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect()
+                .map(|r| {
+                    ScalarResourceSelector::try_from(&r.selector).map_err(|_| {
+                        "containment selector cannot enter a scalar resource boundary".to_string()
+                    })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()
+                .map(|selectors| selectors.into_iter().collect())
         };
-        ResourceBoundary {
-            included: selectors(included, true),
-            excluded: selectors(excluded, false),
-        }
+        Ok(ResourceBoundary {
+            included: selectors(included, true)?,
+            excluded: selectors(excluded, false)?,
+        })
     }
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResourceBoundary {
-    pub included: Vec<ResourceSelector>,
-    pub excluded: Vec<ResourceSelector>,
+    pub included: Vec<ScalarResourceSelector>,
+    pub excluded: Vec<ScalarResourceSelector>,
 }
 impl ResourceBoundary {
     pub fn matches(&self, target: &str) -> bool {
@@ -309,7 +374,7 @@ impl ResourceBoundary {
             .all(|s| self.excluded.iter().any(|e| e.contains(s)))
     }
     pub fn is_universe(&self) -> bool {
-        self.included.contains(&ResourceSelector::All) && self.excluded.is_empty()
+        self.included.contains(&ScalarResourceSelector::All) && self.excluded.is_empty()
     }
     pub fn intersection(&self, other: &Self) -> Self {
         Self {
@@ -555,12 +620,53 @@ mod tests {
 
     #[test]
     fn namespace_matches_segments_and_new_descendants() {
-        let selector = namespace("engineering/platform");
+        let selector = ScalarResourceSelector::try_from(namespace("engineering/platform")).unwrap();
         assert!(selector.matches("engineering/platform/api"));
         assert!(selector.matches("engineering/platform/new/service"));
         assert!(!selector.matches("engineering/platform-tools/api"));
         assert!(!selector.matches("engineering/platform"));
         assert!(!selector.matches("engineering/platform/"));
+    }
+
+    #[test]
+    fn scalar_catalog_resolution_rejects_subtree_in_both_polarities() {
+        let tree = ResourceSelector::Subtree {
+            value: "engineering/platform".into(),
+        };
+        let included =
+            ResourceCatalog::new(&[resource("tree", tree.clone(), &["internal"], true)], &[])
+                .unwrap();
+        assert!(
+            included
+                .resolve(
+                    &selection(&["tree"], &[]),
+                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
+                    "internal"
+                )
+                .is_err()
+        );
+        let excluded = ResourceCatalog::new(
+            &[
+                resource("all", ResourceSelector::All, &["internal"], true),
+                resource("tree", tree, &["external"], false),
+            ],
+            &[ResourceGroupDefinition {
+                id: "filtered".into(),
+                name: "Filtered".into(),
+                included_resource_ids: vec!["all".into()],
+                excluded_resource_ids: vec!["tree".into()],
+            }],
+        )
+        .unwrap();
+        assert!(
+            excluded
+                .resolve(
+                    &selection(&[], &["filtered"]),
+                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
+                    "internal"
+                )
+                .is_err()
+        );
     }
     #[test]
     fn cloudbees_ci_job_selectors_keep_controller_and_folder_boundaries() {
@@ -587,11 +693,13 @@ mod tests {
             .id()
             .clone();
         let catalog = ResourceCatalog::new(&[controller, payments, exact_job], &[]).unwrap();
-        let boundary = catalog.resolve(
-            &selection(&["payments"], &[]),
-            agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
-            "internal",
-        );
+        let boundary = catalog
+            .resolve(
+                &selection(&["payments"], &[]),
+                agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
+                "internal",
+            )
+            .unwrap();
         assert!(boundary.matches("team-ci/payments/build-api"));
         assert!(boundary.matches("team-ci/payments/new/service"));
         for outside in [
@@ -609,6 +717,7 @@ mod tests {
                     agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
                     "internal",
                 )
+                .unwrap()
                 .matches("team-ci/other/build-api")
         );
         assert!(
@@ -618,6 +727,7 @@ mod tests {
                     agent_access_cloudbees_ci::CLOUDBEES_CI_JOB_RESOURCE.id(),
                     "internal",
                 )
+                .unwrap()
                 .matches("team-ci/payments/build-api")
         );
     }
@@ -677,20 +787,24 @@ mod tests {
             },
         ];
         let catalog = ResourceCatalog::new(&resources, &groups).unwrap();
-        let boundary = catalog.resolve(
-            &selection(&["special"], &["wide", "special"]),
-            agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
-            "external",
-        );
+        let boundary = catalog
+            .resolve(
+                &selection(&["special"], &["wide", "special"]),
+                agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
+                "external",
+            )
+            .unwrap();
         assert!(boundary.matches("engineering/new"));
         assert!(!boundary.matches("private/special"));
         assert!(!boundary.is_universe());
         assert!(!boundary.is_empty());
-        let separate = catalog.resolve(
-            &selection(&[], &["special"]),
-            agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
-            "external",
-        );
+        let separate = catalog
+            .resolve(
+                &selection(&[], &["special"]),
+                agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
+                "external",
+            )
+            .unwrap();
         assert!(separate.matches("private/special"));
         assert!(!boundary.intersection(&separate).matches("private/special"));
         assert!(boundary.intersection(&separate).is_empty());
@@ -712,11 +826,13 @@ mod tests {
             selection(&[], &["empty"]),
             selection(&["missing"], &[]),
         ] {
-            let boundary = catalog.resolve(
-                &selected,
-                agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
-                "internal",
-            );
+            let boundary = catalog
+                .resolve(
+                    &selected,
+                    agent_access_provider::GIT_REPOSITORY_RESOURCE.id(),
+                    "internal",
+                )
+                .unwrap();
             assert!(boundary.is_empty());
             assert!(!boundary.matches("engineering/repo"));
         }
@@ -790,12 +906,12 @@ mod tests {
     #[test]
     fn intersections_preserve_namespace_holes() {
         let broad = ResourceBoundary {
-            included: vec![ResourceSelector::All],
-            excluded: vec![namespace("engineering/private")],
+            included: vec![ScalarResourceSelector::All],
+            excluded: vec![namespace("engineering/private").try_into().unwrap()],
         };
         let engineering = ResourceBoundary {
-            included: vec![namespace("engineering")],
-            excluded: vec![exact("engineering/special")],
+            included: vec![namespace("engineering").try_into().unwrap()],
+            excluded: vec![exact("engineering/special").try_into().unwrap()],
         };
         let intersection = broad.intersection(&engineering);
         assert!(intersection.matches("engineering/payments"));
@@ -803,7 +919,7 @@ mod tests {
         assert!(!intersection.matches("engineering/special"));
         assert!(broad.intersects(&engineering));
         assert!(!broad.intersects(&ResourceBoundary {
-            included: vec![namespace("engineering/private")],
+            included: vec![namespace("engineering/private").try_into().unwrap()],
             excluded: vec![]
         }));
     }

@@ -6,6 +6,15 @@ All notable changes to this project are documented in this file.
 
 ### Breaking Changes
 
+- **Confluence content grants add migration `038_confluence_content_resources`.**
+  Back up first and upgrade Broker, CLI and portal together; rollback needs the
+  matching pre-migration database. Resolve existing drafts before upgrading to
+  typed-parent v5 handles. Page creation takes `parent: {kind, id}` or `parentUrl`,
+  and the CLI uses `--parent-kind` with `--parent-id`. Access previews/options now
+  distinguish unscoped, scalar and location authority; grant-selection previews
+  require `credentialMode`. SDK consumers must use the explicit scalar and
+  containment contracts. See [content access](docs/confluence-content-access.md).
+
 - **Application access adds managed-store migration `037_application_access`.**
   Back up first and upgrade Broker and CLI together; rollback requires the
   matching pre-migration database and binary. The migration changes no existing
@@ -186,6 +195,12 @@ All notable changes to this project are documented in this file.
   ([#53](https://github.com/kcosr/agent-access-broker/pull/53), [#55](https://github.com/kcosr/agent-access-broker/pull/55))
 
 ### Added
+
+- **Confluence grants and token restrictions cover exact pages/blogs and page or
+  folder subtrees.** Offline URL entry, overlap-aware previews and bounded current
+  location checks apply across reads, writes, creation, moves, drafts, comments,
+  attachments and search. Search preserves every policy exclusion upstream and
+  checks results before release. See [content access](docs/confluence-content-access.md).
 
 - **Jira issue workflow transitions.** Discover available transitions and apply
   one selected transition with independent project grants and typed CLI commands.

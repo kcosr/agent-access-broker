@@ -379,9 +379,7 @@ async fn mixed_modes_in_disjoint_top_namespace_grants_deny_the_whole_search() {
             .is_empty()
     );
     let options = runtime.agent_token_options_for_identity(&IdentityContext::anonymous());
-    assert!(
-        options.services[0].actions[0].effective_access_by_execution_context[&context()].is_empty()
-    );
+    assert!(options.services[0].actions[0].scalar_access().unwrap()[&context()].is_empty());
     let response = runtime
         .invoke(
             operation(IdentityContext::anonymous()),
@@ -656,7 +654,9 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
         let identity = IdentityContext::anonymous();
         let selected = plan(&runtime).unwrap();
         assert_eq!(
-            selected.scope.covers(&namespace("engineering")),
+            selected
+                .scope
+                .covers(&namespace("engineering").try_into().unwrap()),
             restore_secret
         );
         let catalog = runtime
@@ -689,8 +689,7 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
         assert!(!visible_ids.contains("labs-tool"));
 
         let options = runtime.agent_token_options_for_identity(&identity);
-        let picker_clauses =
-            &options.services[0].actions[0].effective_access_by_execution_context[&context()];
+        let picker_clauses = &options.services[0].actions[0].scalar_access().unwrap()[&context()];
         assert_eq!(
             options
                 .resources
@@ -744,7 +743,8 @@ async fn catalog_preview_picker_and_invocation_agree_on_union_coverage_holes() {
             );
             assert_eq!(
                 preview.access[0]
-                    .clauses
+                    .clauses()
+                    .unwrap()
                     .iter()
                     .any(|clause| clause.matches(path)),
                 allowed,

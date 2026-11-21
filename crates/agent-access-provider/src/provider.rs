@@ -1,5 +1,5 @@
 use crate::{
-    AdmittedRequest, BodyAdmission, CorrelationContext, ExecutionCredential,
+    AdmittedRequest, BodyAdmission, CorrelationContext, ExecutionCredential, LocalScopeRequest,
     ProviderCredentialVerification, ProviderError, ProviderInvocation, ProviderResult,
     ProviderState, ReasonCode, ResourceType, ScopeRequest, ScopeResolution, ServiceDescriptor,
 };
@@ -37,6 +37,17 @@ impl std::fmt::Debug for ServiceProvider {
 
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// Validates only local locator syntax and signed ownership/context facts.
+    /// The host runs this synchronously before acquiring lookup material, only
+    /// for native actions declaring scope_locator_validation. It supplies the
+    /// returned opaque state to resolve_scopes in this same operation.
+    fn validate_scope_locator(
+        &self,
+        _request: LocalScopeRequest<'_>,
+    ) -> Result<Option<ProviderState>, ProviderError> {
+        Ok(None)
+    }
+
     /// Names the canonical resources an action operates on. A local
     /// resolver returns immediately; an action-only provider explicitly
     /// returns [`ScopeResolution::no_resources`]. Lookup uses only the

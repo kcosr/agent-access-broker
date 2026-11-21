@@ -36,6 +36,7 @@ impl std::fmt::Display for CatalogAuditEntity {
         match &self.selector {
             Some(ResourceSelector::Exact { value }) => f.write_str(value),
             Some(ResourceSelector::Namespace { value }) => write!(f, "{value}/*"),
+            Some(ResourceSelector::Subtree { value }) => write!(f, "Subtree {value}"),
             Some(ResourceSelector::All) => f.write_str("All resources"),
             Some(_) | None => f.write_str(&self.id),
         }
@@ -123,6 +124,10 @@ pub(super) fn resource_entity(record: &ManagedResourceRecord) -> CatalogAuditEnt
         ResourceSelector::Namespace { value } => {
             let (value, truncated) = bounded_text(value);
             (Some(ResourceSelector::Namespace { value }), truncated)
+        }
+        ResourceSelector::Subtree { value } => {
+            let (value, truncated) = bounded_text(value);
+            (Some(ResourceSelector::Subtree { value }), truncated)
         }
         ResourceSelector::All => (Some(ResourceSelector::All), false),
         // A selector form this build cannot bound is omitted, not recorded whole.
@@ -497,6 +502,25 @@ mod tests {
             value: "team".into(),
         };
         assert_eq!(resource_entity(&record).to_string(), "team/*");
+        record.definition.selector = ResourceSelector::Subtree {
+            value: "https://example.atlassian.net/wiki/spaces/ENG/folder/123".into(),
+        };
+        let subtree = resource_entity(&record);
+        assert_eq!(
+            subtree.to_string(),
+            "Subtree https://example.atlassian.net/wiki/spaces/ENG/folder/123"
+        );
+        assert_eq!(subtree.selector, Some(record.definition.selector.clone()));
+        assert_eq!(subtree.selector_truncated, Some(false));
+        record.definition.selector = ResourceSelector::Subtree {
+            value: "界".repeat(700),
+        };
+        let bounded_subtree = resource_entity(&record);
+        assert_eq!(bounded_subtree.selector_truncated, Some(true));
+        let Some(ResourceSelector::Subtree { value }) = bounded_subtree.selector else {
+            panic!("subtree audit selector must be preserved");
+        };
+        assert_eq!(value.chars().count(), 512);
         record.definition.selector = ResourceSelector::All;
         assert_eq!(resource_entity(&record).to_string(), "All resources");
         record.definition.selector = ResourceSelector::Exact {

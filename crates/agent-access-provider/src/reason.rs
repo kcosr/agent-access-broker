@@ -62,6 +62,7 @@ pub enum ReasonCode {
     ResourceNotFound,
     ResourceGroupNotFound,
     ResourceInUse,
+    ResourceAccessTooComplex,
     PolicyAuthorityUnavailable,
     PolicyValidationFailed,
     BrokerTokenNotFound,
@@ -199,6 +200,7 @@ impl ReasonCode {
             Self::ResourceNotFound => "resource_not_found",
             Self::ResourceGroupNotFound => "resource_group_not_found",
             Self::ResourceInUse => "resource_in_use",
+            Self::ResourceAccessTooComplex => "resource_access_too_complex",
             Self::PolicyAuthorityUnavailable => "policy_authority_unavailable",
             Self::PolicyValidationFailed => "policy_validation_failed",
             Self::BrokerTokenNotFound => "broker_token_not_found",
@@ -390,6 +392,7 @@ impl ReasonCode {
             | Self::OidcLoginMethodConflict
             | Self::ExternalGroupBindingConflict => 409,
             Self::GatewayMethodDenied => 405,
+            Self::ResourceAccessTooComplex => 422,
             Self::BodySizeDenied
             | Self::AttachmentSizeDenied
             | Self::AttachmentIntegrityMismatch => 413,
@@ -457,6 +460,7 @@ impl ReasonCode {
             Self::ResourceNotFound,
             Self::ResourceGroupNotFound,
             Self::ResourceInUse,
+            Self::ResourceAccessTooComplex,
             Self::PolicyAuthorityUnavailable,
             Self::PolicyValidationFailed,
             Self::BrokerTokenNotFound,
@@ -564,6 +568,8 @@ impl ReasonCode {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookPhase {
+    /// Synchronous local locator validation, before credential acquisition.
+    ScopeLocatorValidation,
     /// Scope resolution (S), including any pre-authorization lookup.
     ScopeResolution,
     /// Body admission (A).
@@ -577,6 +583,7 @@ pub enum HookPhase {
 impl HookPhase {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ScopeLocatorValidation => "scope_locator_validation",
             Self::ScopeResolution => "scope_resolution",
             Self::BodyAdmission => "body_admission",
             Self::Invocation => "invocation",
@@ -664,6 +671,17 @@ impl ReasonCode {
     /// reason and `decision`. An allow decision is never a failure; see
     /// [`Self::permits_provider_allow`].
     pub fn permits_provider_failure(self, decision: &Decision, phase: HookPhase) -> bool {
+        if phase == HookPhase::ScopeLocatorValidation {
+            return matches!(
+                (self, decision),
+                (Self::InputInvalid, Decision::Deny | Decision::Error)
+                    | (Self::InvalidDraftHandle, Decision::Deny)
+                    | (
+                        Self::CursorSigningUnavailable | Self::UpstreamProtocolFailed,
+                        Decision::Error
+                    )
+            );
+        }
         self.provider_rule().is_some_and(|(decisions, phases)| {
             decisions.permit(decision) && phases.contains(&phase)
         })
